@@ -26,6 +26,8 @@
 #endif
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 class NetworkStyle;
 class Notificator;
@@ -141,6 +143,8 @@ private:
 
     QMenuBar* appMenuBar = nullptr;
     QToolBar* appToolBar = nullptr;
+    //! Entries of the navigation bar that are not pages, with the icon each has; the icons follow the theme.
+    std::vector<std::pair<QAction*, const char*>> m_sidebar_icons;
     QAction* overviewAction = nullptr;
     QAction* historyAction = nullptr;
     QAction* sidechainAction = nullptr;

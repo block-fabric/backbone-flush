@@ -112,7 +112,9 @@ QString MakeStyleSheet(const Colors& c)
 {
     return QStringLiteral(
                "QToolTip { color: %1; background-color: %2; border: 1px solid %3; }"
-               "QToolBar { border: none; border-bottom: 2px solid %3; }"
+               "QToolBar { border: none; }"
+               "QToolBar#sidebar { border-right: 2px solid %3; background-color: %2; spacing: 2px; padding: 4px 0px; }"
+               "QToolBar#sidebar QToolButton { padding: 6px 8px; border-radius: 4px; text-align: left; }"
                "QToolBar QToolButton:checked { background-color: %3; color: %4; border-radius: 4px; }"
                "QGroupBox { font-weight: bold; }"
                "QHeaderView::section { background-color: %2; color: %1; padding: 4px; border: none; border-bottom: 1px solid %3; }")

@@ -72,6 +72,7 @@
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QUrlQuery>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -721,15 +722,80 @@ void BitcoinGUI::createToolBars()
 {
     if(walletFrame)
     {
-        QToolBar *toolbar = addToolBar(tr("Tabs toolbar"));
+        // The navigation is a bar on the left, with what the wallet and the node offer in sections.
+        QToolBar* toolbar{new QToolBar(tr("Navigation"), this)};
+        toolbar->setObjectName("sidebar");
+        addToolBar(Qt::LeftToolBarArea, toolbar);
         appToolBar = toolbar;
         toolbar->setMovable(false);
+        toolbar->setFloatable(false);
+        toolbar->setOrientation(Qt::Vertical);
         toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        toolbar->addAction(overviewAction);
-        toolbar->addAction(sendCoinsAction);
-        toolbar->addAction(receiveCoinsAction);
-        toolbar->addAction(historyAction);
-        toolbar->addAction(sidechainAction);
+        toolbar->setIconSize(QSize(22, 22));
+        toolbar->setContextMenuPolicy(Qt::PreventContextMenu);
+
+        const auto section{[&](const QString& title) {
+            auto* label{new QLabel(title.toUpper(), toolbar)};
+            label->setObjectName("sidebarSection");
+            QFont font{label->font()};
+            font.setBold(true);
+            font.setPointSizeF(font.pointSizeF() * 0.85);
+            label->setFont(font);
+            label->setContentsMargins(8, 12, 8, 2);
+            label->setEnabled(false);
+            toolbar->addWidget(label);
+        }};
+        const auto entry{[&](QAction* action) {
+            toolbar->addAction(action);
+            // Entries are as wide as the bar, so that they line up.
+            if (auto* button{qobject_cast<QToolButton*>(toolbar->widgetForAction(action))}) {
+                button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+                button->setMinimumWidth(176);
+            }
+        }};
+        const auto window_entry{[&](const char* icon, const QString& text, const QString& tip, QWidget* window) {
+            QAction* action{new QAction(platformStyle->SingleColorIcon(icon), text, this)};
+            action->setStatusTip(tip);
+            action->setToolTip(tip);
+            connect(action, &QAction::triggered, window, [window] { GUIUtil::bringToFront(window); });
+            m_sidebar_icons.emplace_back(action, icon);
+            entry(action);
+            return action;
+        }};
+
+        section(tr("Wallet"));
+        entry(overviewAction);
+        entry(sendCoinsAction);
+        entry(receiveCoinsAction);
+        entry(historyAction);
+
+        section(tr("Chain"));
+        entry(sidechainAction);
+        window_entry(":/icons/eye", tr("Block Explorer"), tr("Browse blocks and the transactions waiting to be mined"), m_block_explorer);
+
+        section(tr("Tools"));
+        window_entry(":/icons/lock_closed", tr("Multisig Lounge"), tr("Share coins with partners, in addresses that need several signatures"), m_multisig_dialog);
+        window_entry(":/icons/synced", tr("Proof of Funds"), tr("Prove that this wallet holds funds, or check such a proof"), m_proof_dialog);
+        window_entry(":/icons/transaction_confirmed", tr("Timestamp File"), tr("Prove that a file existed, by publishing its fingerprint on the chain"), m_timestamp_dialog);
+        window_entry(":/icons/edit", tr("Graffiti"), tr("Read the messages written on the chain, and write one"), m_graffiti_dialog);
+        QAction* crypto_tools{new QAction(platformStyle->SingleColorIcon(":/icons/export"), tr("Crypto Tools"), this)};
+        crypto_tools->setStatusTip(tr("Hash calculator, merkle tree and address decoder"));
+        connect(crypto_tools, &QAction::triggered, [this] { m_crypto_tools->showTab(CryptoToolsDialog::HASH); });
+        m_sidebar_icons.emplace_back(crypto_tools, ":/icons/export");
+        entry(crypto_tools);
+
+        section(tr("Node"));
+        QAction* node_window{new QAction(platformStyle->SingleColorIcon(":/icons/connect_4"), tr("Node Window"), this)};
+        node_window->setStatusTip(openRPCConsoleAction->statusTip());
+        connect(node_window, &QAction::triggered, this, &BitcoinGUI::showDebugWindow);
+        m_sidebar_icons.emplace_back(node_window, ":/icons/connect_4");
+        entry(node_window);
+        QAction* settings{new QAction(platformStyle->SingleColorIcon(":/icons/fontbigger"), tr("Settings"), this)};
+        settings->setStatusTip(optionsAction->statusTip());
+        connect(settings, &QAction::triggered, optionsAction, &QAction::trigger);
+        m_sidebar_icons.emplace_back(settings, ":/icons/fontbigger");
+        entry(settings);
+
         overviewAction->setChecked(true);
 
 #ifdef ENABLE_WALLET
@@ -744,6 +810,7 @@ void BitcoinGUI::createToolBars()
         m_wallet_selector_label = new QLabel();
         m_wallet_selector_label->setText(tr("Wallet:") + " ");
         m_wallet_selector_label->setBuddy(m_wallet_selector);
+        m_wallet_selector_label->setContentsMargins(8, 0, 8, 0);
 
         m_wallet_selector_label_action = appToolBar->addWidget(m_wallet_selector_label);
         m_wallet_selector_action = appToolBar->addWidget(m_wallet_selector);
@@ -1448,6 +1515,7 @@ void BitcoinGUI::changeEvent(QEvent *e)
         receiveCoinsAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/receiving_addresses")));
         historyAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/history")));
         sidechainAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/proxy")));
+        for (const auto& [action, icon] : m_sidebar_icons) action->setIcon(platformStyle->SingleColorIcon(QString::fromLatin1(icon)));
     }
 
     QMainWindow::changeEvent(e);
