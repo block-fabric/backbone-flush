@@ -192,7 +192,6 @@ BASE_SCRIPTS = [
     'tool_bitcoin_chainstate.py',
     'tool_wallet.py',
     'tool_utils.py',
-    'tool_signet_miner.py',
     'wallet_txn_clone.py',
     'wallet_txn_clone.py --segwit',
     'rpc_getchaintips.py',
@@ -301,7 +300,6 @@ BASE_SCRIPTS = [
     'wallet_crosschain.py',
     'mining_basic.py',
     'mining_mainnet.py',
-    'feature_signet.py',
     'p2p_mutated_blocks.py',
     'rpc_named_arguments.py',
     'feature_startupnotify.py',
@@ -608,7 +606,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     # Warn if bitcoind is already running
     try:
         # pgrep exits with code zero when one or more matching processes found
-        if subprocess.run(["pgrep", "-x", "chainsd"], stdout=subprocess.DEVNULL).returncode == 0:
+        if subprocess.run(["pgrep", "-x", "sidechaind"], stdout=subprocess.DEVNULL).returncode == 0:
             print("%sWARNING!%s There is already a bitcoind process running on this system. Tests may fail unexpectedly due to resource contention!" % (BOLD[1], BOLD[0]))
     except OSError:
         # pgrep not supported

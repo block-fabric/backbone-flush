@@ -162,10 +162,8 @@ void TestTools(TestChain100Setup& test, ClientModel& client_model)
     MineBlock(test);
     graffiti.refresh();
     auto* messages{graffiti.findChild<QTableWidget*>("graffitiTable")};
-    // The newest comes first; the deposit made earlier also carries data, its destination.
-    QCOMPARE(messages->rowCount(), 2);
+    QCOMPARE(messages->rowCount(), 1);
     QCOMPARE(messages->item(0, 2)->text(), QString("hello chains"));
-    QCOMPARE(messages->item(1, 2)->text(), QString("alice"));
     const QString graffiti_txid{messages->item(0, 3)->text()};
     SaveScreenshot(graffiti, "graffiti");
 
@@ -230,12 +228,12 @@ void TestTools(TestChain100Setup& test, ClientModel& client_model)
     // Timestamp a file, then find its stamp
     QTemporaryFile file;
     QVERIFY(file.open());
-    file.write("chains");
+    file.write("sidechain");
     file.close();
     TimestampDialog stamps(wallet_name);
     stamps.setClientModel(&client_model);
     stamps.setFile(file.fileName());
-    QCOMPARE(stamps.findChild<QLabel*>("timestampHash")->text(), QString::fromLatin1(QCryptographicHash::hash("chains", QCryptographicHash::Sha256).toHex()));
+    QCOMPARE(stamps.findChild<QLabel*>("timestampHash")->text(), QString::fromLatin1(QCryptographicHash::hash("sidechain", QCryptographicHash::Sha256).toHex()));
     auto* stamp_result{stamps.findChild<QPlainTextEdit*>("timestampResult")};
     QCOMPARE(WithMessageBoxes(QMessageBox::Yes, [&] { stamps.stamp(); }).size(), 1);
     QVERIFY2(stamp_result->toPlainText().startsWith("The fingerprint was published in transaction"), qPrintable(stamp_result->toPlainText()));
@@ -381,108 +379,16 @@ void TestSidechainPage(interfaces::Node& node)
     ClientModel client_model(node, &options_model);
     WalletModel wallet_model(interfaces::MakeWallet(context, wallet), client_model, platform_style.get());
 
+    // The test chain is not a sidechain, which the page has to cope with. What the page does on a
+    // sidechain is covered by feature_sidechain.py, through the commands the page uses.
     SidechainPage page(platform_style.get());
     page.resize(1000, 700);
     page.setClientModel(&client_model);
     page.setWalletModel(&wallet_model);
-    page.show();
-
-    auto* tabs{page.findChild<QTabWidget*>("sidechainTabs")};
-    auto* sidechains{page.findChild<QTableWidget*>("sidechains")};
-    auto* proposals{page.findChild<QTableWidget*>("proposals")};
-    auto* queued{page.findChild<QTableWidget*>("queuedProposals")};
-    auto* bundles{page.findChild<QTableWidget*>("bundles")};
-    QVERIFY(tabs && sidechains && proposals && queued && bundles);
-    QCOMPARE(sidechains->rowCount(), 0);
-
-    // Propose a sidechain.
-    tabs->setCurrentIndex(1);
-    page.findChild<QSpinBox*>("proposalSlot")->setValue(3);
-    page.findChild<QLineEdit*>("proposalTitle")->setText("Testchain");
-    page.findChild<QLineEdit*>("proposalDescription")->setText("A sidechain made by the GUI test");
-    // No message box: the proposal is accepted.
-    const QStringList propose_boxes{WithMessageBoxes(QMessageBox::Ok, [&] { page.findChild<QPushButton*>("proposeButton")->click(); })};
-    QVERIFY2(propose_boxes.isEmpty(), qPrintable(propose_boxes.join(" | ")));
-    QCOMPARE(queued->rowCount(), 1);
-    QCOMPARE(queued->item(0, 1)->text(), QString("Testchain"));
-    QCOMPARE(proposals->rowCount(), 0);
-
-    // An empty title is refused by the node; the page shows the error and stays as it is.
-    QCOMPARE(WithMessageBoxes(QMessageBox::Ok, [&] { page.findChild<QPushButton*>("proposeButton")->click(); }).size(), 1);
-    QCOMPARE(queued->rowCount(), 1);
-
-    // The next block carries the proposal; this node acks it.
-    MineBlock(test);
     page.refresh();
-    QCOMPARE(queued->rowCount(), 0);
-    QCOMPARE(proposals->rowCount(), 1);
-    QCOMPARE(proposals->item(0, 0)->text(), QString("3"));
-    QCOMPARE(proposals->item(0, 7)->text(), QString("yes"));
-    SaveScreenshot(page, "sidechains-proposals");
-
-    // Stop acking and ack again.
-    proposals->setCurrentCell(0, 0);
-    page.findChild<QPushButton*>("nackButton")->click();
-    QCOMPARE(proposals->item(0, 7)->text(), QString("no"));
-    UniValue ack_params{UniValue::VARR};
-    ack_params.push_back(proposals->item(0, 8)->text().toStdString());
-    node.executeRpc("acksidechain", ack_params, "/");
-
-    for (int i{1}; i < ACTIVATION_PERIOD; ++i) MineBlock(test);
-    page.refresh();
-    QCOMPARE(proposals->rowCount(), 0);
-    QCOMPARE(sidechains->rowCount(), 1);
-    QCOMPARE(sidechains->item(0, 1)->text(), QString("Testchain"));
-
-    // Deposit to it.
-    tabs->setCurrentIndex(0);
-    auto* deposit_button{page.findChild<QPushButton*>("depositButton")};
-    QVERIFY(!deposit_button->isEnabled());
-    sidechains->setCurrentCell(0, 0);
-    QVERIFY(deposit_button->isEnabled());
-    page.findChild<QLineEdit*>("depositDestination")->setText("alice");
-    page.findChild<BitcoinAmountField*>("depositAmount")->setValue(5 * COIN);
-    // A question to confirm, then the transaction id.
-    const QStringList deposit_boxes{WithMessageBoxes(QMessageBox::Yes, [&] { deposit_button->click(); })};
-    QCOMPARE(deposit_boxes.size(), 2);
-    QVERIFY2(deposit_boxes[1].startsWith("Deposit sent"), qPrintable(deposit_boxes[1]));
-    QCOMPARE(test.m_node.mempool->size(), 1U);
-    MineBlock(test);
-    page.refresh();
-    QVERIFY(sidechains->item(0, 2)->text().startsWith("5.00"));
-    SaveScreenshot(page, "sidechains-deposit");
-
-    // A withdrawal bundle handed to the node shows up after the next block, and can be voted on.
-    CMutableTransaction bundle;
-    bundle.vin.resize(1);
-    bundle.vin[0].scriptSig = CScript() << OP_0;
-    bundle.vout.emplace_back(0, drivechain::DestinationScript(drivechain::WITHDRAWAL_RETURN_DEST));
-    bundle.vout.emplace_back(0, drivechain::WithdrawalFeeScript(1000));
-    bundle.vout.emplace_back(2 * COIN, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
-    UniValue bundle_params{UniValue::VARR};
-    bundle_params.push_back(3);
-    bundle_params.push_back(EncodeHexTx(CTransaction{bundle}));
-    node.executeRpc("receivewithdrawalbundle", bundle_params, "/");
-    MineBlock(test);
-    tabs->setCurrentIndex(2);
-    page.refresh();
-    QCOMPARE(bundles->rowCount(), 1);
-    QCOMPARE(bundles->item(0, 5)->text(), QString("abstain"));
-    bundles->setCurrentCell(0, 0);
-    page.findChild<QPushButton*>("upvoteButton")->click();
-    QCOMPARE(bundles->item(0, 5)->text(), QString("upvote"));
-
-    for (int i{1}; i < WITHDRAWAL_MIN_SCORE; ++i) MineBlock(test);
-    page.refresh();
-    QCOMPARE(bundles->rowCount(), 1);
-    QCOMPARE(bundles->item(0, 3)->text(), QString("yes"));
-    SaveScreenshot(page, "sidechains-withdrawals");
-
-    // Paying the bundle out is the business of the block assembler; see feature_drivechain.py.
-    tabs->setCurrentIndex(0);
-    page.refresh();
-    QVERIFY(sidechains->item(0, 2)->text().startsWith("5.00"));
-    QCOMPARE(sidechains->item(0, 3)->text(), QString("1"));
+    QVERIFY(page.findChild<QLabel*>("mainchainSummary")->text().contains("not running as a sidechain"));
+    QVERIFY(!page.findChild<QTabWidget*>("mainchainTabs")->isEnabled());
+    SaveScreenshot(page, "mainchain-page");
 
     TestTools(test, client_model);
 

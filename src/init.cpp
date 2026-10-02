@@ -190,7 +190,7 @@ static constexpr int MIN_CORE_FDS = MIN_LEVELDB_FDS + NUM_FDS_MESSAGE_CAPTURE;
 /**
  * The PID file facilities.
  */
-static const char* BITCOIN_PID_FILENAME = "chainsd.pid";
+static const char* BITCOIN_PID_FILENAME = CLIENT_BIN_NAME "d.pid";
 /**
  * True if this process has created a PID file.
  * Used to determine whether we should remove the PID file on shutdown.
@@ -2185,9 +2185,8 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         node.follower = std::make_unique<sidechain::Follower>(node, std::move(options));
         chainman.m_mainchain_poll = [&node] { node.follower->Poll(); };
         std::string error;
-        if (!node.follower->Sync(error)) {
-            InitWarning(strprintf(_("This node cannot follow the mainchain, without which it cannot tell which blocks are valid. It keeps trying. %s"), error));
-        }
+        // If the mainchain node cannot be reached, the node says so in its warnings and keeps trying.
+        node.follower->Sync(error);
         node.follower->Start();
     }
 

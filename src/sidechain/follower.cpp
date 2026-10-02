@@ -11,10 +11,12 @@
 #include <interfaces/mining.h>
 #include <logging.h>
 #include <node/context.h>
+#include <node/warnings.h>
 #include <pow.h>
 #include <rpc/util.h>
 #include <sidechain/mainchain.h>
 #include <util/threadnames.h>
+#include <util/translation.h>
 #include <validation.h>
 
 namespace sidechain {
@@ -168,12 +170,22 @@ bool Follower::Sync(std::string& error)
     } catch (const std::exception& e) {
         error = e.what();
         LOCK(m_mutex);
-        if (m_status.connected || m_status.error != error) LogWarning("%s", error);
+        if (m_status.connected || m_status.error != error) {
+            LogWarning("%s", error);
+            // Shown where the node shows its warnings, such as the status bar of the GUI.
+            if (m_node.warnings) {
+                m_node.warnings->Unset(node::Warning::MAINCHAIN_UNREACHABLE);
+                m_node.warnings->Set(node::Warning::MAINCHAIN_UNREACHABLE, strprintf(_("This node cannot follow the mainchain, without which it cannot tell which new blocks are valid. %s"), error));
+            }
+        }
         m_status = {false, error};
         return false;
     }
     LOCK(m_mutex);
-    if (!m_status.connected) LogInfo("Following the mainchain node at %s:%u", m_client.GetOptions().host, m_client.GetOptions().port);
+    if (!m_status.connected) {
+        LogInfo("Following the mainchain node at %s:%u", m_client.GetOptions().host, m_client.GetOptions().port);
+        if (m_node.warnings) m_node.warnings->Unset(node::Warning::MAINCHAIN_UNREACHABLE);
+    }
     m_status = {true, {}};
     return true;
 }

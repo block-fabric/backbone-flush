@@ -1,3 +1,14 @@
+Sidechain template
+==================
+
+A sidechain of the Chains mainchain with nothing in it but what every sidechain
+needs: blind merged mining, deposits from the mainchain and withdrawals to it.
+Copy it to make a sidechain. See [doc/sidechain.md](doc/sidechain.md) for how it
+works, how to try it, and how to make your own.
+
+It is derived from the Chains mainchain, which is derived from Bitcoin Core;
+the rest of this file is from there.
+
 Bitcoin Core integration/staging tree
 =====================================
 

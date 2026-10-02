@@ -310,8 +310,8 @@ void BitcoinGUI::createActions()
     historyAction->setShortcut(QKeySequence(QStringLiteral("Alt+4")));
     tabGroup->addAction(historyAction);
 
-    sidechainAction = new QAction(platformStyle->SingleColorIcon(":/icons/proxy"), tr("Si&dechains"), this);
-    sidechainAction->setStatusTip(tr("Deposit to sidechains, and manage sidechain proposals and withdrawal votes"));
+    sidechainAction = new QAction(platformStyle->SingleColorIcon(":/icons/proxy"), tr("&Mainchain"), this);
+    sidechainAction->setStatusTip(tr("Deposit from the mainchain, withdraw to it, and mine this chain"));
     sidechainAction->setToolTip(sidechainAction->statusTip());
     sidechainAction->setCheckable(true);
     sidechainAction->setShortcut(QKeySequence(QStringLiteral("Alt+5")));
@@ -633,7 +633,7 @@ void BitcoinGUI::createMenuBar()
         banking->addAction(m_load_psbt_clipboard_action);
     }
 
-    QMenu* use{appMenuBar->addMenu(tr("&Use Chains"))};
+    QMenu* use{appMenuBar->addMenu(tr("&Use %1").arg(CLIENT_NAME))};
     window_action(use, tr("Timestamp &File"), tr("Prove that a file existed, by publishing its fingerprint on the chain"), m_timestamp_dialog);
     window_action(use, tr("OP_RETURN &Graffiti"), tr("Read the messages written on the chain, and write one"), m_graffiti_dialog);
     if (walletFrame) {
@@ -644,12 +644,11 @@ void BitcoinGUI::createMenuBar()
         use->addAction(sidechainAction);
     }
 
-    QMenu* work{appMenuBar->addMenu(tr("W&ork for Chains"))};
-    window_action(work, tr("Solo &Mine"), tr("Mine blocks with the processor of this computer"), m_mining_dialog);
+    QMenu* work{appMenuBar->addMenu(tr("W&ork for %1").arg(CLIENT_NAME))};
     if (walletFrame) {
-        QAction* sidechain_admin{work->addAction(tr("Sidechain &Proposals and Votes"))};
-        sidechain_admin->setStatusTip(tr("Propose sidechains, acknowledge proposals and vote on withdrawals in the blocks this node mines"));
-        connect(sidechain_admin, &QAction::triggered, this, [this] { showNormalIfMinimized(); gotoSidechainPage(); });
+        QAction* merged_mining{work->addAction(tr("&Merged Mining"))};
+        merged_mining->setStatusTip(tr("Have the miners of the mainchain mine the blocks of this chain"));
+        connect(merged_mining, &QAction::triggered, this, [this] { showNormalIfMinimized(); gotoSidechainPage(); });
     }
 
     QMenu* tools{appMenuBar->addMenu(tr("&Crypto Tools"))};

@@ -5,6 +5,8 @@
 
 #include <kernel/chainparams.h>
 
+#include <arith_uint256.h>
+
 #include <chainparamsseeds.h>
 #include <consensus/amount.h>
 #include <consensus/merkle.h>
@@ -71,6 +73,43 @@ static CBlock CreateGenesisBlock(uint32_t nTime, uint32_t nNonce, uint32_t nBits
     const char* pszTimestamp = "The Times 03/Jan/2009 Chancellor on brink of second bailout for banks";
     const CScript genesisOutputScript = CScript() << "04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f"_hex << OP_CHECKSIG;
     return CreateGenesisBlock(pszTimestamp, genesisOutputScript, nTime, nNonce, nBits, nVersion, genesisReward);
+}
+
+void CChainParams::MakeSidechain(const SidechainIdentity& identity)
+{
+    consensus.sidechain.enabled = true;
+    consensus.sidechain.slot = identity.slot;
+    // A sidechain has no sidechains of its own.
+    consensus.drivechain.max_sidechains = 0;
+    // The mainchain makes no rule about how the blocks of a sidechain are signed.
+    consensus.signet_blocks = false;
+    consensus.signet_challenge.clear();
+
+    // The chain is secured by the work of the mainchain. The proof of work of
+    // its own blocks is kept as a formality that takes a couple of hashes, so
+    // that the code inherited from the mainchain needs no changes.
+    consensus.powLimit = uint256{"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"};
+    consensus.fPowNoRetargeting = true;
+    consensus.fPowAllowMinDifficultyBlocks = false;
+    consensus.enforce_BIP94 = false;
+    consensus.nMinimumChainWork = uint256{};
+    consensus.defaultAssumeValid = uint256{};
+
+    pchMessageStart = identity.message_start;
+    nDefaultPort = identity.default_port;
+    bech32_hrp = identity.bech32_hrp;
+
+    // The first block. It creates no coins: all coins come from the mainchain.
+    genesis = CreateGenesisBlock(identity.genesis_message, CScript() << OP_RETURN, identity.genesis_time, /*nNonce=*/0, 0x207fffff, 1, 0);
+    arith_uint256 target;
+    target.SetCompact(genesis.nBits);
+    while (UintToArith256(genesis.GetHash()) > target) ++genesis.nNonce;
+    consensus.hashGenesisBlock = genesis.GetHash();
+
+    vFixedSeeds.clear();
+    vSeeds.clear();
+    m_assumeutxo_data = {};
+    chainTxData = ChainTxData{.nTime = identity.genesis_time, .tx_count = 1, .dTxRate = 0};
 }
 
 void CChainParams::ApplyDeploymentOptions(const DeploymentOptions& opts)
@@ -193,6 +232,12 @@ public:
             .commitment_period = 649,
             .redownload_buffer_size = 15400,
         };
+
+        // This chain is a sidechain of the Chains mainchain.
+        // TODO for a new sidechain: its slot, its own message, magic bytes, port and address prefix.
+        MakeSidechain({.slot = 0, .genesis_message = "Sidechain template, main network", .genesis_time = 1790900000,
+                       .message_start = {0x5c, 0x1d, 0xec, 0x01}, .default_port = 9655, .bech32_hrp = "sc"});
+        consensus.coinbase_maturity = 6; // deposits and fees can be spent after six blocks
     }
 };
 
@@ -287,6 +332,11 @@ public:
             .commitment_period = 649,
             .redownload_buffer_size = 15400,
         };
+
+        // This chain is a sidechain of the Chains testnet.
+        MakeSidechain({.slot = 0, .genesis_message = "Sidechain template, test network", .genesis_time = 1790900000,
+                       .message_start = {0x5c, 0x1d, 0xec, 0x02}, .default_port = 19655, .bech32_hrp = "tsc"});
+        consensus.coinbase_maturity = 6;
     }
 };
 
@@ -390,6 +440,11 @@ public:
             .commitment_period = 629,
             .redownload_buffer_size = 15885,
         };
+
+        // This chain is a sidechain of the Chains signet. Its own blocks are not signed.
+        MakeSidechain({.slot = 0, .genesis_message = "Sidechain template, signet", .genesis_time = 1790900000,
+                       .message_start = {0x5c, 0x1d, 0xec, 0x03}, .default_port = 39655, .bech32_hrp = "tsc"});
+        consensus.coinbase_maturity = 6;
     }
 };
 
@@ -436,11 +491,11 @@ public:
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
 
-        pchMessageStart[0] = 0xc7;
-        pchMessageStart[1] = 0xe8;
-        pchMessageStart[2] = 0xc1;
-        pchMessageStart[3] = 0xda;
-        nDefaultPort = 29555;
+        pchMessageStart[0] = 0x5c;
+        pchMessageStart[1] = 0x1d;
+        pchMessageStart[2] = 0xec;
+        pchMessageStart[3] = 0x04;
+        nDefaultPort = 29655;
         nPruneAfterHeight = opts.fastprune ? 100 : 1000;
 
         // On request this chain is a sidechain, with what tests need to be quick.

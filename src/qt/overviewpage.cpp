@@ -140,7 +140,9 @@ OverviewPage::OverviewPage(const PlatformStyle *platformStyle, QWidget *parent) 
 
     // What happens on the chain, below what happens in the wallet.
     m_chain_activity = new ChainActivity(this);
-    ui->topLayout->addWidget(m_chain_activity, 1);
+    // Room for the rows of its tables; the wallet part above keeps the rest.
+    m_chain_activity->setMinimumHeight(250);
+    ui->topLayout->addWidget(m_chain_activity);
     connect(m_chain_activity, &ChainActivity::detailsRequested, this, &OverviewPage::explorerRequested);
 
     // use a SingleColorIcon for the "out of sync warning" icon

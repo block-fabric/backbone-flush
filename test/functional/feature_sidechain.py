@@ -5,7 +5,7 @@
 """Test the sidechain rules against a mainchain node.
 
 The nodes of the test are nodes of this sidechain. The mainchain node is a
-`chainsd` of the Chains mainchain, looked for in the directory named by the
+node of the Chains mainchain, looked for in the directory named by the
 environment variable MAINCHAIN_BIN_DIR, or else in ../chains/build/bin next
 to this source tree. The test is skipped if there is none.
 """
@@ -26,6 +26,9 @@ from test_framework.util import (
     p2p_port,
     rpc_port,
 )
+
+# The node program of the mainchain.
+MAINCHAIN_DAEMON = "chains" + "d"
 
 SLOT = 3
 # Regtest parameters of the mainchain, see CRegTestParams there.
@@ -57,7 +60,7 @@ class SidechainTest(BitcoinTestFramework):
 
     def start_mainchain(self):
         bin_dir = os.environ.get("MAINCHAIN_BIN_DIR", os.path.join(self.config["environment"]["SRCDIR"], "..", "chains", "build", "bin"))
-        binary = os.path.join(bin_dir, "chainsd")
+        binary = os.path.join(bin_dir, MAINCHAIN_DAEMON)
         if not os.path.isfile(binary):
             raise SkipTest(f"no mainchain node at {binary}; set MAINCHAIN_BIN_DIR")
         datadir = os.path.join(self.options.tmpdir, "mainchain")
