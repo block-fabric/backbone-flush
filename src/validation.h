@@ -14,6 +14,7 @@
 #include <consensus/amount.h>
 #include <drivechain/miner.h>
 #include <drivechain/scdb.h>
+#include <sidechain/mainchain.h>
 #include <cuckoocache.h>
 #include <deploymentstatus.h>
 #include <kernel/chain.h>
@@ -1051,6 +1052,16 @@ protected:
 public:
     //! The drivechain decisions this node takes when it builds a block.
     drivechain::MinerState m_drivechain_miner;
+
+    //! The record of the mainchain, if this chain is a sidechain.
+    std::unique_ptr<sidechain::Mainchain> m_mainchain;
+    //! Brings the record of the mainchain up to date, if it can be done without waiting.
+    std::function<void()> m_mainchain_poll;
+    //! Headers that were turned away because no mainchain block on record committed
+    //! to them. They are tried again when the record gets such a block.
+    mutable std::map<uint256, CBlockHeader> m_bmm_waiting GUARDED_BY(::cs_main);
+    /** What the sidechain rules need to check a block; empty if this chain is not a sidechain. */
+    std::optional<drivechain::SideContext> SideContext(CAmount& minted) const;
 
     using Options = kernel::ChainstateManagerOpts;
 

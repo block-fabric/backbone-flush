@@ -63,6 +63,8 @@
 #include <node/mempool_persist.h>
 #include <node/mempool_persist_args.h>
 #include <node/cpuminer.h>
+#include <sidechain/follower.h>
+#include <sidechain/mainclient.h>
 #include <node/mining_args.h>
 #include <node/mining_types.h>
 #include <node/peerman_args.h>
@@ -327,6 +329,10 @@ void Shutdown(NodeContext& node)
     StopRPC();
     StopHTTPServer();
     if (node.cpu_miner) node.cpu_miner->Stop();
+    if (node.follower) {
+        node.follower->Stop();
+        if (node.chainman) node.chainman->m_mainchain_poll = nullptr;
+    }
     for (auto& client : node.chain_clients) {
         try {
             client->stop();
@@ -740,6 +746,13 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-rpccookieperms=<readable-by>", strprintf("Set permissions on the RPC auth cookie file so that it is readable by [owner|group|all] (default: owner [via umask 0077])"), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcmaxconnections=<n>", strprintf("The maximum number of connected HTTP clients (default: %d)", DEFAULT_MAX_HTTP_CONNECTIONS), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcpassword=<pw>", "Password for JSON-RPC connections", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
+    argsman.AddArg("-mainchainrpcconnect=<ip>", "Address of the mainchain node that this sidechain node follows (default: 127.0.0.1)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpcport=<port>", "JSON-RPC port of the mainchain node (default: 9554, testnet: 19554, signet: 39554, regtest: 29554)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpcuser=<user>", "Username for the JSON-RPC connection to the mainchain node. Without it the cookie file of the mainchain node is used.", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpcpassword=<pw>", "Password for the JSON-RPC connection to the mainchain node", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpccookiefile=<file>", "Cookie file of the mainchain node (default: the .cookie file in the data directory of the mainchain node)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchaindatadir=<dir>", "Data directory of the mainchain node, where its cookie file is looked for (default: ~/.chains)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpcwallet=<name>", "Wallet of the mainchain node that pays for blind merged mining (default: its only loaded wallet)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-rpcport=<port>", strprintf("Listen for JSON-RPC connections on <port> (default: %u, testnet: %u, signet: %u, regtest: %u)", defaultBaseParams->RPCPort(), testnetBaseParams->RPCPort(), signetBaseParams->RPCPort(), regtestBaseParams->RPCPort()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpcservertimeout=<n>", strprintf("Timeout during HTTP requests (default: %d)", DEFAULT_HTTP_SERVER_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpcthreads=<n>", strprintf("Set the number of threads to service RPC calls (default: %d)", DEFAULT_HTTP_THREADS), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -2149,6 +2162,33 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     if (ShutdownRequested(node)) {
         return true;
+    }
+
+    // On a sidechain, follow the mainchain. Blocks are checked against the record of it.
+    if (chainman.GetConsensus().sidechain.enabled) {
+        sidechain::MainClient::Options options;
+        const ChainType chain_type{chainman.GetParams().GetChainType()};
+        options.host = args.GetArg("-mainchainrpcconnect", "127.0.0.1");
+        options.port = static_cast<uint16_t>(args.GetIntArg("-mainchainrpcport", chain_type == ChainType::MAIN ? 9554 : chain_type == ChainType::TESTNET ? 19554 : chain_type == ChainType::SIGNET ? 39554 : 29554));
+        if (args.IsArgSet("-mainchainrpcuser")) options.credentials = args.GetArg("-mainchainrpcuser", "") + ":" + args.GetArg("-mainchainrpcpassword", "");
+        if (args.IsArgSet("-mainchainrpccookiefile")) {
+            options.cookie_file = fs::absolute(args.GetPathArg("-mainchainrpccookiefile"));
+        } else {
+            fs::path main_datadir{args.IsArgSet("-mainchaindatadir") ? fs::absolute(args.GetPathArg("-mainchaindatadir")) : GetDefaultDataDir().parent_path() / ".chains"};
+            const char* subdir{chain_type == ChainType::MAIN ? "" : chain_type == ChainType::TESTNET ? "testnet" : chain_type == ChainType::SIGNET ? "signet" : "regtest"};
+            options.cookie_file = main_datadir / subdir / ".cookie";
+        }
+        if (args.IsArgSet("-mainchainrpcwallet")) {
+            options.wallet = args.GetArg("-mainchainrpcwallet", "");
+            options.wallet_set = true;
+        }
+        node.follower = std::make_unique<sidechain::Follower>(node, std::move(options));
+        chainman.m_mainchain_poll = [&node] { node.follower->Poll(); };
+        std::string error;
+        if (!node.follower->Sync(error)) {
+            InitWarning(strprintf(_("This node cannot follow the mainchain, without which it cannot tell which blocks are valid. It keeps trying. %s"), error));
+        }
+        node.follower->Start();
     }
 
     // ********************************************************* Step 12: start node

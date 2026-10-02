@@ -1110,8 +1110,8 @@ RPCMethod encryptwallet();
 
 // spend
 RPCMethod sendtoaddress();
-RPCMethod createsidechaindeposit();
-RPCMethod createbmmrequest();
+RPCMethod createwithdrawal();
+RPCMethod refundwithdrawal();
 RPCMethod sendmany();
 RPCMethod fundrawtransaction();
 RPCMethod bumpfee();
@@ -1184,8 +1184,8 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &send},
         {"wallet", &sendmany},
         {"wallet", &sendtoaddress},
-        {"wallet", &createsidechaindeposit},
-        {"wallet", &createbmmrequest},
+        {"wallet", &createwithdrawal},
+        {"wallet", &refundwithdrawal},
         {"wallet", &setlabel},
         {"wallet", &setwalletflag},
         {"wallet", &signmessage},

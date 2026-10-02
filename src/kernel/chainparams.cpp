@@ -442,6 +442,16 @@ public:
         pchMessageStart[3] = 0xda;
         nDefaultPort = 29555;
         nPruneAfterHeight = opts.fastprune ? 100 : 1000;
+
+        // On request this chain is a sidechain, with what tests need to be quick.
+        if (opts.sidechain_slot) {
+            consensus.sidechain.enabled = true;
+            consensus.sidechain.slot = *opts.sidechain_slot;
+            consensus.sidechain.bundle_retry_delay = 5;
+            // A sidechain has no sidechains of its own.
+            consensus.drivechain.max_sidechains = 0;
+            consensus.coinbase_maturity = 2;
+        }
         m_assumed_blockchain_size = 0;
         m_assumed_chain_state_size = 0;
 

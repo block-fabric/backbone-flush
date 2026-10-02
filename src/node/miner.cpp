@@ -194,6 +194,37 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         ++nBlockTx;
     }
 
+    // Sidechain: what the coinbase has to pay because of what the mainchain did
+    // and of the transactions in the block, and the withdrawal bundle to commit to.
+    std::vector<CTxOut> side_outputs;
+    if (const Consensus::SidechainParams& side_params{chainparams.GetConsensus().sidechain}; side_params.enabled) {
+        const sidechain::Mainchain& mainchain{*Assert(chainman.m_mainchain)};
+        sidechain::State side{m_chainstate.m_scdb.m_side};
+        sidechain::StateUndo undo;
+        std::string reject_reason;
+        // The block is built for the next mainchain block to commit to.
+        if (!side.ApplyMainEvents(mainchain.Height(), mainchain, nHeight, undo, side_outputs, reject_reason)) {
+            throw std::runtime_error(strprintf("%s: the block does not fit the mainchain on record (%s)", __func__, reject_reason));
+        }
+        std::optional<uint256> bundle_hash;
+        std::vector<COutPoint> bundled;
+        if (const auto bundle{side.NextBundle(nHeight, side_params, &bundled)}) {
+            // A bundle takes the withdrawals out of reach of refunds. If some are being
+            // refunded by transactions that may go in this block, the bundle waits.
+            const bool refund_pending{m_mempool && WITH_LOCK(m_mempool->cs, return std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) EXCLUSIVE_LOCKS_REQUIRED(m_mempool->cs) { return m_mempool->m_refunds.contains(withdrawal); }))};
+            if (!refund_pending) {
+                bundle_hash = bundle->GetHash().ToUint256();
+                if (!side.StartBundle(*bundle_hash, nHeight, side_params, undo, reject_reason)) bundle_hash.reset();
+            }
+        }
+        for (size_t i{1}; i < pblock->vtx.size(); ++i) {
+            if (!side.ApplyTx(*pblock->vtx[i], nHeight, side_params, undo, side_outputs, reject_reason)) {
+                throw std::runtime_error(strprintf("%s: transaction %s breaks the sidechain rules (%s)", __func__, pblock->vtx[i]->GetHash().ToString(), reject_reason));
+            }
+        }
+        if (bundle_hash) side_outputs.emplace_back(0, sidechain::BundleCommitScript(*bundle_hash));
+    }
+
     const auto time_1{SteadyClock::now()};
 
     m_last_block_num_txs = nBlockTx;
@@ -218,6 +249,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus())};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
+    // Sidechain payouts come right after the first output, as the rules want them.
+    for (const CTxOut& output : side_outputs) {
+        coinbaseTx.vout.push_back(output);
+    }
     // Drivechain messages. Mining clients that build their own coinbase have to include them.
     for (const CTxOut& message : drivechain_additions.coinbase_outputs) {
         coinbaseTx.vout.push_back(message);

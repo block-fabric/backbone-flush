@@ -157,6 +157,8 @@ public:
         DeploymentOptions dep_opts{};
         bool fastprune{false};
         bool enforce_bip94{false};
+        //! If set, the chain is a sidechain in this slot of the mainchain.
+        std::optional<uint32_t> sidechain_slot{};
     };
 
     struct MainNetOptions {

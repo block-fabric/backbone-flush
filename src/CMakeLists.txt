@@ -117,6 +117,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   compressor.cpp
   core_io.cpp
   drivechain/scdb.cpp
+  sidechain/state.cpp
   drivechain/sidechain.cpp
   deploymentinfo.cpp
   external_signer.cpp
@@ -218,6 +219,9 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/abort.cpp
   node/blockmanager_args.cpp
   drivechain/db.cpp
+  sidechain/follower.cpp
+  sidechain/mainchain.cpp
+  sidechain/mainclient.cpp
   drivechain/miner.cpp
   node/blockstorage.cpp
   node/caches.cpp
@@ -263,6 +267,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   rest.cpp
   rpc/blockchain.cpp
   rpc/drivechain.cpp
+  rpc/sidechain.cpp
   rpc/external_signer.cpp
   rpc/fees.cpp
   rpc/mempool.cpp

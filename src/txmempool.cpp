@@ -245,6 +245,9 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
     for (const drivechain::BmmRequest& request : drivechain::GetBmmRequests(tx)) {
         m_bmm_requests[request.slot] = tx.GetHash();
     }
+    for (const CTxOut& out : tx.vout) {
+        if (const auto refund{sidechain::ParseRefundScript(out.scriptPubKey)}) m_refunds[refund->withdrawal] = tx.GetHash();
+    }
     // Don't bother worrying about child transactions of this one.
     // Normal case of a new transaction arriving is that there can't be any
     // children, because such children would be orphans.
@@ -300,6 +303,13 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
     for (const drivechain::BmmRequest& request : drivechain::GetBmmRequests(it->GetTx())) {
         if (const auto bmm{m_bmm_requests.find(request.slot)}; bmm != m_bmm_requests.end() && bmm->second == it->GetTx().GetHash()) {
             m_bmm_requests.erase(bmm);
+        }
+    }
+    for (const CTxOut& out : it->GetTx().vout) {
+        if (const auto refund{sidechain::ParseRefundScript(out.scriptPubKey)}) {
+            if (const auto entry{m_refunds.find(refund->withdrawal)}; entry != m_refunds.end() && entry->second == it->GetTx().GetHash()) {
+                m_refunds.erase(entry);
+            }
         }
     }
 
@@ -550,7 +560,8 @@ void CTxMemPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendhei
         TxValidationState dummy_state; // Not used. CheckTxInputs() should always pass
         CAmount txfee = 0;
         assert(!tx.IsCoinBase());
-        assert(Consensus::CheckTxInputs(tx, dummy_state, mempoolDuplicate, spendheight, txfee));
+        // The maturity of coinbase outputs was checked, with the maturity of this chain, when the transaction was accepted.
+        assert(Consensus::CheckTxInputs(tx, dummy_state, mempoolDuplicate, spendheight, txfee, /*coinbase_maturity=*/0));
         for (const auto& input: tx.vin) mempoolDuplicate.SpendCoin(input.prevout);
         AddCoins(mempoolDuplicate, tx, std::numeric_limits<int>::max());
     }
