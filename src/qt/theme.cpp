@@ -7,18 +7,22 @@
 #include <QApplication>
 #include <QColor>
 #include <QFile>
+#include <QFont>
 #include <QObject>
 #include <QPalette>
 #include <QSettings>
 #include <QStyle>
 #include <QStyleFactory>
 
+#include <algorithm>
 #include <optional>
 
 namespace Theme {
 namespace {
 const char* const SETTING{"Theme"};
 const char* const SYSTEM{"system"};
+const char* const SETTING_FONT_FAMILY{"FontFamily"};
+const char* const SETTING_FONT_SIZE{"FontSizeAdjustment"};
 
 /** The colours a theme is made of. The rest of the palette is derived from them. */
 struct Colors {
@@ -37,25 +41,43 @@ struct Colors {
 };
 
 const Colors THEMES[]{
+    // Complete style sheets, from the Skydoge wallet. The colours next to each are the
+    // ones the icons and the widgets without a style of their own are drawn with.
     {"light", QT_TRANSLATE_NOOP("Theme", "Light"),
-     "#f3f4f6", "#1b1f24", "#ffffff", "#f0f2f5", "#1b1f24", "#e6e8ec", "#1b1f24", "#2f6fde", "#ffffff", "#1a5fd0"},
+     "#f4f6f9", "#171a1f", "#f6f8fa", "#e8ebee", "#171a1f", "#d9dbde", "#171a1f", "#0aa46b", "#ffffff", "#0aa46b", ":/themes/light"},
     {"dark", QT_TRANSLATE_NOOP("Theme", "Dark"),
-     "#2b2d31", "#e6e6e6", "#1f2023", "#27292d", "#e6e6e6", "#3a3d42", "#e6e6e6", "#3d8bfd", "#ffffff", "#6aa9ff"},
-    // The dark theme of the Drivechain and Skydoge wallets, based on QDarkStyleSheet.
+     "#14161a", "#e8eaed", "#0f1013", "#1e2024", "#e8eaed", "#2d2f33", "#e8eaed", "#4d9fff", "#051221", "#4d9fff", ":/themes/dark"},
+    {"classic", QT_TRANSLATE_NOOP("Theme", "Classic"),
+     "#eceae4", "#1c1c1a", "#f0efea", "#e1dfd9", "#1c1c1a", "#d3d1cb", "#1c1c1a", "#d6e4f2", "#10314f", "#d6e4f2", ":/themes/classic"},
+    {"sepia", QT_TRANSLATE_NOOP("Theme", "Sepia Parchment"),
+     "#efe6cf", "#4b3b2a", "#f3ecdb", "#e6ddc6", "#4b3b2a", "#dbd1bb", "#4b3b2a", "#8b5e34", "#fbf6ea", "#8b5e34", ":/themes/sepia"},
+    {"rose", QT_TRANSLATE_NOOP("Theme", "Rose Quartz"),
+     "#fff5f7", "#4a2c33", "#fff7f9", "#f5eaed", "#4a2c33", "#e9dcdf", "#4a2c33", "#e0637f", "#ffffff", "#e0637f", ":/themes/rose"},
+    {"midnight", QT_TRANSLATE_NOOP("Theme", "Midnight Money"),
+     "#0d1117", "#e6edf3", "#090c11", "#171c22", "#e6edf3", "#272b31", "#e6edf3", "#3d8bfd", "#e6edf3", "#3d8bfd", ":/themes/midnight"},
+    {"ocean", QT_TRANSLATE_NOOP("Theme", "Ocean Teal"),
+     "#06232e", "#d6f0f5", "#041a22", "#102d37", "#d6f0f5", "#1e3b45", "#d6f0f5", "#3d8bfd", "#d6f0f5", "#3d8bfd", ":/themes/ocean"},
+    {"nord", QT_TRANSLATE_NOOP("Theme", "Nord Frost"),
+     "#2e3440", "#eceff4", "#222730", "#373d49", "#eceff4", "#444a55", "#eceff4", "#3d8bfd", "#eceff4", "#3d8bfd", ":/themes/nord"},
+    {"dracula", QT_TRANSLATE_NOOP("Theme", "Dracula"),
+     "#21222c", "#f8f8f2", "#181921", "#2b2c35", "#f8f8f2", "#3a3b43", "#f8f8f2", "#3d8bfd", "#f8f8f2", "#3d8bfd", ":/themes/dracula"},
+    {"glass", QT_TRANSLATE_NOOP("Theme", "Glass Neobank"),
+     "#0e1220", "#eaf0ff", "#0a0d18", "#191d2b", "#eaf0ff", "#282c3a", "#eaf0ff", "#3d8bfd", "#eaf0ff", "#3d8bfd", ":/themes/glass"},
+    {"amethyst", QT_TRANSLATE_NOOP("Theme", "Amethyst Royal"),
+     "#1a1327", "#ede9f5", "#130e1d", "#241d31", "#ede9f5", "#332c3f", "#ede9f5", "#3d8bfd", "#ede9f5", "#3d8bfd", ":/themes/amethyst"},
+    {"wow", QT_TRANSLATE_NOOP("Theme", "Wow"),
+     "#0e0b1c", "#f2eefb", "#0a0815", "#191627", "#f2eefb", "#292636", "#f2eefb", "#7c3aed", "#ffffff", "#7c3aed", ":/themes/wow"},
+    {"solar", QT_TRANSLATE_NOOP("Theme", "Solar Gold"),
+     "#131110", "#f5efe6", "#0e0c0c", "#1e1c1a", "#f5efe6", "#2e2b29", "#f5efe6", "#3d8bfd", "#f5efe6", "#3d8bfd", ":/themes/solar"},
+    {"crimson", QT_TRANSLATE_NOOP("Theme", "Crimson Ember"),
+     "#1a1213", "#f6e9e8", "#130d0e", "#251c1d", "#f6e9e8", "#342b2c", "#f6e9e8", "#3d8bfd", "#f6e9e8", "#3d8bfd", ":/themes/crimson"},
+    {"neon", QT_TRANSLATE_NOOP("Theme", "Neon Terminal"),
+     "#070b11", "#cfeaf2", "#05080c", "#11161c", "#cfeaf2", "#1f252c", "#cfeaf2", "#00e5ff", "#04161a", "#00e5ff", ":/themes/neon"},
+    {"matrix", QT_TRANSLATE_NOOP("Theme", "Matrix Green"),
+     "#000000", "#33ff66", "#000000", "#020c05", "#33ff66", "#061e0c", "#33ff66", "#3d8bfd", "#00ff41", "#3d8bfd", ":/themes/matrix"},
+    // The dark theme of the Drivechain wallets, based on QDarkStyleSheet.
     {"qdarkstyle", QT_TRANSLATE_NOOP("Theme", "Dark (classic Drivechain)"),
      "#19232d", "#f0f0f0", "#19232d", "#1c2a36", "#f0f0f0", "#32414b", "#f0f0f0", "#1464a0", "#f0f0f0", "#148cd2", ":/themes/qdarkstyle"},
-    {"midnight", QT_TRANSLATE_NOOP("Theme", "Midnight Blue"),
-     "#101a2c", "#dbe6f7", "#0a1220", "#0f192b", "#dbe6f7", "#1b2a45", "#dbe6f7", "#22b8cf", "#04121a", "#5cd6e8"},
-    {"gold", QT_TRANSLATE_NOOP("Theme", "Chains Gold"),
-     "#1c1a17", "#ece4d6", "#131210", "#1a1815", "#ece4d6", "#2c2823", "#ece4d6", "#e0a526", "#1a1300", "#f2c14e"},
-    {"forest", QT_TRANSLATE_NOOP("Theme", "Forest"),
-     "#16211b", "#dcebe0", "#0f1813", "#141f19", "#dcebe0", "#22342a", "#dcebe0", "#3fb873", "#04160b", "#7bd9a2"},
-    {"solarized-dark", QT_TRANSLATE_NOOP("Theme", "Solarized Dark"),
-     "#073642", "#93a1a1", "#002b36", "#04313d", "#a7b4b4", "#0d4452", "#a7b4b4", "#268bd2", "#fdf6e3", "#2aa198"},
-    {"solarized-light", QT_TRANSLATE_NOOP("Theme", "Solarized Light"),
-     "#eee8d5", "#586e75", "#fdf6e3", "#f5efdc", "#4a5f66", "#e4ddc8", "#4a5f66", "#268bd2", "#fdf6e3", "#2176b4"},
-    {"rose", QT_TRANSLATE_NOOP("Theme", "Rose"),
-     "#fbf1f3", "#3a2228", "#ffffff", "#f8e9ec", "#3a2228", "#f1dde2", "#3a2228", "#c2416b", "#ffffff", "#a8325a"},
 };
 
 const Colors* Find(const QString& id)
@@ -121,10 +143,20 @@ QString MakeStyleSheet(const Colors& c)
         .arg(c.button_text.name(), c.button.name(), c.highlight.name(), c.highlighted_text.name());
 }
 
+QString SidebarStyleSheet(const Colors& c)
+{
+    return QStringLiteral(
+               "QToolBar#sidebar { border: none; border-right: 2px solid %1; spacing: 2px; padding: 4px 0px; }"
+               "QToolBar#sidebar QToolButton { padding: 6px 8px; border-radius: 4px; text-align: left; }"
+               "QToolBar#sidebar QToolButton:checked { background-color: %1; color: %2; }")
+        .arg(c.highlight.name(), c.highlighted_text.name());
+}
+
 /** The look the application had before a theme was applied. */
 struct Original {
     QPalette palette;
     QString style;
+    QFont font;
 };
 std::optional<Original> g_original;
 } // namespace
@@ -152,8 +184,11 @@ void Apply(const QString& id)
 {
     const Colors* theme{Find(id)};
     if (!g_original) {
-        if (!theme) return;
-        g_original = Original{QApplication::palette(), QApplication::style()->objectName()};
+        if (!theme) {
+            ApplyFont();
+            return;
+        }
+        g_original = Original{QApplication::palette(), QApplication::style()->objectName(), QApplication::font()};
     }
     if (theme) {
         // The Fusion style draws everything with the palette, which the styles of some desktops do not.
@@ -162,7 +197,8 @@ void Apply(const QString& id)
         QString style_sheet{MakeStyleSheet(*theme)};
         if (theme->style_sheet) {
             QFile file{theme->style_sheet};
-            if (file.open(QFile::ReadOnly | QFile::Text)) style_sheet = QString::fromUtf8(file.readAll());
+            // The sheet of the theme, then what this wallet has that the sheet does not know of.
+            if (file.open(QFile::ReadOnly | QFile::Text)) style_sheet = QString::fromUtf8(file.readAll()) + SidebarStyleSheet(*theme);
         }
         qApp->setStyleSheet(style_sheet);
     } else {
@@ -170,6 +206,41 @@ void Apply(const QString& id)
         QApplication::setStyle(QStyleFactory::create(g_original->style));
         QApplication::setPalette(g_original->palette);
     }
+    ApplyFont();
+}
+
+QString SavedFontFamily() { return QSettings().value(SETTING_FONT_FAMILY).toString(); }
+
+int SavedFontSizeAdjustment() { return std::clamp(QSettings().value(SETTING_FONT_SIZE, 0).toInt(), MIN_FONT_SIZE_ADJUSTMENT, MAX_FONT_SIZE_ADJUSTMENT); }
+
+void SaveFont(const QString& family, int size_adjustment)
+{
+    QSettings settings;
+    settings.setValue(SETTING_FONT_FAMILY, family);
+    settings.setValue(SETTING_FONT_SIZE, std::clamp(size_adjustment, MIN_FONT_SIZE_ADJUSTMENT, MAX_FONT_SIZE_ADJUSTMENT));
+    ApplyFont();
+}
+
+void ApplyFont()
+{
+    static const QFont original{QApplication::font()};
+    const QString family{SavedFontFamily()};
+    const int adjustment{SavedFontSizeAdjustment()};
+    QFont font{original};
+    if (!family.isEmpty()) font.setFamily(family);
+    if (font.pointSizeF() > 0) font.setPointSizeF(std::max(4.0, font.pointSizeF() + adjustment));
+    QApplication::setFont(font);
+    // Widgets styled by a sheet take their font from it, so the sheet is told too.
+    QString sheet{qApp->styleSheet()};
+    static const QString MARK{QStringLiteral("/*font*/")};
+    const int at{static_cast<int>(sheet.indexOf(MARK))};
+    if (at >= 0) sheet.truncate(at);
+    if (!family.isEmpty() || adjustment != 0) {
+        sheet += MARK + QStringLiteral("QWidget { %1 font-size: %2pt; }")
+                            .arg(family.isEmpty() ? QString{} : QStringLiteral("font-family: \"%1\";").arg(family))
+                            .arg(font.pointSizeF() > 0 ? font.pointSizeF() : 9.0, 0, 'f', 1);
+    }
+    if (sheet != qApp->styleSheet()) qApp->setStyleSheet(sheet);
 }
 
 } // namespace Theme

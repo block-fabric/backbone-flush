@@ -30,6 +30,7 @@
 
 #ifdef ENABLE_WALLET
 #include <qt/walletcontroller.h>
+#include <qt/theme.h>
 #include <qt/walletframe.h>
 #include <qt/walletmodel.h>
 #include <qt/walletview.h>
@@ -710,6 +711,27 @@ void BitcoinGUI::createMenuBar()
     QMenu* node_menu{appMenuBar->addMenu(tr("This &Node"))};
     node_menu->addAction(openRPCConsoleAction);
     node_menu->addAction(optionsAction);
+    // Themes and font size apply at once.
+    QMenu* theme_menu{node_menu->addMenu(tr("&Theme"))};
+    theme_menu->setObjectName("themeMenu");
+    auto* theme_group{new QActionGroup(this)};
+    for (const auto& theme : Theme::Available()) {
+        QAction* action{theme_menu->addAction(theme.name)};
+        action->setCheckable(true);
+        action->setData(theme.id);
+        action->setChecked(theme.id == Theme::Saved());
+        theme_group->addAction(action);
+    }
+    connect(theme_group, &QActionGroup::triggered, this, [](QAction* action) { Theme::Save(action->data().toString()); });
+    connect(theme_menu, &QMenu::aboutToShow, this, [theme_group] {
+        for (QAction* action : theme_group->actions()) action->setChecked(action->data().toString() == Theme::Saved());
+    });
+    QAction* larger{node_menu->addAction(tr("Increase font size"))};
+    larger->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Plus));
+    connect(larger, &QAction::triggered, this, [] { Theme::SaveFont(Theme::SavedFontFamily(), Theme::SavedFontSizeAdjustment() + 1); });
+    QAction* smaller{node_menu->addAction(tr("Decrease font size"))};
+    smaller->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
+    connect(smaller, &QAction::triggered, this, [] { Theme::SaveFont(Theme::SavedFontFamily(), Theme::SavedFontSizeAdjustment() - 1); });
     node_menu->addAction(showHelpMessageAction);
     node_menu->addSeparator();
     node_menu->addAction(aboutAction);

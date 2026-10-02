@@ -14,6 +14,7 @@ class QValidatedLineEdit;
 
 QT_BEGIN_NAMESPACE
 class QComboBox;
+class QSpinBox;
 class QDataWidgetMapper;
 QT_END_NAMESPACE
 
@@ -79,6 +80,8 @@ private:
     OptionsModel* model{nullptr};
     QDataWidgetMapper* mapper{nullptr};
     QComboBox* m_theme{nullptr};
+    QComboBox* m_font_family{nullptr};
+    QSpinBox* m_font_size{nullptr};
 };
 
 #endif // BITCOIN_QT_OPTIONSDIALOG_H

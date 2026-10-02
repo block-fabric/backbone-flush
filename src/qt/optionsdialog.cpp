@@ -24,6 +24,8 @@
 #include <chrono>
 
 #include <QComboBox>
+#include <QFontDatabase>
+#include <QSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QApplication>
@@ -192,6 +194,27 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
     theme_row->addWidget(theme_label);
     theme_row->addWidget(m_theme, 1);
     ui->verticalLayout_Display->insertLayout(1, theme_row);
+
+    /* Font of the whole interface. */
+    auto* font_row{new QHBoxLayout};
+    auto* font_label{new QLabel(tr("&Font:"), this)};
+    m_font_family = new QComboBox(this);
+    m_font_family->setObjectName("fontFamily");
+    m_font_family->addItem(tr("(as on the desktop)"), QString{});
+    for (const QString& family : QFontDatabase::families()) m_font_family->addItem(family, family);
+    m_font_family->setCurrentIndex(std::max(0, m_font_family->findData(Theme::SavedFontFamily())));
+    font_label->setBuddy(m_font_family);
+    m_font_size = new QSpinBox(this);
+    m_font_size->setObjectName("fontSize");
+    m_font_size->setRange(Theme::MIN_FONT_SIZE_ADJUSTMENT, Theme::MAX_FONT_SIZE_ADJUSTMENT);
+    m_font_size->setPrefix(tr("size "));
+    m_font_size->setSuffix(tr(" pt"));
+    m_font_size->setToolTip(tr("How many points larger, or smaller if negative, than on the desktop."));
+    m_font_size->setValue(Theme::SavedFontSizeAdjustment());
+    font_row->addWidget(font_label);
+    font_row->addWidget(m_font_family, 1);
+    font_row->addWidget(m_font_size);
+    ui->verticalLayout_Display->insertLayout(2, font_row);
 
     /* Widget-to-option mapper */
     mapper = new QDataWidgetMapper(this);
@@ -399,6 +422,9 @@ void OptionsDialog::on_okButton_clicked()
 
     mapper->submit();
     if (m_theme->currentData().toString() != Theme::Saved()) Theme::Save(m_theme->currentData().toString());
+    if (m_font_family->currentData().toString() != Theme::SavedFontFamily() || m_font_size->value() != Theme::SavedFontSizeAdjustment()) {
+        Theme::SaveFont(m_font_family->currentData().toString(), m_font_size->value());
+    }
     accept();
     updateDefaultProxyNets();
 }

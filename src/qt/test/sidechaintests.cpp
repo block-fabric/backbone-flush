@@ -318,13 +318,13 @@ void TestTools(TestChain100Setup& test, ClientModel& client_model)
 
     // Themes
     const QPalette original_palette{QApplication::palette()};
-    QCOMPARE(Theme::Available().size(), 10);
+    QCOMPARE(Theme::Available().size(), 18);
     Theme::Apply("midnight");
-    QCOMPARE(QApplication::palette().color(QPalette::Window).name(), QString("#101a2c"));
+    QCOMPARE(QApplication::palette().color(QPalette::Window).name(), QString("#0d1117"));
     multisig.findChild<QTabWidget*>("multisigTabs")->setCurrentIndex(2);
     QApplication::processEvents();
     SaveScreenshot(multisig, "theme-midnight");
-    Theme::Apply("gold");
+    Theme::Apply("solar");
     QApplication::processEvents();
     SaveScreenshot(explorer, "theme-gold");
     Theme::Apply("system");
