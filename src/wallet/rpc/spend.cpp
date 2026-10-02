@@ -5,6 +5,7 @@
 #include <common/messages.h>
 #include <consensus/validation.h>
 #include <core_io.h>
+#include <drivechain/sidechain.h>
 #include <key_io.h>
 #include <node/types.h>
 #include <policy/policy.h>
@@ -334,6 +335,183 @@ RPCMethod sendtoaddress()
     const bool verbose{request.params[10].isNull() ? false : request.params[10].get_bool()};
 
     return SendMoney(*pwallet, coin_control, recipients, comment, comment_to, verbose);
+},
+    };
+}
+
+/**
+ * Sign the inputs of a transaction that belong to the wallet, commit it, and
+ * make sure the mempool took it. `external` holds the coins of the inputs
+ * that do not belong to the wallet and need no signature.
+ * @return the id of the signed transaction
+ */
+static Txid SignAndCommit(CWallet& wallet, CMutableTransaction& mtx, const std::map<COutPoint, Coin>& external)
+{
+    std::map<COutPoint, Coin> coins{external};
+    {
+        LOCK(wallet.cs_wallet);
+        for (const CTxIn& txin : mtx.vin) {
+            if (coins.contains(txin.prevout)) continue;
+            const CWalletTx* wtx{wallet.GetWalletTx(txin.prevout.hash)};
+            if (!wtx || txin.prevout.n >= wtx->GetTx()->vout.size()) throw JSONRPCError(RPC_WALLET_ERROR, "Input not found in the wallet");
+            coins[txin.prevout] = Coin(wtx->GetTx()->vout[txin.prevout.n], /*nHeightIn=*/1, /*fCoinBaseIn=*/false);
+        }
+    }
+    std::map<int, bilingual_str> input_errors;
+    wallet.SignTransaction(mtx, coins, SIGHASH_DEFAULT, input_errors);
+    for (unsigned int i{0}; i < mtx.vin.size(); ++i) {
+        if (external.contains(mtx.vin[i].prevout)) {
+            // Anyone can spend an escrow output at the script level, with nothing in the scriptSig.
+            mtx.vin[i].scriptSig.clear();
+            mtx.vin[i].scriptWitness.SetNull();
+        } else if (input_errors.contains(i)) {
+            throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Signing failed: %s", input_errors.at(i).original));
+        }
+    }
+
+    const CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
+    wallet.CommitTransaction(tx, /*replaces_txid=*/std::nullopt, /*comment=*/std::nullopt, /*comment_to=*/std::nullopt);
+    if (!wallet.chain().isInMempool(tx->GetHash())) {
+        wallet.AbandonTransaction(tx->GetHash());
+        throw JSONRPCError(RPC_WALLET_ERROR, "The transaction was not accepted into the mempool; another deposit to this sidechain may have been made at the same time");
+    }
+    return tx->GetHash();
+}
+
+RPCMethod createsidechaindeposit()
+{
+    return RPCMethod{
+        "createsidechaindeposit",
+        "Deposit coins to a sidechain. The coins are added to the escrow output of the sidechain, and the sidechain\n"
+        "credits them to the given destination once it has seen the deposit." +
+        HELP_REQUIRING_PASSPHRASE,
+        {
+            {"slot", RPCArg::Type::NUM, RPCArg::Optional::NO, "The sidechain slot number"},
+            {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination on the sidechain, in the format the sidechain expects"},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "The amount in " + CURRENCY_UNIT + " to deposit"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
+            {RPCResult::Type::STR_AMOUNT, "total", "The amount held in escrow by the sidechain after this deposit"},
+        }},
+        RPCExamples{HelpExampleCli("createsidechaindeposit", "0 \"sidechainaddress\" 1.5")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!pwallet) return UniValue::VNULL;
+    pwallet->BlockUntilSyncedToCurrentChain();
+
+    const int64_t slot{request.params[0].getInt<int64_t>()};
+    if (slot < 0 || slot > std::numeric_limits<uint32_t>::max()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid sidechain slot");
+    const std::string destination{request.params[1].get_str()};
+    if (destination.empty() || destination.size() > drivechain::MAX_DEPOSIT_DESTINATION_SIZE || destination == drivechain::WITHDRAWAL_RETURN_DEST) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid destination: it must have 1 to %u bytes and cannot be \"%s\"", drivechain::MAX_DEPOSIT_DESTINATION_SIZE, drivechain::WITHDRAWAL_RETURN_DEST));
+    }
+    const CAmount amount{AmountFromValue(request.params[2])};
+    if (amount <= 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The amount must be positive");
+
+    EnsureWalletIsUnlocked(*pwallet);
+
+    const auto escrow{pwallet->chain().getSidechainEscrow(static_cast<uint32_t>(slot))};
+    if (!escrow.active) throw JSONRPCError(RPC_INVALID_PARAMETER, "No active sidechain in this slot");
+    const CScript escrow_script{drivechain::EscrowScript(static_cast<uint32_t>(slot))};
+
+    // A deposit replaces the escrow output of the sidechain with a larger one.
+    CMutableTransaction tx;
+    CCoinControl coin_control;
+    std::map<COutPoint, Coin> external;
+    if (escrow.has_output) {
+        tx.vin.emplace_back(escrow.outpoint);
+        // An input with an empty scriptSig and no witness.
+        coin_control.SetInputWeight(escrow.outpoint, 41 * WITNESS_SCALE_FACTOR);
+        external[escrow.outpoint] = Coin(CTxOut(escrow.amount, escrow_script), /*nHeightIn=*/1, /*fCoinBaseIn=*/false);
+    }
+    std::vector<CRecipient> recipients{
+        {CNoDestination{escrow_script}, escrow.amount + amount, /*fSubtractFeeFromAmount=*/false},
+        {CNoDestination{drivechain::DestinationScript(destination)}, 0, /*fSubtractFeeFromAmount=*/false},
+    };
+    auto res{FundTransaction(*pwallet, tx, recipients, /*change_pos=*/std::nullopt, /*lockUnspents=*/false, coin_control)};
+    if (!res) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
+
+    CMutableTransaction mtx{*res->tx};
+    const Txid txid{SignAndCommit(*pwallet, mtx, external)};
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", txid.GetHex());
+    result.pushKV("total", ValueFromAmount(escrow.amount + amount));
+    return result;
+},
+    };
+}
+
+RPCMethod createbmmrequest()
+{
+    return RPCMethod{
+        "createbmmrequest",
+        "Ask miners to commit to a sidechain block in the next block (blind merged mining), by offering them a fee.\n"
+        "The request is only valid in the next block; if no miner takes it, it is dropped and the coins stay in the wallet." +
+        HELP_REQUIRING_PASSPHRASE,
+        {
+            {"slot", RPCArg::Type::NUM, RPCArg::Optional::NO, "The sidechain slot number"},
+            {"sideblockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The hash of the sidechain block"},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "The fee in " + CURRENCY_UNIT + " to offer; the fee paid can differ slightly"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction id"},
+            {RPCResult::Type::STR_AMOUNT, "fee", "The fee the request pays"},
+            {RPCResult::Type::STR_HEX, "prevblockhash", "The mainchain block the request has to be mined on top of"},
+        }},
+        RPCExamples{HelpExampleCli("createbmmrequest", "0 \"sideblockhash\" 0.0001")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!pwallet) return UniValue::VNULL;
+    pwallet->BlockUntilSyncedToCurrentChain();
+
+    const int64_t slot{request.params[0].getInt<int64_t>()};
+    if (slot < 0 || slot > std::numeric_limits<uint32_t>::max()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid sidechain slot");
+    const uint256 side_block_hash{ParseHashV(request.params[1], "sideblockhash")};
+    const CAmount amount{AmountFromValue(request.params[2])};
+    if (amount <= 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The amount must be positive");
+
+    EnsureWalletIsUnlocked(*pwallet);
+
+    const auto height{pwallet->chain().getHeight()};
+    if (!height) throw JSONRPCError(RPC_WALLET_ERROR, "No chain tip");
+    drivechain::BmmRequest bmm_request;
+    bmm_request.slot = static_cast<uint32_t>(slot);
+    bmm_request.side_block_hash = side_block_hash;
+    bmm_request.prev_main_block_hash = pwallet->chain().getBlockHash(*height);
+    std::vector<CRecipient> recipients{
+        {CNoDestination{drivechain::BmmRequestScript(bmm_request)}, 0, /*fSubtractFeeFromAmount=*/false},
+    };
+
+    // The whole point of the transaction is its fee. Find out its size first,
+    // then pick the fee rate that makes it pay the amount offered.
+    CCoinControl coin_control;
+    coin_control.fOverrideFeeRate = true;
+    const CFeeRate probe_rate{DEFAULT_MIN_RELAY_TX_FEE * 10};
+    coin_control.m_feerate = probe_rate;
+    auto probe{CreateTransaction(*pwallet, recipients, /*change_pos=*/std::nullopt, coin_control, /*sign=*/false)};
+    if (!probe) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(probe).original);
+    const int64_t vsize{std::max<int64_t>(1, probe->fee * 1000 / probe_rate.GetFeePerK())};
+    coin_control.m_feerate = CFeeRate{amount, static_cast<int32_t>(vsize)};
+
+    auto res{CreateTransaction(*pwallet, recipients, /*change_pos=*/std::nullopt, coin_control, /*sign=*/true)};
+    if (!res) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
+    pwallet->CommitTransaction(res->tx, /*replaces_txid=*/std::nullopt, /*comment=*/std::nullopt, /*comment_to=*/std::nullopt);
+    if (!pwallet->chain().isInMempool(res->tx->GetHash())) {
+        pwallet->AbandonTransaction(res->tx->GetHash());
+        throw JSONRPCError(RPC_WALLET_ERROR, "The request was not accepted into the mempool; a request with a higher fee may already be there");
+    }
+
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", res->tx->GetHash().GetHex());
+    result.pushKV("fee", ValueFromAmount(res->fee));
+    result.pushKV("prevblockhash", bmm_request.prev_main_block_hash.GetHex());
+    return result;
 },
     };
 }

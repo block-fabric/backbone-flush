@@ -12,6 +12,7 @@
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
+#include <qt/theme.h>
 
 #include <common/system.h>
 #include <interfaces/node.h>
@@ -22,6 +23,9 @@
 
 #include <chrono>
 
+#include <QComboBox>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QApplication>
 #include <QDataWidgetMapper>
 #include <QDir>
@@ -175,6 +179,19 @@ OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
         }
     }
     ui->unit->setModel(new BitcoinUnits(this));
+
+    /* Theme, which is applied as soon as the dialog is accepted. */
+    auto* theme_row{new QHBoxLayout};
+    auto* theme_label{new QLabel(tr("&Theme:"), this)};
+    m_theme = new QComboBox(this);
+    m_theme->setObjectName("theme");
+    m_theme->setToolTip(tr("Colours of the windows."));
+    for (const auto& theme : Theme::Available()) m_theme->addItem(theme.name, theme.id);
+    m_theme->setCurrentIndex(std::max(0, m_theme->findData(Theme::Saved())));
+    theme_label->setBuddy(m_theme);
+    theme_row->addWidget(theme_label);
+    theme_row->addWidget(m_theme, 1);
+    ui->verticalLayout_Display->insertLayout(1, theme_row);
 
     /* Widget-to-option mapper */
     mapper = new QDataWidgetMapper(this);
@@ -381,6 +398,7 @@ void OptionsDialog::on_okButton_clicked()
     model->setData(model->index(OptionsModel::FontForMoney, 0), ui->moneyFont->itemData(ui->moneyFont->currentIndex()));
 
     mapper->submit();
+    if (m_theme->currentData().toString() != Theme::Saved()) Theme::Save(m_theme->currentData().toString());
     accept();
     updateDefaultProxyNets();
 }

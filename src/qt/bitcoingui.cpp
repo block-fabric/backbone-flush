@@ -6,6 +6,13 @@
 
 #include <qt/bitcoingui.h>
 
+#include <qt/blockexplorer.h>
+#include <qt/cryptotoolsdialog.h>
+#include <qt/graffitidialog.h>
+#include <qt/miningdialog.h>
+#include <qt/multisigdialog.h>
+#include <qt/proofoffundsdialog.h>
+#include <qt/timestampdialog.h>
 #include <qt/bitcoinunits.h>
 #include <qt/clientmodel.h>
 #include <qt/createwalletdialog.h>
@@ -111,6 +118,19 @@ BitcoinGUI::BitcoinGUI(interfaces::Node& node, const PlatformStyle *_platformSty
     updateWindowTitle();
 
     rpcConsole = new RPCConsole(node, _platformStyle, nullptr);
+    const auto wallet_name{[this]() -> std::optional<QString> {
+#ifdef ENABLE_WALLET
+        if (walletFrame && walletFrame->currentWalletModel()) return walletFrame->currentWalletModel()->getWalletName();
+#endif
+        return std::nullopt;
+    }};
+    m_mining_dialog = new MiningDialog(wallet_name, nullptr);
+    m_block_explorer = new BlockExplorer(nullptr);
+    m_crypto_tools = new CryptoToolsDialog(nullptr);
+    m_graffiti_dialog = new GraffitiDialog(wallet_name, nullptr);
+    m_timestamp_dialog = new TimestampDialog(wallet_name, nullptr);
+    m_proof_dialog = new ProofOfFundsDialog(wallet_name, nullptr);
+    m_multisig_dialog = new MultisigDialog(wallet_name, nullptr);
     helpMessageDialog = new HelpMessageDialog(this, false);
 #ifdef ENABLE_WALLET
     if(enableWallet)
@@ -248,6 +268,13 @@ BitcoinGUI::~BitcoinGUI()
 #endif
 
     delete rpcConsole;
+    delete m_mining_dialog;
+    delete m_block_explorer;
+    delete m_crypto_tools;
+    delete m_graffiti_dialog;
+    delete m_timestamp_dialog;
+    delete m_proof_dialog;
+    delete m_multisig_dialog;
 }
 
 void BitcoinGUI::createActions()
@@ -283,6 +310,13 @@ void BitcoinGUI::createActions()
     historyAction->setShortcut(QKeySequence(QStringLiteral("Alt+4")));
     tabGroup->addAction(historyAction);
 
+    sidechainAction = new QAction(platformStyle->SingleColorIcon(":/icons/proxy"), tr("Si&dechains"), this);
+    sidechainAction->setStatusTip(tr("Deposit to sidechains, and manage sidechain proposals and withdrawal votes"));
+    sidechainAction->setToolTip(sidechainAction->statusTip());
+    sidechainAction->setCheckable(true);
+    sidechainAction->setShortcut(QKeySequence(QStringLiteral("Alt+5")));
+    tabGroup->addAction(sidechainAction);
+
 #ifdef ENABLE_WALLET
     // These showNormalIfMinimized are needed because Send Coins and Receive Coins
     // can be triggered from the tray menu, and need to show the GUI to be useful.
@@ -294,6 +328,8 @@ void BitcoinGUI::createActions()
     connect(receiveCoinsAction, &QAction::triggered, this, &BitcoinGUI::gotoReceiveCoinsPage);
     connect(historyAction, &QAction::triggered, [this]{ showNormalIfMinimized(); });
     connect(historyAction, &QAction::triggered, this, &BitcoinGUI::gotoHistoryPage);
+    connect(sidechainAction, &QAction::triggered, [this]{ showNormalIfMinimized(); });
+    connect(sidechainAction, &QAction::triggered, this, &BitcoinGUI::gotoSidechainPage);
 #endif // ENABLE_WALLET
 
     quitAction = new QAction(tr("E&xit"), this);
@@ -555,39 +591,74 @@ void BitcoinGUI::createMenuBar()
 {
     appMenuBar = menuBar();
 
-    // Configure the menus
-    QMenu *file = appMenuBar->addMenu(tr("&File"));
-    if(walletFrame)
-    {
-        file->addAction(m_create_wallet_action);
-        file->addAction(m_open_wallet_action);
-        file->addAction(m_close_wallet_action);
-        file->addAction(m_close_all_wallets_action);
-        file->addAction(m_migrate_wallet_action);
-        file->addSeparator();
-        file->addAction(backupWalletAction);
-        file->addAction(m_restore_wallet_action);
-        file->addAction(m_export_watchonly_action);
-        file->addSeparator();
-        file->addAction(openAction);
-        file->addAction(signMessageAction);
-        file->addAction(verifyMessageAction);
-        file->addAction(m_load_psbt_action);
-        file->addAction(m_load_psbt_clipboard_action);
-        file->addSeparator();
-    }
-    file->addAction(quitAction);
+    // The menus are arranged by what the user wants to do, as in the Drivechain wallets.
+    const auto window_action{[this](QMenu* menu, const QString& text, const QString& tip, QWidget* window) {
+        QAction* action{menu->addAction(text)};
+        action->setStatusTip(tip);
+        connect(action, &QAction::triggered, window, [window] { GUIUtil::bringToFront(window); });
+        // The windows have no parent, so that they do not stay on top of the main window.
+        connect(quitAction, &QAction::triggered, window, &QWidget::hide);
+        return action;
+    }};
 
-    QMenu *settings = appMenuBar->addMenu(tr("&Settings"));
-    if(walletFrame)
-    {
-        settings->addAction(encryptWalletAction);
-        settings->addAction(changePassphraseAction);
-        settings->addSeparator();
-        settings->addAction(m_mask_values_action);
-        settings->addSeparator();
+    if (walletFrame) {
+        QMenu* wallet_menu{appMenuBar->addMenu(tr("&Your Wallet"))};
+        wallet_menu->addAction(m_create_wallet_action);
+        wallet_menu->addAction(m_open_wallet_action);
+        wallet_menu->addAction(m_close_wallet_action);
+        wallet_menu->addAction(m_close_all_wallets_action);
+        wallet_menu->addAction(m_migrate_wallet_action);
+        wallet_menu->addSeparator();
+        wallet_menu->addAction(usedSendingAddressesAction);
+        wallet_menu->addAction(usedReceivingAddressesAction);
+        wallet_menu->addSeparator();
+        wallet_menu->addAction(backupWalletAction);
+        wallet_menu->addAction(m_restore_wallet_action);
+        wallet_menu->addAction(m_export_watchonly_action);
+        wallet_menu->addSeparator();
+        wallet_menu->addAction(encryptWalletAction);
+        wallet_menu->addAction(changePassphraseAction);
+        wallet_menu->addAction(m_mask_values_action);
+
+        QMenu* banking{appMenuBar->addMenu(tr("&Banking"))};
+        banking->addAction(sendCoinsAction);
+        banking->addAction(receiveCoinsAction);
+        banking->addAction(historyAction);
+        banking->addAction(openAction);
+        banking->addSeparator();
+        window_action(banking, tr("&Proof of Funds"), tr("Prove that this wallet holds funds, or check such a proof"), m_proof_dialog);
+        window_action(banking, tr("M&ultisig Lounge"), tr("Share coins with partners, in addresses that need several signatures"), m_multisig_dialog);
+        banking->addSeparator();
+        banking->addAction(m_load_psbt_action);
+        banking->addAction(m_load_psbt_clipboard_action);
     }
-    settings->addAction(optionsAction);
+
+    QMenu* use{appMenuBar->addMenu(tr("&Use Chains"))};
+    window_action(use, tr("Timestamp &File"), tr("Prove that a file existed, by publishing its fingerprint on the chain"), m_timestamp_dialog);
+    window_action(use, tr("OP_RETURN &Graffiti"), tr("Read the messages written on the chain, and write one"), m_graffiti_dialog);
+    if (walletFrame) {
+        use->addSeparator();
+        use->addAction(signMessageAction);
+        use->addAction(verifyMessageAction);
+        use->addSeparator();
+        use->addAction(sidechainAction);
+    }
+
+    QMenu* work{appMenuBar->addMenu(tr("W&ork for Chains"))};
+    window_action(work, tr("Solo &Mine"), tr("Mine blocks with the processor of this computer"), m_mining_dialog);
+    if (walletFrame) {
+        QAction* sidechain_admin{work->addAction(tr("Sidechain &Proposals and Votes"))};
+        sidechain_admin->setStatusTip(tr("Propose sidechains, acknowledge proposals and vote on withdrawals in the blocks this node mines"));
+        connect(sidechain_admin, &QAction::triggered, this, [this] { showNormalIfMinimized(); gotoSidechainPage(); });
+    }
+
+    QMenu* tools{appMenuBar->addMenu(tr("&Crypto Tools"))};
+    tools->setObjectName("toolsMenu");
+    window_action(tools, tr("&Block Explorer"), tr("Browse blocks and the transactions waiting to be mined"), m_block_explorer);
+    connect(tools->addAction(tr("&Hash Calculator")), &QAction::triggered, [this] { m_crypto_tools->showTab(CryptoToolsDialog::HASH); });
+    connect(tools->addAction(tr("Merkle &Tree")), &QAction::triggered, [this] { m_crypto_tools->showTab(CryptoToolsDialog::MERKLE); });
+    connect(tools->addAction(tr("&Address Decoder")), &QAction::triggered, [this] { m_crypto_tools->showTab(CryptoToolsDialog::ADDRESS); });
+    connect(quitAction, &QAction::triggered, m_crypto_tools, &QWidget::hide);
 
     QMenu* window_menu = appMenuBar->addMenu(tr("&Window"));
 
@@ -624,9 +695,6 @@ void BitcoinGUI::createMenuBar()
             GUIUtil::bringToFront(this);
         });
 #endif
-        window_menu->addSeparator();
-        window_menu->addAction(usedSendingAddressesAction);
-        window_menu->addAction(usedReceivingAddressesAction);
     }
 
     window_menu->addSeparator();
@@ -639,11 +707,15 @@ void BitcoinGUI::createMenuBar()
         });
     }
 
-    QMenu *help = appMenuBar->addMenu(tr("&Help"));
-    help->addAction(showHelpMessageAction);
-    help->addSeparator();
-    help->addAction(aboutAction);
-    help->addAction(aboutQtAction);
+    QMenu* node_menu{appMenuBar->addMenu(tr("This &Node"))};
+    node_menu->addAction(openRPCConsoleAction);
+    node_menu->addAction(optionsAction);
+    node_menu->addAction(showHelpMessageAction);
+    node_menu->addSeparator();
+    node_menu->addAction(aboutAction);
+    node_menu->addAction(aboutQtAction);
+    node_menu->addSeparator();
+    node_menu->addAction(quitAction);
 }
 
 void BitcoinGUI::createToolBars()
@@ -658,6 +730,7 @@ void BitcoinGUI::createToolBars()
         toolbar->addAction(sendCoinsAction);
         toolbar->addAction(receiveCoinsAction);
         toolbar->addAction(historyAction);
+        toolbar->addAction(sidechainAction);
         overviewAction->setChecked(true);
 
 #ifdef ENABLE_WALLET
@@ -712,6 +785,13 @@ void BitcoinGUI::setClientModel(ClientModel *_clientModel, interfaces::BlockAndH
         connect(_clientModel, &ClientModel::showProgress, this, &BitcoinGUI::showProgress);
 
         rpcConsole->setClientModel(_clientModel, tip_info->block_height, tip_info->block_time, tip_info->verification_progress);
+        m_mining_dialog->setClientModel(_clientModel);
+        m_block_explorer->setClientModel(_clientModel);
+        m_crypto_tools->setClientModel(_clientModel);
+        m_graffiti_dialog->setClientModel(_clientModel);
+        m_timestamp_dialog->setClientModel(_clientModel);
+        m_proof_dialog->setClientModel(_clientModel);
+        m_multisig_dialog->setClientModel(_clientModel);
 
         updateProxyIcon();
 
@@ -742,6 +822,13 @@ void BitcoinGUI::setClientModel(ClientModel *_clientModel, interfaces::BlockAndH
         }
         // Propagate cleared model to child objects
         rpcConsole->setClientModel(nullptr);
+        m_mining_dialog->setClientModel(nullptr);
+        m_block_explorer->setClientModel(nullptr);
+        m_crypto_tools->setClientModel(nullptr);
+        m_graffiti_dialog->setClientModel(nullptr);
+        m_timestamp_dialog->setClientModel(nullptr);
+        m_proof_dialog->setClientModel(nullptr);
+        m_multisig_dialog->setClientModel(nullptr);
 #ifdef ENABLE_WALLET
         if (walletFrame)
         {
@@ -809,6 +896,10 @@ void BitcoinGUI::addWallet(WalletModel* walletModel)
     }
 
     connect(wallet_view, &WalletView::outOfSyncWarningClicked, this, &BitcoinGUI::showModalOverlay);
+    connect(wallet_view, &WalletView::explorerRequested, this, [this](const QString& hash) {
+        GUIUtil::bringToFront(m_block_explorer);
+        m_block_explorer->search(hash);
+    });
     connect(wallet_view, &WalletView::transactionClicked, this, &BitcoinGUI::gotoHistoryPage);
     connect(wallet_view, &WalletView::coinsSent, this, &BitcoinGUI::gotoHistoryPage);
     connect(wallet_view, &WalletView::message, [this](const QString& title, const QString& message, unsigned int style) {
@@ -878,6 +969,7 @@ void BitcoinGUI::setWalletActionsEnabled(bool enabled)
     sendCoinsAction->setEnabled(enabled);
     receiveCoinsAction->setEnabled(enabled);
     historyAction->setEnabled(enabled && !isPrivacyModeActivated());
+    sidechainAction->setEnabled(enabled);
     encryptWalletAction->setEnabled(enabled);
     backupWalletAction->setEnabled(enabled);
     changePassphraseAction->setEnabled(enabled);
@@ -1044,6 +1136,12 @@ void BitcoinGUI::gotoReceiveCoinsPage()
 {
     receiveCoinsAction->setChecked(true);
     if (walletFrame) walletFrame->gotoReceiveCoinsPage();
+}
+
+void BitcoinGUI::gotoSidechainPage()
+{
+    sidechainAction->setChecked(true);
+    if (walletFrame) walletFrame->gotoSidechainPage();
 }
 
 void BitcoinGUI::gotoSendCoinsPage(QString addr)
@@ -1350,6 +1448,7 @@ void BitcoinGUI::changeEvent(QEvent *e)
         sendCoinsAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/send")));
         receiveCoinsAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/receiving_addresses")));
         historyAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/history")));
+        sidechainAction->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/proxy")));
     }
 
     QMainWindow::changeEvent(e);

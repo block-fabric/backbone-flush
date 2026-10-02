@@ -644,6 +644,26 @@ public:
                int{FillBlock(block2, block2_out, lock, active, chainman().m_blockman)};
     }
     void findCoins(std::map<COutPoint, Coin>& coins) override { return FindCoins(m_node, coins); }
+    SidechainEscrow getSidechainEscrow(uint32_t slot) override
+    {
+        SidechainEscrow escrow;
+        LOCK(::cs_main);
+        const Chainstate& chainstate{chainman().ActiveChainstate()};
+        drivechain::SidechainDB scdb;
+        if (m_node.mempool) {
+            LOCK(m_node.mempool->cs);
+            scdb = chainstate.GetMempoolSidechainDB({slot});
+        } else {
+            scdb = chainstate.m_scdb;
+        }
+        if (const drivechain::Slot* state{scdb.GetSlot(slot)}) {
+            escrow.active = true;
+            escrow.has_output = state->has_ctip;
+            escrow.outpoint = state->ctip.outpoint;
+            escrow.amount = state->ctip.amount;
+        }
+        return escrow;
+    }
     double guessVerificationProgress(const uint256& block_hash) override
     {
         LOCK(chainman().GetMutex());

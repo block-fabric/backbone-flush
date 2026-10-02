@@ -239,6 +239,12 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
         mapNextTx.insert(std::make_pair(&tx.vin[i].prevout, newit));
     }
+    for (const CTxOut& out : tx.vout) {
+        if (const auto slot{drivechain::ParseEscrowScript(out.scriptPubKey)}) m_escrow_txs[*slot].insert(tx.GetHash());
+    }
+    for (const drivechain::BmmRequest& request : drivechain::GetBmmRequests(tx)) {
+        m_bmm_requests[request.slot] = tx.GetHash();
+    }
     // Don't bother worrying about child transactions of this one.
     // Normal case of a new transaction arriving is that there can't be any
     // children, because such children would be orphans.
@@ -283,6 +289,19 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
 
     for (const CTxIn& txin : it->GetTx().vin)
         mapNextTx.erase(txin.prevout);
+    for (const CTxOut& out : it->GetTx().vout) {
+        if (const auto slot{drivechain::ParseEscrowScript(out.scriptPubKey)}) {
+            if (const auto txs{m_escrow_txs.find(*slot)}; txs != m_escrow_txs.end()) {
+                txs->second.erase(it->GetTx().GetHash());
+                if (txs->second.empty()) m_escrow_txs.erase(txs);
+            }
+        }
+    }
+    for (const drivechain::BmmRequest& request : drivechain::GetBmmRequests(it->GetTx())) {
+        if (const auto bmm{m_bmm_requests.find(request.slot)}; bmm != m_bmm_requests.end() && bmm->second == it->GetTx().GetHash()) {
+            m_bmm_requests.erase(bmm);
+        }
+    }
 
     RemoveUnbroadcastTx(it->GetTx().GetHash(), true /* add logging because unchecked */);
 

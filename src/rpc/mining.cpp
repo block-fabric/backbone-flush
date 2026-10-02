@@ -11,6 +11,7 @@
 #include <addresstype.h>
 #include <arith_uint256.h>
 #include <chain.h>
+#include <common/system.h>
 #include <chainparams.h>
 #include <chainparamsbase.h>
 #include <consensus/amount.h>
@@ -24,6 +25,7 @@
 #include <key_io.h>
 #include <net.h>
 #include <netbase.h>
+#include <node/cpuminer.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/miner.h>
@@ -444,6 +446,96 @@ static RPCMethod generateblock()
     };
 }
 
+static RPCMethod setgenerate()
+{
+    return RPCMethod{
+        "setgenerate",
+        "Turn the built-in CPU miner on or off.\n"
+        "It searches for blocks with threads of this computer's processor, which is only useful\n"
+        "on test networks and while a network is young.\n",
+        {
+            {"generate", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Whether to mine."},
+            {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address that receives the block rewards. Required to turn mining on."},
+            {"threads", RPCArg::Type::NUM, RPCArg::Default{1}, "Number of threads to mine with, or -1 for one per processor core."},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::BOOL, "generate", "Whether the miner is running"},
+                {RPCResult::Type::NUM, "threads", "Number of mining threads"},
+            }},
+        RPCExamples{
+            HelpExampleCli("setgenerate", "true \"myaddress\" 4")
+            + HelpExampleCli("setgenerate", "false")
+        },
+        [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+    if (!node.cpu_miner) throw JSONRPCError(RPC_INTERNAL_ERROR, "The miner is not available");
+    if (request.params[0].get_bool()) {
+        if (request.params[1].isNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "An address is required to mine");
+        const CTxDestination destination{DecodeDestination(request.params[1].get_str())};
+        if (!IsValidDestination(destination)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address");
+        int threads{request.params[2].isNull() ? 1 : request.params[2].getInt<int>()};
+        if (threads == -1) threads = std::max(1, GetNumCores());
+        if (threads < 1 || threads > 1024) throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid number of threads");
+        std::string error;
+        if (!node.cpu_miner->Start(threads, GetScriptForDestination(destination), error)) {
+            throw JSONRPCError(RPC_MISC_ERROR, error);
+        }
+    } else {
+        node.cpu_miner->Stop();
+    }
+    const auto stats{node.cpu_miner->GetStats()};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("generate", stats.running);
+    result.pushKV("threads", stats.threads);
+    return result;
+},
+    };
+}
+
+static RPCMethod getgenerate()
+{
+    return RPCMethod{
+        "getgenerate",
+        "Returns the state of the built-in CPU miner.",
+        {},
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::BOOL, "generate", "Whether the miner is running"},
+                {RPCResult::Type::NUM, "threads", "Number of mining threads"},
+                {RPCResult::Type::NUM, "hashespersec", "Recent hash rate of the miner"},
+                {RPCResult::Type::NUM, "hashes", "Number of hashes tried since the miner was started"},
+                {RPCResult::Type::NUM, "blocksfound", "Number of blocks the miner found since the node started"},
+                {RPCResult::Type::NUM, "blocksrejected", "Number of blocks the miner found that were not accepted"},
+                {RPCResult::Type::STR, "address", /*optional=*/true, "The address that receives the block rewards"},
+                {RPCResult::Type::NUM, "cores", "Number of processor cores of this computer"},
+            }},
+        RPCExamples{HelpExampleCli("getgenerate", "")},
+        [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node = EnsureAnyNodeContext(request.context);
+    if (!node.cpu_miner) throw JSONRPCError(RPC_INTERNAL_ERROR, "The miner is not available");
+    const auto stats{node.cpu_miner->GetStats()};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("generate", stats.running);
+    result.pushKV("threads", stats.threads);
+    result.pushKV("hashespersec", stats.hashes_per_second);
+    result.pushKV("hashes", stats.hashes);
+    result.pushKV("blocksfound", stats.blocks_found);
+    result.pushKV("blocksrejected", stats.blocks_rejected);
+    CTxDestination destination;
+    if (stats.running && ExtractDestination(stats.coinbase_output_script, destination)) {
+        result.pushKV("address", EncodeDestination(destination));
+    }
+    result.pushKV("cores", GetNumCores());
+    return result;
+},
+    };
+}
+
 static RPCMethod getmininginfo()
 {
     return RPCMethod{
@@ -724,11 +816,16 @@ static RPCMethod getblocktemplate()
                 {RPCResult::Type::NUM, "sigoplimit", "limit of sigops in blocks"},
                 {RPCResult::Type::NUM, "sizelimit", "limit of block size"},
                 {RPCResult::Type::NUM, "weightlimit", /*optional=*/true, "limit of block weight"},
+                {RPCResult::Type::NUM, "txweightlimit", /*optional=*/true, "limit of the weight of the transactions other than the coinbase"},
                 {RPCResult::Type::NUM_TIME, "curtime", "current timestamp in " + UNIX_EPOCH_TIME + ". Adjusted for the proposed BIP94 timewarp rule."},
                 {RPCResult::Type::STR, "bits", "compressed target of next block"},
                 {RPCResult::Type::NUM, "height", "The height of the next block"},
                 {RPCResult::Type::STR_HEX, "signet_challenge", /*optional=*/true, "Only on signet"},
                 {RPCResult::Type::STR_HEX, "default_witness_commitment", /*optional=*/true, "a valid witness commitment for the unmodified block template"},
+                {RPCResult::Type::ARR, "drivechain_coinbase_outputs", "scripts of the zero value outputs the coinbase must contain for the drivechain messages of the block template",
+                {
+                    {RPCResult::Type::STR_HEX, "script", "output script"},
+                }},
             }},
         },
         RPCExamples{
@@ -1036,7 +1133,7 @@ static RPCMethod getblocktemplate()
     result.pushKV("mutable", std::move(aMutable));
     result.pushKV("noncerange", "00000000ffffffff");
     int64_t nSigOpLimit = MAX_BLOCK_SIGOPS_COST;
-    int64_t nSizeLimit = MAX_BLOCK_SERIALIZED_SIZE;
+    int64_t nSizeLimit = consensusParams.max_block_weight;
     if (fPreSegWit) {
         CHECK_NONFATAL(nSigOpLimit % WITNESS_SCALE_FACTOR == 0);
         nSigOpLimit /= WITNESS_SCALE_FACTOR;
@@ -1046,7 +1143,8 @@ static RPCMethod getblocktemplate()
     result.pushKV("sigoplimit", nSigOpLimit);
     result.pushKV("sizelimit", nSizeLimit);
     if (!fPreSegWit) {
-        result.pushKV("weightlimit", MAX_BLOCK_WEIGHT);
+        result.pushKV("weightlimit", consensusParams.max_block_weight);
+        result.pushKV("txweightlimit", consensusParams.max_block_tx_weight);
     }
     result.pushKV("curtime", block.GetBlockTime());
     result.pushKV("bits", strprintf("%08x", block.nBits));
@@ -1056,10 +1154,19 @@ static RPCMethod getblocktemplate()
         result.pushKV("signet_challenge", HexStr(consensusParams.signet_challenge));
     }
 
-    if (auto coinbase{block_template->getCoinbaseTx()}; coinbase.required_outputs.size() > 0) {
-        CHECK_NONFATAL(coinbase.required_outputs.size() == 1); // Only one output is currently expected
-        result.pushKV("default_witness_commitment", HexStr(coinbase.required_outputs[0].scriptPubKey));
+    // The coinbase has to carry the witness commitment, if there is one, and the drivechain messages.
+    UniValue drivechain_outputs(UniValue::VARR);
+    for (const CTxOut& output : block_template->getCoinbaseTx().required_outputs) {
+        const CScript& script{output.scriptPubKey};
+        const bool witness_commitment{script.size() >= MINIMUM_WITNESS_COMMITMENT && script[0] == OP_RETURN && script[1] == 0x24 &&
+                                      script[2] == 0xaa && script[3] == 0x21 && script[4] == 0xa9 && script[5] == 0xed};
+        if (witness_commitment) {
+            result.pushKV("default_witness_commitment", HexStr(output.scriptPubKey));
+        } else {
+            drivechain_outputs.push_back(HexStr(output.scriptPubKey));
+        }
     }
+    result.pushKV("drivechain_coinbase_outputs", std::move(drivechain_outputs));
 
     return result;
 },
@@ -1182,6 +1289,8 @@ void RegisterMiningRPCCommands(CRPCTable& t)
     static const CRPCCommand commands[]{
         {"mining", &getnetworkhashps},
         {"mining", &getmininginfo},
+        {"mining", &setgenerate},
+        {"mining", &getgenerate},
         {"mining", &prioritisetransaction},
         {"mining", &getprioritisedtransactions},
         {"mining", &getblocktemplate},

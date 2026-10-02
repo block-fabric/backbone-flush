@@ -36,6 +36,13 @@ class SendCoinsRecipient;
 class UnitDisplayStatusBarControl;
 class WalletController;
 class WalletFrame;
+class BlockExplorer;
+class CryptoToolsDialog;
+class GraffitiDialog;
+class MiningDialog;
+class MultisigDialog;
+class ProofOfFundsDialog;
+class TimestampDialog;
 class WalletModel;
 class HelpMessageDialog;
 class ModalOverlay;
@@ -136,6 +143,7 @@ private:
     QToolBar* appToolBar = nullptr;
     QAction* overviewAction = nullptr;
     QAction* historyAction = nullptr;
+    QAction* sidechainAction = nullptr;
     QAction* quitAction = nullptr;
     QAction* sendCoinsAction = nullptr;
     QAction* usedSendingAddressesAction = nullptr;
@@ -176,6 +184,13 @@ private:
     const std::unique_ptr<QMenu> trayIconMenu;
     Notificator* notificator = nullptr;
     RPCConsole* rpcConsole = nullptr;
+    MiningDialog* m_mining_dialog{nullptr};
+    BlockExplorer* m_block_explorer{nullptr};
+    CryptoToolsDialog* m_crypto_tools{nullptr};
+    GraffitiDialog* m_graffiti_dialog{nullptr};
+    TimestampDialog* m_timestamp_dialog{nullptr};
+    ProofOfFundsDialog* m_proof_dialog{nullptr};
+    MultisigDialog* m_multisig_dialog{nullptr};
     HelpMessageDialog* helpMessageDialog = nullptr;
     ModalOverlay* modalOverlay = nullptr;
 
@@ -286,6 +301,8 @@ public Q_SLOTS:
     void gotoHistoryPage();
     /** Switch to receive coins page */
     void gotoReceiveCoinsPage();
+    /** Switch to sidechain page */
+    void gotoSidechainPage();
     /** Switch to send coins page */
     void gotoSendCoinsPage(QString addr = "");
 
