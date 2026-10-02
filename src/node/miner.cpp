@@ -115,12 +115,14 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate,
           if (auto result{CheckMiningOptions(options, /*use_argnames=*/false)}; !result) {
               throw std::runtime_error(util::ErrorString(result).original);
           }
+          // Unless told otherwise, blocks are as large as the chain allows.
+          const bool default_weight{!options.block_max_weight};
           BlockCreateOptions flattened{FlattenMiningOptions(std::move(options))};
           // Transactions other than the coinbase have their own weight limit on
           // top of the limit for the whole block.
           const Consensus::Params& consensus{chainstate.m_chainman.GetConsensus()};
           const uint64_t limit{std::min<uint64_t>(consensus.max_block_weight, uint64_t{consensus.max_block_tx_weight} + *flattened.block_reserved_weight)};
-          if (*flattened.block_max_weight > limit) flattened.block_max_weight = limit;
+          if (default_weight || *flattened.block_max_weight > limit) flattened.block_max_weight = limit;
           return flattened;
       }()}
 {

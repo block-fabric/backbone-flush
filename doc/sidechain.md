@@ -119,9 +119,10 @@ chains-cli -regtest listwithdrawalbundles 3
 ## Making your own sidechain
 
 1. Copy this tree.
-2. Name it: `CLIENT_NAME` and `CLIENT_BIN_NAME` at the top of `CMakeLists.txt`.
-   The programs, the data directory and the configuration file are named
-   after `CLIENT_BIN_NAME`.
+2. Name it: `contrib/sidechain/rename.py Thunder thunder` sets `CLIENT_NAME`
+   and `CLIENT_BIN_NAME` in `CMakeLists.txt` and brings the tests along. The
+   programs, the data directory and the configuration file are named after
+   `CLIENT_BIN_NAME`.
 3. Give it an identity on each network: the `MakeSidechain(...)` calls in
    `src/kernel/chainparams.cpp` (message of the first block, magic bytes,
    port, address prefix), and the RPC ports in `src/chainparamsbase.cpp`. The
@@ -130,9 +131,10 @@ chains-cli -regtest listwithdrawalbundles 3
 4. Bring the tests along:
    - `contrib/sidechain/rename-hrp.py <old> <new>` re-encodes the addresses in
      the tests for each address prefix you changed;
-   - the names of the programs and the magic bytes of the networks are in
-     `test/functional/test_framework/` (`util.py`, `test_node.py`,
-     `messages.py`), the ports in `p2p_addrfetch.py`;
+   - the magic bytes of the networks are in
+     `test/functional/test_framework/messages.py`, the port of regtest in
+     `test/functional/p2p_addrfetch.py`, and the hash of the UTXO snapshot
+     in `test/functional/rpc_dumptxoutset.py` follows the magic of regtest;
    - regenerate `test/functional/data/util/getchainparams-*.json` with
      `<name>-util [-testnet|-signet|-regtest] getchainparams`.
 5. Add what makes your sidechain worth having. Consensus rules of your own
