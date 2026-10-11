@@ -215,7 +215,8 @@ CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operat
     if (!res) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
     const CTransactionRef tx{res->tx};
     wallet.CommitTransaction(tx, /*replaces_txid=*/std::nullopt, /*comment=*/std::nullopt, /*comment_to=*/std::nullopt);
-    if (!wallet.chain().isInMempool(tx->GetHash())) {
+    // Not a failure if a block took it already, or if the wallet does not broadcast (-walletbroadcast=0).
+    if (CommittedTransactionRefused(wallet, tx)) {
         wallet.AbandonTransaction(tx->GetHash());
         throw JSONRPCError(RPC_WALLET_ERROR, "The transaction was not accepted into the mempool (see the debug log for why)");
     }

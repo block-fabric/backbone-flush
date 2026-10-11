@@ -534,6 +534,23 @@ class BitAssetsTest(SidechainTest):
         assert_equal(other.listmyassets()["assets"], held["assets"])
         assert_equal(other.listmyassets()["liquidity"], held["liquidity"])
 
+        self.log.info("With -walletbroadcast=0 a BitAssets call keeps its transaction for the user to send, not abandoned")
+        self.restart_node(0, extra_args=self.extra_args[0] + ["-walletbroadcast=0"])
+        self.connect_nodes(0, 1)
+        side = self.nodes[0]
+        kept = side.reserveasset("KEPT")["txid"]
+        assert kept not in side.getrawmempool()
+        wtx = side.gettransaction(kept)
+        assert_equal(wtx["confirmations"], 0)
+        assert all(not d.get("abandoned", False) for d in wtx["details"])
+        # The user sends it: it is a valid reservation.
+        side.sendrawtransaction(wtx["hex"])
+        assert kept in side.getrawmempool()
+        self.mine_txs()
+        assert_equal(side.gettransaction(kept)["confirmations"], 1)
+        self.restart_node(0)
+        self.connect_nodes(0, 1)
+
 
 if __name__ == "__main__":
     BitAssetsTest(__file__).main()
