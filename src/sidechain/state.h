@@ -59,6 +59,16 @@ inline constexpr size_t MAX_MAIN_SCRIPT_SIZE{80};
  */
 inline constexpr size_t MAX_PAYOUTS_PER_BLOCK{1000};
 /**
+ * Most refunds of withdrawals one block's transactions may ask for; a transaction that would go
+ * beyond is not valid in that block, and waits for the next (the miner leaves it out). Refunds are
+ * paid from the queue of what the mainchain gave rise to (TakePayouts), which has half of every block
+ * whatever the transactions do: they are not held back by what pools and auctions pay out. A fifth
+ * of that half, so that refunds, which cost no more than the fees of a withdrawal and of its
+ * refund, cannot hold deposits back either; far more than are ever asked for (a withdrawal is taken
+ * back only before a bundle takes it).
+ */
+inline constexpr size_t MAX_REFUNDS_PER_BLOCK{MAX_PAYOUTS_PER_BLOCK / 10};
+/**
  * Blocks during which a new withdrawal can still be taken back ahead of a bundle that would take it
  * (block assembly policy, not a rule): after that, a bundle goes before refund requests.
  */
@@ -187,12 +197,11 @@ public:
     /**
      * The payouts a block pays: at most MAX_PAYOUTS_PER_BLOCK, of what was owed
      * before it and of what it gave rise to, oldest first in each queue. What
-     * the mainchain gave rise to (`owed`: deposits) has a queue of its own, apart
-     * from what transactions did (`owed_tx`: refunds, and what a sidechain's own
-     * rules pay out), so that transactions, however many, cannot hold deposits
-     * back. Each queue has half of the block, and what one does not use goes to
-     * the other, so that neither holds the other back. The rest is queued for
-     * the next blocks.
+     * the mainchain gave rise to and the refunds of withdrawals (`owed`) have a
+     * queue of their own, apart from what pools and auctions pay out (`owed_tx`),
+     * so that those, however many, cannot hold deposits and refunds back. Each
+     * queue has half of the block, and what one does not use goes to the other,
+     * so that neither holds the other back. The rest is queued for the next blocks.
      */
     std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx);
     /** Payouts owed and not paid yet, oldest first: from the mainchain, and from transactions. */
@@ -201,9 +210,13 @@ public:
     /**
      * Take in the withdrawals and the refund requests of a transaction that is not a coinbase.
      * All or nothing: a transaction that breaks a rule changes nothing.
+     * @param[in,out] payouts  what the assets pay out, of the block's transactions so far
+     *                         (at most bitassets::MAX_TX_PAYOUTS_PER_BLOCK)
+     * @param[in,out] refunds  the refunds of withdrawals, of the block's transactions so far
+     *                         (at most MAX_REFUNDS_PER_BLOCK)
      */
     [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                               std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending = false);
+                               std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending = false);
 
     /** Whether a refund request could be mined now. @param[in] main_pending  see MainPending */
     [[nodiscard]] bool CheckRefund(const RefundRequest& request, std::string& reject_reason, bool main_pending = false) const;
@@ -236,7 +249,7 @@ protected:
     StoreOverlay& Writable() const;
     /** ApplyTx, on an overlay of its own. */
     [[nodiscard]] bool ApplyTxSteps(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                                    std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending);
+                                    std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending);
 
 private:
     void AddWithdrawal(const Withdrawal& withdrawal);

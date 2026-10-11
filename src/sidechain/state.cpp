@@ -410,15 +410,16 @@ bool State::CheckRefund(const RefundRequest& request, std::string& reject_reason
 }
 
 bool State::ApplyTx(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                    std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending)
+                    std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending)
 {
     // All or nothing: on an overlay of its own, kept only if the transaction keeps the rules, so that
     // block assembly can leave a transaction out and go on, rather than start over.
     StoreOverlay tx_overlay{Writable(), /*journal=*/false};
-    const size_t paid{payouts.size()};
+    const size_t paid{payouts.size()}, refunded{refunds.size()};
     State tx_state{tx_overlay};
-    if (!tx_state.ApplyTxSteps(tx, height, params, payouts, reject_reason, main_pending)) {
+    if (!tx_state.ApplyTxSteps(tx, height, params, payouts, refunds, reject_reason, main_pending)) {
         payouts.resize(paid);
+        refunds.resize(refunded);
         return false;
     }
     tx_overlay.MergeInto(Writable());
@@ -426,10 +427,10 @@ bool State::ApplyTx(const CTransaction& tx, int height, const Consensus::Sidecha
 }
 
 bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                         std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending)
+                         std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending)
 {
-    // The assets go last, as they always have; what they pay still comes first.
-    std::vector<CTxOut> refunds;
+    // The assets go last, as they always have.
+    const size_t refunded{refunds.size()};
     for (uint32_t n{0}; n < tx.vout.size(); ++n) {
         const CTxOut& out{tx.vout[n]};
         if (IsWithdrawalScript(out.scriptPubKey)) {
@@ -451,6 +452,12 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
             refunds.emplace_back(withdrawal.Burned(), GetScriptForDestination(WitnessV0KeyHash{withdrawal.refund_keyhash}));
             Remove(refund->withdrawal);
         }
+    }
+    // Room for refunds is bounded: what a block pays, the coinbase creates, and every node keeps what
+    // waits. ApplyTx() drops what the transaction did, and the miner leaves it for a later block.
+    if (refunds.size() > refunded && refunds.size() > MAX_REFUNDS_PER_BLOCK) {
+        reject_reason = "bad-sc-block-refunds-full";
+        return false;
     }
     // The assets: a transaction that breaks their rules is invalid. What pools and auctions pay out
     // in CHN, the coinbase pays.
@@ -474,7 +481,6 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
         withdrawal.height = height;
         AddWithdrawal(withdrawal);
     }
-    payouts.insert(payouts.end(), refunds.begin(), refunds.end());
     return true;
 }
 
@@ -513,11 +519,14 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
         if (!StartBundle(*commitment, height, block.hashPrevBlock, params, reject_reason)) return false;
     }
 
+    std::vector<CTxOut> refunds;
     for (size_t i{1}; i < block.vtx.size(); ++i) {
-        if (!ApplyTx(*block.vtx[i], height, params, tx_payouts, reject_reason, main_pending)) return false;
+        if (!ApplyTx(*block.vtx[i], height, params, tx_payouts, refunds, reject_reason, main_pending)) return false;
     }
 
-    // The coinbase pays the deposits and the refunds, right after its first output, as many as a block can.
+    // The coinbase pays the deposits and the refunds, right after its first output, as many as a block
+    // can. Refunds wait with the deposits, apart from what pools and auctions pay out.
+    payouts.insert(payouts.end(), refunds.begin(), refunds.end());
     payouts = TakePayouts(std::move(payouts), std::move(tx_payouts));
     const std::vector<CTxOut>& coinbase{block.vtx[0]->vout};
     if (coinbase.size() < 1 + payouts.size()) {
@@ -550,6 +559,9 @@ bool RecordIndependent(const std::string& reject_reason)
     };
     return independent.contains(reject_reason);
 }
+
+// What pools and auctions may add to their queue in a block, it pays in that block whatever else is owed.
+static_assert(bitassets::MAX_TX_PAYOUTS_PER_BLOCK <= MAX_PAYOUTS_PER_BLOCK - MAX_PAYOUTS_PER_BLOCK / 2);
 
 std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx)
 {

@@ -1264,6 +1264,12 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
 {
     const auto plan{MakePlan(tx, height, reject_reason, reveal_depth)};
     if (!plan) return false;
+    // Room for payouts is bounded: what a block pays, the coinbase creates, and every node keeps what
+    // waits. The miner leaves the transaction for a later block.
+    if (!plan->payouts.empty() && payouts.size() + plan->payouts.size() > MAX_TX_PAYOUTS_PER_BLOCK) {
+        reject_reason = "bad-ba-block-payouts-full";
+        return false;
+    }
     sidechain::StoreOverlay& out{Writable()};
     // In the order the rules have always applied a plan in.
     for (const COutPoint& outpoint : plan->spent) SetToken(outpoint, std::nullopt);

@@ -1267,9 +1267,9 @@ BOOST_AUTO_TEST_CASE(bundle_nonce)
     CMutableTransaction tx;
     tx.vin.resize(1);
     tx.vout.emplace_back(COIN, sidechain::WithdrawalScript(1000, uint160::FromHex("0101010101010101010101010101010101010101").value(), GetScriptForDestination(WitnessV0KeyHash{uint160::FromHex("0101010101010101010101010101010101010101").value()})));
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
-    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, 1, params, payouts, reason), reason);
+    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, 1, params, payouts, refunds, reason), reason);
     const auto a{state.NextBundle(10, uint256{0xa}, params)};
     const auto b{state.NextBundle(10, uint256{0xb}, params)};
     BOOST_REQUIRE(a && b);
@@ -1294,9 +1294,9 @@ BOOST_AUTO_TEST_CASE(paid_on_another_branch)
     tx.vin.resize(1);
     tx.vout.emplace_back(COIN, sidechain::WithdrawalScript(1000, uint160::FromHex("0101010101010101010101010101010101010101").value(), pay));
     tx.vout.emplace_back(2 * COIN, sidechain::WithdrawalScript(1000, uint160::FromHex("0101010101010101010101010101010101010101").value(), pay));
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
-    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, 1, params, payouts, reason), reason);
+    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, 1, params, payouts, refunds, reason), reason);
     BOOST_REQUIRE_EQUAL(side.Withdrawals(), 2U);
 
     sidechain::Mainchain mainchain;
@@ -1332,14 +1332,14 @@ BOOST_AUTO_TEST_CASE(paid_on_another_branch_oldest_first)
     sidechain::State& state{side.state};
     const uint160 key{uint160::FromHex("0101010101010101010101010101010101010101").value()};
     const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key})};
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
     const auto withdraw{[&](uint8_t salt, int height) {
         CMutableTransaction tx;
         tx.vin.resize(1);
         tx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{salt}), 0};
         tx.vout.emplace_back(COIN, sidechain::WithdrawalScript(1000, key, pay));
-        BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, height, params, payouts, reason), reason);
+        BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, height, params, payouts, refunds, reason), reason);
         return COutPoint{tx.GetHash(), 0};
     }};
     const COutPoint older{withdraw(1, 1)}, newer{withdraw(2, 2)};
@@ -1371,9 +1371,9 @@ COutPoint MakeWithdrawal(sidechain::State& state, const CKey& key, const CScript
     tx.vin.resize(1);
     tx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{salt}), 0};
     tx.vout.emplace_back(COIN, sidechain::WithdrawalScript(1000, key.GetPubKey().GetID(), pay));
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
-    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, height, params, payouts, reason), reason);
+    BOOST_REQUIRE_MESSAGE(state.ApplyTx(CTransaction{tx}, height, params, payouts, refunds, reason), reason);
     return COutPoint{tx.GetHash(), 0};
 }
 
@@ -2768,6 +2768,59 @@ BOOST_AUTO_TEST_CASE(sidechain_block_rejects)
     }
 }
 
+BOOST_AUTO_TEST_CASE(sidechain_refunds_per_block)
+{
+    // The fifth audit: refunds waited in the queue of what transactions pay out, behind any flood of
+    // swaps. They now wait with the deposits, and a block's transactions ask for MAX_REFUNDS_PER_BLOCK
+    // at most, so that they cannot hold deposits back either.
+    SideBlockCase c;
+    std::vector<COutPoint> made;
+    for (size_t i{0}; i < sidechain::MAX_REFUNDS_PER_BLOCK + 1; ++i) {
+        made.push_back(MakeWithdrawal(c.side.state, c.key, c.pay, 1, c.params, static_cast<uint8_t>(i + 1)));
+    }
+    c.side.store.TakeUndo();
+    std::vector<CTxOut> payouts, refunds;
+    std::string reason;
+    for (size_t i{0}; i < sidechain::MAX_REFUNDS_PER_BLOCK; ++i) {
+        const CMutableTransaction tx{SideBlockCase::Tx({c.Refund(SignRefund(c.key, made[i]))}, static_cast<uint8_t>(i))};
+        BOOST_REQUIRE_MESSAGE(c.side.state.ApplyTx(CTransaction{tx}, 2, c.params, payouts, refunds, reason), reason);
+    }
+    BOOST_CHECK(payouts.empty());
+    BOOST_CHECK_EQUAL(refunds.size(), sidechain::MAX_REFUNDS_PER_BLOCK);
+    // One more: not in this block; nothing done.
+    const uint256 before{c.side.state.Hash()};
+    const CMutableTransaction beyond{SideBlockCase::Tx({c.Refund(SignRefund(c.key, made.back()))}, 0xf0)};
+    BOOST_CHECK(!c.side.state.ApplyTx(CTransaction{beyond}, 2, c.params, payouts, refunds, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-sc-block-refunds-full");
+    BOOST_CHECK_EQUAL(refunds.size(), sidechain::MAX_REFUNDS_PER_BLOCK);
+    BOOST_CHECK(c.side.state.Hash() == before);
+    BOOST_CHECK(c.side.state.GetWithdrawal(made.back()));
+    // A withdrawal still goes in; and in the next block, the refund.
+    const CMutableTransaction withdraw{SideBlockCase::Tx({CTxOut{2 * COIN, sidechain::WithdrawalScript(1000, c.key.GetPubKey().GetID(), c.pay)}}, 0xf1)};
+    BOOST_CHECK_MESSAGE(c.side.state.ApplyTx(CTransaction{withdraw}, 2, c.params, payouts, refunds, reason), reason);
+    refunds.clear();
+    BOOST_CHECK_MESSAGE(c.side.state.ApplyTx(CTransaction{beyond}, 3, c.params, payouts, refunds, reason), reason);
+    BOOST_CHECK_EQUAL(refunds.size(), 1U);
+}
+
+BOOST_AUTO_TEST_CASE(sidechain_refund_ahead_of_tx_payouts)
+{
+    // A refund is paid in the block that asks for it, whatever pools and auctions owe: it waits with
+    // the deposits, which have half of every block.
+    SideBlockCase c;
+    std::vector<CTxOut> flood;
+    for (size_t i{0}; i < 3 * sidechain::MAX_PAYOUTS_PER_BLOCK; ++i) flood.emplace_back(static_cast<CAmount>(i + 1), CScript() << OP_TRUE);
+    BOOST_REQUIRE_EQUAL(c.side.state.TakePayouts({}, flood).size(), sidechain::MAX_PAYOUTS_PER_BLOCK);
+    c.side.store.TakeUndo();
+    c.txs.push_back(SideBlockCase::Tx({c.Refund(SignRefund(c.key, c.withdrawal))}));
+    c.coinbase.push_back(c.RefundPayout());
+    // The rest of the block: what pools and auctions owe, in order.
+    c.coinbase.insert(c.coinbase.end(), flood.begin() + sidechain::MAX_PAYOUTS_PER_BLOCK, flood.begin() + 2 * sidechain::MAX_PAYOUTS_PER_BLOCK - 1);
+    BOOST_CHECK_MESSAGE(c.Check(), c.reason);
+    BOOST_CHECK_EQUAL(c.side.state.TxQueue().size(), sidechain::MAX_PAYOUTS_PER_BLOCK + 1);
+    BOOST_CHECK(c.side.state.Queue().empty());
+}
+
 BOOST_AUTO_TEST_CASE(sidechain_failures_by_kind)
 {
     // Which failures depend on the record of the mainchain: those the follower takes back when a
@@ -2811,9 +2864,9 @@ BOOST_AUTO_TEST_CASE(sidechain_tx_all_or_nothing)
         CTxOut{2 * COIN, sidechain::WithdrawalScript(1000, key.GetPubKey().GetID(), c.pay)},
         CTxOut{COIN, sidechain::WithdrawalScript(COIN, key.GetPubKey().GetID(), c.pay)},
     })};
-    std::vector<CTxOut> payouts{CTxOut{5, CScript() << OP_TRUE}};
+    std::vector<CTxOut> payouts{CTxOut{5, CScript() << OP_TRUE}}, refunds;
     std::string reason;
-    BOOST_CHECK(!c.side.state.ApplyTx(CTransaction{tx}, 2, c.params, payouts, reason));
+    BOOST_CHECK(!c.side.state.ApplyTx(CTransaction{tx}, 2, c.params, payouts, refunds, reason));
     BOOST_CHECK_EQUAL(reason, "bad-sc-withdrawal");
     BOOST_CHECK_EQUAL(payouts.size(), 1U);
     BOOST_CHECK(c.side.state.Hash() == before);

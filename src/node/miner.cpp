@@ -293,15 +293,18 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         // One pass: a transaction that breaks a rule leaves the state as it was (ApplyTx is all or
         // nothing), and what depends on it comes after it in the block, so it goes before it is applied.
         side_tx_outputs.clear();
+        std::vector<CTxOut> side_refunds;
         for (size_t i{1}; i < pblock->vtx.size();) {
-            if (side.ApplyTx(*pblock->vtx[i], nHeight, side_params, side_tx_outputs, reject_reason, main_pending)) {
+            if (side.ApplyTx(*pblock->vtx[i], nHeight, side_params, side_tx_outputs, side_refunds, reject_reason, main_pending)) {
                 ++i;
                 continue;
             }
             LogInfo("%s: leaving out transaction %s, which breaks the sidechain rules in this block (%s)", __func__, pblock->vtx[i]->GetHash().ToString(), reject_reason);
             drop({pblock->vtx[i]->GetHash()});
         }
-        // As many of the payouts owed as a block may pay; the rest wait for the next block.
+        // As many of the payouts owed as a block may pay; the rest wait for the next block. Refunds
+        // wait with the deposits (State::ConnectBlock).
+        side_outputs.insert(side_outputs.end(), side_refunds.begin(), side_refunds.end());
         side_outputs = side.TakePayouts(std::move(side_outputs), std::move(side_tx_outputs));
         if (bundle_hash) side_outputs.emplace_back(0, sidechain::BundleCommitScript(*bundle_hash));
         m_chainstate.ReleaseSideCursor();

@@ -694,6 +694,35 @@ BOOST_AUTO_TEST_CASE(small_providers_and_dust)
     BOOST_CHECK(g.payouts.empty());
 }
 
+BOOST_AUTO_TEST_CASE(payouts_per_block)
+{
+    // The fifth audit: swaps of a little CHN each could put payouts in the coinbase's queue faster
+    // than blocks pay them, and hold every pool's and auction's payouts back. A block's transactions
+    // give rise to MAX_TX_PAYOUTS_PER_BLOCK at most; one beyond is not valid in the block.
+    Fixture f;
+    const auto [gc, gold]{f.Issue("GOLD", 20'000'000)};
+    const CTransaction chn_pool{MakeTx({gold}, AddLiquidity{GOLD, CHN, 10'000'000, 1'000'000'000, 1}, {Asset(GOLD, 10'000'000), std::nullopt, std::nullopt}, 1'000'000'000)};
+    std::string reason;
+    BOOST_REQUIRE_MESSAGE(f.Apply(chn_pool, &reason), reason);
+    // What the block's earlier transactions pay out.
+    f.payouts.assign(MAX_TX_PAYOUTS_PER_BLOCK - 1, CTxOut{MIN_CHN_PAYOUT, HOLDER});
+    const CTransaction last{MakeTx({COutPoint{chn_pool.GetHash(), 0}}, Swap{GOLD, 10'000, CHN, 1, HOLDER}, {Asset(GOLD, 9'990'000)})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(last, &reason), reason);
+    BOOST_CHECK_EQUAL(f.payouts.size(), MAX_TX_PAYOUTS_PER_BLOCK);
+    const CTransaction beyond{MakeTx({COutPoint{last.GetHash(), 0}}, Swap{GOLD, 10'000, CHN, 1, HOLDER}, {Asset(GOLD, 9'980'000)})};
+    BOOST_CHECK_EQUAL(f.Reject(beyond), "bad-ba-block-payouts-full");
+    BOOST_CHECK_EQUAL(f.payouts.size(), MAX_TX_PAYOUTS_PER_BLOCK);
+    // What pays nothing out still goes in: a swap for GOLD, a move of GOLD.
+    BOOST_CHECK_MESSAGE(f.Apply(MakeTx({}, Swap{CHN, 1'000'000, GOLD, 1, CScript{}}, {std::nullopt}, 1'000'000), &reason), reason);
+    BOOST_CHECK_MESSAGE(f.Apply(MakeTx({COutPoint{chn_pool.GetHash(), 1}}, std::nullopt, {Token{Token::Kind::LP, PoolId(GOLD, CHN), f.state.Tokens().at(COutPoint{chn_pool.GetHash(), 1}).amount}}), &reason), reason);
+    BOOST_CHECK_EQUAL(f.payouts.size(), MAX_TX_PAYOUTS_PER_BLOCK);
+    // In the next block it is valid.
+    f.payouts.clear();
+    ++f.height;
+    BOOST_CHECK_MESSAGE(f.Apply(beyond, &reason), reason);
+    BOOST_CHECK_EQUAL(f.payouts.size(), 1U);
+}
+
 BOOST_AUTO_TEST_CASE(swap_math_exact)
 {
     // The swap math against a 256 bit reference, where amount * 997 * reserve does not fit in 128 bits.
@@ -1014,11 +1043,11 @@ BOOST_AUTO_TEST_CASE(release_of_one_satoshi)
     Consensus::SidechainParams params;
     params.enabled = true;
     params.bitassets_reveal_depth = 1;
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
     int height{100};
     const auto apply{[&](const CTransaction& tx) {
-        const bool ok{side.ApplyTx(tx, height, params, payouts, reason)};
+        const bool ok{side.ApplyTx(tx, height, params, payouts, refunds, reason)};
         BOOST_CHECK_MESSAGE(ok, reason);
         return ok;
     }};

@@ -91,6 +91,17 @@ inline constexpr int32_t MAX_AUCTION_DELAY{52'560};
  * collecting an auction is not paid (the CHN were burned when they went in).
  */
 inline constexpr uint64_t MIN_CHN_PAYOUT{50'000};
+/**
+ * Most CHN payouts the transactions of a block may give rise to (swaps, bids, liquidity taken out,
+ * auctions collected); a transaction that would go beyond is not valid in that block, and waits for
+ * the next (the miner leaves it out, and fills the block around it). The half of a block that the
+ * queue of these payouts is sure to get (sidechain::State::TakePayouts): transactions cannot make
+ * that queue grow, so a flood of small swaps delays nobody's payout by more than a block, and refunds
+ * and deposits, which have the other half, not at all. A transaction has one action and so at most
+ * two payouts; 500 is about one in eight of the transactions a full block holds, many more than
+ * pay out CHN in ordinary use.
+ */
+inline constexpr size_t MAX_TX_PAYOUTS_PER_BLOCK{500};
 /** Most tokens one burn names. */
 inline constexpr size_t MAX_BURNS{16};
 
@@ -660,7 +671,8 @@ public:
 
     /**
      * Check a transaction against the state and, if it follows the rules, apply it. The CHN it pays
-     * out are added to `payouts`, for the coinbase. A transaction that does not follow the rules
+     * out are added to `payouts`, for the coinbase. A transaction that does not follow the rules,
+     * or would take `payouts` (those of the block's transactions) beyond MAX_TX_PAYOUTS_PER_BLOCK,
      * changes nothing.
      * @param[out] released  CHN freed by retiring an asset (ReleaseAsset), for mainchain miners
      */
