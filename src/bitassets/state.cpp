@@ -1116,6 +1116,9 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (create->start_height < height) return invalid("bad-ba-auction-started");
         // An auction that never starts would hold what it sells, and the asset it quotes, for ever.
         if (create->start_height > height + MAX_AUCTION_DELAY) return invalid("bad-ba-auction-delay");
+        // CHN sold are paid out by the coinbase, MIN_CHN_PAYOUT at least: less could never be bought,
+        // nor taken back.
+        if (create->base.IsNull() && create->base_amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
         Auction auction;
         auction.base = create->base;
         auction.base_amount = create->base_amount;
@@ -1145,7 +1148,12 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         }
         const uint64_t bought{auction.BuysAt(height, bid->quote_amount)};
         if (bought == 0 || bought > auction.remaining || bought < bid->min_base) return invalid("bad-ba-bid-price");
-        if (auction.base.IsNull() && bought < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        // CHN are paid out MIN_CHN_PAYOUT at least: a bid buys no less, leaves none less to buy (nor to
+        // take back), and pays no less (the proceeds, collected, would not be paid out).
+        if (auction.base.IsNull() && (bought < MIN_CHN_PAYOUT || (bought < auction.remaining && auction.remaining - bought < MIN_CHN_PAYOUT))) {
+            return invalid("bad-ba-chn-dust");
+        }
+        if (auction.quote.IsNull() && bid->quote_amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
         const auto proceeds{Add(auction.proceeds, bid->quote_amount)};
         if (!proceeds) return invalid("bad-ba-bid");
         auction.remaining -= bought;

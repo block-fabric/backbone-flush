@@ -87,8 +87,10 @@ inline constexpr int32_t MAX_AUCTION_DELAY{52'560};
  * 500 swaps of this much each (0.25 CHN turned over, 0.3% of it to the pools each way, and the fees),
  * not 500 of 1000 satoshis (0.000005 CHN); a payout of it is five times the least withdrawal, and an
  * output worth spending at any fee rate below about 700 sat/vB. Less from a swap or a bid is refused;
- * less taken out of a pool, or coming back from a deposit, stays in it, for its providers; less from
- * collecting an auction is not paid (the CHN were burned when they went in).
+ * less taken out of a pool, or coming back from a deposit, stays in it, for its providers. An auction
+ * selling CHN sells this much at least, and a bid leaves no less of it (or none); a bid in CHN pays
+ * this much at least: whatever an auction holds in CHN can be paid out. (Less from collecting an
+ * auction is not paid: the CHN were burned when they went in.)
  */
 inline constexpr uint64_t MIN_CHN_PAYOUT{50'000};
 /**

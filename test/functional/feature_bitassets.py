@@ -512,7 +512,15 @@ class BitAssetsTest(SidechainTest):
         self.mine_txs()
         assert_raises_rpc_error(-8, "the least CHN paid out is 0.0005", side.bidauction, sells_chn, "0.1")
         assert_equal(side.quotebid(sells_chn, 1)["buys"], Decimal("0.00100000"))
+        # Nor one that leaves CHN dust, which nobody could buy.
+        assert_raises_rpc_error(-8, "It would leave less than 0.0005 CHN", side.bidauction, sells_chn, "9.99")
         other.collectauction(sells_chn)
+        # An auction sells 0.0005 CHN at least; a bid in CHN pays 0.0005 CHN at least.
+        assert_raises_rpc_error(-8, "an auction sells 0.0005 CHN at least", other.createauction, "CHN", "0.0004", "GOLD", 10, 10, 5)
+        for_chn = side.createauction("GOLD", 1, "CHN", "0.001", "0.001", 5)["txid"]
+        self.mine_txs()
+        assert_raises_rpc_error(-8, "a bid pays 0.0005 CHN at least", other.bidauction, for_chn, "0.0004")
+        side.collectauction(for_chn)
         self.mine_txs()
 
         self.log.info("What a wallet did, in words")

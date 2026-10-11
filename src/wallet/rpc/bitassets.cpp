@@ -1079,6 +1079,9 @@ RPCMethod createauction()
     create.start_price = bitassets::ParseUnits(request.params[3], quote.decimals);
     create.end_price = bitassets::ParseUnits(request.params[4], quote.decimals);
     if (create.end_price > create.start_price) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price falls: the end price is at most the start price");
+    if (create.base.IsNull() && create.base_amount < bitassets::MIN_CHN_PAYOUT) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an auction sells %s CHN at least (the least CHN paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    }
     create.duration = request.params[5].getInt<int>();
     if (create.duration < 1 || create.duration > bitassets::MAX_AUCTION_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The duration is 1 to %u blocks", bitassets::MAX_AUCTION_DURATION));
     const int start_in{request.params[6].isNull() ? 1 : request.params[6].getInt<int>()};
@@ -1160,6 +1163,12 @@ RPCMethod bidauction()
     buys = auction->BuysAt(height, amount);
     if (auction->base.IsNull() && buys < bitassets::MIN_CHN_PAYOUT) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    }
+    if (auction->base.IsNull() && buys < auction->remaining && auction->remaining - buys < bitassets::MIN_CHN_PAYOUT) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("It would leave less than %s CHN, which nobody could buy: buy all that is left, or less", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    }
+    if (auction->quote.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: a bid pays %s CHN at least (the least CHN paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
     }
     const AssetInfo quote{auction->quote, std::nullopt, dq, LabelOfAsset(*pwallet, auction->quote)};
     std::vector<COutPoint> inputs;
