@@ -16,6 +16,7 @@
 #include <util/time.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -92,6 +93,12 @@ public:
 
 private:
     const BlockCreateOptions m_options;
+
+    /**
+     * On a sidechain, while the mempool's transactions are added: applies a chunk to the sidechain
+     * state of the block, and says whether it keeps the rules there. A chunk that does not is left out.
+     */
+    std::function<bool(const std::vector<CTxMemPoolEntryRef>&)> m_side_check;
 
     // utility functions
     /** Clear the block's state and prepare for assembling a new block */
