@@ -2,12 +2,17 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test that the miner fills a block around the bound on the refunds of its transactions.
+"""Test that the miner fills a block around the bound on the refunds of its transactions, and the relay
+policy on transactions dense in payouts.
 
 The transactions of a block ask for MAX_REFUNDS_PER_BLOCK (100) refunds of withdrawals at most (and
 give rise to bitassets::MAX_TX_PAYOUTS_PER_BLOCK CHN payouts at most). Transactions that pay well for
 many refunds each must not leave the rest of the block empty: the miner leaves out those beyond the
 bound and fills the block with the others, rather than dropping them after it was filled.
+
+The mempool, for its part, takes a transaction only if it pays the minimum relay fee of 750 vbytes for
+each CHN payout and each refund it would give rise to (bitassets::PAYOUT_POLICY_VSIZE): a refund the
+wallet makes is taken, 40 refunds that pay less are not.
 
 The mainchain node is a stand-in (test_framework/sidechain_standin.py).
 """
@@ -15,11 +20,11 @@ The mainchain node is a stand-in (test_framework/sidechain_standin.py).
 import base64
 from decimal import Decimal
 
-from test_framework.messages import CTransaction, CTxOut, tx_from_hex
+from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxOut, tx_from_hex
 from test_framework.script import CScript, OP_RETURN
 from test_framework.sidechain_standin import StandInMainchain
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, rpc_port
+from test_framework.util import assert_equal, assert_raises_rpc_error, rpc_port
 
 SLOT = 3
 WITHDRAWAL_TAG = bytes.fromhex("d8574452")
@@ -34,6 +39,10 @@ LIGHT = 20
 # Room for about four of the heavy transactions (of about 21 000 weight each); two of them make 90
 # refunds, and the third would go beyond.
 BLOCK_MAX_WEIGHT = 100000
+# Relay policy: the minimum relay fee (sat/kvB) of this many vbytes for each payout.
+PAYOUT_POLICY_VSIZE = 750
+MIN_RELAY_FEE = 100
+DENSE = 40
 
 
 class SidechainPayoutsTest(BitcoinTestFramework):
@@ -139,6 +148,65 @@ class SidechainPayoutsTest(BitcoinTestFramework):
         assert_equal(set(block["tx"][1:]), heavy - mined - set(node.getblock(node.getblockhash(node.getblockcount() - 1), 1)["tx"]))
         assert_equal(node.getrawmempool(), [])
         assert_equal(sum(1 for w in node.listwithdrawals() if w["txid"] == withdrawals), 0)
+
+        self.payout_policy_test()
+
+    def refund_output(self, address, txid, n):
+        signature = base64.b64decode(self.node.signmessage(address, f"Refund withdrawal {txid}:{n}"))
+        return CTxOut(0, CScript([OP_RETURN, REFUND_TAG + bytes.fromhex(txid)[::-1] + n.to_bytes(4, "little") + signature]))
+
+    def signed(self, utxo, outputs, fee):
+        """The hex of a transaction of the wallet that spends `utxo` alone, with a fee of `fee`, signed."""
+        node = self.node
+        tx = CTransaction()
+        tx.vin = [CTxIn(COutPoint(int(utxo["txid"], 16), utxo["vout"]))]
+        tx.vout = list(outputs)
+        change = int(utxo["amount"] * COIN) - sum(o.nValue for o in outputs) - fee
+        tx.vout.append(CTxOut(change, bytes.fromhex(node.getaddressinfo(node.getnewaddress(address_type="bech32"))["scriptPubKey"])))
+        signed = node.signrawtransactionwithwallet(tx.serialize().hex())
+        assert signed["complete"]
+        return signed["hex"]
+
+    def payout_policy_test(self):
+        """Relay policy: a transaction pays the minimum relay fee of PAYOUT_POLICY_VSIZE for each payout."""
+        node = self.node
+        refund_address = node.getnewaddress(address_type="bech32")
+        keyhash = bytes.fromhex(node.getaddressinfo(refund_address)["witness_program"])
+        data = WITHDRAWAL_TAG + WITHDRAWAL_FEE.to_bytes(8, "little") + keyhash + MAIN_SCRIPT
+        withdrawals = self.send([CTxOut(MIN_WITHDRAWAL + WITHDRAWAL_FEE, CScript([OP_RETURN, data])) for _ in range(DENSE + 1)], 1)
+        node.sendmany("", {node.getnewaddress(address_type="bech32"): Decimal("0.3") for _ in range(2)})
+        self.mine()
+        utxos = [u for u in node.listunspent() if u["amount"] == Decimal("0.3")]
+        assert_equal(len(utxos), 2)
+        # 40 refunds at the minimum relay fee (0.1 sat/vB) of 750 vbytes each.
+        needed = DENSE * PAYOUT_POLICY_VSIZE * MIN_RELAY_FEE // 1000
+        dense = [self.refund_output(refund_address, withdrawals, n) for n in range(DENSE)]
+
+        self.log.info("A transaction of 40 refunds that pays well above the minimum relay fee, but not for its refunds, is refused")
+        tx = self.signed(utxos[0], dense, fee=needed - 1)
+        vsize = tx_from_hex(tx).get_vsize()
+        assert needed - 1 > 5 * vsize * MIN_RELAY_FEE // 1000, "five times the minimum relay fee of its size"
+        result = node.testmempoolaccept([tx])[0]
+        assert_equal(result["allowed"], False)
+        assert_equal(result["reject-reason"], "ba-payouts-too-dense")
+        assert_raises_rpc_error(-26, "ba-payouts-too-dense", node.sendrawtransaction, tx, 0, 1)
+
+        self.log.info("The same, paying for its refunds, is taken")
+        dense_txid = node.sendrawtransaction(self.signed(utxos[0], dense, fee=needed), 0, 1)
+
+        self.log.info("A refund the wallet makes is taken")
+        taken = node.refundwithdrawal(withdrawals, DENSE)
+        assert taken["txid"] in node.getrawmempool()
+
+        self.log.info("Outputs that pay out nothing are not counted")
+        plain = self.signed(utxos[1], [CTxOut(1000000, bytes.fromhex(node.getaddressinfo(node.getnewaddress(address_type="bech32"))["scriptPubKey"]))], fee=200)
+        assert tx_from_hex(plain).get_vsize() > 100
+        plain_txid = node.sendrawtransaction(plain)
+
+        self.log.info("They go into a block")
+        block = node.getblock(self.mine(), 1)
+        assert_equal(set(block["tx"][1:]), {dense_txid, taken["txid"], plain_txid})
+        assert_equal(node.getrawmempool(), [])
 
 
 if __name__ == '__main__':

@@ -655,6 +655,8 @@ private:
         CAmount m_base_fees;
         /** Base fees + any fee delta set by the user with prioritisetransaction. */
         CAmount m_modified_fees;
+        /** On a sidechain: the CHN payouts and refunds of withdrawals the transaction would give rise to (relay policy). */
+        size_t m_side_payouts{0};
 
         /** If we're doing package validation (i.e. m_package_feerates=true), the "effective"
          * package feerate of this transaction is the total fees divided by the total size of
@@ -802,6 +804,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
                 if (!withdrawal) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bad-sc-withdrawal");
                 if (withdrawal->amount < side_params.min_withdrawal) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bad-sc-withdrawal-amount");
             } else if (const auto refund{sidechain::ParseRefundScript(out.scriptPubKey)}) {
+                ++ws.m_side_payouts;
                 std::string reject_reason;
                 const bool main_pending{side.MainPendingNext(*Assert(m_active_chainstate.m_chainman.m_mainchain), side_params)};
                 if (!side.CheckRefund(*refund, reject_reason, main_pending)) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reject_reason);
@@ -820,9 +823,11 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
             }
         }
         const int height{m_active_chainstate.m_chain.Height() + 1};
-        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth)) {
+        size_t payouts{0};
+        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts)) {
             return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
         }
+        ws.m_side_payouts += payouts;
         // One registration of an asset at a time: the second could never be mined.
         if (const auto marker{bitassets::GetMarker(tx)}; marker && marker->operation) {
             if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) {
@@ -1143,6 +1148,16 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // blocks and transactions in a package. Package transactions will be checked using package
     // feerate later.
     if (!bypass_limits && !args.m_package_feerates && !CheckFeeRate(ws.m_vsize, ws.m_modified_fees, state)) return false;
+
+    // Relay policy, not consensus: a transaction pays for the CHN payouts and refunds it would give rise
+    // to, as the state stands at the tip, by its own fee (bitassets::PAYOUT_POLICY_VSIZE).
+    if (ws.m_side_payouts > 0 && !bypass_limits && m_pool.m_opts.require_standard) {
+        const CAmount needed{m_pool.m_opts.min_relay_feerate.GetFee(static_cast<int32_t>(ws.m_side_payouts * bitassets::PAYOUT_POLICY_VSIZE))};
+        if (ws.m_modified_fees < needed) {
+            return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "ba-payouts-too-dense",
+                                 strprintf("%u payouts need a fee of %d, not %d", ws.m_side_payouts, needed, ws.m_modified_fees));
+        }
+    }
 
     ws.m_iters_conflicting = m_pool.GetIterSet(ws.m_conflicts);
 

@@ -1252,11 +1252,12 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
     return plan;
 }
 
-bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results, int reveal_depth) const
+bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results, int reveal_depth, size_t* payouts) const
 {
     auto plan{MakePlan(tx, height, reject_reason, reveal_depth)};
     if (!plan) return false;
     if (results) *results = std::move(plan->results);
+    if (payouts) *payouts = plan->payouts.size();
     return true;
 }
 

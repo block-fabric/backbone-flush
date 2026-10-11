@@ -102,6 +102,18 @@ inline constexpr uint64_t MIN_CHN_PAYOUT{50'000};
  * pay out CHN in ordinary use.
  */
 inline constexpr size_t MAX_TX_PAYOUTS_PER_BLOCK{500};
+/**
+ * Relay policy, not consensus: a transaction pays at least the minimum relay fee of this many virtual
+ * bytes for each CHN payout and each refund of a withdrawal it would give rise to, or the mempool
+ * refuses it ("ba-payouts-too-dense"). A payout takes one of the MAX_TX_PAYOUTS_PER_BLOCK, and a refund
+ * one of the sidechain::MAX_REFUNDS_PER_BLOCK, of a block, which are scarcer than its weight: without
+ * this, a transaction of 40 refunds takes 40 of the 100 for the minimum fee of its 4700 vbytes (470
+ * sat at 0.1 sat/vB); it now pays 3000. The 600 of a block then cost the minimum fee of 450 000
+ * vbytes, about half a block of transactions. What a wallet makes is never refused: it pays 1 sat/vB
+ * at least (-mintxfee, ten times the minimum relay fee), a refund output alone takes 116 vbytes, and a
+ * transaction has one action, which pays out once at most, in 150 vbytes or more.
+ */
+inline constexpr int64_t PAYOUT_POLICY_VSIZE{750};
 /** Most tokens one burn names. */
 inline constexpr size_t MAX_BURNS{16};
 
@@ -679,8 +691,11 @@ public:
     [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released = nullptr, int reveal_depth = 0);
     /** Whether an asset is dead and can be retired; if not, why (`why`). */
     bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
-    /** Whether ApplyTx would accept the transaction now; `results`, if given, gets what it would pay out. */
-    [[nodiscard]] bool CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results = nullptr, int reveal_depth = 0) const;
+    /**
+     * Whether ApplyTx would accept the transaction now (in a block with room for its payouts);
+     * `results`, if given, gets what it would pay out, and `payouts` how many CHN payouts it gives rise to.
+     */
+    [[nodiscard]] bool CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results = nullptr, int reveal_depth = 0, size_t* payouts = nullptr) const;
     /** What the inputs of a transaction carry, in the order of the inputs. */
     std::vector<std::pair<uint32_t, Token>> SpentTokens(const CTransaction& tx) const;
 
