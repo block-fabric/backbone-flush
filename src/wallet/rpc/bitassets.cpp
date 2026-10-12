@@ -1103,11 +1103,12 @@ RPCMethod bidauction()
     return RPCMethod{
         "bidauction",
         "Bid on an auction: pay an amount of what it sells for, get what that buys at the price of the block that\n"
-        "takes the bid (at least what it buys in the next block: the price only falls)." + HELP_REQUIRING_PASSPHRASE,
+        "takes the bid (at least what it buys in the next block: the price only falls). A bid that buys all that is left\n"
+        "pays what that costs in the block that takes it, and gets the rest back." + HELP_REQUIRING_PASSPHRASE,
         {
             {"auction", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction that made it"},
             {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "What to pay; with buy_all, the most to pay (refused if all that is left costs more)"},
-            {"buy_all", RPCArg::Type::BOOL, RPCArg::Default{false}, "Pay what buys all that is left at the price of the next block, and no more (cost_of_remaining in getauction)"},
+            {"buy_all", RPCArg::Type::BOOL, RPCArg::Default{false}, "Pay what buys all that is left at the price of the next block, and no more (cost_of_remaining in getauction); taken in a later block, it pays what all that is left costs then, and the rest comes back"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -1142,10 +1143,7 @@ RPCMethod bidauction()
         // Not the most that buys no more than what is left: that overpays by up to the price of a
         // unit (with 0 decimals, nearly twice the price for the last one).
         amount = cost;
-        if (amount == 0 || auction->BuysAt(height, amount) != auction->remaining) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No bid buys exactly what is left at the price of the next block: the least that buys it all, %s, buys more than is left (the rules refuse that). Bid an amount instead",
-                                                                bitassets::FormatUnits(cost, dq)));
-        }
+        if (amount == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing is left to buy");
         if (!request.params[1].isNull() && amount > bitassets::ParseUnits(request.params[1], dq)) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("All that is left costs %s now, more than the most given", bitassets::FormatUnits(amount, dq)));
         }
@@ -1155,12 +1153,13 @@ RPCMethod bidauction()
     }
     uint64_t buys{auction->BuysAt(height, amount)};
     if (buys == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing at the price of the next block");
-    if (buys > auction->remaining) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too much: it buys more than is left (see buy_all)");
-    // An amount that buys all that is left pays what that costs, not more: the rest would buy nothing.
-    if (buys == auction->remaining && amount > cost && auction->BuysAt(height, cost) == auction->remaining) amount = cost;
-    // Never more than what all that is left costs (an amount that buys less costs less than that).
-    if (amount > cost) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The bid would pay %s, more than all that is left costs (%s)", bitassets::FormatUnits(amount, dq), bitassets::FormatUnits(cost, dq)));
-    buys = auction->BuysAt(height, amount);
+    // An amount that buys all that is left pays what that costs, not more. Bought in a later block,
+    // where the price is lower, it still buys all that is left, and the rest comes back (the bid says
+    // where: below).
+    if (buys >= auction->remaining) {
+        amount = std::min(amount, cost);
+        buys = auction->remaining;
+    }
     if (auction->base.IsNull() && buys < bitassets::MIN_CHN_PAYOUT) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
     }
@@ -1175,8 +1174,10 @@ RPCMethod bidauction()
     std::vector<Out> outs;
     CAmount chn_in{0};
     PayIn(*pwallet, quote, amount, inputs, outs, chn_in);
-    ResultOuts(*pwallet, {auction->base}, outs);
-    const CTransactionRef tx{Send(*pwallet, bitassets::Bid{id, amount, buys, ChnTo(*pwallet, {auction->base})}, outs, inputs, chn_in)};
+    // What it buys, then what comes back of what it pays, should it buy all that is left in a block
+    // where that costs less (by the coinbase, for CHN).
+    ResultOuts(*pwallet, {auction->base, auction->quote}, outs);
+    const CTransactionRef tx{Send(*pwallet, bitassets::Bid{id, amount, buys, ChnTo(*pwallet, {auction->base, auction->quote})}, outs, inputs, chn_in)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("pays", bitassets::AmountToJSON(amount, dq));

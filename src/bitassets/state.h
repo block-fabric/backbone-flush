@@ -364,7 +364,12 @@ struct CreateAuction {
     friend bool operator==(const CreateAuction&, const CreateAuction&) = default;
 };
 
-/** Pay `quote_amount` into an auction. Result: what it buys, at least `min_base`. */
+/**
+ * Pay `quote_amount` into an auction. Result: what it buys, at least `min_base`. One that would buy
+ * more than is left buys all of it, for what that costs, if it can be given the rest back: in CHN,
+ * by the coinbase to `chn_to`; in an asset, to one more result output, after that of what it buys
+ * (which carries nothing if nothing comes back). Otherwise it is refused.
+ */
 struct Bid {
     static constexpr uint8_t KIND{10};
     Txid auction;
@@ -574,9 +579,9 @@ struct Auction {
     uint64_t BuysAt(int height, uint64_t quote_amount) const;
     /**
      * The least a bid in the block at `height` pays to buy all that is left: ceil(remaining * price
-     * / base_amount), the smallest amount whose BuysAt is at least what is left. Not a rule: what
-     * wallets pay. A bid of it may buy more than is left (when one unit of the quote buys more than
-     * one of the base), which the rules refuse: then no bid buys exactly all that is left.
+     * / base_amount), the smallest amount whose BuysAt is at least what is left. A bid of it may buy
+     * more than is left (when one unit of the quote buys more than one of the base); what a bid that
+     * buys more than is left pays, when it gets the rest back (Bid).
      */
     uint64_t CostOfRemaining(int height) const;
     /** Whether bids are taken in the block at `height`. */

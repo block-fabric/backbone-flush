@@ -575,6 +575,9 @@ struct State::Plan {
     bool returns{false};
     //! Whether the transaction is one of the assets (has a marker or spends tokens): it writes the layout.
     bool assets_tx{false};
+    //! A Bid in an asset with an output for what comes back of it: after the other results, carrying
+    //! that (nothing if nothing comes back).
+    std::optional<Result> back;
 };
 
 namespace {
@@ -1146,21 +1149,44 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if ((registration(auction.base) != auction.base_registration || registration(auction.quote) != auction.quote_registration)) {
             return invalid("bad-ba-auction-asset-gone");
         }
-        const uint64_t bought{auction.BuysAt(height, bid->quote_amount)};
+        uint64_t bought{auction.BuysAt(height, bid->quote_amount)};
+        // A bid that would buy more than is left buys all of it, for what that costs (CostOfRemaining),
+        // and gets the rest back if it says where: in CHN, by the coinbase to `chn_to`; in an asset, to
+        // a result output after that of what it buys (the transaction has one more result output than
+        // what it buys needs, which carries nothing if nothing comes back). So a bid for all that is
+        // left, made for the next block, still buys it in a later one, where the price is lower.
+        const size_t bought_outputs{auction.base.IsNull() ? 0U : 1U};
+        const bool back_output{!auction.quote.IsNull() && result_outputs == bought_outputs + 1};
+        const bool gives_back{auction.quote.IsNull() ? !bid->chn_to.empty() : back_output};
+        uint64_t paid{bid->quote_amount}, back{0};
+        if (bought > auction.remaining && auction.remaining > 0 && gives_back) {
+            // Never more than the bid: it buys more than is left, so it pays at least what that costs.
+            paid = auction.CostOfRemaining(height);
+            if (paid > bid->quote_amount) return invalid("bad-ba-bid-price");
+            bought = auction.remaining;
+            back = bid->quote_amount - paid;
+            // CHN dust does not come back (the coinbase pays out MIN_CHN_PAYOUT at least): the auction keeps it.
+            if (auction.quote.IsNull() && back < MIN_CHN_PAYOUT) {
+                paid += back;
+                back = 0;
+            }
+        }
         if (bought == 0 || bought > auction.remaining || bought < bid->min_base) return invalid("bad-ba-bid-price");
         // CHN are paid out MIN_CHN_PAYOUT at least: a bid buys no less, leaves none less to buy (nor to
         // take back), and pays no less (the proceeds, collected, would not be paid out).
         if (auction.base.IsNull() && (bought < MIN_CHN_PAYOUT || (bought < auction.remaining && auction.remaining - bought < MIN_CHN_PAYOUT))) {
             return invalid("bad-ba-chn-dust");
         }
-        if (auction.quote.IsNull() && bid->quote_amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
-        const auto proceeds{Add(auction.proceeds, bid->quote_amount)};
+        if (auction.quote.IsNull() && paid < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        const auto proceeds{Add(auction.proceeds, paid)};
         if (!proceeds) return invalid("bad-ba-bid");
         auction.remaining -= bought;
         auction.proceeds = *proceeds;
         ++auction.bids;
         take(auction.quote, bid->quote_amount);
         plan.results.push_back({auction.base, bought});
+        if (auction.quote.IsNull() && back > 0) plan.results.push_back({auction.quote, back});
+        if (back_output) plan.back = Result{auction.quote, back};
         plan.auction = std::make_pair(bid->auction, auction);
     } else if (const auto* collect{op ? std::get_if<Collect>(op) : nullptr}) {
         const auto found{GetAuction(collect->auction)};
@@ -1245,6 +1271,13 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         }
         // An AddLiquidity's results are above; the others are asset coins.
         result_tokens.push_back(Token{Token::Kind::ASSET, result.asset, result.amount});
+    }
+    if (plan.back) {
+        if (plan.back->amount == 0) {
+            result_tokens.emplace_back();
+        } else {
+            result_tokens.push_back(Token{Token::Kind::ASSET, plan.back->asset, plan.back->amount});
+        }
     }
     if (result_tokens.size() != result_outputs) return invalid("bad-ba-results");
     for (const auto& [key, balance] : books) {

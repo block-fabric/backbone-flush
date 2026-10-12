@@ -729,6 +729,64 @@ BOOST_AUTO_TEST_CASE(auction_chn_dust)
     BOOST_CHECK_EQUAL(f.state.Auctions().at(for_chn.GetHash()).proceeds, MIN_CHN_PAYOUT);
 }
 
+BOOST_AUTO_TEST_CASE(auction_buy_all_later)
+{
+    // The fifth audit: a bid for all that is left, made at the price of the next block, bought more
+    // than is left in any later block (the price had fallen), and the rules refused it. Now it buys all
+    // that is left, pays what that costs, and gets the rest back -- if it says where.
+    Fixture f;
+    const auto [gc, gold]{f.Issue("GOLD", 1000)};
+    const auto [sc, silver]{f.Issue("SILVER", 10)};
+    std::string reason;
+    const Token receipt{Unit(Token::Kind::RECEIPT, uint256{})};
+
+    // GOLD for CHN: 10 000 000 for all of it at the start, 1 000 000 at the end (9 blocks later).
+    const CTransaction for_chn{MakeTx({gold}, CreateAuction{GOLD, 100, CHN, 10'000'000, 1'000'000, f.height, 10}, {Asset(GOLD, 900), receipt})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(for_chn, &reason), reason);
+    const Txid chn_id{for_chn.GetHash()};
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(chn_id).CostOfRemaining(f.height), 10'000'000u);
+    f.height += 9;
+    // Saying nowhere for the CHN that come back: refused, as before.
+    BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, Bid{chn_id, 10'000'000, 100, CScript{}}, {std::nullopt}, 10'000'000)), "bad-ba-bid-price");
+    f.payouts.clear();
+    BOOST_REQUIRE_MESSAGE(f.Apply(MakeTx({}, Bid{chn_id, 10'000'000, 100, HOLDER}, {std::nullopt}, 10'000'000), &reason), reason);
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(chn_id).remaining, 0u);
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(chn_id).proceeds, 1'000'000u);
+    BOOST_REQUIRE_EQUAL(f.payouts.size(), 1U);
+    BOOST_CHECK(f.payouts[0] == CTxOut(9'000'000, HOLDER));
+
+    // SILVER for GOLD: 100 for all of it at the start, 10 at the end.
+    const CTransaction for_gold{MakeTx({silver}, CreateAuction{SILVER, 10, GOLD, 100, 10, f.height, 10}, {receipt})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(for_gold, &reason), reason);
+    const Txid gold_id{for_gold.GetHash()};
+    const COutPoint coins{for_chn.GetHash(), 0};
+    // A bid with an output for what comes back, that buys less than is left: nothing comes back.
+    const CTransaction some{MakeTx({coins}, Bid{gold_id, 50, 5, CScript{}}, {Asset(GOLD, 850), std::nullopt, std::nullopt})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(some, &reason), reason);
+    BOOST_CHECK(f.state.Tokens().at(COutPoint{some.GetHash(), 1}) == Asset(SILVER, 5));
+    BOOST_CHECK(!f.state.Tokens().contains(COutPoint{some.GetHash(), 2}));
+    f.height += 9;
+    // At the end price, 100 GOLD buys more than the 5 left; without an output for the rest, refused.
+    const COutPoint more{some.GetHash(), 0};
+    BOOST_CHECK_EQUAL(f.Reject(MakeTx({more}, Bid{gold_id, 100, 5, CScript{}}, {Asset(GOLD, 750), std::nullopt})), "bad-ba-bid-price");
+    const CTransaction rest{MakeTx({more}, Bid{gold_id, 100, 5, CScript{}}, {Asset(GOLD, 750), std::nullopt, std::nullopt})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(rest, &reason), reason);
+    BOOST_CHECK(f.state.Tokens().at(COutPoint{rest.GetHash(), 1}) == Asset(SILVER, 5));
+    BOOST_CHECK(f.state.Tokens().at(COutPoint{rest.GetHash(), 2}) == Asset(GOLD, 95));
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(gold_id).remaining, 0u);
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(gold_id).proceeds, 55u);
+
+    // CHN dust does not come back: the auction keeps it.
+    const auto [c3, copper]{f.Issue("COPPER", 10)};
+    const CTransaction dust{MakeTx({copper}, CreateAuction{HashName("COPPER"), 10, CHN, 1'000'000, 990'000, f.height, 2}, {receipt})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(dust, &reason), reason);
+    ++f.height;
+    f.payouts.clear();
+    BOOST_REQUIRE_MESSAGE(f.Apply(MakeTx({}, Bid{dust.GetHash(), 1'000'000, 10, HOLDER}, {std::nullopt}, 1'000'000), &reason), reason);
+    BOOST_CHECK(f.payouts.empty());
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(dust.GetHash()).proceeds, 1'000'000u);
+}
+
 BOOST_AUTO_TEST_CASE(payouts_per_block)
 {
     // The fifth audit: swaps of a little CHN each could put payouts in the coinbase's queue faster

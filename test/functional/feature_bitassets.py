@@ -7,6 +7,7 @@
 from decimal import Decimal
 
 from feature_sidechain import ACTIVATION_PERIOD, SLOT, SidechainTest
+from test_framework.messages import COIN
 from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
 
 
@@ -283,7 +284,6 @@ class BitAssetsTest(SidechainTest):
         assert auction["cost_of_remaining"] < auction["price"]
         assert_raises_rpc_error(-8, "running", side.collectauction, auction["auction"])
         # The price fell: all that is left, for less.
-        assert_raises_rpc_error(-8, "more than is left", other.bidauction, auction["auction"], 100)
         cost = other.getauction(auction["auction"])["cost_of_remaining"]
         all_left = other.bidauction(auction["auction"], None, True)
         assert_equal(all_left["buys"], Decimal("75.00"))
@@ -329,14 +329,18 @@ class BitAssetsTest(SidechainTest):
         side.collectauction(auction["auction"])
         self.mine_txs()
         # 300 SILVER for 0.07 GOLD (7 units): a unit of GOLD buys 42 SILVER, so after a bid no amount
-        # buys exactly the 258 left (6 units buy 257, 7 buy 300): buying all is refused.
+        # buys exactly the 258 left (6 units buy 257, 7 buy 300): buying all pays 7 units for the 258.
         side.createauction("SILVER", 300, "GOLD", "0.07", "0.07", 5)
         self.mine_txs()
         auction = side.listauctions()[0]
         assert_equal(auction["cost_of_remaining"], Decimal("0.07"))
         assert_equal(other.bidauction(auction["auction"], "0.01")["buys"], 42)
         self.mine_txs()
-        assert_raises_rpc_error(-8, "No bid buys exactly what is left", other.bidauction, auction["auction"], None, True)
+        all_left = other.bidauction(auction["auction"], None, True)
+        assert_equal((all_left["pays"], all_left["buys"]), (Decimal("0.07"), 258))
+        self.mine_txs()
+        assert_equal(side.getauction(auction["auction"])["status"], "sold out")
+        side.collectauction(auction["auction"])
         # A bid of more than all that is left costs pays only that.
         side.createauction("SILVER", 10, "CHN", "0.5", "0.5", 5)
         self.mine_txs()
@@ -344,6 +348,30 @@ class BitAssetsTest(SidechainTest):
         overpaid = other.bidauction(auction["auction"], "0.52")
         assert_equal(overpaid["pays"], Decimal("0.50000000"))
         assert_equal(overpaid["buys"], 10)
+        self.mine_txs()
+        side.collectauction(auction["auction"])
+        self.mine_txs()
+
+        self.log.info("A bid for all that is left, taken blocks later, pays what it costs then and gets the rest back")
+        side.createauction("SILVER", 10, "CHN", 1, "0.5", 5)
+        self.mine_txs()
+        auction = side.listauctions()[0]
+        late = other.bidauction(auction["auction"], None, True)
+        assert_equal(late["buys"], 10)
+        # Held out of the next two blocks (the miner is node 0), as if they were full.
+        self.sync_mempools()
+        side.prioritisetransaction(late["txid"], 0, -COIN)
+        self.mine_txs()
+        self.mine_txs()
+        assert late["txid"] in side.getrawmempool()
+        side.prioritisetransaction(late["txid"], 0, COIN)
+        block = self.mine_txs()
+        assert late["txid"] in [t["txid"] for t in block["tx"]]
+        auction = side.getauction(auction["auction"])
+        assert_equal(auction["status"], "sold out")
+        assert auction["proceeds"] < late["pays"]
+        assert_equal(self.payouts_to(other, block), late["pays"] - auction["proceeds"])
+        side.collectauction(auction["auction"])
         self.mine_txs()
 
         self.log.info("Reservations are released")
