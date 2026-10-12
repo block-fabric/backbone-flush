@@ -759,8 +759,11 @@ private:
  *  3: in each asset's record, how many auctions hold some of it and how many of its pools have
  *     providers (AssetRecord::holding_auctions, provided_pools).
  *  4: no order of reservations (0x36, 0x38) nor index of reservations by commitment (0x3c).
+ *  5: withdrawal refunds wait with the deposits, not behind the payouts of the transactions; derived
+ *     again, so that a node that kept refunds in the old queue does not pay differently from one that
+ *     syncs from scratch.
  */
-inline constexpr uint32_t STORE_LAYOUT{4};
+inline constexpr uint32_t STORE_LAYOUT{5};
 /** Whether the assets in a store are in the layout of this version, or there are none yet. */
 bool StoreLayoutCurrent(const sidechain::StoreView& view);
 
