@@ -1657,7 +1657,9 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
     if (txns.size() > 1) {
         const bool on_sidechain{m_active_chainstate.m_chainman.GetConsensus().sidechain.enabled};
         for (const CTransactionRef& tx : txns) {
+            // BitAssets markers too: their mempool rules see the mempool, not the other members of the package.
             const bool drivechain_tx{drivechain::GetBmmRequest(*tx).has_value() || (on_sidechain && sidechain::CheckedAgainstMempool(*tx)) ||
+                                     std::any_of(tx->vout.begin(), tx->vout.end(), [](const CTxOut& out) { return bitassets::IsMarkerScript(out.scriptPubKey); }) ||
                                      std::any_of(tx->vout.begin(), tx->vout.end(), [](const CTxOut& out) { return drivechain::ParseEscrowScript(out.scriptPubKey).has_value(); })};
             if (drivechain_tx) {
                 package_state.Invalid(PackageValidationResult::PCKG_POLICY, "package-drivechain-tx");
