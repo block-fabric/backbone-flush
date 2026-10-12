@@ -476,7 +476,8 @@ class BitAssetsTest(SidechainTest):
         assert release not in side.getrawmempool()
         assert replacement in side.getrawmempool()
         # A package tested as a whole replaces nothing: a release in it that competes with the one
-        # waiting is refused.
+        # waiting is refused, as is any package carrying BitAssets markers, whose rules see the
+        # mempool and not the other members of the package.
         raw = other.createrawtransaction([], [{"data": data.hex()}])
         raw = other.fundrawtransaction(raw, {"changePosition": 1, "fee_rate": 200, "lockUnspents": True})["hex"]
         competing = other.signrawtransactionwithwallet(raw)["hex"]
@@ -484,8 +485,8 @@ class BitAssetsTest(SidechainTest):
         unrelated = other.signrawtransactionwithwallet(other.fundrawtransaction(raw)["hex"])["hex"]
         other.lockunspent(True)
         tested = other.testmempoolaccept([competing, unrelated])
-        assert_equal(tested[0]["allowed"], False)
-        assert_equal(tested[0]["reject-reason"], "bip125-replacement-disallowed")
+        assert_equal(tested[0]["package-error"], "package-drivechain-tx")
+        assert "allowed" not in tested[0] or tested[0]["allowed"] is False
         self.mine_txs()
         assert_raises_rpc_error(-8, "No such asset", side.getasset, "DEAD")
         # Its number names no asset now: never the asset whose name the number is.
