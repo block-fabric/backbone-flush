@@ -591,11 +591,12 @@ int32_t State::BundleMainHeight() const { return BUNDLE_MAIN_HEIGHT.Get(*m_view)
 bool RecordIndependent(const std::string& reject_reason)
 {
     // What a block breaks whatever the mainchain did: the form of its withdrawals and commitments,
-    // and the signatures of refunds (checked once the withdrawal is known and free).
+    // and the signatures of refunds (checked once the withdrawal is known and free); and what the
+    // sidechain's own rules say (ChainHooks::RecordIndependent).
     static const std::set<std::string> independent{
         "bad-sc-withdrawal", "bad-sc-withdrawal-amount", "bad-sc-refund-signature", "bad-sc-bundle-multiple",
     };
-    return independent.contains(reject_reason);
+    return independent.contains(reject_reason) || Hooks().RecordIndependent(reject_reason);
 }
 
 // What pools and auctions may add to their queue in a block, it pays in that block whatever else is owed
