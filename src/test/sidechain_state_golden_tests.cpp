@@ -19,6 +19,7 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <sidechain/hooks.h>
 #include <sidechain/mainchain.h>
 #include <sidechain/state.h>
 #include <sidechain/store.h>
@@ -28,6 +29,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -84,12 +86,16 @@ struct GoldenChain {
         {
             sidechain::StoreOverlay scratch{store, /*journal=*/false};
             sidechain::State dry{scratch};
-            std::vector<CTxOut> payouts, tx_payouts, refunds;
+            std::vector<CTxOut> payouts, peg_owed, tx_payouts, refunds;
             std::string reason;
-            if (dry.ApplyMainEvents(mainchain.Height(), mainchain, height + 1, params, payouts, reason) &&
+            // The sidechain's own peg actions, if it has any (none unless a test installs them).
+            const sidechain::PegStep step{.main_height = mainchain.Height(), .nonce = prev, .max_withdrawal_height = std::nullopt, .peg_height = std::nullopt};
+            if (sidechain::Hooks().BeforePegStep(dry, block, height + 1, step, params, peg_owed, reason) &&
+                dry.ApplyMainEvents(mainchain.Height(), mainchain, height + 1, params, payouts, reason) &&
                 dry.ApplyTxs(block, height + 1, params, dry.MainPending(mainchain, params), /*peg_step=*/true, tx_payouts, refunds, reason)) {
                 payouts.insert(payouts.end(), refunds.begin(), refunds.end());
-                for (const CTxOut& out : dry.TakePayouts(std::move(payouts), std::move(tx_payouts))) coinbase.vout.push_back(out);
+                peg_owed.insert(peg_owed.end(), tx_payouts.begin(), tx_payouts.end());
+                for (const CTxOut& out : dry.TakePayouts(std::move(payouts), std::move(peg_owed))) coinbase.vout.push_back(out);
             }
         }
         block.vtx[0] = MakeTransactionRef(coinbase);
@@ -178,6 +184,24 @@ CTxOut RefundOut(const CKey& key, const COutPoint& withdrawal)
     BOOST_REQUIRE(key.SignCompact(MessageHash(sidechain::RefundMessage(withdrawal)), request.signature));
     return CTxOut{0, sidechain::RefundScript(request)};
 }
+
+/** Installs hooks for the life of the object; the template's again after. */
+struct InstallHooks {
+    explicit InstallHooks(std::unique_ptr<sidechain::ChainHooks> hooks) { sidechain::SetHooks(std::move(hooks)); }
+    ~InstallHooks() { sidechain::SetHooks(nullptr); }
+};
+
+/** Hooks whose peg actions of their own owe `count` outputs in every block that takes the peg actions. */
+struct PegOwedHooks : sidechain::ChainHooks {
+    size_t count;
+    explicit PegOwedHooks(size_t n) : count{n} {}
+    bool BeforePegStep(sidechain::State&, const CBlock&, int, const sidechain::PegStep&, const Consensus::SidechainParams&,
+                       std::vector<CTxOut>& owed_tx, std::string&) const override
+    {
+        for (size_t i{0}; i < count; ++i) owed_tx.emplace_back(static_cast<CAmount>(7 + i), CScript() << OP_2);
+        return true;
+    }
+};
 
 } // namespace
 
@@ -288,6 +312,48 @@ BOOST_AUTO_TEST_CASE(refunds_asset_payouts_and_a_release)
     const auto released{chain.state.GetWithdrawal(COutPoint{release->GetHash(), sidechain::RELEASE_WITHDRAWAL_INDEX})};
     BOOST_REQUIRE(released);
     BOOST_CHECK_EQUAL(released->amount, 1);
+}
+
+BOOST_AUTO_TEST_CASE(own_peg_actions_take_no_room_of_the_assets)
+{
+    // Not golden values: what a sidechain's own peg actions owe (ChainHooks::BeforePegStep) is paid as
+    // what the transactions pay out, but takes none of the room the assets have in a block
+    // (MAX_TX_PAYOUTS_PER_BLOCK); it used to, and a block of as many asset payouts as a block takes was
+    // invalid (bad-ba-block-payouts-full).
+    InstallHooks installed{std::make_unique<PegOwedHooks>(7)};
+    GoldenChain chain;
+    TxMaker make;
+    const CScript holder{GetScriptForDestination(WitnessV0KeyHash{FixedKey(2).GetPubKey()})};
+    const AssetId gold{HashName("GOLD")};
+    const uint256 nonce{HashName("nonce GOLD")};
+    const CTransactionRef reserve{make.Assets({}, Reserve{ReservationCommitment(gold, nonce, holder)}, {Token{Token::Kind::RESERVATION, uint256{}, 1}}, holder)};
+    BOOST_REQUIRE_EQUAL(chain.Connect({reserve}), "");
+    Register reg;
+    reg.name = gold;
+    reg.nonce = nonce;
+    reg.supply = 20'000'000;
+    const CTransactionRef registered{make.Assets({COutPoint{reserve->GetHash(), 0}}, reg, {Token{Token::Kind::CONTROL, gold, 1}, Asset(gold, 20'000'000)}, holder)};
+    const CTransactionRef pool{make.Assets({COutPoint{registered->GetHash(), 1}}, AddLiquidity{gold, CHN, 10'000'000, 1'000'000'000, 1},
+                                           {Asset(gold, 10'000'000), std::nullopt, std::nullopt}, holder, 1'000'000'000)};
+    BOOST_REQUIRE_EQUAL(chain.Connect({registered, pool}), "");
+    BOOST_CHECK_EQUAL(chain.paid.size(), 7U);
+
+    std::vector<CTransactionRef> swaps;
+    COutPoint coin{pool->GetHash(), 0};
+    uint64_t left{10'000'000};
+    for (size_t i{0}; i < MAX_TX_PAYOUTS_PER_BLOCK + 1; ++i) {
+        left -= 1000;
+        swaps.push_back(make.Assets({coin}, Swap{gold, 1000, CHN, 1, holder}, {Asset(gold, left)}, holder));
+        coin = COutPoint{swaps.back()->GetHash(), 0};
+    }
+    // One beyond the bound is still one too many.
+    BOOST_CHECK_EQUAL(chain.Connect(swaps), "bad-ba-block-payouts-full");
+    // As many as the bound: valid, and the coinbase pays what the peg actions owe, then the swaps.
+    swaps.pop_back();
+    BOOST_REQUIRE_EQUAL(chain.Connect(swaps), "");
+    BOOST_REQUIRE_EQUAL(chain.paid.size(), 7 + MAX_TX_PAYOUTS_PER_BLOCK);
+    for (size_t i{0}; i < 7; ++i) BOOST_CHECK(chain.paid[i] == (CTxOut{static_cast<CAmount>(7 + i), CScript() << OP_2}));
+    for (size_t i{7}; i < chain.paid.size(); ++i) BOOST_CHECK(chain.paid[i].scriptPubKey == holder);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

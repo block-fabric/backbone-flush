@@ -208,7 +208,8 @@ public:
     virtual bool ApplyTx(State& state, const CTransaction& tx, int height, bool peg_step, std::vector<CTxOut>& payouts, std::string& reject_reason) const;
     /**
      * Peg actions of the sidechain's own, first in a block that takes them: what it adds to
-     * `owed_tx` is paid by the coinbase as refunds are. Block assembly calls it too, with the block
+     * `owed_tx` is paid by the coinbase with what the block's transactions pay out, ahead of it, and
+     * takes none of the room those have in a block (bitassets::MAX_TX_PAYOUTS_PER_BLOCK). Block assembly calls it too, with the block
      * as far as it is known then: its parent, version, time and sections (SidechainAssembly), and a
      * coinbase whose only output pays the coinbase script, with no value; no other transactions.
      */

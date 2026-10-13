@@ -185,7 +185,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     const Consensus::SidechainParams& side_params{chainparams.GetConsensus().sidechain};
     std::optional<sidechain::StoreOverlay> side_store;
     std::optional<sidechain::State> side;
-    std::vector<CTxOut> side_outputs, side_tx_outputs, side_refunds;
+    // What the sidechain's own peg actions owe is kept apart from what the transactions pay out, as in
+    // State::ConnectBlock: it takes none of their room.
+    std::vector<CTxOut> side_outputs, side_peg_owed, side_tx_outputs, side_refunds;
     std::optional<uint256> bundle_hash;
     bool main_pending{false};
     // Whether the block takes the peg actions: always so in the template (SidechainAssembly).
@@ -217,7 +219,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
             coinbase.vout.emplace_back(0, m_options.coinbase_output_script);
             known.vtx.push_back(MakeTransactionRef(std::move(coinbase)));
             const sidechain::PegStep step{.main_height = main_height, .nonce = bundle_nonce, .max_withdrawal_height = max_withdrawal_height, .peg_height = step_peg_height};
-            if (!sidechain::Hooks().BeforePegStep(*side, known, nHeight, step, side_params, side_tx_outputs, reject_reason)) {
+            if (!sidechain::Hooks().BeforePegStep(*side, known, nHeight, step, side_params, side_peg_owed, reject_reason)) {
                 throw std::runtime_error(strprintf("%s: the sidechain's own peg actions refuse the block (%s)", __func__, reject_reason));
             }
         }
@@ -365,7 +367,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         // As many of the payouts owed as a block may pay; the rest wait for the next block. Refunds
         // wait with the deposits (State::ConnectBlock).
         side_outputs.insert(side_outputs.end(), side_refunds.begin(), side_refunds.end());
-        side_outputs = side->TakePayouts(std::move(side_outputs), std::move(side_tx_outputs), peg_step ? sidechain::MAX_PAYOUTS_PER_BLOCK : 0);
+        side_peg_owed.insert(side_peg_owed.end(), side_tx_outputs.begin(), side_tx_outputs.end());
+        side_outputs = side->TakePayouts(std::move(side_outputs), std::move(side_peg_owed), peg_step ? sidechain::MAX_PAYOUTS_PER_BLOCK : 0);
         if (bundle_hash) side_outputs.emplace_back(0, sidechain::BundleCommitScript(*bundle_hash));
         // A merged mined block: outputs of the sidechain's own (none in the template).
         if (m_sidechain.peg == SidechainAssembly::Peg::BMM) {
