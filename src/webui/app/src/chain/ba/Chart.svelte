@@ -94,8 +94,8 @@
         <line class="grid" x1={pad.l} x2={width - pad.r} y1={Y(tk)} y2={Y(tk)} />
         <text class="axis" x={pad.l - 6} y={Y(tk) + 3.5} text-anchor="end">{formatY(tk)}</text>
       {/each}
-      <text class="axis" x={pad.l} y={tall - 6}>{formatX(points[0].x)}</text>
-      <text class="axis" x={width - pad.r} y={tall - 6} text-anchor="end">{formatX(points[points.length - 1].x)}</text>
+      <text class="axis" x={pad.l} y={tall - 6}>{formatX(logX ? Math.exp(x0) : x0)}</text>
+      <text class="axis" x={width - pad.r} y={tall - 6} text-anchor="end">{formatX(logX ? Math.exp(x1) : x1)}</text>
       {#if areaPath}<path class="area" d={areaPath} />{/if}
       {#if comparePath}<path class="line alt" d={comparePath} />{/if}
       <path class="line" d={line} />

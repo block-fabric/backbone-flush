@@ -258,7 +258,7 @@
       <div class="panel ba-figure"><span class="muted">Assets held</span><strong>{holdings.filter((h) => h.balance > 0).length}</strong><span class="faint">{tn('%n controlled', holdings.filter((h) => h.control).length)}</span></div>
       <div class="panel ba-figure"><span class="muted">Worth</span><strong>{formatPrice(worth)} CHN</strong><span class="faint">{priced} of {holdings.length} with a market</span></div>
       <div class="panel ba-figure"><span class="muted">Pool shares</span><strong>{mine?.liquidity.length ?? 0}</strong><span class="faint">earning 0.3% of each trade</span></div>
-      <div class="panel ba-figure"><span class="muted">Being issued</span><strong>{issuingCount}</strong><span class="faint">{receipts.length} auction(s) to follow</span></div>
+      <div class="panel ba-figure"><span class="muted">Being issued</span><strong>{issuingCount}</strong><span class="faint">{tn('%n auction(s) of yours to follow', receipts.length)}</span></div>
     </section>
 
     <TabRow label="My assets" tabs={TABS} current={tab} select={(id) => (nav.tab = id)} />
@@ -280,9 +280,9 @@
                     <AssetBadge id={h.asset} label={h.label} showLabel={false} />
                     <span class="main">
                       <SafeText text={h.label} />
-                      <span class="faint small">
-                        {#if h.control}<Icon name="crown" size={12} /> controlled ·{/if}
-                        {h.supply > 0 ? formatPercent((h.balance / h.supply) * 100) : '–'} of the supply
+                      <span class="faint small line">
+                        {#if h.control}<span class="ba-tag accent">controlled</span>{/if}
+                        <span>{h.supply > 0 ? formatPercent((h.balance / h.supply) * 100) : '–'} of the supply</span>
                       </span>
                     </span>
                     <span class="side">
@@ -484,6 +484,12 @@
   .locked p {
     flex: 1 1 18rem;
     margin: 0;
+  }
+  .line {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
   }
   .center {
     justify-content: center;

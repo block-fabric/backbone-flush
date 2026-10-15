@@ -76,7 +76,7 @@
       <section class="panel">
         <div class="panel-head"><h3>The curve</h3></div>
         <div class="panel-body">
-          <Chart points={curvePoints(pool.reserve_a, pool.reserve_b)} marks={[{ x: pool.reserve_a, y: pool.reserve_b }]} logX area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => formatPrice(x, 4)} formatY={(y) => formatPrice(y, 4)} />
+          <Chart points={curvePoints(pool.reserve_a, pool.reserve_b)} marks={[{ x: pool.reserve_a, y: pool.reserve_b }]} logX yZero area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => formatPrice(x, 4)} formatY={(y) => formatPrice(y, 4)} />
           <p class="ba-help">Volume: {formatAmount(pool.volume_a, decimalsOf(pool.asset_a_id))} <SafeText text={pool.asset_a} /> and {formatAmount(pool.volume_b, decimalsOf(pool.asset_b_id))} <SafeText text={pool.asset_b} /> traded in.</p>
         </div>
       </section>

@@ -91,6 +91,7 @@
     box-shadow: none;
   }
   .unit {
+    flex: none;
     color: var(--text-muted);
     font-size: 0.85rem;
     font-weight: 600;

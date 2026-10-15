@@ -3,7 +3,7 @@
   // and putting liquidity in them (ba/LiquidityPanel.svelte). The Trade tab of the Qt window of BitAssets.
   import SafeText from '../../components/SafeText.svelte';
   import TabRow from '../../components/TabRow.svelte';
-  import { formatCount } from '../../lib/format';
+  import { tn } from '../../lib/i18n.svelte';
   import { nav } from '../../lib/nav.svelte';
   import '../ba/ba.css';
   import LiquidityPanel from '../ba/LiquidityPanel.svelte';
@@ -26,7 +26,7 @@
 <div class="page ba-page trade">
   <header class="page-head">
     <h1>Trade</h1>
-    <span class="muted">{formatCount(open)} pools with liquidity · 0.3% fee per trade, to their providers</span>
+    <span class="muted">{tn('%n pool(s) with liquidity', open)} · 0.3% fee per trade, to their providers</span>
   </header>
   {#if ba.error}<p class="ba-problems bad" role="alert"><SafeText text={ba.error} /></p>{/if}
   <TabRow label="Trade" tabs={TABS} current={tab} select={(id) => (nav.tab = id)} />

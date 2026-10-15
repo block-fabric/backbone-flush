@@ -65,6 +65,10 @@
 
     <Card title="Markets" icon="swap" open={() => go('trade', 'pools')} openLabel="Open the pools" stat>
       <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
+      <dl class="pairs">
+        <dt>Pools with liquidity</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>
+        <dt>Trades, all told</dt><dd class="num">{formatCount(ba.pools.reduce((n, p) => n + p.swaps, 0))}</dd>
+      </dl>
       {#if markets.length === 0}
         <p class="muted">No pool trades yet.</p>
       {:else}
@@ -86,6 +90,10 @@
 
     <Card title="Auctions" icon="gavel" open={() => go('auctions')} openLabel="Open the auctions" stat>
       <span class="value num">{formatCount(ba.auctions.filter((a) => a.status === 'open').length)}</span>
+      <dl class="pairs">
+        <dt>Taking bids</dt><dd class="num">{ba.auctions.filter((a) => a.status === 'open').length}</dd>
+        <dt>Upcoming</dt><dd class="num">{ba.auctions.filter((a) => a.status === 'upcoming').length}</dd>
+      </dl>
       {#if ending.length === 0}
         <p class="muted">No auction is taking bids.</p>
       {:else}
@@ -112,11 +120,40 @@
     grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
     gap: 1rem;
   }
+  .value {
+    display: block;
+    margin: 0.1rem 0 0.55rem;
+    font-size: 1.55rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  .pairs {
+    display: grid;
+    /* The labels keep their longest word; the values wrap when the card is narrow (as the kit's cards). */
+    grid-template-columns: minmax(min-content, 1fr) minmax(0, auto);
+    gap: 0.35rem 1rem;
+    margin: 0;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+  }
+  .pairs dt {
+    color: var(--text-muted);
+    font-size: 0.86rem;
+    overflow-wrap: break-word;
+  }
+  .pairs dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    margin: 0;
+    text-align: right;
+    font-weight: 600;
+    font-size: 0.92rem;
+  }
   .mini {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    margin: 0.5rem 0 0;
+    margin: 0.7rem 0 0;
     padding: 0;
     list-style: none;
   }
