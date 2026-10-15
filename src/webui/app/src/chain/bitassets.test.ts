@@ -372,8 +372,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
   it('are in the Chain section and the menus, before the tools, with their quick actions', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
     expect(own).toEqual(['assets', 'my-assets', 'issue', 'trade', 'auctions']);
-    expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', 'bmm', ...own, 'explorer']);
-    expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', 'bmm', ...own, 'explorer']);
+    expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...own, 'explorer']);
+    expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...own, 'explorer']);
     expect(chainBeforeTools(HOME_QUICK_ACTIONS.map((q) => q.page), (p) => p)).toBeNull();
     expect(HOME_QUICK_ACTIONS.map((q) => q.label)).toEqual(expect.arrayContaining(['Explore assets', 'Register new asset', 'Swap']));
     const chain = menuSections(buildCommands()).find((s) => s.group === 'Chains')!;
