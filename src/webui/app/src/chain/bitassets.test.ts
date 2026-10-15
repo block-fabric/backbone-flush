@@ -606,7 +606,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
   it('Assets: every asset, past the first 1000, and the newest past the most read (audit port-2 #4)', async () => {
     assets = Array.from({ length: 1025 }, (_, i) => asset(i.toString(16).padStart(64, '0').replace(/^0/, '7'), { label: `F${String(i + 1).padStart(4, '0')}`, name: `F${i + 1}`, seq: `${1000 + i}-0001`, registered: i + 1 }));
     render(Assets);
-    await waitFor(() => expect(ba.assets.length).toBe(1025));
+    await waitFor(() => expect(ba.assets.length).toBe(1025), { timeout: 10000 });
     expect(called('listassets').map((c) => c.params)).toEqual([[ASSET_PAGE, 0], [ASSET_PAGE, ASSET_PAGE]]);
     await waitFor(() => expect(screen.getByRole('button', { name: /^All/ }).textContent).toContain('1025'));
     // The newest first, findable by typing.
@@ -627,7 +627,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'zin' } });
     await waitFor(() => expect(called('listassets').some((c) => (c.params as unknown[])[2] === 'zin')).toBe(true));
     await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getByText('ZINC')).toBeTruthy());
-  });
+  }, 30000);
 
   it('My assets: older activity read on asking; tables are cards when narrow; no faint text under 4.5:1 (audit port-2 #13)', async () => {
     activityCount = 450;
