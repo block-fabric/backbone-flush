@@ -74,7 +74,7 @@ if(WEBUI_SIDECHAIN)
           --mainchain-bin ${WEBUI_MAINCHAIN_BIN_DIR}
           --tmp ${CMAKE_CURRENT_BINARY_DIR}/e2e-bitassets
           --shots ${CMAKE_CURRENT_BINARY_DIR}/e2e-shots
-          --port 29740
+          --port 29770
           --script bitassets.js
       )
       set_tests_properties(webui_e2e_bitassets PROPERTIES TIMEOUT 2400 RUN_SERIAL TRUE)
