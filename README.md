@@ -12,7 +12,11 @@ stablecoins) and trade them: in pools, an automated market maker, and by Dutch a
 | RPC port | 9354 (testnet 19354, signet 39354, regtest 29354) |
 
 BitAssets is the [sidechain template](doc/sidechain.md) of Chains with assets added. A BitAssets node needs a
-Chains node (`chainsd` or `chains-qt`) to follow, reached over its RPC interface.
+Chains node (`chainsd` or `chains-app`) to follow, reached over its RPC interface.
+
+Its GUI is `bitassets-app`: the node and its wallet with an HTML interface in a native web view
+(WebKitGTK on Linux, WebView2 on Windows), with pages for the assets, issuing, the pools, the
+auctions and the asset explorer ([doc/webui.md](doc/webui.md)). There is no Qt GUI.
 
 ## Installing
 
@@ -24,21 +28,22 @@ On Debian or Ubuntu (24.04):
 
 ```sh
 sudo apt install build-essential cmake pkgconf python3 libevent-dev libboost-dev \
-    libsqlite3-dev libzmq3-dev qt6-base-dev qt6-tools-dev qt6-l10n-tools libqrencode-dev
-git clone https://github.com/block-fabric/bitassets.git
-cd bitassets
-cmake -B build -DBUILD_GUI=ON
+    libsqlite3-dev libzmq3-dev libgtk-3-dev libwebkit2gtk-4.1-dev nodejs npm
+git clone https://github.com/block-fabric/bitassets-app.git
+cd bitassets-app
+cmake -B build
 cmake --build build -j$(nproc)
 ```
 
-Leave out `-DBUILD_GUI=ON` (and the Qt packages) for a node without a window. Other systems and
-options: [doc/build-unix.md](doc/build-unix.md) and the other `doc/build-*.md`.
+`-DBUILD_WEBUI=OFF` (and no GTK, WebKitGTK or Node.js) for a node without a window. Windows: cross-built
+with the depends system (`make -C depends HOST=x86_64-w64-mingw32 NO_QT=1`), see [doc/webui.md](doc/webui.md).
+Other systems and options: [doc/build-unix.md](doc/build-unix.md) and the other `doc/build-*.md`.
 
 The programs, in `build/bin`:
 
 | Program | What it is |
 |---|---|
-| `bitassets-qt` | the wallet, with its window |
+| `bitassets-app` | the wallet, with its window |
 | `bitassetsd` | the node, without a window |
 | `bitassets-cli` | commands for a running node or wallet |
 | `bitassets-wallet`, `bitassets-tx`, `bitassets-util` | tools that work without a node |
@@ -52,14 +57,14 @@ set to the folder of its programs.
 First a Chains node, with RPC on (`server=1` in `chains.conf`, or `-server`), on the same network.
 
 The simplest is to let the Chains wallet run BitAssets: in its **Sidechain Nodes** window, select
-BitAssets, press **Locate programs…** and choose the folder with `bitassetsd` and `bitassets-qt`, then **Start node**
+BitAssets, press **Locate programs…** and choose the folder with `bitassetsd` and `bitassets-app`, then **Start node**
 or **Open wallet**.
 
 By hand, on the same computer as the Chains node:
 
 ```sh
-bitassets-qt                 # the main network
-bitassets-qt -testnet        # the test network
+bitassets-app                # the main network
+bitassets-app -testnet       # the test network
 ```
 
 It finds the Chains node by itself: RPC on 127.0.0.1 at the port of the network, and the cookie
