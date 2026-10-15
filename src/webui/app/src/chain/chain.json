@@ -1,20 +1,20 @@
 {
   "comment": "The chain of this app, in one place: read by CMake (src/webui/CMakeLists.txt, which makes webui/chainconfig.h for the host) and by the interface (chain/config.ts). A sidechain sets its own here; see doc/webui.md.",
-  "name": "Sidechain",
-  "bin": "sidechain",
+  "name": "BitAssets",
+  "bin": "bitassets",
   "role": "sidechain",
   "coin": { "ticker": "CHN", "name": "Chains" },
-  "uriScheme": "sidechain",
+  "uriScheme": "bitassets",
   "brand": {
-    "color": "#4fa3ff",
-    "iconHue": 150,
-    "mark": ["M4 7.5h14a3 3 0 0 1 3 3v11a3 3 0 0 1-3 3H4z", "M24 11h4v10h-4", "M9 16h7"]
+    "color": "#2bc79a",
+    "iconHue": 127,
+    "mark": ["M9.5 5h13l6.5 7.5L16 28 3 12.5z", "M3 12.5h26", "M12.5 5L10 12.5 16 28l6-15.5L19.5 5"]
   },
   "networks": {
-    "main": { "p2p": 9655, "rpc": 9654, "hrp": "sc", "pubkey": 28, "script": 88 },
-    "test": { "p2p": 19655, "rpc": 19654, "hrp": "tsc", "pubkey": 111, "script": 196 },
-    "signet": { "p2p": 39655, "rpc": 39654, "hrp": "tsc", "pubkey": 111, "script": 196 },
-    "regtest": { "p2p": 29655, "rpc": 29654, "hrp": "rsc", "pubkey": 111, "script": 196 }
+    "main": { "p2p": 9355, "rpc": 9354, "hrp": "ba", "pubkey": 28, "script": 88 },
+    "test": { "p2p": 19355, "rpc": 19354, "hrp": "tba", "pubkey": 111, "script": 196 },
+    "signet": { "p2p": 39355, "rpc": 39354, "hrp": "tba", "pubkey": 111, "script": 196 },
+    "regtest": { "p2p": 29355, "rpc": 29354, "hrp": "rsc", "pubkey": 111, "script": 196 }
   },
   "mainchain": {
     "name": "Chains",
@@ -29,9 +29,9 @@
   },
   "links": {
     "website": "https://blockfab.org/drivechains/",
-    "source": "https://github.com/block-fabric/sidechain-template-app",
-    "issues": "https://github.com/block-fabric/sidechain-template-app/issues",
-    "guide": "https://github.com/block-fabric/sidechain-template-app/blob/main/doc/sidechain.md"
+    "source": "https://github.com/block-fabric/bitassets-app",
+    "issues": "https://github.com/block-fabric/bitassets-app/issues",
+    "guide": "https://github.com/block-fabric/bitassets-app/blob/main/doc/bitassets.md"
   },
   "drop": ["sidechains", "sidechain-nodes", "mine"]
 }
