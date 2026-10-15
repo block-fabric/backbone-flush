@@ -19,7 +19,7 @@
   import Chart from '../ba/Chart.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
   import { amountParam, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsOf, type Auction } from '../ba/model';
-  import { ba, decimalsOf, labelOf, refreshBitAssets, sellIntent, startBitAssets } from '../ba/store.svelte';
+  import { ba, decimalsOf, labelOf, nameOf, refreshBitAssets, sellIntent, startBitAssets } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
 
@@ -141,8 +141,9 @@
   async function sell() {
     const wallet = wallets.current;
     if (wallet === null || !ready || amount === null || !startParsed.ok || !endParsed.ok || busy) return;
-    const lb = labelOf(base);
-    const lq = labelOf(quote);
+    // Named with their numbers in the confirmation: look-alike labels told apart (audit port-2 #5).
+    const lb = nameOf(base);
+    const lq = nameOf(quote);
     const r = await ask({
       title: t('Start an auction'),
       message: t('Sell %1 %2 for %3, from %4 down to %5 %3 for all of it, over %6 blocks?', formatUnits(amount, dbase), lb, lq, formatUnits(startParsed.units, dquote), formatUnits(endParsed.units, dquote), String(duration)),

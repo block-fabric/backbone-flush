@@ -15,7 +15,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsOf, type Asset, type DataField, type Holding } from './model';
-  import { refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
+  import { nameOf, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
 
@@ -49,9 +49,17 @@
   let mintToValid = $state(false);
   // The data.
   let fields = $state<Record<DataField, string>>({ info: '', commitment: '', ipv4: '', ipv6: '', encryptionkey: '', signingkey: '' });
+  // Filled when the form opens (or the asset read changes to another one), not each time the asset is read
+  // again: a refresh (a block, the supply after a mint) never wipes what the user is typing.
+  let fieldsFor = '';
   $effect(() => {
-    if (open !== 'data') return;
-    const data = asset?.data ?? {};
+    if (open !== 'data') {
+      fieldsFor = '';
+      return;
+    }
+    if (!asset || fieldsFor === asset.asset) return;
+    fieldsFor = asset.asset;
+    const data = asset.data ?? {};
     fields = { info: data.info ?? '', commitment: data.commitment ?? '', ipv4: data.ipv4 ?? '', ipv6: data.ipv6 ?? '', encryptionkey: data.encryptionkey ?? '', signingkey: data.signingkey ?? '' };
   });
   const problems = $derived(dataProblems(fields));
@@ -121,7 +129,7 @@
     if (to && !mintToValid) return;
     const r = await ask({
       title: t('Mint %1', holding.label),
-      message: t('Mint %1 more %2?', formatUnits(mintUnits, decimals), holding.label),
+      message: t('Mint %1 more %2?', formatUnits(mintUnits, decimals), nameOf(holding.asset, holding.label)),
       informative: to ? t('The new coins go to %1. The supply goes up by as much.', to) : t('The new coins go to this wallet. The supply goes up by as much.'),
       level: 'question',
       choices: [
@@ -142,7 +150,7 @@
     const lines = Object.entries(updates).map(([k, v]) => (v === null ? t('%1: deleted', t(FIELD_NAMES[k as DataField])) : t('%1: %2', t(FIELD_NAMES[k as DataField]), v)));
     const r = await ask({
       title: t('Change the data of %1', holding.label),
-      message: tn('Change %n field(s) of the data of %1?', lines.length, holding.label),
+      message: tn('Change %n field(s) of the data of %1?', lines.length, nameOf(holding.asset, holding.label)),
       details: lines,
       informative: t('The change is on the chain for good: the history of each field keeps every value it had.'),
       level: 'question',
@@ -160,7 +168,7 @@
     if (!to || !giveValid) return;
     const r = await ask({
       title: t('Give control of %1', holding.label),
-      message: t('Give the control coin of %1 to this address?', holding.label),
+      message: t('Give the control coin of %1 to this address?', nameOf(holding.asset, holding.label)),
       code: to,
       informative: t('Its holder mints more and changes its data; only they can give it back.'),
       level: 'warning',
@@ -179,7 +187,7 @@
   async function fixSupply() {
     const r = await ask({
       title: t('Fix the supply of %1', holding.label),
-      message: t('Burn the control coin of %1? Nobody will ever mint more of it or change its data.', holding.label),
+      message: t('Burn the control coin of %1? Nobody will ever mint more of it or change its data.', nameOf(holding.asset, holding.label)),
       informative: t('This cannot be undone. Holders then know the supply will never grow.'),
       level: 'warning',
       choices: [
@@ -195,7 +203,7 @@
     if (burnUnits === null) return;
     const r = await ask({
       title: t('Burn %1', holding.label),
-      message: t('Destroy %1 %2 for good?', formatUnits(burnUnits, decimals), holding.label),
+      message: t('Destroy %1 %2 for good?', formatUnits(burnUnits, decimals), nameOf(holding.asset, holding.label)),
       informative: t('The supply goes down by as much. This cannot be undone.'),
       level: 'warning',
       choices: [

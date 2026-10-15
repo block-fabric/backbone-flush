@@ -16,7 +16,7 @@
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, AUCTION_STATUS, auctionPriceAt, auctionProgress, formatAmount, formatPrice, formatUnits, isChn, unitPrice, unitsOf, type Auction, type AuctionUnits, type BidQuote } from './model';
-  import { ba, decimalsOf, refreshBitAssets } from './store.svelte';
+  import { ba, decimalsOf, nameOf, refreshBitAssets } from './store.svelte';
 
   let { auction }: { auction: Auction } = $props();
 
@@ -89,7 +89,7 @@
     if (wallet === null || bid === null || !quote || busy) return;
     const r = await ask({
       title: t('Bid'),
-      message: t('Pay %1 %2 for at least %3 %4?', formatUnits(bid, dq), auction.quote, formatAmount(quote.buys, db), auction.base),
+      message: t('Pay %1 %2 for at least %3 %4?', formatUnits(bid, dq), nameOf(auction.quote_id, auction.quote), formatAmount(quote.buys, db), nameOf(auction.base_id, auction.base)),
       informative: t('At the price of the block that takes the bid: at least what it buys in the next block, more if it waits (the price only falls).'),
       level: 'question',
       choices: [
@@ -125,7 +125,7 @@
     }
     const r = await ask({
       title: t('Buy all'),
-      message: t('Pay %1 %2 for the %3 %4 left?', formatAmount(now.cost_of_remaining, dq), now.quote, formatAmount(now.remaining, db), now.base),
+      message: t('Pay %1 %2 for the %3 %4 left?', formatAmount(now.cost_of_remaining, dq), nameOf(now.quote_id, now.quote), formatAmount(now.remaining, db), nameOf(now.base_id, now.base)),
       informative: t('The wallet pays exactly that, never more: less, should the price fall first, and the rest comes back.'),
       level: 'question',
       choices: [

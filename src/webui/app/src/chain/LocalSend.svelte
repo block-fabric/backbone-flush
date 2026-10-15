@@ -14,7 +14,7 @@
   import AssetBadge from './ba/AssetBadge.svelte';
   import UnitsInput from './ba/UnitsInput.svelte';
   import { amountParam, assetArg, CHN_ID, formatAmount, formatUnits, unitsOf } from './ba/model';
-  import { ba, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
+  import { ba, nameOf, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
 
   let { active = $bindable(false) }: { active?: boolean } = $props();
 
@@ -49,7 +49,7 @@
     const address = to.trim();
     const r = await ask({
       title: t('Send %1', holding.label),
-      message: t('Send %1 %2 to this address?', formatUnits(amount, decimals), holding.label),
+      message: t('Send %1 %2 to this address?', formatUnits(amount, decimals), nameOf(holding.asset, holding.label)),
       code: address,
       informative: t('It arrives with the next block. The fee is paid in CHN by this wallet.'),
       level: 'question',

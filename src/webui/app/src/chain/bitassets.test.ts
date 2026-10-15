@@ -47,12 +47,13 @@ import {
   type Holdings,
   type Pool,
 } from './ba/model';
-import { ba, notePrices, priceSeries, refreshBitAssets, resetBitAssets, sanitizeJournal, sendIntent } from './ba/store.svelte';
+import { ACTIVITY_PAGE, ASSET_PAGE, ba, baView, MAX_ASSETS, nameOf, notePrices, priceSeries, readAllAssets, refreshBitAssets, resetBitAssets, sanitizeJournal, sendIntent } from './ba/store.svelte';
 import { setTransport, type BridgeRequest } from '../lib/bridge';
 import { buildCommands, menuSections } from '../lib/commands.svelte';
 import { dialogs } from '../lib/dialogs.svelte';
 import { AREAS, chainBeforeTools, HOME_QUICK_ACTIONS, NAV_SECTIONS } from '../lib/layout';
 import { nav } from '../lib/nav.svelte';
+import { handleShortcut } from '../lib/keyboard';
 import { app, node, prefs, wallets } from '../lib/state.svelte';
 import { resetWalletData } from '../lib/walletdata.svelte';
 import { encode, program } from '../test/bech32';
@@ -75,6 +76,8 @@ let auctions: Auction[] = [];
 let mine: Holdings = { assets: [], reservations: [], liquidity: [], receipts: [] };
 let store: unknown = null;
 let locked = false;
+let hidden: Asset[] = [];
+let activityCount = 1;
 const calls: BridgeRequest[] = [];
 
 function fresh() {
@@ -112,9 +115,12 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
   const byArg = (arg: unknown) => assets.find((a) => assetArg(a.asset) === arg || a.label === arg);
   switch (r.method) {
     case 'getbitassetsinfo':
-      return { assets: assets.length, reservations: 1, pools: pools.length, auctions: auctions.length, height: 21, reveal_depth: 2 };
-    case 'listassets':
-      return assets;
+      return { assets: assets.length + hidden.length, reservations: 1, pools: pools.length, auctions: auctions.length, height: 21, reveal_depth: 2 };
+    case 'listassets': {
+      // [count, skip, match], as the node takes them; `hidden` are the newest past what the page reads.
+      const all = [...assets, ...hidden].filter((a) => p[2] === undefined || a.label.toLowerCase().includes(String(p[2]).toLowerCase()));
+      return p[2] === undefined ? assets.slice(Number(p[1] ?? 0), Number(p[1] ?? 0) + Number(p[0] ?? 100)) : all.slice(0, Number(p[0]));
+    }
     case 'getasset': {
       const a = byArg(p[0]);
       if (!a) fail('No such asset is registered');
@@ -151,7 +157,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return structuredClone(mine);
     case 'listassetactivity':
       if (locked) fail('Please enter the wallet passphrase with walletpassphrase first.', -13);
-      return [{ txid: id('5'), time: 1_700_000_000, confirmations: 3, operation: 'mint', summary: 'Minted 10.00 GOLD' }];
+      return Array.from({ length: Math.min(Number(p[0] ?? 50), activityCount) }, (_, i) => ({ txid: `5${(i + 1).toString(16).padStart(63, '0')}`, time: 1_700_000_000 - i, confirmations: 3, operation: 'mint', summary: 'Minted 10.00 GOLD' }));
     case 'reserveasset':
       return { txid: id('6'), asset: 'f'.repeat(64) };
     case 'registerasset':
@@ -217,6 +223,8 @@ beforeEach(() => {
   wallets.current = 'w';
   wallets.balances.w = { trusted: 1_000_000_000n, untrustedPending: 0n, immature: 0n };
   fresh();
+  hidden = [];
+  activityCount = 1;
   store = null;
   locked = false;
   calls.length = 0;
@@ -372,6 +380,9 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     for (const c of LOCAL_COMMANDS) expect(chain.items.map((i) => i.label)).toContain(c.label);
     chain.items.find((c) => c.label === 'Add liquidity…')!.run();
     expect([nav.page, nav.tab]).toEqual(['trade', 'liquidity']);
+    // Alt+6 opens Assets, as it did in bitassets-qt (audit port-2 #8).
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: '6', altKey: true }))).toBe(true);
+    expect(nav.page).toBe('assets');
     expect(CHAIN.uriScheme).toBe('bitassets');
   });
 
@@ -505,6 +516,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByText('At least')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    // The asset named with its number: a look-alike label (G0LD) is told apart (audit port-2 #5).
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
     await answer('yes');
     await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
     // A larger trade moves the price more than 2%: asked about first.
@@ -543,6 +556,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(called('quotebid').length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Bid' })).toHaveProperty('disabled', false));
     await fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '1']));
     await fireEvent.click(screen.getByRole('button', { name: 'Buy all that is left' }));
@@ -559,6 +573,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.input(document.querySelector('#sell-end')!, { target: { value: '4' } });
     await waitFor(() => expect(screen.getByRole('img', { name: 'The price of one unit over the auction' })).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Start the auction/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
     await answer('yes');
     await waitFor(() => expect(called('createauction')[0]?.params).toEqual([assetArg(GOLD), '50', 'CHN', '10', '4', 60, 1]));
   });
@@ -574,8 +589,59 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     const send = screen.getByRole('button', { name: /^Send$/ });
     await waitFor(() => expect(send).toHaveProperty('disabled', false), { timeout: 3000 });
     await fireEvent.click(send);
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Send 12.5 GOLD (#1739-0029) to this address?'));
     await answer('yes', 4000);
     await waitFor(() => expect(called('sendasset')[0]?.params).toEqual([OTHER, assetArg(GOLD), '12.5']));
+  });
+
+  it('names an asset in a confirmation by its label and number, or the start of its hash (audit port-2 #5)', async () => {
+    await refreshBitAssets();
+    expect(nameOf(GOLD)).toBe('GOLD (#1739-0029)');
+    expect(nameOf(CHN_ID)).toBe('CHN');
+    // Not listed (a private name): the start and end of its hash.
+    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('G0LD (0x99999999…abcd)');
+    expect(nameOf('8'.repeat(64))).toBe('0x88888888…8888');
+  });
+
+  it('Assets: every asset, past the first 1000, and the newest past the most read (audit port-2 #4)', async () => {
+    assets = Array.from({ length: 1025 }, (_, i) => asset(i.toString(16).padStart(64, '0').replace(/^0/, '7'), { label: `F${String(i + 1).padStart(4, '0')}`, name: `F${i + 1}`, seq: `${1000 + i}-0001`, registered: i + 1 }));
+    render(Assets);
+    await waitFor(() => expect(ba.assets.length).toBe(1025));
+    expect(called('listassets').map((c) => c.params)).toEqual([[ASSET_PAGE, 0], [ASSET_PAGE, ASSET_PAGE]]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^All/ }).textContent).toContain('1025'));
+    // The newest first, findable by typing.
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'F1025' } });
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('listitem').length).toBe(1));
+    // Drawn a few hundred at a time.
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: '' } });
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('listitem').length).toBe(240));
+    await fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('listitem').length).toBe(480));
+    // Past the most read, the newest are read, and typing asks the node for the others.
+    calls.length = 0;
+    await readAllAssets(MAX_ASSETS + 5000);
+    expect(called('listassets').map((c) => (c.params as number[])[1])).toEqual([0, 5000]);
+    hidden = [asset('6'.repeat(64), { label: 'ZINC', name: 'ZINC', seq: '5555-0001', registered: 2000 })];
+    await refreshBitAssets();
+    await waitFor(() => expect(screen.getByText(/oldest of the 1\D?026 assets are not listed here/)).toBeTruthy());
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'zin' } });
+    await waitFor(() => expect(called('listassets').some((c) => (c.params as unknown[])[2] === 'zin')).toBe(true));
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getByText('ZINC')).toBeTruthy());
+  });
+
+  it('My assets: older activity read on asking; tables are cards when narrow; no faint text under 4.5:1 (audit port-2 #13)', async () => {
+    activityCount = 450;
+    render(MyAssets);
+    await loaded();
+    nav.tab = 'activity';
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Activity' })).getAllByRole('row').length).toBe(ACTIVITY_PAGE + 1));
+    await fireEvent.click(screen.getByRole('button', { name: 'Show older activity' }));
+    await waitFor(() => expect(baView.activity).toBe(2 * ACTIVITY_PAGE));
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Activity' })).getAllByRole('row').length).toBe(2 * ACTIVITY_PAGE + 1));
+    const css = (await import('node:fs')).readFileSync(`${__dirname}/ba/ba.css`, 'utf8');
+    expect(css).toMatch(/\.ba-wrap \{[^}]*container-type: inline-size/);
+    expect(css).toMatch(/@container \(max-width: 56rem\) \{[\s\S]*\.ba-table thead \{\s*display: none;/);
+    expect(css).toMatch(/\.ba-page \.faint \{\s*color: var\(--text-muted\);/);
   });
 
   it('the cards of the home: holdings, markets, auctions', async () => {

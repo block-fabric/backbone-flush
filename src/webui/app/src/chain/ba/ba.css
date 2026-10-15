@@ -388,6 +388,44 @@
 /* Tables of the pages, as cards in a narrow panel (use:stacked). */
 .ba-wrap {
   overflow-x: auto;
+  container-type: inline-size;
+}
+/* A panel too narrow for the columns (Trade → Pools is about 60 rem wide): each row a card, every cell under
+   the words of its column (use:stacked), nothing behind a sideways scroll (audit port-2 #13). */
+@container (max-width: 56rem) {
+  .ba-table,
+  .ba-table tbody,
+  .ba-table tr {
+    display: block;
+  }
+  .ba-table thead {
+    display: none;
+  }
+  .ba-table tr {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ba-table tr:last-child {
+    border-bottom: 0;
+  }
+  .ba-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.2rem 0.8rem;
+    border: 0;
+    text-align: right;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .ba-table td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: left;
+  }
 }
 .ba-table {
   width: 100%;
@@ -429,4 +467,10 @@
 }
 .ba-back {
   align-self: flex-start;
+}
+
+/* Small text of the pages on raised cards and rows (a figure's note, "≈ 9.5 CHN", "Open · yours"): the faint
+   colour falls under 4.5:1 there (4.30 in Midnight), so these pages use the muted one (audit port-2 #13). */
+.ba-page .faint {
+  color: var(--text-muted);
 }

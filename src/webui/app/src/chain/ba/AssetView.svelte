@@ -16,7 +16,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
   import { assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type DataField, type Pool } from './model';
-  import { ba, chnPrice, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
+  import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { id, onback }: { id: string; onback?: () => void } = $props();
 
@@ -98,7 +98,7 @@
     if (!asset || wallet === null) return;
     const r = await ask({
       title: t('Retire %1', asset.label),
-      message: t('Retire %1 for good? It and its pools are deleted and its name is free again; the %2 CHN its pools hold go to mainchain miners, as a fee.', asset.label, formatAmount(asset.release_fee ?? 0, 8)),
+      message: t('Retire %1 for good? It and its pools are deleted and its name is free again; the %2 CHN its pools hold go to mainchain miners, as a fee.', nameOf(asset.asset, asset.label), formatAmount(asset.release_fee ?? 0, 8)),
       informative: t('Anyone may retire a dead asset; this wallet pays the fee of the transaction.'),
       level: 'warning',
       choices: [

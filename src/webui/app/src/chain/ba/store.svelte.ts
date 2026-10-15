@@ -66,6 +66,35 @@ export function emptyJournal(): Journal {
 
 export type MineState = 'none' | 'loading' | 'ok' | 'locked' | 'error';
 
+/** Assets read a call (listassets count), and at most in all: past that, the Assets page asks the node as the user types. */
+export const ASSET_PAGE = 1000;
+export const MAX_ASSETS = 20_000;
+/** Entries of the asset activity read at first, and more each time "Show more" is pressed (up to MAX_ACTIVITY). */
+export const ACTIVITY_PAGE = 200;
+export const MAX_ACTIVITY = 5000;
+
+/**
+ * Every asset of the chain, in the order of registration, in pages of ASSET_PAGE (audit port-2 #4: a single
+ * listassets [1000, 0] left the newest out once there were more); past MAX_ASSETS, the newest MAX_ASSETS
+ * (`total`: the assets the node counts, getbitassetsinfo).
+ */
+export async function readAllAssets(total: number | Promise<number>): Promise<Asset[]> {
+  // The first page at once, with the other calls of a refresh; the count of the node decides the rest.
+  const first = rpc.raw<Asset[]>('listassets', [ASSET_PAGE, 0]);
+  first.catch(() => undefined);
+  const from = Math.max(0, (await total) - MAX_ASSETS);
+  const out: Asset[] = [];
+  for (let skip = from; skip < from + MAX_ASSETS; skip += ASSET_PAGE) {
+    const page = (await (skip === 0 ? first : rpc.raw<Asset[]>('listassets', [ASSET_PAGE, skip]))) ?? [];
+    out.push(...page);
+    if (page.length < ASSET_PAGE) break;
+  }
+  return out;
+}
+
+/** What the pages ask for beyond the usual: more of the activity of the wallet. */
+export const baView = $state({ activity: ACTIVITY_PAGE });
+
 export const ba = $state({
   info: null as BitAssetsInfo | null,
   assets: [] as Asset[],
@@ -306,13 +335,14 @@ export async function refreshBitAssets(): Promise<void> {
       await loadJournal();
       const wallet = wallets.current;
       // Every call goes out at once: the node's and the wallet's.
+      const infoCall = rpc.raw<BitAssetsInfo>('getbitassetsinfo');
       const nodeCalls = Promise.all([
-        rpc.raw<BitAssetsInfo>('getbitassetsinfo'),
-        rpc.raw<Asset[]>('listassets', [1000, 0]),
+        infoCall,
+        readAllAssets(infoCall.then((i) => i?.assets ?? 0)),
         rpc.raw<Pool[]>('listpools'),
         rpc.raw<Auction[]>('listauctions', [false]),
       ]);
-      const walletCalls = wallet === null ? null : Promise.all([rpc.raw<Holdings>('listmyassets', [], { wallet }), rpc.raw<Activity[]>('listassetactivity', [200], { wallet })]);
+      const walletCalls = wallet === null ? null : Promise.all([rpc.raw<Holdings>('listmyassets', [], { wallet }), rpc.raw<Activity[]>('listassetactivity', [baView.activity], { wallet })]);
       // Neither fails unheard of: each is awaited below.
       walletCalls?.catch(() => undefined);
       try {
@@ -393,6 +423,7 @@ export function startBitAssets(): void {
 
 /** For the tests. */
 export function resetBitAssets(): void {
+  baView.activity = ACTIVITY_PAGE;
   timer?.();
   timer = null;
   lastTip = '';
@@ -421,6 +452,19 @@ export function decimalsOf(id: string): number {
 export function labelOf(id: string): string {
   if (/^0+$/.test(id)) return 'CHN';
   return ba.assets.find((a) => a.asset === id)?.label ?? ba.mine?.assets.find((a) => a.asset === id)?.label ?? `0x${id.slice(0, 12)}…`;
+}
+
+/**
+ * How a confirmation names an asset: its label and its number ("G0LD (#1739-0929)"), or the start of its hash
+ * when it has none listed (a private name): labels are any printable ASCII, so look-alikes (G0LD and GOLD,
+ * USDl and USDI) are told apart by the number, as the pickers show it (audit port-2 #5). Text of the chain.
+ */
+export function nameOf(id: string, label?: string): string {
+  if (/^0+$/.test(id)) return 'CHN';
+  const listed = ba.assets.find((a) => a.asset === id);
+  const text = label ?? listed?.label ?? ba.mine?.assets.find((a) => a.asset === id)?.label ?? '';
+  const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;
+  return text ? `${text} (${tag})` : tag;
 }
 
 /** The pool of two assets, either way round. */

@@ -13,7 +13,7 @@
   import AssetSelect from './AssetSelect.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsOf, type Pool } from './model';
-  import { ba, decimalsOf, labelOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
 
   let a = $state('');
   let b = $state(CHN_ID);
@@ -83,8 +83,9 @@
   async function add() {
     const wallet = wallets.current;
     if (wallet === null || aUnits === null || bUnits === null || !deposit || problem || busy) return;
-    const la = labelOf(a);
-    const lb = labelOf(b);
+    // Named with their numbers in the confirmation: look-alike labels told apart (audit port-2 #5).
+    const la = nameOf(a);
+    const lb = nameOf(b);
     // The pool may have changed since the amounts were typed (made, reopened or left): asked again.
     let now: Pool | null = null;
     try {

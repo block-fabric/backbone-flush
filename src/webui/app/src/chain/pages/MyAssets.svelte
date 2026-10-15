@@ -39,7 +39,7 @@
     type Position,
     type Reservation,
   } from '../ba/model';
-  import { ba, chnPrice, decimalsOf, dropPending, pendingOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, unlockHoldings, type PendingIssue } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
 
@@ -168,8 +168,8 @@
     const db = decimalsOf(pos.asset_b_id);
     const r = await ask({
       title: t('Take liquidity out'),
-      message: t('Take %1% of your shares of the %2 / %3 pool out?', String(percent), pos.asset_a, pos.asset_b),
-      informative: out ? t('About %1 %2 and %3 %4, at least %5% less should the pool move first. CHN comes by the coinbase of the next block; assets as coins of the transaction.', formatUnits(out.a, da), pos.asset_a, formatUnits(out.b, db), pos.asset_b, String(slippage)) : undefined,
+      message: t('Take %1% of your shares of the %2 / %3 pool out?', String(percent), nameOf(pos.asset_a_id, pos.asset_a), nameOf(pos.asset_b_id, pos.asset_b)),
+      informative: out ? t('About %1 %2 and %3 %4, at least %5% less should the pool move first. CHN comes by the coinbase of the next block; assets as coins of the transaction.', formatUnits(out.a, da), nameOf(pos.asset_a_id, pos.asset_a), formatUnits(out.b, db), nameOf(pos.asset_b_id, pos.asset_b), String(slippage)) : undefined,
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -193,6 +193,12 @@
     go('trade', 'liquidity');
   }
 
+  /** Read more of the activity (it shows the newest ACTIVITY_PAGE at first: audit port-2 #13). */
+  function showMoreActivity() {
+    baView.activity = Math.min(MAX_ACTIVITY, baView.activity + ACTIVITY_PAGE);
+    void refreshBitAssets();
+  }
+
   // --- Auctions of the wallet (receipts) ---
   const receipts = $derived((mine?.receipts ?? []).map((r) => ({ id: r.auction, a: ba.auctions.find((x) => x.auction === r.auction) ?? null })));
   async function collect(a: Auction) {
@@ -203,8 +209,8 @@
       title: action === 'cancel' ? t('Cancel the auction') : t('Collect the auction'),
       message:
         action === 'cancel'
-          ? t('Cancel the auction of %1 %2? Nobody bid yet: everything comes back.', formatAmount(a.remaining, decimalsOf(a.base_id)), a.base)
-          : t('Collect %1 %2 and the %3 %4 left?', formatAmount(a.proceeds, decimalsOf(a.quote_id)), a.quote, formatAmount(a.remaining, decimalsOf(a.base_id)), a.base),
+          ? t('Cancel the auction of %1 %2? Nobody bid yet: everything comes back.', formatAmount(a.remaining, decimalsOf(a.base_id)), nameOf(a.base_id, a.base))
+          : t('Collect %1 %2 and the %3 %4 left?', formatAmount(a.proceeds, decimalsOf(a.quote_id)), nameOf(a.quote_id, a.quote), formatAmount(a.remaining, decimalsOf(a.base_id)), nameOf(a.base_id, a.base)),
       informative: t('CHN comes by the coinbase of the next block; assets as coins of the transaction.'),
       level: 'question',
       choices: [
@@ -466,6 +472,9 @@
               </tbody>
             </table>
           </div>
+          {#if ba.activity.length >= baView.activity && baView.activity < MAX_ACTIVITY}
+            <p class="more"><button type="button" class="btn small" onclick={showMoreActivity}>{t('Show older activity')}</button></p>
+          {/if}
         {/if}
       </section>
     {/if}
@@ -473,6 +482,11 @@
 {/if}
 
 <style>
+  .more {
+    display: flex;
+    justify-content: center;
+    margin: 0.6rem 0;
+  }
   .locked {
     display: flex;
     flex-wrap: wrap;

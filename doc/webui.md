@@ -428,6 +428,14 @@ RPC methods of the assets to the page's allowlist; those that sign (and `listmya
 passphrase for them) are keyed methods. The parity with the Assets page of `bitassets-qt`: section BA of
 [webui-parity.md](webui-parity.md).
 
+Every asset of the chain is read, in pages of 1000 (`listassets` with its skip), up to 20 000: past that,
+the newest 20 000, and what the user types on Assets is asked of the node too (`listassets` with its
+match), so the newest are never left out (audit port-2 #4). Assets draws 240 cards at a time ("Show
+more"). The activity of the wallet shows the newest 200, more on "Show older activity". Every
+confirmation names an asset by its label and number ("GOLD (#1739-0029)"), or the start of its hash
+for a private name: labels are printable ASCII, so look-alikes (G0LD, GOLD) are told apart as the pickers
+tell them (audit port-2 #5). Alt+6 opens Assets. In a narrow panel the tables are cards.
+
 | Page | What it does |
 |---|---|
 | Assets | Every asset as a card (its mark in the colour of its hash, label, number, description, supply, price in CHN, tags): search by name, number or hash, Enter asking the node for a private name; filters (held or controlled, with a market, mintable, fixed supply, dead) and sorts (newest, oldest, name, supply, value, most traded). An asset (`ba/AssetView.svelte`): supply, minted, burned, price, value, what the wallet holds; its markets, its price as the app saw it, its auctions; its data, every field, and the history of each; who controls it; retiring it once dead |

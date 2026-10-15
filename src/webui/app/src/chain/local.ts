@@ -39,7 +39,7 @@ export interface LocalPage {
 }
 
 export const LOCAL_PAGES = [
-  { id: 'assets', title: 'Assets', icon: 'gem', section: 'chain', summary: 'Every asset of the chain: its supply, markets, auctions and history', keywords: 'bitassets explore token find search supply', quick: { label: 'Explore assets', icon: 'gem' } },
+  { id: 'assets', title: 'Assets', icon: 'gem', section: 'chain', shortcut: 'Alt+6', summary: 'Every asset of the chain: its supply, markets, auctions and history', keywords: 'bitassets explore token find search supply', quick: { label: 'Explore assets', icon: 'gem' } },
   { id: 'my-assets', title: 'My assets', icon: 'holdings', section: 'chain', summary: 'What this wallet holds and controls: balances, pool shares, auctions to collect, activity', wallet: true, keywords: 'portfolio balances holdings mint burn control liquidity receipts activity' },
   { id: 'issue', title: 'Issue', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Issue an asset', icon: 'issue' } },
   { id: 'trade', title: 'Trade', icon: 'swap', section: 'chain', summary: 'Swap assets in their pools, and provide liquidity for a share of the fees', keywords: 'swap exchange amm pool liquidity price dex', quick: { label: 'Swap', icon: 'swap' } },

@@ -13,7 +13,7 @@
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
-  import { ba, decimalsOf, labelOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
 
   let pay = $state(CHN_ID);
   let get = $state('');
@@ -115,8 +115,9 @@
   async function swap() {
     const wallet = wallets.current;
     if (wallet === null || amount === null || out === null || least === null || problem || busy) return;
-    const payLabel = labelOf(pay);
-    const getLabel = labelOf(get);
+    // Named with their numbers in the confirmations: look-alike labels told apart (audit port-2 #5).
+    const payLabel = nameOf(pay);
+    const getLabel = nameOf(get);
     if (impact > WARN_IMPACT) {
       const r = await ask({
         title: t('Price impact'),

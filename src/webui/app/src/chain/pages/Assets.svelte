@@ -29,6 +29,44 @@
   let looking = $state(false);
   /** An asset found by its hash or number that the list does not hold (its name is private). */
   let found = $state<Asset | null>(null);
+  /** Tiles drawn: more on "Show more" (a chain of thousands of assets stays quick to open). */
+  const TILES = 240;
+  let drawn = $state(TILES);
+  /**
+   * Past MAX_ASSETS the list does not hold every asset: what the user types is asked of the node too
+   * (listassets with its match), and what it finds is listed with the rest (audit port-2 #4).
+   */
+  const complete = $derived(!ba.info || ba.assets.length >= ba.info.assets);
+  let remote = $state.raw<Asset[]>([]);
+  let remoteSeq = 0;
+  $effect(() => {
+    const q = query.trim();
+    const mine = ++remoteSeq;
+    if (complete || q.length < 2) {
+      remote = [];
+      return;
+    }
+    const timer = setTimeout(() => {
+      rpc
+        .raw<Asset[]>('listassets', [100, 0, q])
+        .then((found) => {
+          if (mine === remoteSeq) remote = found ?? [];
+        })
+        .catch(() => undefined);
+    }, 300);
+    return () => clearTimeout(timer);
+  });
+  const pool = $derived.by(() => {
+    if (!remote.length) return ba.assets;
+    const have = new Set(ba.assets.map((a) => a.asset));
+    return [...ba.assets, ...remote.filter((a) => !have.has(a.asset))];
+  });
+  $effect(() => {
+    void query;
+    void filter;
+    void sort;
+    drawn = TILES;
+  });
 
   // Opened for an asset (from another page, the palette, the home).
   $effect(() => {
@@ -59,7 +97,7 @@
 
   const list = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    let out = ba.assets.filter((a) => {
+    let out = pool.filter((a) => {
       if (filter === 'mine' && !mineIds.has(a.asset)) return false;
       if (filter === 'market' && !withPool.has(a.asset)) return false;
       if (filter === 'mintable' && a.fixed) return false;
@@ -177,7 +215,7 @@
       </div>
     {:else}
       <ul class="grid" aria-label="Assets">
-        {#each list as a (a.asset)}
+        {#each list.slice(0, drawn) as a (a.asset)}
           {@const price = chnPrice(a.asset)}
           <li>
             <button type="button" class="panel tile" onclick={() => (shown = a.asset)}>
@@ -199,6 +237,12 @@
           </li>
         {/each}
       </ul>
+      {#if list.length > drawn}
+        <p class="more"><button type="button" class="btn" onclick={() => (drawn += TILES)}>{t('Show more (%1 more)', formatCount(list.length - drawn))}</button></p>
+      {/if}
+    {/if}
+    {#if !complete}
+      <p class="ba-help">{t('The %1 oldest of the %2 assets are not listed here: type a name to find them, or its number or hash and press Enter.', formatCount(ba.info!.assets - ba.assets.length), formatCount(ba.info!.assets))}</p>
     {/if}
     {#if found && !ba.assets.some((a) => a.asset === found?.asset)}
       <p class="ba-help">Found by its hash: <button type="button" class="btn small ghost" onclick={() => (shown = found?.asset ?? null)}><SafeText text={found.label} /></button> <span class="faint" translate="no">{assetArg(found.asset)}</span></p>
@@ -207,6 +251,11 @@
 </div>
 
 <style>
+  .more {
+    display: flex;
+    justify-content: center;
+    margin: 0.8rem 0 0;
+  }
   .finder {
     display: flex;
     flex-direction: column;
