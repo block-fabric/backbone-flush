@@ -153,8 +153,12 @@ Sidechain, in the wallet: `getdepositaddress`, `createwithdrawal`, `refundwithdr
 
 ## Wallet
 
-The pages: Overview, Send, Receive, Transactions, **Mainchain** (deposits, withdrawals, merged
-mining), and **Assets** (your assets, send and receive, create, trade in pools, auctions, explore).
+`bitassets-app`: the pages of the wallet (Overview, Send, which sends an asset as well as CHN, Receive,
+Transactions, Wallets), **Peg** and **Merged mining** (deposits, withdrawals, merged mining), and the pages of
+the assets: **Assets** (every asset, its supply, markets, auctions and history), **My assets** (what the
+wallet holds and controls: mint, change the data, give control, fix the supply, burn; the assets being
+issued; pool shares; auctions to collect; activity), **Issue** (a wizard), **Trade** (swaps, pools,
+liquidity) and **Auctions**. See [doc/webui.md](doc/webui.md).
 
 ## Credits
 

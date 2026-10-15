@@ -11,7 +11,7 @@ based sidechain, with Bitcoin's keys and transactions, and without the defects o
   *reservation* commits to the name without showing it (HMAC-SHA256, under a nonce only the wallet
   can make, of the name's hash and of the script of the output that carries the reservation); once
   it is in a block, the *registration* reveals the nonce and creates the asset: its initial supply
-  (zero is allowed) and its **control coin**. The window ("Assets", in the sidebar) does both steps.
+  (zero is allowed) and its **control coin**. The app (`bitassets-app`, its Issue page) does both steps.
   Bound to its output's script, a reservation cannot be copied to any use: a copy made by someone
   else, with an output of their own, commits to nothing they can reveal.
 - **A reservation is revealed only once it is deep enough** (`bitassets_reveal_depth` blocks: 6 on
@@ -21,7 +21,7 @@ based sidechain, with Bitcoin's keys and transactions, and without the defects o
   name under a nonce of its own and register it in its own block, ahead of the one it saw.
   `registerasset` refuses to register sooner and says from which block it can; `listmyassets`
   gives each reservation's `registers_from` and `wait`, and `getbitassetsinfo` the depth
-  (`reveal_depth`). The window waits as long by itself.
+  (`reveal_depth`). The app waits as long by itself, and registers then.
 - **A name may not read as another asset**: not CHN (in any case), not like a number
   (`1739-0029`, `0001-1739-0029`), not starting with `0x`.
 - **An asset is known by the SHA-256 hash of its name.** The registration publishes the name
@@ -91,7 +91,7 @@ spends a token without carrying it on, or outputs one it does not have, is inval
   (`cost_of_remaining`: the least amount whose bid buys it all). `bidauction` with `buy_all` pays
   exactly that, never more (with an amount, at most that amount), and refuses when no bid buys
   exactly what is left (the least that buys it all buys more, which the rules refuse); a bid of an
-  amount that buys all that is left pays only what that costs. The window's "Buy all" pays the
+  amount that buys all that is left pays only what that costs. The app's "Buy all that is left" pays the
   amount it shows (less, should the price fall first).
 - An auction starts within 52560 blocks (about a year) of the one that makes it.
 

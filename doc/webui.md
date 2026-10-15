@@ -369,7 +369,7 @@ files only through the native chooser; amounts with `Amount`; tables in the colo
 
 ### Pages of a chain of its own
 
-A sidechain made from the template (BitNames, BitAssets, Thunder...) adds its pages in three files the
+A sidechain made from the template (BitNames, BitAssets, Thunder...) adds its pages in six files the
 template keeps empty, and nowhere else, so that a merge of the template never conflicts with them:
 
 1. **src/webui/app/src/chain/local.ts**: an entry per page in `LOCAL_PAGES` (`id`, `title`, `icon`,
@@ -382,6 +382,13 @@ template keeps empty, and nowhere else, so that a merge of the template never co
 3. **src/webui/local.cpp**: the RPC methods the pages call (`RpcMethods`, added to the page's
    allowlist; those that need the keys in `KeyedRpcMethods`) and the host methods they need
    (`RegisterHost`, after the kit's).
+4. **src/webui/app/src/chain/icons.ts**: icons of its own (`LOCAL_ICONS`, SVG paths on the 24 grid of
+   the kit's), named in `local.ts` like the kit's.
+5. **src/webui/app/src/chain/LocalCards.svelte**: cards of its own on the home of the dashboard, after
+   the row of summary cards (views/home/Card.svelte).
+6. **src/webui/app/src/chain/LocalSend.svelte**: what the Send page sends beside the coin (an asset, a
+   name): a choice at the top of Send, and the chain's own form, which takes the place of the kit's while
+   it is active (`bind:active`). The template sends only its coin and shows nothing there.
 
 ```ts
 // chain/local.ts
@@ -394,6 +401,41 @@ Its own words follow the rules of the kit (`t()` for the app's words; `SafeText`
 the chain); its tests go in `src/chain/` too (`*.test.ts` are found anywhere under src). Nothing in
 `lib/`, `components/`, `pages/` or `views/` needs to change; when a page needs something the kit does
 not offer, make it a change of the template (generic, behind `chain.json`), and merge it.
+
+### The pages of BitAssets
+
+In `src/webui/app/src/chain`: `local.ts` lists them (all in the Chain section, after Peg and Merged mining,
+before the explorer and the tools), `LocalPages.svelte` shows them, `LocalCards.svelte` puts their cards on
+the home of the dashboard, `LocalSend.svelte` sends an asset from the Send page, `icons.ts` draws their
+icons; `pages/` holds the pages, `ba/` what they share (`model.ts`: the shapes of the answers, amounts in
+units of an asset's decimals as bigints, the rules of names and data, the pools and the auctions worked out
+as the chain works them out; `store.svelte.ts`: the state and the journal). `src/webui/local.cpp` adds the
+RPC methods of the assets to the page's allowlist; those that sign (and `listmyassets`,
+`listassetactivity`, which sign the nonce of a reservation to tell it, so a locked wallet needs its
+passphrase for them) are keyed methods. The parity with the Assets page of `bitassets-qt`: section BA of
+[webui-parity.md](webui-parity.md).
+
+| Page | What it does |
+|---|---|
+| Assets | Every asset as a card (its mark in the colour of its hash, label, number, description, supply, price in CHN, tags): search by name, number or hash, Enter asking the node for a private name; filters (held or controlled, with a market, mintable, fixed supply, dead) and sorts (newest, oldest, name, supply, value, most traded). An asset (`ba/AssetView.svelte`): supply, minted, burned, price, value, what the wallet holds; its markets, its price as the app saw it, its auctions; its data, every field, and the history of each; who controls it; retiring it once dead |
+| My assets | Holdings with their worth; an asset's panel (`ba/ManagePanel.svelte`): Send, Trade, Auction; with its control coin, mint more, change every field of its data, give control, fix the supply; burn some. Being issued: the steps of each asset, registered by itself, "Register now" on a locked wallet, a reservation the app did not make registered with what is typed, Release. Pool shares taken out (a part, with what it gives). My auctions collected or cancelled. Activity |
+| Issue | A wizard: name (the rules of the chain, free or taken), decimals and supply, description and the issuer's commitment, addresses and keys, a public or private name, review with the two steps on the way; the reservation, then the registration once the reservation is `reveal_depth` blocks deep |
+| Trade | Swap (`ba/SwapPanel.svelte`): quoted by the node, the price impact (asked above 2%, refused above 10%), the least after the slippage, the fee, the curve of the pool. Pools (`ba/PoolsPanel.svelte`): each with its price, holdings, volume; one opened with its curve and its price over time. Add liquidity (`ba/LiquidityPanel.svelte`): at the pool's price, or setting the price of a new pool or one everyone left |
+| Auctions | Running, upcoming, sold out or ended, collected; an auction (`ba/AuctionView.svelte`): its price falling block by block, a bid quoted by the node, buying all that is left; selling by auction with its price line drawn first |
+| Send | An asset chosen at the top of the page, sent to an address with its amount checked (`chain/LocalSend.svelte`) |
+| Home | Cards: My assets (worth, held, controlled, being issued), Markets, Auctions |
+
+**The journal.** The chain keeps no history of prices, and nothing of an asset being created but its
+secret reservation. The app keeps them in a file of the data directory of the network,
+`bitassets-journal.json` (host methods `bitassets.store.load` and `bitassets.store.save` in
+`src/webui/local.cpp`; written whole and flushed before it replaces the old file; a file that cannot be
+read is kept aside as `<file>.unreadable`): the assets being created (name, supply, decimals, data, public
+or not: what registerasset needs, as chains-qt kept it in QSettings), written at once, and the prices of
+the pools as the app saw them, block by block (bounded).
+
+The rules of the kit hold: text of the chain (labels, descriptions, data, the summaries of the activity,
+errors of the node) with `SafeText` or `translate="no"`, the app's words through `t()`, no inline style
+(bars and the hue of an asset set through the CSS object model), colours from the tokens of the themes.
 
 ## Tests
 
@@ -412,6 +454,9 @@ not offer, make it a change of the template (generic, behind `chain.json`), and 
 | `e2e/run_sidechain.py` | A sidechain (`webui_e2e_sidechain`, with `WEBUI_MAINCHAIN_BIN_DIR` or `MAINCHAIN_BIN_DIR` naming the folder of `chainsd`): a regtest mainchain started and mining a block every second, the sidechain activated in its slot, the app following it with a user name and a password file; through the page: a deposit address, the deposit made by the helper, merged mining on, the deposit credited, a withdrawal to an address of the mainchain wallet, its bundle voted on and paid (checked on the mainchain); pictures of the pages of the sidechain in the layouts and looks |
 | `e2e/run_release.py` | The release as a user gets it (`deploy-app`, built with `WEBUI_TEST_HOOKS=OFF`; `--windows` for the zip, run on the Windows of the machine): what the package holds and SHA256SUMS, no hooks of the tests in the app; the app run with no test script on regtest against a live mainchain, its node answering the command line program of the package, following the mainchain in its slot, and stopping cleanly |
 | `test_<stem>-app`: chainconfig_tests, sidechainapi_tests | chain.json against the chain parameters (names, unit, ports, prefixes); the methods of the mainchain the pages may call, the deposit helper refusing what is not a deposit address of this sidechain, the RPC policy of a sidechain |
+| `npm test`: chain/bitassets.test.ts | BitAssets: amounts with the decimals of an asset, the hash of a name, the rules of names and data, swaps, deposits and withdrawals of a pool and the prices of an auction as the chain works them out, the journal; the pages driven against a pretend node: the assets searched, filtered and opened, a dead asset retired, an asset minted, its data changed, burned and its supply fixed, pool shares taken out, the activity, a locked wallet, the wizard reserving an asset then registering it by itself, a swap (and the price impact asked about), a new pool, a bid and buying all of an auction, an auction started, an asset sent from Send, the cards of the home, the pages in the menus before the tools |
+| `e2e/run_sidechain.py --script bitassets.js` (ctest `webui_e2e_bitassets`) | BitAssets on regtest against a live mainchain: a deposit, merged mining; the wizard issues GOLD, registered by the app by itself; minted; the GOLD/CHN pool made and a swap; an auction started, bid on, bought out and collected; GOLD sent from Send; pictures of every page in Midnight and Light, the dashboard and the workspace |
+| `test_<stem>-app`: local_tests | The journal of BitAssets in its file: written whole, read back, refused when not an object or too large, kept aside when it cannot be read |
 | `npm test`: test/sidechain.test.ts | The chain of chain.json (units, URIs, addresses of both chains), the pages dropped, Peg and Merged mining in the Chain section and the menus, the events of the mainchain kept up to date across a reorganisation, the bundles, deposits and commitments, the log of merged mining, and the pages driven: the deposit helper, a withdrawal and its refund, the votes of the bundle, merged mining on and off and one block by hand, the cards of the home, the Mainchain settings |
 
 Each e2e script takes `--app build/bin/chains-app --tmp <dir> --shots <dir>`;
