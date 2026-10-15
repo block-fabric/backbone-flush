@@ -2,6 +2,12 @@
 // LocalPages.svelte, which shows them, and chain.json) that a chain made from the template changes, so
 // that merges of the template stay clean. See doc/webui.md, "Pages of a chain of its own".
 //
+// BitAssets: the assets of the chain (an explorer with each asset's supply, markets, auctions and history),
+// what the wallet holds and controls, the wizard that issues an asset, trading in the pools (swaps and
+// liquidity) and the Dutch auctions; their components in LocalPages.svelte (chain/pages, chain/ba), their RPC
+// methods in src/webui/local.cpp, the cards of the home in LocalCards.svelte, their icons in icons.ts, and
+// sending an asset in the Send page (LocalSend.svelte).
+//
 // The template has none. A sidechain adds an entry per page, for example
 //
 //   { id: 'names', title: 'Names', icon: 'book', section: 'chain', summary: 'Register and manage names', wallet: true,
@@ -32,7 +38,13 @@ export interface LocalPage {
   quick?: { label: string; icon?: IconName; tab?: string };
 }
 
-export const LOCAL_PAGES = [] as const satisfies readonly LocalPage[];
+export const LOCAL_PAGES = [
+  { id: 'assets', title: 'Assets', icon: 'gem', section: 'chain', summary: 'Every asset of the chain: its supply, markets, auctions and history', keywords: 'bitassets explore token find search supply', quick: { label: 'Explore assets', icon: 'gem' } },
+  { id: 'my-assets', title: 'My assets', icon: 'holdings', section: 'chain', summary: 'What this wallet holds and controls: balances, pool shares, auctions to collect, activity', wallet: true, keywords: 'portfolio balances holdings mint burn control liquidity receipts activity' },
+  { id: 'issue', title: 'Issue', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Issue an asset', icon: 'issue' } },
+  { id: 'trade', title: 'Trade', icon: 'swap', section: 'chain', summary: 'Swap assets in their pools, and provide liquidity for a share of the fees', keywords: 'swap exchange amm pool liquidity price dex', quick: { label: 'Swap', icon: 'swap' } },
+  { id: 'auctions', title: 'Auctions', icon: 'gavel', section: 'chain', summary: 'Buy at a price that falls block by block, or sell by Dutch auction', keywords: 'dutch auction bid sell buy' },
+] as const satisfies readonly LocalPage[];
 
 export type LocalPageId = (typeof LOCAL_PAGES)[number]['id'];
 
@@ -46,4 +58,10 @@ export interface LocalCommand {
   keywords?: string;
 }
 
-export const LOCAL_COMMANDS = [] as const satisfies readonly LocalCommand[];
+export const LOCAL_COMMANDS = [
+  { id: 'ba.issue', label: 'Issue an asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
+  { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
+  { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
+  { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset', keywords: 'dutch auction' },
+  { id: 'ba.activity', label: 'Asset activity', page: 'my-assets', tab: 'activity', tip: 'The asset transactions of this wallet', keywords: 'history transactions' },
+] as const satisfies readonly LocalCommand[];

@@ -1,0 +1,327 @@
+<script lang="ts">
+  // Issue: a wizard that creates an asset. The name (checked as the chain checks it, and asked of the node: is
+  // it free?), the supply and its decimals (with the smallest amount, and the largest the chain takes), what it
+  // is (a description, and the issuer's commitment, addresses and keys), whether its name is published; then a
+  // preview, and the two steps on the way: a reservation that hides the name, then the registration once the
+  // reservation is deep enough, which this app sends by itself (ba/store.svelte.ts), as chains-qt did. The
+  // Create panel of the Qt window of BitAssets.
+  import SafeText from '../../components/SafeText.svelte';
+  import Icon from '../../components/Icon.svelte';
+  import NoWallet from '../../components/NoWallet.svelte';
+  import { errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
+  import { t, tn } from '../../lib/i18n.svelte';
+  import { niceTimeOffset } from '../../lib/format';
+  import { go, PAGES } from '../../lib/nav.svelte';
+  import { rpc } from '../../lib/rpc';
+  import { app, toast, wallets, walletsEnabled } from '../../lib/state.svelte';
+  import '../ba/ba.css';
+  import AssetBadge from '../ba/AssetBadge.svelte';
+  import UnitsInput from '../ba/UnitsInput.svelte';
+  import { amountParam, DATA_FIELDS, hashName, dataProblems, dataToSet, formatUnits, MAX_AMOUNT, MAX_DECIMALS, MAX_INFO, nameProblem, smallestAmount, type DataField } from '../ba/model';
+  import { ba, notePending, pendingOf, refreshBitAssets, startBitAssets } from '../ba/store.svelte';
+
+  $effect(() => startBitAssets());
+
+  const noWallet = $derived(!walletsEnabled() || wallets.current === null);
+  type Step = 'name' | 'supply' | 'about' | 'review' | 'done';
+  const STEPS: { id: Step; label: string }[] = [
+    { id: 'name', label: 'Name' },
+    { id: 'supply', label: 'Supply' },
+    { id: 'about', label: 'About it' },
+    { id: 'review', label: 'Review' },
+  ];
+  let step = $state<Step>('name');
+
+  // --- The name ---
+  let name = $state('');
+  let availability = $state<'' | 'checking' | 'free' | 'taken' | 'mine'>('');
+  const problem = $derived(nameProblem(name));
+  let check = 0;
+  $effect(() => {
+    const text = name;
+    const mine = ++check;
+    availability = '';
+    if (!text || nameProblem(text)) return;
+    if (pendingOf(wallets.current).some((p) => p.name === text) || ba.mine?.reservations.some((r) => r.name === text)) {
+      availability = 'mine';
+      return;
+    }
+    const timer = setTimeout(async () => {
+      availability = 'checking';
+      try {
+        await rpc.raw('getasset', [text]);
+        if (mine === check) availability = 'taken';
+      } catch {
+        // No such asset: the name is free (a reservation of someone else is secret, and may take it first).
+        if (mine === check) availability = 'free';
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  });
+
+  // The id the asset will have: the hash of its name (its colour in the pages).
+  let previewId = $state('1'.repeat(64));
+  $effect(() => {
+    const text = name;
+    if (!text) return;
+    hashName(text)
+      .then((h) => {
+        if (text === name) previewId = h;
+      })
+      .catch(() => undefined);
+  });
+
+  // --- The supply ---
+  let decimals = $state(2);
+  let supplyText = $state('');
+  let supply = $state<bigint | null>(0n);
+  const supplyValue = $derived(supplyText.trim() === '' ? 0n : supply);
+  const largest = $derived(formatUnits(MAX_AMOUNT, decimals, { max: decimals }));
+
+  // --- About it ---
+  let fields = $state<Record<DataField, string>>({ info: '', commitment: '', ipv4: '', ipv6: '', encryptionkey: '', signingkey: '' });
+  let advanced = $state(false);
+  let published = $state(true);
+  const problems = $derived(dataProblems(fields));
+  const maxInfo = MAX_INFO;
+  const infoBytes = $derived(new TextEncoder().encode(fields.info).length);
+
+  const FIELD_NAMES: Record<DataField, string> = {
+    info: 'Description',
+    commitment: 'Commitment',
+    ipv4: 'IPv4 address',
+    ipv6: 'IPv6 address',
+    encryptionkey: 'Encryption key',
+    signingkey: 'Signing key',
+  };
+  const FIELD_HINTS: Record<DataField, string> = {
+    info: 'What it is: a description, a link',
+    commitment: 'A hash (64 hex digits) of documents kept elsewhere: terms, a prospectus',
+    ipv4: 'An IPv4 address of the issuer, such as 203.0.113.7:8333',
+    ipv6: 'An IPv6 address of the issuer, such as [2001:db8::7]:8333',
+    encryptionkey: 'A public key (66 hex digits) to encrypt messages to the issuer to',
+    signingkey: 'An x-only public key (64 hex digits) the issuer signs with',
+  };
+
+  const depth = $derived(ba.info?.reveal_depth ?? 1);
+  const spacing = $derived(app.info?.blockSpacing ?? 600);
+
+  const canNext = $derived.by(() => {
+    if (step === 'name') return !!name && !problem && availability === 'free';
+    if (step === 'supply') return supplyValue !== null && Number.isInteger(decimals) && decimals >= 0 && decimals <= MAX_DECIMALS;
+    if (step === 'about') return Object.keys(problems).length === 0;
+    return true;
+  });
+  const order: Step[] = ['name', 'supply', 'about', 'review'];
+  function next() {
+    if (!canNext) return;
+    const i = order.indexOf(step);
+    if (i >= 0 && i < order.length - 1) step = order[i + 1];
+  }
+  function back() {
+    const i = order.indexOf(step);
+    if (i > 0) step = order[i - 1];
+  }
+
+  let busy = $state(false);
+  let created = $state('');
+  async function create() {
+    const wallet = wallets.current;
+    if (wallet === null || busy || supplyValue === null) return;
+    busy = true;
+    try {
+      const done = await walletRpc<{ txid: string; asset: string }>(wallet, 'reserveasset', [name]);
+      if (!done) return;
+      const saved = await notePending({
+        wallet,
+        name,
+        asset: done.asset,
+        supply: amountParam(supplyValue, decimals),
+        decimals,
+        data: dataToSet(fields),
+        public: published,
+        time: Math.floor(Date.now() / 1000),
+        reservation: done.txid,
+      });
+      if (!saved) {
+        await inform(t('The journal of BitAssets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in My assets, with its supply and data.', name), 'warning');
+      }
+      created = name;
+      step = 'done';
+      toast('success', t('Name reserved'), tn('%1 is registered by itself once the reservation is %n block(s) deep.', depth, name));
+      void refreshBitAssets();
+    } catch (e) {
+      await inform(t('Issue an asset'), errorText(e), 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
+  function again() {
+    name = '';
+    supplyText = '';
+    decimals = 2;
+    fields = { info: '', commitment: '', ipv4: '', ipv6: '', encryptionkey: '', signingkey: '' };
+    published = true;
+    advanced = false;
+    created = '';
+    step = 'name';
+  }
+</script>
+
+{#if noWallet}
+  <NoWallet page={PAGES.issue} />
+{:else}
+  <div class="page ba-page issue">
+    <header class="page-head"><h1>Issue an asset</h1></header>
+    <p class="ba-help lead">A token of your own: shares, points, tickets, a stablecoin. You hold its control coin, which mints more and describes it; trade it in a pool, or sell it by auction.</p>
+
+    {#if step !== 'done'}
+      <ol class="ba-steps" aria-label="Steps">
+        {#each STEPS as s, i (s.id)}
+          <li class:done={order.indexOf(step) > i} class:now={step === s.id}>{t(s.label)}</li>
+        {/each}
+      </ol>
+    {/if}
+
+    <div class="ba-split">
+      <section class="panel wizard">
+        {#if step === 'name'}
+          <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+            <div class="field">
+              <label for="issue-name">Its name</label>
+              <input id="issue-name" class="big" type="text" maxlength="64" placeholder="Such as GOLD" autocomplete="off" spellcheck="false" bind:value={name} aria-invalid={problem ? 'true' : undefined} />
+              {#if problem}<span class="error">{t(problem)}</span>
+              {:else if availability === 'checking'}<span class="hint">Checking…</span>
+              {:else if availability === 'free'}<span class="hint ba-good"><Icon name="check" size={14} /> <SafeText text={name} /> is free</span>
+              {:else if availability === 'taken'}<span class="error"><SafeText text={name} /> is taken</span>
+              {:else if availability === 'mine'}<span class="error">This wallet is creating <SafeText text={name} /> already: see My assets.</span>
+              {:else}<span class="hint">1 to 64 plain characters (ASCII), no space at either end; not CHN, not "0x…", not like a number such as 1739-0029.</span>{/if}
+            </div>
+            <p class="ba-help">The asset is known by the hash of its name. Nobody can take a name between your two steps: the reservation hides it.</p>
+            <div class="row"><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
+          </form>
+        {:else if step === 'supply'}
+          <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+            <div class="field">
+              <label for="issue-decimals">Decimals: {decimals}</label>
+              <input id="issue-decimals" type="range" min="0" max={MAX_DECIMALS} step="1" bind:value={decimals} />
+              <span class="hint">They only change how amounts are shown: with {decimals}, the smallest amount is {smallestAmount(decimals)}. They are set for good.</span>
+            </div>
+            <UnitsInput id="issue-supply" label="Initial supply" {decimals} allowZero bind:units={supply} bind:text={supplyText} placeholder="0" hint="0: none yet; the control coin mints more later" />
+            <p class="ba-help">At most {largest} with {decimals} decimals.</p>
+            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
+          </form>
+        {:else if step === 'about'}
+          <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+            <div class="field">
+              <label for="issue-info">Description</label>
+              <textarea id="issue-info" rows="4" placeholder="What it is: a description, a link (optional)" bind:value={fields.info} aria-invalid={problems.info ? 'true' : undefined}></textarea>
+              {#if problems.info}<span class="error">{t(problems.info)}</span>{:else}<span class="hint">{infoBytes} / {maxInfo} bytes</span>{/if}
+            </div>
+            <label class="check"><input type="checkbox" bind:checked={published} /> <span>Publish the name, so that it is listed and found by name</span></label>
+            {#if !published}<p class="ba-help">A private name: only its hash and number are on the chain. Whoever knows the name finds it; the list of assets shows its hash.</p>{/if}
+            <button type="button" class="btn ghost small more" aria-expanded={advanced} onclick={() => (advanced = !advanced)}><Icon name={advanced ? 'chevron' : 'chevron-right'} size={14} /> The issuer's commitment, addresses and keys</button>
+            {#if advanced}
+              {#each DATA_FIELDS.filter((f) => f !== 'info') as f (f)}
+                <div class="field">
+                  <label for="issue-{f}">{t(FIELD_NAMES[f])}</label>
+                  <input id="issue-{f}" type="text" class="mono" spellcheck="false" autocomplete="off" bind:value={fields[f]} aria-invalid={problems[f] ? 'true' : undefined} />
+                  {#if problems[f]}<span class="error">{t(problems[f] ?? '')}</span>{:else}<span class="hint">{t(FIELD_HINTS[f])}</span>{/if}
+                </div>
+              {/each}
+            {/if}
+            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
+          </form>
+        {:else if step === 'review'}
+          <div class="ba-form">
+            <h2>Review</h2>
+            <dl class="ba-lines">
+              <dt>Name</dt><dd><SafeText text={name} /></dd>
+              <dt>Initial supply</dt><dd>{formatUnits(supplyValue ?? 0n, decimals)}</dd>
+              <dt>Decimals</dt><dd>{decimals}</dd>
+              <dt>The name</dt><dd>{published ? 'Published' : 'Private: only its hash'}</dd>
+              {#each DATA_FIELDS.filter((f) => fields[f].trim()) as f (f)}
+                <dt>{t(FIELD_NAMES[f])}</dt><dd><SafeText class="ba-mono" text={fields[f]} /></dd>
+              {/each}
+            </dl>
+            <h3>On the way</h3>
+            <ol class="timeline">
+              <li><strong>Now: the reservation.</strong> It hides the name, so that nobody can see it coming and take it first.</li>
+              <li><strong>{tn('%n block(s) later (about %1): the registration.', depth, niceTimeOffset(depth * spacing))}</strong> Not sooner, so that whoever makes a block cannot take the name first. This app sends it by itself while it runs.</li>
+              <li><strong>The block after: in your assets</strong>, with its supply and its control coin.</li>
+            </ol>
+            <p class="ba-help">Two small transactions, each with the fee of the wallet. A reservation can be released while it is not registered.</p>
+            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Reserving…' : 'Reserve and issue'}</button></div>
+          </div>
+        {:else}
+          <div class="ba-form done">
+            <Icon name="check" size={28} />
+            <h2><SafeText text={created} /> is reserved</h2>
+            <p class="ba-help">{tn('It is registered by itself once the reservation is %n block(s) deep, then it is in your assets after the block after. Keep the app running meanwhile, or come back to it.', depth)}</p>
+            <div class="row"><button type="button" class="btn primary" onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Issue another</button></div>
+          </div>
+        {/if}
+      </section>
+
+      {#if step !== 'done'}
+        <aside class="panel preview" aria-label="Preview">
+          <span class="muted small">Preview</span>
+          <AssetBadge id={previewId} label={name || '?'} />
+          {#if fields.info.trim()}<SafeText class="blurb" text={fields.info} />{:else}<span class="faint small">No description.</span>{/if}
+          <dl class="ba-lines">
+            <dt>Supply</dt><dd>{supplyValue !== null ? formatUnits(supplyValue, decimals) : '–'}</dd>
+            <dt>Smallest amount</dt><dd>{smallestAmount(decimals)}</dd>
+            <dt>Control coin</dt><dd>Yours</dd>
+            <dt>Listed</dt><dd>{published ? 'By its name' : 'By its hash'}</dd>
+          </dl>
+        </aside>
+      {/if}
+    </div>
+  </div>
+{/if}
+
+<style>
+  .lead {
+    max-width: 52rem;
+  }
+  .wizard {
+    padding: 1.2rem;
+  }
+  .wizard h2,
+  .wizard h3 {
+    margin: 0;
+  }
+  .big {
+    font-size: 1.3rem;
+    padding: 0.55rem 0.7rem;
+  }
+  .more {
+    align-self: flex-start;
+  }
+  .timeline {
+    margin: 0;
+    padding-left: 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.92rem;
+  }
+  .done {
+    align-items: flex-start;
+  }
+  .preview {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.1rem;
+  }
+  .preview :global(.blurb) {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+  }
+  .small {
+    font-size: 0.85rem;
+  }
+</style>

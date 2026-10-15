@@ -11,6 +11,7 @@ add_executable(test_chains-app
   bridge_tests.cpp
   chainconfig_tests.cpp
   sidechainapi_tests.cpp
+  local_tests.cpp
   events_tests.cpp
   hardening_tests.cpp
   i18n_tests.cpp
