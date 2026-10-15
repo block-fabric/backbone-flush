@@ -151,7 +151,7 @@
       toast('success', t('Name reserved'), tn('%1 is registered by itself once the reservation is %n block(s) deep.', depth, name));
       void refreshBitAssets();
     } catch (e) {
-      await inform(t('Issue an asset'), errorText(e), 'error');
+      await inform(t('Register new asset'), errorText(e), 'error');
     } finally {
       busy = false;
     }
@@ -173,7 +173,7 @@
   <NoWallet page={PAGES.issue} />
 {:else}
   <div class="page ba-page issue">
-    <header class="page-head"><h1>Issue an asset</h1></header>
+    <header class="page-head"><h1>Register new asset</h1></header>
     <p class="ba-help lead">A token of your own: shares, points, tickets, a stablecoin. You hold its control coin, which mints more and describes it; trade it in a pool, or sell it by auction.</p>
 
     {#if step !== 'done'}

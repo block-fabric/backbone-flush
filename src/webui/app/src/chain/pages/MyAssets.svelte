@@ -245,7 +245,7 @@
     <header class="page-head">
       <h1>My assets</h1>
       <div class="row">
-        <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> Issue an asset</button>
+        <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> Register new asset</button>
         <button type="button" class="btn small ghost" onclick={() => go('receive')} title="Assets are received at any address of this wallet"><Icon name="receive" size={15} /> Receive</button>
       </div>
     </header>
@@ -272,8 +272,8 @@
     {#if tab === 'holdings'}
       {#if holdings.length === 0}
         <div class="panel ba-empty">
-          {#if ba.mineState === 'loading'}Loading…{:else}Nothing yet: issue an asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
-          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>Issue an asset</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>Trade</button></div>
+          {#if ba.mineState === 'loading'}Loading…{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
+          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>Register new asset</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>Trade</button></div>
         </div>
       {:else}
         <div class="ba-split">
@@ -307,7 +307,7 @@
       {/if}
     {:else if tab === 'issuing'}
       {#if issuingCount === 0}
-        <div class="panel ba-empty">No asset is being issued.<div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>Issue an asset</button></div></div>
+        <div class="panel ba-empty">No asset is being registered.<div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>Register new asset</button></div></div>
       {:else}
         <div class="ba-cols">
           {#each pending as p (p.name)}

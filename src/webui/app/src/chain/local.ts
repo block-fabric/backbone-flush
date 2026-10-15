@@ -41,7 +41,8 @@ export interface LocalPage {
 export const LOCAL_PAGES = [
   { id: 'assets', title: 'Assets', icon: 'gem', section: 'chain', shortcut: 'Alt+6', summary: 'Every asset of the chain: its supply, markets, auctions and history', keywords: 'bitassets explore token find search supply', quick: { label: 'Explore assets', icon: 'gem' } },
   { id: 'my-assets', title: 'My assets', icon: 'holdings', section: 'chain', summary: 'What this wallet holds and controls: balances, pool shares, auctions to collect, activity', wallet: true, keywords: 'portfolio balances holdings mint burn control liquidity receipts activity' },
-  { id: 'issue', title: 'Issue', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Issue an asset', icon: 'issue' } },
+  // Shown as "Register new asset" (user decision, 2026-10-15); its id stays issue.
+  { id: 'issue', title: 'Register new asset', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Register new asset', icon: 'issue' } },
   { id: 'trade', title: 'Trade', icon: 'swap', section: 'chain', summary: 'Swap assets in their pools, and provide liquidity for a share of the fees', keywords: 'swap exchange amm pool liquidity price dex', quick: { label: 'Swap', icon: 'swap' } },
   { id: 'auctions', title: 'Auctions', icon: 'gavel', section: 'chain', summary: 'Buy at a price that falls block by block, or sell by Dutch auction', keywords: 'dutch auction bid sell buy' },
 ] as const satisfies readonly LocalPage[];
@@ -59,7 +60,7 @@ export interface LocalCommand {
 }
 
 export const LOCAL_COMMANDS = [
-  { id: 'ba.issue', label: 'Issue an asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
+  { id: 'ba.issue', label: 'Register new asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
   { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
   { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset', keywords: 'dutch auction' },
