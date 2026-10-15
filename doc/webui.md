@@ -381,14 +381,8 @@ template keeps empty, and nowhere else, so that a merge of the template never co
    `src/chain/pages/`, say) and shows the one of `page`.
 3. **src/webui/local.cpp**: the RPC methods the pages call (`RpcMethods`, added to the page's
    allowlist; those that need the keys in `KeyedRpcMethods`) and the host methods they need
-   (`RegisterHost`, after the kit's).
-4. **src/webui/app/src/chain/icons.ts**: icons of its own (`LOCAL_ICONS`, SVG paths on the 24 grid of
-   the kit's), named in `local.ts` like the kit's.
-5. **src/webui/app/src/chain/LocalCards.svelte**: cards of its own on the home of the dashboard, after
-   the row of summary cards (views/home/Card.svelte).
-6. **src/webui/app/src/chain/LocalSend.svelte**: what the Send page sends beside the coin (an asset, a
-   name): a choice at the top of Send, and the chain's own form, which takes the place of the kit's while
-   it is active (`bind:active`). The template sends only its coin and shows nothing there.
+   (`RegisterHost`, after the kit's; with `confirm`, the confirmation of the desktop, for what a page must
+   not do on its own word, such as showing a key: a no answers `BRIDGE_CANCELLED`).
 
 The template keeps more hooks empty for what a chain adds beside its pages (audit port-2 #7), so that
 these too never conflict:

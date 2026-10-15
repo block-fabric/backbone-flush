@@ -119,7 +119,7 @@ std::set<std::string> KeyedRpcMethods()
             "createauction", "bidauction", "collectauction"};
 }
 
-void RegisterHost(Bridge& bridge, NodeFn node)
+void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm)
 {
     // The journal of the app: the assets being created (what to register once each reservation is deep enough), and
     // the prices of the pools as the app saw them; in a file of the data directory, with a sanity cap.
@@ -130,6 +130,7 @@ void RegisterHost(Bridge& bridge, NodeFn node)
         WriteStore(StorePath(node(), JOURNAL_FILE), Param(params, "value"));
         return UniValue{true};
     }, Bridge::Thread::LONG);
+    (void)confirm;
 }
 
 } // namespace webui::local
