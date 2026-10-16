@@ -63,15 +63,21 @@
   const slip = $derived(custom.trim() !== '' && Number(custom) >= 0 && Number(custom) < 100 ? Number(custom) : slippage);
 
   // The quote of the node, a moment after the last change.
+  // A new block quotes again, the last quote kept meanwhile: it does not blink with every block.
   let generation = 0;
+  let quoted = '';
   $effect(() => {
     const mine = ++generation;
     const a = amount;
     const p = pay;
     const g = get;
     void ba.version;
-    quote = null;
-    quoteError = '';
+    const key = `${a}|${p}|${g}`;
+    if (key !== quoted) {
+      quote = null;
+      quoteError = '';
+      quoted = key;
+    }
     if (a === null || !g || p === g || !pool || pool.abandoned) return;
     const timer = setTimeout(() => {
       rpc
