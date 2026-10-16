@@ -173,6 +173,8 @@ BASE_SCRIPTS = [
     'feature_bitassets_invalid.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',
+    'feature_sidechain_catchup.py',
+    'feature_sidechain_prune.py',
     'feature_sidechain_follower.py',
     'feature_sidechain_rules.py',
     'feature_sidechain_payouts.py',
