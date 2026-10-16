@@ -1,4 +1,4 @@
-// BitAssets in Simple mode, the default of a first start (run_sidechain.py --script bitassets_simple.js
+// BitAssets in Simple mode, as a user chooses it (run_sidechain.py --script bitassets_simple.js
 // --js-var SIMPLE=true): the wallet gets coins (a deposit by the helper of the mainchain wallet, merged mining
 // on); Create a token makes GOLD through its wizard, which the app registers by itself; a market of GOLD and CHN
 // is opened (by RPC: liquidity is Advanced's); Swap buys GOLD for CHN from its plain quote; My assets shows it.
@@ -49,7 +49,7 @@
 
   try {
     await waitFor('the node to run', () => T() && T().app.phase === 'ready' && T().node.tip, 120000);
-    await check('Simple mode by default', T().prefs.uiMode === 'simple', T().prefs.uiMode);
+    await check('Advanced on a first start (user decision), Simple once chosen', window.__E2E_FIRST_MODE === 'advanced' \&\& T().prefs.uiMode === 'simple', `${window.__E2E_FIRST_MODE} ${T().prefs.uiMode}`);
     await waitFor('the node to reach the mainchain', async () => (await rpc('getmainchaininfo')).connected, 60000);
     T().savePrefs({ layout: 'dashboard', tipsDone: true });
 
