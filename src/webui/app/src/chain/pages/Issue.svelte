@@ -19,8 +19,17 @@
   import UnitsInput from '../ba/UnitsInput.svelte';
   import { amountParam, DATA_FIELDS, hashName, dataProblems, dataToSet, formatUnits, MAX_AMOUNT, MAX_DECIMALS, MAX_INFO, nameProblem, smallestAmount, type DataField } from '../ba/model';
   import { ba, notePending, pendingOf, refreshBitAssets, startBitAssets } from '../ba/store.svelte';
+  import Term from '../../components/Term.svelte';
+  import { simpleMode } from '../../lib/uimode.svelte';
+  import '../ba/terms';
 
   $effect(() => startBitAssets());
+
+  // Simple mode (lib/uimode.svelte.ts): "Create a token", the same wizard and the same calls (reserveasset, then
+  // the registration the store sends), with the decimals, the private name and the issuer's data under
+  // "More options".
+  const simple = $derived(simpleMode());
+  let moreSupply = $state(false);
 
   const noWallet = $derived(!walletsEnabled() || wallets.current === null);
   type Step = 'name' | 'supply' | 'about' | 'review' | 'done';
@@ -173,8 +182,12 @@
   <NoWallet page={PAGES.issue} />
 {:else}
   <div class="page ba-page issue">
-    <header class="page-head"><h1>Register new asset</h1></header>
-    <p class="ba-help lead">A token of your own: shares, points, tickets, a stablecoin. You hold its control coin, which mints more and describes it; trade it in a pool, or sell it by auction.</p>
+    <header class="page-head"><h1>{simple ? 'Create a token' : 'Register new asset'}</h1></header>
+    {#if simple}
+      <p class="ba-help lead">A <Term id="asset">token</Term> of your own: points, tickets, shares. Give it a name and an amount; you can send it, swap it, and make more later with its <Term id="controlcoin">control coin</Term>.</p>
+    {:else}
+      <p class="ba-help lead">A token of your own: shares, points, tickets, a stablecoin. You hold its control coin, which mints more and describes it; trade it in a pool, or sell it by auction.</p>
+    {/if}
 
     {#if step !== 'done'}
       <ol class="ba-steps" aria-label="Steps">
@@ -203,12 +216,17 @@
           </form>
         {:else if step === 'supply'}
           <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+            {#if simple}
+              <button type="button" class="btn ghost small more" aria-expanded={moreSupply} onclick={() => (moreSupply = !moreSupply)}><Icon name={moreSupply ? 'chevron' : 'chevron-right'} size={14} /> More options: decimals ({decimals})</button>
+            {/if}
+            {#if !simple || moreSupply}
             <div class="field">
               <label for="issue-decimals">Decimals: {decimals}</label>
               <input id="issue-decimals" type="range" min="0" max={MAX_DECIMALS} step="1" bind:value={decimals} />
               <span class="hint">They only change how amounts are shown: with {decimals}, the smallest amount is {smallestAmount(decimals)}. They are set for good.</span>
             </div>
-            <UnitsInput id="issue-supply" label="Initial supply" {decimals} allowZero bind:units={supply} bind:text={supplyText} placeholder="0" hint="0: none yet; the control coin mints more later" />
+            {/if}
+            <UnitsInput id="issue-supply" label={simple ? 'How many to create' : 'Initial supply'} {decimals} allowZero bind:units={supply} bind:text={supplyText} placeholder="0" hint={simple ? 'You can make more later.' : '0: none yet; the control coin mints more later'} />
             <p class="ba-help">At most {largest} with {decimals} decimals.</p>
             <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
           </form>
@@ -219,9 +237,13 @@
               <textarea id="issue-info" rows="4" placeholder="What it is: a description, a link (optional)" bind:value={fields.info} aria-invalid={problems.info ? 'true' : undefined}></textarea>
               {#if problems.info}<span class="error">{t(problems.info)}</span>{:else}<span class="hint">{infoBytes} / {maxInfo} bytes</span>{/if}
             </div>
+            {#if simple && !advanced}
+              <p class="ba-help">Its name is listed, so that anyone can find it.</p>
+            {:else}
             <label class="check"><input type="checkbox" bind:checked={published} /> <span>Publish the name, so that it is listed and found by name</span></label>
+            {/if}
             {#if !published}<p class="ba-help">A private name: only its hash and number are on the chain. Whoever knows the name finds it; the list of assets shows its hash.</p>{/if}
-            <button type="button" class="btn ghost small more" aria-expanded={advanced} onclick={() => (advanced = !advanced)}><Icon name={advanced ? 'chevron' : 'chevron-right'} size={14} /> The issuer's commitment, addresses and keys</button>
+            <button type="button" class="btn ghost small more" aria-expanded={advanced} onclick={() => (advanced = !advanced)}><Icon name={advanced ? 'chevron' : 'chevron-right'} size={14} /> {#if simple}More options: a private name, the issuer's commitment, addresses and keys{:else}The issuer's commitment, addresses and keys{/if}</button>
             {#if advanced}
               {#each DATA_FIELDS.filter((f) => f !== 'info') as f (f)}
                 <div class="field">
@@ -252,7 +274,7 @@
               <li><strong>The block after: in your assets</strong>, with its supply and its control coin.</li>
             </ol>
             <p class="ba-help">Two small transactions, each with the fee of the wallet. A reservation can be released while it is not registered.</p>
-            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Reserving…' : 'Reserve and issue'}</button></div>
+            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Reserving…' : simple ? 'Create the token' : 'Reserve and issue'}</button></div>
           </div>
         {:else}
           <div class="ba-form done">

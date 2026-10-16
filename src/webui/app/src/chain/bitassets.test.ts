@@ -654,3 +654,81 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     expect(screen.getByText('20 CHN')).toBeTruthy();
   });
 });
+
+// Simple mode (lib/uimode.svelte.ts, user decision 2026-10-16): Swap with a plain quote, My assets, Create a
+// token; pools, liquidity and auctions in Advanced. The same calls as Advanced.
+describe('Simple mode', () => {
+  beforeEach(() => {
+    prefs.uiMode = 'simple';
+  });
+
+  it('leaves the auctions out of the navigation, and has three first steps of BitAssets', async () => {
+    expect((LOCAL_PAGES as readonly LocalPage[]).find((p) => p.id === 'auctions')?.advanced).toBe(true);
+    expect((LOCAL_PAGES as readonly LocalPage[]).filter((p) => p.advanced).map((p) => p.id)).toEqual(['auctions']);
+    const { FIRST_STEPS } = await import('./firststeps');
+    expect(FIRST_STEPS.map((s) => s.action?.page)).toEqual(['peg', 'trade', 'issue']);
+  });
+
+  it('Swap: the quote in plain words, the slippage under More options, with the call of Advanced', async () => {
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    expect(screen.getByRole('heading', { name: 'Swap' })).toBeTruthy();
+    // No tabs of pools nor liquidity, nor the curve of the pool.
+    expect(screen.queryByRole('tab', { name: 'Pools' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'The pool' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'How a swap works' })).toBeTruthy();
+    await waitFor(() => expect((document.querySelector('#swap-get') as HTMLSelectElement).value).toBe(GOLD));
+    expect(screen.queryByRole('group', { name: 'Slippage' })).toBeNull();
+    await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '0.5' } });
+    await waitFor(() => expect(screen.getByTestId('swap-plain').textContent).toMatch(/You pay 0\.5\s*CHN and get about/));
+    expect(screen.getByTestId('swap-plain').textContent).toMatch(/At least .* if the price moves first/);
+    await fireEvent.click(screen.getByRole('button', { name: /More options/ }));
+    await fireEvent.click(screen.getByRole('button', { name: '1%' }));
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
+    // Asked for by a link: the pools are shown.
+    nav.tab = 'pools';
+    await waitFor(() => expect(screen.getByRole('table', { name: 'Pools' })).toBeTruthy());
+  });
+
+  it('Create a token: the wizard of Advanced in plain words, the same calls', async () => {
+    render(Issue);
+    render(DialogHost);
+    await waitFor(() => expect(ba.loaded).toBe(true));
+    expect(screen.getByRole('heading', { name: 'Create a token' })).toBeTruthy();
+    await fireEvent.input(screen.getByLabelText('Its name'), { target: { value: 'COPPER' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // The decimals under More options (2 by default).
+    expect(document.querySelector('#issue-decimals')).toBeNull();
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000.25' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.queryByRole('checkbox', { name: /Publish the name/ })).toBeNull();
+    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'Copper, by the gram' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the token/ }));
+    await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
+    await waitFor(() => expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', supply: '1000.25', decimals: 2, data: { info: 'Copper, by the gram' }, public: true }] }));
+  });
+
+  it('My assets: holdings, what is being created and the activity; pool shares and auctions in Advanced', async () => {
+    render(MyAssets);
+    await loaded();
+    const tabs = () => screen.getAllByRole('tab').map((x) => x.textContent?.trim());
+    await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Being created', 'Activity']));
+    expect(screen.getByRole('list', { name: 'Holdings' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Create a token/ })).toBeTruthy();
+    prefs.uiMode = 'advanced';
+    await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Being issued', 'Pool shares', 'My auctions', 'Activity']));
+  });
+
+  it('the cards of the home: no auctions card', async () => {
+    render(LocalCards);
+    await loaded();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'My assets' })).toBeTruthy());
+    expect(screen.queryByRole('heading', { name: 'Auctions' })).toBeNull();
+    expect(screen.getByRole('button', { name: /Create a token/ })).toBeTruthy();
+  });
+});

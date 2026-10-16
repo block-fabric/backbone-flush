@@ -14,6 +14,14 @@
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import Term from '../../components/Term.svelte';
+  import { simpleMode } from '../../lib/uimode.svelte';
+  import './terms';
+
+  // Simple mode (lib/uimode.svelte.ts): the quote in plain words, the slippage under "More options", how a
+  // swap works in place of the curve of the pool. The same call (swapasset) as Advanced.
+  const simple = $derived(simpleMode());
+  let moreOptions = $state(false);
 
   let pay = $state(CHN_ID);
   let get = $state('');
@@ -83,7 +91,7 @@
   const impact = $derived(quote?.price_impact ?? 0);
   const problem = $derived.by(() => {
     if (!get || pay === get) return 'Pick two different assets.';
-    if (!pool) return 'No pool trades these two yet: make one in Liquidity.';
+    if (!pool) return simple ? 'No market trades these two yet.' : 'No pool trades these two yet: make one in Liquidity.';
     if (pool.abandoned) return 'This pool is closed: nobody provides liquidity to it any more. It holds only the minimum every pool keeps for good; adding liquidity reopens it.';
     if (quoteError) return quoteError;
     if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return 'Too little: the least CHN a pool pays out is 0.0005 CHN.';
@@ -171,6 +179,10 @@
       </div>
     </div>
 
+    {#if simple}
+      <button type="button" class="btn ghost small more" aria-expanded={moreOptions} onclick={() => (moreOptions = !moreOptions)}><Icon name={moreOptions ? 'chevron' : 'chevron-right'} size={14} /> More options</button>
+    {/if}
+    {#if !simple || moreOptions}
     <div class="field">
       <span class="label">Slippage</span>
       <div class="ba-chips" role="group" aria-label="Slippage">
@@ -181,12 +193,19 @@
       </div>
       <span class="hint">How much less than quoted the trade may give, if the pool moves before it is mined.</span>
     </div>
+    {/if}
 
     {#if problem && (amount !== null || !pool || pool.abandoned)}
       <p class="ba-problems" class:bad={!!quoteError || impact > MAX_IMPACT} role="status">{#if quoteError}<SafeText text={quoteError} />{:else}{t(problem)}{/if}</p>
     {/if}
 
-    {#if quote && out !== null && least !== null}
+    {#if simple && quote && out !== null && least !== null && amount !== null}
+      <div class="plain" data-testid="swap-plain">
+        <p>You pay <strong>{formatUnits(amount, payDecimals)} <SafeText text={labelOf(pay)} /></strong> and get about <strong>{formatUnits(out, getDecimals)} <SafeText text={labelOf(get)} /></strong>.</p>
+        <p class="muted small">At least {formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /> if the price moves first (<Term id="slippage">slippage</Term> {slip}%). The market keeps {formatAmount(quote.fee, payDecimals)} <SafeText text={labelOf(pay)} /> as its <Term id="fee">fee</Term>.</p>
+        {#if impact > 2}<p class="ba-warn small">This is a large trade for this market: the price you get is {impact.toFixed(1)}% worse than its price now.</p>{/if}
+      </div>
+    {:else if quote && out !== null && least !== null}
       <dl class="ba-lines">
         <dt>Price</dt><dd>1 <SafeText text={labelOf(get)} /> = {formatPrice(quote.price)} <SafeText text={labelOf(pay)} /></dd>
         <dt>Before the trade</dt><dd>{formatPrice(quote.spot_price)}</dd>
@@ -201,6 +220,16 @@
     <div class="row"><button type="submit" class="btn primary wide" disabled={busy || wallets.current === null || amount === null || out === null || !!problem}><Icon name="swap" size={16} /> {busy ? 'Swapping…' : 'Swap'}</button></div>
   </form>
 
+  {#if simple}
+  <section class="panel">
+    <div class="panel-head"><h3>How a swap works</h3></div>
+    <div class="panel-body how">
+      <p>Each token trades with CHN in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
+      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the token then shows in My assets.</p>
+      <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
+    </div>
+  </section>
+  {:else}
   <section class="panel">
     <div class="panel-head"><h3>The pool</h3>{#if pool}<span class="muted small">{pool.swaps} trades</span>{/if}</div>
     <div class="panel-body">
@@ -212,6 +241,7 @@
       {/if}
     </div>
   </section>
+  {/if}
 </div>
 
 <style>
@@ -240,6 +270,24 @@
     padding: 0 0.6rem;
     border-radius: 999px;
     font-size: 0.85rem;
+  }
+  .more {
+    align-self: flex-start;
+  }
+  .plain p {
+    margin: 0 0 0.35rem;
+  }
+  .plain p:first-child {
+    font-size: 1.05rem;
+  }
+  .how {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .how p {
+    margin: 0;
+    line-height: 1.45;
   }
   .wide {
     flex: 1 1 auto;

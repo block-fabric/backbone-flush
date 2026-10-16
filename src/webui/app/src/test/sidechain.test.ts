@@ -420,9 +420,11 @@ describe('Simple mode on a sidechain', () => {
     expect(within(quick).getByRole('button', { name: /Deposit/ })).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     await waitFor(() => expect(document.querySelector('.side-blocks')).toBeTruthy());
-    // A step of the tips opens its page.
-    await fireEvent.click(screen.getByRole('button', { name: /Send coins back/ }));
-    expect([nav.page, nav.tab]).toEqual(['peg', 'withdraw']);
+    // A step of the tips opens its page (the chain's own steps: chain/firststeps.ts).
+    const { FIRST_STEPS } = await import('../lib/firststeps');
+    const step = FIRST_STEPS.find((s) => s.action && !s.action.panel && s.action.tab)!;
+    await fireEvent.click(within(document.querySelector('.tips') as HTMLElement).getByRole('button', { name: new RegExp(step.action!.label) }));
+    expect([nav.page, nav.tab]).toEqual([step.action!.page, step.action!.tab]);
   });
 
   it('Drivechains: two tabs in plain words, the withdrawal with the call of Advanced', async () => {

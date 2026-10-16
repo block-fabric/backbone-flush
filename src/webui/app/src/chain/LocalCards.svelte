@@ -12,8 +12,11 @@
   import AssetBadge from './ba/AssetBadge.svelte';
   import { formatAmount, formatPrice, isChn, unitPrice } from './ba/model';
   import { ba, chnPrice, decimalsOf, pendingOf, startBitAssets } from './ba/store.svelte';
+  import { simpleMode } from '../lib/uimode.svelte';
 
   $effect(() => startBitAssets());
+  // Simple mode (lib/uimode.svelte.ts): no auctions card (Advanced's), the actions in plain words.
+  const simple = $derived(simpleMode());
 
   const holdings = $derived(ba.wallet === wallets.current ? (ba.mine?.assets ?? []) : []);
   const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * h.balance, 0));
@@ -58,12 +61,12 @@
         </ul>
       {/if}
       {#snippet actions()}
-        <button type="button" class="btn grow" onclick={() => go('issue')}><Icon name="issue" size={15} /> Issue</button>
+        <button type="button" class="btn grow" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create a token' : 'Issue'}</button>
         <button type="button" class="btn ghost" onclick={() => go('send')}>Send</button>
       {/snippet}
     </Card>
 
-    <Card title="Markets" icon="swap" open={() => go('trade', 'pools')} openLabel="Open the pools" stat>
+    <Card title="Markets" icon="swap" open={() => go('trade', simple ? 'swap' : 'pools')} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
       <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
       <dl class="pairs">
         <dt>Pools with liquidity</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>
@@ -88,6 +91,7 @@
       {/snippet}
     </Card>
 
+    {#if !simple}
     <Card title="Auctions" icon="gavel" open={() => go('auctions')} openLabel="Open the auctions" stat>
       <span class="value num">{formatCount(ba.auctions.filter((a) => a.status === 'open').length)}</span>
       <dl class="pairs">
@@ -111,6 +115,7 @@
         <button type="button" class="btn grow" onclick={() => go('auctions', 'sell')}><Icon name="gavel" size={15} /> Sell</button>
       {/snippet}
     </Card>
+    {/if}
   </div>
 {/if}
 
