@@ -1828,4 +1828,61 @@ BOOST_AUTO_TEST_CASE(rpc_data_fields)
     BOOST_CHECK_EQUAL(RpcError([] { ParseUnits(UniValue{UniValue::VOBJ}, 2); }), "An amount is a number or a string");
 }
 
+BOOST_AUTO_TEST_CASE(names_that_mimic_numbers)
+{
+    // Audit 7 E-BA4: a name shown with its number must not carry another asset's.
+    for (const char* name : {"GOLD (#1739-0029)", "GOLD #1", "(GOLD)", "GOLD)", "x1739-0029", "GOLD 1739-0029 bar", "0000-1739-0029"}) BOOST_CHECK_MESSAGE(NameMimicsNumber(name), name);
+    for (const char* name : {"GOLD", "GOLD-2026", "GOLD 2026-10", "123-4567", "1234 5678", "A-1234-567"}) BOOST_CHECK_MESSAGE(!NameMimicsNumber(name), name);
+    BOOST_CHECK(ShapedAsNumber("1739-0029"));
+    BOOST_CHECK(ShapedAsNumber("0000-1739-0029"));
+    BOOST_CHECK(!ShapedAsNumber("1739-002"));
+    BOOST_CHECK(!ShapedAsNumber("GOLD"));
+    // Audit 7 E-BA7: text shaped as a number that is none is an error, not the asset of that name
+    // (which anyone may have registered privately).
+    const auto lookup{[](uint32_t) -> std::optional<AssetId> { return std::nullopt; }};
+    BOOST_CHECK(!ParseSeq("0000-1739-0029"));
+    BOOST_CHECK(RpcError([&] { ParseAssetArg(UniValue{"0000-1739-0029"}, lookup); }).find("is not the number of an asset") != std::string::npos);
+    BOOST_CHECK(ParseAssetArg(UniValue{"GOLD"}, lookup) == GOLD);
+}
+
+BOOST_AUTO_TEST_CASE(mempool_recheck_reads)
+{
+    // Audit 7 E-BA5: what a check reads tells when it may find otherwise. A swap reads its pool: a
+    // trade in the pool changes a key it read; a transfer of another asset changes none.
+    Fixture f;
+    const auto [gc, gold]{f.Issue("GOLD", 1'000'000)};
+    const auto [sc, silver]{f.Issue("SILVER", 1'000)};
+    const CTransaction added{MakeTx({gold}, AddLiquidity{GOLD, CHN, 100'000, 50'000'000, 1}, {Asset(GOLD, 900'000), std::nullopt, std::nullopt}, 50'000'000)};
+    BOOST_REQUIRE(f.Apply(added));
+    const COutPoint gold_left{added.GetHash(), 0};
+    const CTransaction split{MakeTx({gold_left}, std::nullopt, {Asset(GOLD, 1'000), Asset(GOLD, 899'000)})};
+    BOOST_REQUIRE(f.Apply(split));
+    const uint64_t out{amm::SwapOut(100'000, 50'000'000, 1'000)};
+    const CTransaction swap{MakeTx({COutPoint{split.GetHash(), 0}}, Swap{GOLD, 1'000, CHN, out, HOLDER}, {})};
+    const RecordingView reads{f.state.Store()};
+    std::string reason;
+    BOOST_REQUIRE_MESSAGE(State{reads}.CheckTx(swap, f.height, reason), reason);
+    BOOST_CHECK(!CheckDependsOnHeight(swap));
+    const auto touches{[&](const sidechain::StoreUndo& undo) {
+        for (const auto& [key, value] : undo.entries) {
+            if (reads.Keys().contains(key)) return true;
+            for (const auto& prefix : reads.Prefixes()) {
+                if (key.size() >= prefix.size() && std::equal(prefix.begin(), prefix.end(), key.begin())) return true;
+            }
+        }
+        return false;
+    }};
+    // Another asset moves: nothing the swap read.
+    BOOST_REQUIRE(f.Apply(MakeTx({silver}, std::nullopt, {Asset(SILVER, 400), Asset(SILVER, 600)})));
+    BOOST_CHECK(!touches(f.undo.parts.back()));
+    // Someone trades in the pool first: the swap's minimum is no longer met, and it read the pool.
+    const CTransaction first{MakeTx({COutPoint{split.GetHash(), 1}}, Swap{GOLD, 10'000, CHN, 1, HOLDER}, {Asset(GOLD, 889'000)})};
+    BOOST_REQUIRE_MESSAGE(f.Apply(first, &reason), reason);
+    BOOST_CHECK(touches(f.undo.parts.back()));
+    BOOST_CHECK(!f.state.CheckTx(swap, f.height, reason));
+    // Bids and auctions made to start at a height are checked at every tip.
+    BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, Bid{swap.GetHash(), 5, 1, CScript{}}, {})));
+    BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, CreateAuction{GOLD, 100, CHN, 4'000, 400, f.height + 1, 10}, {})));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

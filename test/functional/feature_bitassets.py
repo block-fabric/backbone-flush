@@ -67,6 +67,11 @@ class BitAssetsTest(SidechainTest):
 
         self.log.info("Reserve, then register an asset")
         assert_raises_rpc_error(-8, "no reservation", side.registerasset, "GOLD", 1000000, 2)
+        # A name that would read as another asset's number where names are shown with their numbers.
+        for look_alike in ("GOLD (#1739-0029)", "GOLD #2", "GOLD 1739-0029"):
+            assert_raises_rpc_error(-8, "would read as the number of another asset", side.reserveasset, look_alike)
+        # Text shaped as a number that is none: an error, not the asset of that name.
+        assert_raises_rpc_error(-8, "is not the number of an asset", side.getasset, "0000-1739-0029")
         reserved = side.reserveasset("GOLD")
         self.mine_txs()
         assert_equal(side.getbitassetsinfo()["reservations"], 1)
@@ -215,8 +220,12 @@ class BitAssetsTest(SidechainTest):
         liquidity = side.listmyassets()["liquidity"]
         assert_equal(len(liquidity), 1)
         assert_equal(liquidity[0]["shares"], added["shares"])
+        # A deposit that was to make the pool, which someone made meanwhile, is refused, not signed at
+        # their price (and one that was to go in at the pool's price is refused for a pool there is not).
+        assert_raises_rpc_error(-8, "Someone opened this pool meanwhile", other.addliquidity, "GOLD", 100, "CHN", 1, 1, True)
+        assert_raises_rpc_error(-8, "which was not expected", other.addliquidity, "GOLD", 100, "SILVER", 1, 1, False)
         # More, at the pool's price.
-        more = other.addliquidity("GOLD", 100, "CHN")
+        more = other.addliquidity("GOLD", 100, "CHN", None, 1, False)
         assert_equal(more["amount_b"], Decimal("0.05000000"))
         self.mine_txs()
         # Amounts off the pool's price: only what its price takes goes in, not the excess, which would
@@ -237,8 +246,13 @@ class BitAssetsTest(SidechainTest):
         assert_greater_than(quote["amount_out"], 0)
         assert_greater_than(quote["price_impact"], 0)
         before = self.holding(other, "GOLD")["balance"]
-        swap = other.swapasset("CHN", "0.1", "GOLD")
+        # The least the caller showed is what it signs, at the least: more than the quote, less the
+        # slippage, gives is refused.
+        assert_raises_rpc_error(-8, "The pool moved", other.swapasset, "CHN", "0.1", "GOLD", 0.5, 10, quote["amount_out"])
+        least = (quote["amount_out"] * Decimal("0.995")).quantize(Decimal("0.01"), rounding="ROUND_DOWN")
+        swap = other.swapasset("CHN", "0.1", "GOLD", 0.5, 10, str(least))
         assert_equal(swap["quote"], quote["amount_out"])
+        assert swap["min_out"] >= least
         self.mine_txs()
         assert_equal(self.holding(other, "GOLD")["balance"], before + quote["amount_out"])
         # GOLD for CHN: the coinbase pays.
@@ -250,6 +264,13 @@ class BitAssetsTest(SidechainTest):
         # A trade the pool moved away from fails, and leaves the mempool.
         exact = side.quoteswap("CHN", 1, "GOLD", True)
         assert exact["amount_out"] >= Decimal("1.00")
+
+        self.log.info("Pools are listed a page at a time")
+        assert_equal(side.getbitassetsinfo()["pools"], 1)
+        assert_equal(side.listpools(None, 1, 0), side.listpools())
+        assert_equal(side.listpools(None, 1, 1), [])
+        assert_equal(side.listpools("GOLD", 0), [])
+        assert_raises_rpc_error(-8, "At most 1000", side.listpools, None, 1001)
 
         self.log.info("Take liquidity out")
         shares = side.listmyassets()["liquidity"][0]["shares"]
@@ -373,6 +394,19 @@ class BitAssetsTest(SidechainTest):
         assert_equal(self.payouts_to(other, block), late["pays"] - auction["proceeds"])
         side.collectauction(auction["auction"])
         self.mine_txs()
+
+        self.log.info("Auctions are listed a page at a time")
+        info = side.getbitassetsinfo()
+        every = side.listauctions(True)
+        assert_equal(len(every), info["auctions_all"])
+        assert_greater_than(len(every), 3)
+        assert_equal(len(side.listauctions()), info["auctions"])
+        pages = []
+        for skip in range(0, len(every), 2):
+            pages += side.listauctions(True, 2, skip)
+        assert_equal(pages, every)
+        assert_equal(side.listauctions(True, 10, len(every)), [])
+        assert_equal(side.listauctions(True, 1000, 0, "SILVER"), [a for a in every if "SILVER" in (a["base"], a["quote"])])
 
         self.log.info("Reservations are released")
         side.reserveasset("SPARE")

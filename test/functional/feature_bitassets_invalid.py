@@ -14,6 +14,7 @@
 """
 
 import hashlib
+import hmac
 import struct
 from decimal import Decimal
 
@@ -267,6 +268,20 @@ class BitAssetsInvalidTest(BitAssetsTest):
         other.releaseassetreservation("TWICE")
         self.mine_txs()
         assert_equal(other.listmyassets()["reservations"], [])
+
+        self.log.info("A published name that reads as another asset's number is not relayed, but is valid in a block")
+        look_alike = b"GOLD (#1739-0029)"
+        assert_raises_rpc_error(-8, "would read as the number of another asset", side.reserveasset, look_alike.decode())
+        nonce = bytes(32)
+        commitment = hmac.new(nonce, name_id(look_alike.decode()) + bytes(mine), hashlib.sha256).digest()
+        reserve = side.sendrawtransaction(self.build(side, [(0, mine), (0, marker_script(marker(RESERVE, commitment, [(0, token(RESERVATION, bytes(32)))])))]))
+        self.mine_txs()
+        self.mine_txs()
+        look_alike_id = name_id(look_alike.decode())
+        register = self.build(side, [(0, mine), (0, marker_script(marker(REGISTER, look_alike_id + nonce + varint(0) + b"\x00" + b"\x00" * 6 + b"\x01" + ser_string(look_alike), [(0, token(CONTROL, look_alike_id))])))], [(reserve, 0)])
+        self.assert_refused(side, register, "ba-name-look-alike", send=True)
+        # Policy only: a block may hold it.
+        self.template([register])
 
         self.log.info("A pool and an auction, for what follows")
         side.addliquidity("GOLD", 500, "CHN", 5)
