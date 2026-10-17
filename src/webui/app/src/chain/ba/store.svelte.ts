@@ -30,8 +30,9 @@ export interface PendingIssue {
   /** When it was reserved (seconds), and the reservation's transaction. */
   time: number;
   reservation: string;
-  /** The registration, once sent. */
+  /** The registration, once sent, and the height of the next block then. */
   registration?: string;
+  registeredAt?: number;
   /** Why the last registration failed (an error of the node, shown as it is). */
   error?: string;
 }
@@ -92,15 +93,54 @@ export async function readAllAssets(total: number | Promise<number>): Promise<As
   return out;
 }
 
-/** What the pages ask for beyond the usual: more of the activity of the wallet. */
-export const baView = $state({ activity: ACTIVITY_PAGE });
+/**
+ * Pools and auctions are read a page at a time (listpools, listauctions [count, skip]: audit 7 E-BA3, anyone can
+ * grow those tables cheaply): the first POOL_PAGE / AUCTION_PAGE, more as the user asks ("Show more"), up to
+ * MAX_POOLS / MAX_AUCTIONS. The node orders and counts them once per block.
+ */
+export const LIST_PAGE = 1000;
+export const POOL_PAGE = 1000;
+export const MAX_POOLS = 5000;
+export const AUCTION_PAGE = 200;
+export const MAX_AUCTIONS = 5000;
+/** Auctions of the wallet's receipts read one by one when not in the page read (at most). */
+const MAX_RECEIPT_AUCTIONS = 50;
+
+/** What the pages ask for beyond the usual: more of the activity of the wallet, more pools and auctions. */
+export const baView = $state({ activity: ACTIVITY_PAGE, pools: POOL_PAGE, auctions: AUCTION_PAGE });
+
+/** Up to `limit` entries of a paged list, in pages of LIST_PAGE: `page(count, skip)` asks for one. */
+export async function readPaged<T>(read: (count: number, skip: number) => Promise<T[] | null>, limit: number): Promise<T[]> {
+  const out: T[] = [];
+  for (let skip = 0; skip < limit; skip += LIST_PAGE) {
+    const count = Math.min(LIST_PAGE, limit - skip);
+    const page = (await read(count, skip)) ?? [];
+    out.push(...page);
+    if (page.length < count) break;
+  }
+  return out;
+}
+
+/** Show more auctions (the next AUCTION_PAGE), asked of the node at once. */
+export function showMoreAuctions(): void {
+  baView.auctions = Math.min(MAX_AUCTIONS, baView.auctions + AUCTION_PAGE);
+  void refreshBitAssets();
+}
+
+/** Show more pools (the next POOL_PAGE). */
+export function showMorePools(): void {
+  baView.pools = Math.min(MAX_POOLS, baView.pools + POOL_PAGE);
+  void refreshBitAssets();
+}
 
 export const ba = $state({
   info: null as BitAssetsInfo | null,
   assets: [] as Asset[],
   pools: [] as Pool[],
-  /** The auctions not collected yet, newest first. */
+  /** The auctions not collected yet, newest first: the first baView.auctions of them. */
   auctions: [] as Auction[],
+  /** The auctions of the wallet's receipts that are not among those (read one by one). */
+  receiptAuctions: [] as Auction[],
   /** Of the wallet loaded: what it holds (null until known). */
   mine: null as Holdings | null,
   activity: [] as Activity[],
@@ -133,6 +173,7 @@ export function sendAsset(id: string): void {
 
 let running = false;
 let again = false;
+let againNode = false;
 let journalLoaded = false;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let journalWarned = false;
@@ -157,7 +198,7 @@ export function sanitizeJournal(raw: unknown): Journal {
   if (Array.isArray(r.pending)) {
     j.pending = r.pending
       .filter((p) => p && str(p.wallet) && str(p.name) && str(p.supply) && typeof p.decimals === 'number' && str(p.asset))
-      .map((p) => ({ ...p, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0 }))
+      .map((p) => ({ ...p, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined }))
       .slice(-MAX_PENDING);
   }
   if (r.prices && typeof r.prices === 'object') {
@@ -265,12 +306,25 @@ async function registerReady(wallet: string): Promise<void> {
       changed = true;
       continue;
     }
-    if (p.registration) continue;
-    const r = mine.reservations.find((x) => x.name === p.name);
-    if (!r || r.taken || (r.wait ?? 0) > 0) continue;
+    if (p.registration) {
+      // Sent, and in no block two blocks on: still waiting in the mempool, or dropped from it (stale, expired,
+      // evicted), when it is sent again: the wallet frees the reservation the dropped one held (audit 7 E-BA7).
+      if (p.registeredAt === undefined) p.registeredAt = ba.height;
+      if (ba.height < p.registeredAt + 2) continue;
+      try {
+        await rpc.raw('getmempoolentry', [p.registration]);
+        continue;
+      } catch {
+        // Not in the mempool: sent again below.
+      }
+    } else {
+      const r = mine.reservations.find((x) => x.name === p.name);
+      if (!r || r.taken || (r.wait ?? 0) > 0) continue;
+    }
     try {
       const done = await rpc.raw<{ txid: string }>('registerasset', registerParams(p), { wallet });
       p.registration = done.txid;
+      p.registeredAt = ba.height;
       p.error = undefined;
       changed = true;
       toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', p.name));
@@ -292,6 +346,7 @@ export async function registerNow(p: PendingIssue): Promise<string | null> {
   const done = await walletRpc<{ txid: string }>(p.wallet, 'registerasset', registerParams(p));
   if (!done) return null;
   p.registration = done.txid;
+  p.registeredAt = ba.height;
   p.error = undefined;
   saveJournal();
   void refreshBitAssets();
@@ -322,13 +377,19 @@ export async function unlockHoldings(): Promise<boolean> {
   return true;
 }
 
-/** Ask the node and the wallet again. */
-export async function refreshBitAssets(): Promise<void> {
+/**
+ * Ask the node and the wallet again. With `node` false, only the wallet (what the mempool changes without a
+ * block): the lists of the chain change with blocks alone, and are asked again with each (audit 7 E-BA3).
+ */
+export async function refreshBitAssets(options: { node?: boolean } = {}): Promise<void> {
+  const withNode = options.node ?? true;
   if (running) {
     again = true;
+    againNode ||= withNode;
     return;
   }
   running = true;
+  let askNode = withNode || !ba.loaded;
   try {
     do {
       again = false;
@@ -336,24 +397,33 @@ export async function refreshBitAssets(): Promise<void> {
       const wallet = wallets.current;
       // Every call goes out at once: the node's and the wallet's.
       const infoCall = rpc.raw<BitAssetsInfo>('getbitassetsinfo');
-      const nodeCalls = Promise.all([
-        infoCall,
-        readAllAssets(infoCall.then((i) => i?.assets ?? 0)),
-        rpc.raw<Pool[]>('listpools'),
-        rpc.raw<Auction[]>('listauctions', [false]),
-      ]);
+      const nodeCalls = askNode
+        ? Promise.all([
+            infoCall,
+            readAllAssets(infoCall.then((i) => i?.assets ?? 0)),
+            readPaged<Pool>((count, skip) => rpc.raw<Pool[]>('listpools', [null, count, skip]), baView.pools),
+            readPaged<Auction>((count, skip) => rpc.raw<Auction[]>('listauctions', [false, count, skip]), baView.auctions),
+          ])
+        : null;
+      nodeCalls?.catch(() => undefined);
       const walletCalls = wallet === null ? null : Promise.all([rpc.raw<Holdings>('listmyassets', [], { wallet }), rpc.raw<Activity[]>('listassetactivity', [baView.activity], { wallet })]);
       // Neither fails unheard of: each is awaited below.
       walletCalls?.catch(() => undefined);
       try {
-        const [info, assets, pools, auctions] = await nodeCalls;
-        ba.info = info;
-        ba.assets = assets ?? [];
-        ba.pools = pools ?? [];
-        ba.auctions = auctions ?? [];
-        ba.height = info?.height ?? -1;
+        if (nodeCalls) {
+          const [info, assets, pools, auctions] = await nodeCalls;
+          ba.info = info;
+          ba.assets = assets ?? [];
+          ba.pools = pools ?? [];
+          ba.auctions = auctions ?? [];
+          ba.height = info?.height ?? -1;
+          if (notePrices(ba.pools, ba.height, Math.floor(Date.now() / 1000))) saveJournal();
+        } else {
+          const info = await infoCall;
+          ba.info = info;
+          ba.height = info?.height ?? -1;
+        }
         ba.error = '';
-        if (notePrices(ba.pools, ba.height, Math.floor(Date.now() / 1000))) saveJournal();
       } catch (e) {
         ba.error = errorText(e);
       }
@@ -376,6 +446,7 @@ export async function refreshBitAssets(): Promise<void> {
             ba.mineState = 'ok';
             ba.mineError = '';
             ba.wallet = wallet;
+            await readReceiptAuctions();
             await registerReady(wallet);
           }
         } catch (e) {
@@ -391,17 +462,52 @@ export async function refreshBitAssets(): Promise<void> {
       }
       ba.loaded = true;
       ba.version++;
+      askNode = againNode;
+      againNode = false;
     } while (again);
   } finally {
     running = false;
   }
 }
 
+/** The auctions of the wallet's receipts not in the page of auctions read (audit 7 E-BA3: the list is paged). */
+async function readReceiptAuctions(): Promise<void> {
+  const listed = new Set(ba.auctions.map((a) => a.auction));
+  const missing = (ba.mine?.receipts ?? []).map((r) => r.auction).filter((id) => !listed.has(id)).slice(0, MAX_RECEIPT_AUCTIONS);
+  const known = new Map(ba.receiptAuctions.map((a) => [a.auction, a]));
+  const out: Auction[] = [];
+  for (const id of missing) {
+    try {
+      out.push(await rpc.raw<Auction>('getauction', [id]));
+    } catch {
+      const before = known.get(id);
+      if (before) out.push(before);
+    }
+  }
+  ba.receiptAuctions = out;
+}
+
+/** An auction by id: in the page read, or among those of the wallet's receipts. */
+export function auctionById(id: string): Auction | undefined {
+  return ba.auctions.find((a) => a.auction === id) ?? ba.receiptAuctions.find((a) => a.auction === id);
+}
+
+/** Whether the node has more auctions than the page read (not collected), or more pools. */
+export function moreAuctions(): boolean {
+  return (ba.info?.auctions ?? 0) > ba.auctions.length && baView.auctions < MAX_AUCTIONS;
+}
+export function morePools(): boolean {
+  return (ba.info?.pools ?? 0) > ba.pools.length && baView.pools < MAX_POOLS;
+}
+
 let timer: (() => void) | null = null;
 let lastTip = '';
 let lastWallet: string | null | undefined;
 
-/** Keep the state up to date while a page of BitAssets (or its cards) is shown: at once, then with every block and every 5 seconds. */
+/**
+ * Keep the state up to date while a page of BitAssets (or its cards) is shown: at once, then with every block;
+ * the wallet's part also every 5 seconds (the mempool), the chain's lists only with blocks.
+ */
 export function startBitAssets(): void {
   const tick = () => {
     const tip = node.tip?.hash ?? '';
@@ -417,13 +523,16 @@ export function startBitAssets(): void {
   // Resting while the window is hidden (lib/poll.ts). What waits for the mempool changes without a block.
   timer = every(2500, () => {
     tick();
-    if (++ticks % 2 === 0) void refreshBitAssets();
+    if (++ticks % 2 === 0) void refreshBitAssets({ node: false });
   });
 }
 
 /** For the tests. */
 export function resetBitAssets(): void {
   baView.activity = ACTIVITY_PAGE;
+  baView.pools = POOL_PAGE;
+  baView.auctions = AUCTION_PAGE;
+  againNode = false;
   timer?.();
   timer = null;
   lastTip = '';
@@ -434,7 +543,7 @@ export function resetBitAssets(): void {
   again = false;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
-  Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], mine: null, activity: [], mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
+  Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
   Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '' });
   sellIntent.asset = '';
@@ -455,16 +564,18 @@ export function labelOf(id: string): string {
 }
 
 /**
- * How a confirmation names an asset: its label and its number ("G0LD (#1739-0929)"), or the start of its hash
- * when it has none listed (a private name): labels are any printable ASCII, so look-alikes (G0LD and GOLD,
- * USDl and USDI) are told apart by the number, as the pickers show it (audit port-2 #5). Text of the chain.
+ * How a confirmation names an asset: its number first, then its label quoted ('#1739-0929 · "G0LD"'), or the
+ * start of its hash when it has none listed (a private name): labels are any printable ASCII, so look-alikes
+ * (G0LD and GOLD, USDl and USDI) are told apart by the number, as the pickers show it (audit port-2 #5); and a
+ * label may hold another asset's number ("GOLD (#1739-0029)"), which, quoted after the real one, reads as text
+ * (audit 7 E-BA4). Text of the chain.
  */
 export function nameOf(id: string, label?: string): string {
   if (/^0+$/.test(id)) return 'CHN';
   const listed = ba.assets.find((a) => a.asset === id);
   const text = label ?? listed?.label ?? ba.mine?.assets.find((a) => a.asset === id)?.label ?? '';
   const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;
-  return text ? `${text} (${tag})` : tag;
+  return text ? `${tag} · "${text}"` : tag;
 }
 
 /** The pool of two assets, either way round. */

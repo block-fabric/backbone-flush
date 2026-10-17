@@ -40,7 +40,7 @@
     type Reservation,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
 
@@ -205,7 +205,7 @@
   }
 
   // --- Auctions of the wallet (receipts) ---
-  const receipts = $derived((mine?.receipts ?? []).map((r) => ({ id: r.auction, a: ba.auctions.find((x) => x.auction === r.auction) ?? null })));
+  const receipts = $derived((mine?.receipts ?? []).map((r) => ({ id: r.auction, a: auctionById(r.auction) ?? null })));
   async function collect(a: Auction) {
     const wallet = wallets.current;
     if (wallet === null) return;

@@ -40,7 +40,10 @@ import {
   swapIn,
   swapOut,
   unitPrice,
+  unitsAtLeast,
+  unitsAtMost,
   unitsOf,
+  nameMimicsNumber,
   withdraw,
   type Asset,
   type Auction,
@@ -138,8 +141,11 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     }
     case 'getassethistory':
       return p[0] === assetArg(GOLD) ? { info: [{ value: null, txid: id('9'), height: 5 }, { value: 'One gram of gold', txid: id('8'), height: 12 }], commitment: [{ value: null, txid: id('9'), height: 5 }] } : {};
-    case 'listpools':
-      return p.length ? pools.filter((x) => assetArg(x.asset_a_id) === p[0] || assetArg(x.asset_b_id) === p[0]) : pools;
+    case 'listpools': {
+      // [asset, count, skip], as the node takes them (paged: audit 7 E-BA3).
+      const list = p[0] != null ? pools.filter((x) => assetArg(x.asset_a_id) === p[0] || assetArg(x.asset_b_id) === p[0]) : pools;
+      return list.slice(Number(p[2] ?? 0), Number(p[2] ?? 0) + Number(p[1] ?? 100));
+    }
     case 'getpool': {
       const x = pools.find((q) => [assetArg(q.asset_a_id), assetArg(q.asset_b_id)].sort().join() === [p[0], p[1]].sort().join());
       if (!x) fail('There is no pool of these assets');
@@ -156,10 +162,15 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       const aout = swapOut(rin, rout, ain.ok ? ain.units : 0n);
       return { amount_in: Number(formatUnits(ain.ok ? ain.units : 0n, din, { group: false })), amount_out: Number(formatUnits(aout, dout, { group: false })), price: 1, spot_price: 1, price_impact: priceImpact(rin, rout, ain.ok ? ain.units : 0n, aout), fee: 0.003, abandoned: false };
     }
-    case 'listauctions':
-      return p[0] ? [...auctions, { ...auctions[0], auction: id('f'), status: 'closed', remaining: 0 }] : auctions;
+    case 'listauctions': {
+      // [include_closed, count, skip, asset].
+      const list = (p[0] ? [...auctions, { ...auctions[0], auction: id('f'), status: 'closed', remaining: 0 }] : auctions).filter((a) => p[3] == null || assetArg(a.base_id) === p[3] || assetArg(a.quote_id) === p[3]);
+      return list.slice(Number(p[2] ?? 0), Number(p[2] ?? 0) + Number(p[1] ?? 100));
+    }
+    case 'getmempoolentry':
+      return fail('Transaction not in mempool', -5);
     case 'getauction':
-      return auctions.find((a) => a.auction === p[0]) ?? fail('No such auction');
+      return auctions.find((a) => a.auction === p[0]) ?? (p[0] === id('e') ? { ...auctions[0], auction: id('e') } : fail('No such auction'));
     case 'quotebid':
       return { buys: 10, remaining: 60, cost_of_remaining: 5.4, open: true };
     case 'listmyassets':
@@ -530,10 +541,13 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByText('At least')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
-    // The asset named with its number: a look-alike label (G0LD) is told apart (audit port-2 #5).
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
+    // The asset named with its number first: a look-alike label (G0LD) is told apart (audit port-2 #5), and a
+    // label holding another number reads as text (audit 7 E-BA4).
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
+    // The least confirmed is the least signed (min_out, audit 7 E-BA2).
+    expect(document.querySelector('dialog[open]')?.textContent).toContain('At least 4.88 #1739-0029');
     await answer('yes');
-    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10, '4.88']));
     // Done (the host confirmed and ran it): the form is cleared.
     await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // A larger trade moves the price more than 2%: asked about first.
@@ -557,7 +571,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByText('Share of the pool')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Make the pool/ }));
     await answer('yes');
-    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'CHN', '5', 1]));
+    // Both amounts, and that they set the price (audit 7 E-BA1).
+    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'CHN', '5', 1, true]));
 
     nav.tab = 'pools';
     await waitFor(() => expect(screen.getByRole('table', { name: 'Pools' })).toBeTruthy());
@@ -572,7 +587,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(called('quotebid').length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Bid' })).toHaveProperty('disabled', false));
     await fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '1']));
     // Done (the host confirmed and ran it): the form is cleared.
@@ -591,7 +606,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.input(document.querySelector('#sell-end')!, { target: { value: '4' } });
     await waitFor(() => expect(screen.getByRole('img', { name: 'The price of one unit over the auction' })).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Start the auction/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
     await answer('yes');
     await waitFor(() => expect(called('createauction')[0]?.params).toEqual([assetArg(GOLD), '50', 'CHN', '10', '4', 60, 1]));
   });
@@ -607,17 +622,68 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     const send = screen.getByRole('button', { name: /^Send$/ });
     await waitFor(() => expect(send).toHaveProperty('disabled', false), { timeout: 3000 });
     await fireEvent.click(send);
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Send 12.5 GOLD (#1739-0029) to this address?'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Send 12.5 #1739-0029 · "GOLD" to this address?'));
     await answer('yes', 4000);
     await waitFor(() => expect(called('sendasset')[0]?.params).toEqual([OTHER, assetArg(GOLD), '12.5']));
   });
 
+  it('Make the pool: what was confirmed is signed, though the pool appears while the dialog is open (audit 7 E-BA1)', async () => {
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    nav.tab = 'liquidity';
+    await waitFor(() => expect(document.querySelector('#lq-a')).not.toBeNull());
+    await fireEvent.change(document.querySelector('#lq-a')!, { target: { value: SILVER } });
+    await fireEvent.input(document.querySelector('#lq-amount-a')!, { target: { value: '30' } });
+    await fireEvent.input(document.querySelector('#lq-amount-b')!, { target: { value: '5' } });
+    await waitFor(() => expect(screen.getByText('Share of the pool')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /Make the pool/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Make the #4218-0372 · "SILVER" / CHN pool with 30'));
+    // Someone opens SILVER/CHN at 1 SILVER = 1000 CHN, and the store refreshes, while the dialog is open.
+    pools.push({ pool: id('q'), asset_a: 'SILVER', asset_b: 'CHN', asset_a_id: SILVER, asset_b_id: CHN_ID, reserve_a: 10, reserve_b: 10000, price: 1000, shares: 316227, volume_a: 0, volume_b: 0, swaps: 0, created: 20, abandoned: false });
+    await refreshBitAssets();
+    await answer('yes');
+    // The amounts confirmed, and that they set the price: the wallet refuses it now, never 30,000 CHN.
+    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'CHN', '5', 1, true]));
+  });
+
+  it('pools and auctions are read a page at a time, with more on demand (audit 7 E-BA3)', async () => {
+    auctions = Array.from({ length: 250 }, (_, i) => ({ ...auctions[0], auction: (i + 0x1000).toString(16).padStart(64, '0') }));
+    render(Auctions);
+    await loaded();
+    expect(ba.auctions.length).toBe(200);
+    expect(called('listauctions').every((c) => (c.params as unknown[])[0] === false && Number((c.params as unknown[])[1]) <= 1000)).toBe(true);
+    await waitFor(() => expect(screen.getByText(/Showing the newest 200 of 250 auctions/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    await waitFor(() => expect(ba.auctions.length).toBe(250));
+    expect(screen.queryByText(/Showing the newest/)).toBeNull();
+    // A receipt of an auction not in the page read (the fake node's getauction knows it): asked for by itself.
+    mine.receipts = [{ auction: id('e') }];
+    await refreshBitAssets();
+    await waitFor(() => expect(ba.receiptAuctions.map((a) => a.auction)).toEqual([id('e')]));
+    // The wallet's part every few seconds; the lists of the chain only with a block.
+    const before = called('listpools').length;
+    await refreshBitAssets({ node: false });
+    expect(called('listpools').length).toBe(before);
+    expect(called('listmyassets').length).toBeGreaterThan(1);
+  });
+
+  it('a registration dropped from the mempool is sent again (audit 7 E-BA7)', async () => {
+    store = { pending: [{ wallet: 'w', name: 'IRON', asset: id('f'), supply: '1', decimals: 0, data: {}, public: true, time: 1, reservation: id('r'), registration: id('6'), registeredAt: 18 }], prices: {} };
+    await refreshBitAssets();
+    // Two blocks on (21 >= 18 + 2), not in the mempool (the fake node knows no getmempoolentry): registered again.
+    await waitFor(() => expect(called('registerasset').length).toBe(1));
+    expect(called('getmempoolentry')[0].params).toEqual([id('6')]);
+    expect(ba.journal.pending[0].registration).toBe(id('7'));
+    expect(ba.journal.pending[0].registeredAt).toBe(21);
+  });
+
   it('names an asset in a confirmation by its label and number, or the start of its hash (audit port-2 #5)', async () => {
     await refreshBitAssets();
-    expect(nameOf(GOLD)).toBe('GOLD (#1739-0029)');
+    expect(nameOf(GOLD)).toBe('#1739-0029 · "GOLD"');
     expect(nameOf(CHN_ID)).toBe('CHN');
     // Not listed (a private name): the start and end of its hash.
-    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('G0LD (0x99999999…abcd)');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('0x99999999…abcd · "G0LD"');
     expect(nameOf('8'.repeat(64))).toBe('0x88888888…8888');
   });
 
@@ -701,11 +767,13 @@ describe('Simple mode', () => {
     await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '0.5' } });
     await waitFor(() => expect(screen.getByTestId('swap-plain').textContent).toMatch(/You pay 0\.5\s*CHN and get about/));
     expect(screen.getByTestId('swap-plain').textContent).toMatch(/At least .* if the price moves first/);
+    // The plain summary names the asset with its number (audit 7 E-BA4).
+    expect(screen.getByTestId('swap-plain').textContent).toContain('#1739-0029 · "GOLD"');
     await fireEvent.click(screen.getByRole('button', { name: /More options/ }));
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
     await answer('yes');
-    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10, '4.88']));
     // Done (the host confirmed and ran it): the form is cleared.
     await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // Asked for by a link: the pools are shown.
@@ -750,5 +818,25 @@ describe('Simple mode', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'My assets' })).toBeTruthy());
     expect(screen.queryByRole('heading', { name: 'Auctions' })).toBeNull();
     expect(screen.getByRole('button', { name: /Create a token/ })).toBeTruthy();
+  });
+});
+
+describe('audit 7: names and amounts', () => {
+  it('names that carry a number are refused, as the wallet refuses them (E-BA4)', () => {
+    for (const n of ['GOLD (#1739-0029)', 'GOLD #2', 'GOLD 1739-0029', '(x)']) expect(nameMimicsNumber(n)).toBe(true);
+    for (const n of ['GOLD', 'GOLD-2026', '123-4567']) expect(nameMimicsNumber(n)).toBe(false);
+    expect(nameProblem('GOLD (#1739-0029)')).toMatch(/would read as the number of another asset/);
+  });
+
+  it('amounts past 2^53 units never round above a balance, nor below a cap (E-BA6)', () => {
+    // 1234567.890123456789 with 12 decimals: the double reads it as …4567 17.
+    const v = 1234567.890123456789;
+    const exact = 1234567890123456789n;
+    expect(unitsAtMost(v, 12) <= exact).toBe(true);
+    expect(unitsAtLeast(v, 12) >= exact).toBe(true);
+    expect(exact - unitsAtMost(v, 12) < 10_000n).toBe(true);
+    // Exact amounts are left as they are.
+    expect(unitsAtMost(12.5, 2)).toBe(1250n);
+    expect(unitsAtLeast('9223372.036854775807', 12)).toBe(9223372036854775807n);
   });
 });

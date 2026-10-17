@@ -15,7 +15,7 @@
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
-  import { assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type DataField, type Pool } from './model';
+  import { assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
   import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { id, onback }: { id: string; onback?: () => void } = $props();
@@ -41,12 +41,19 @@
     if (key === loadedAt) return;
     loadedAt = key;
     const arg = assetArg(id);
-    Promise.all([rpc.raw<Asset>('getasset', [arg]), rpc.raw<AssetHistory>('getassethistory', [arg]).catch(() => ({})), rpc.raw<Pool[]>('listpools', [arg]).catch(() => [])])
-      .then(([a, h, p]) => {
+    // Its pools and auctions asked of the node by asset: the lists of the store are pages (audit 7 E-BA3).
+    Promise.all([
+      rpc.raw<Asset>('getasset', [arg]),
+      rpc.raw<AssetHistory>('getassethistory', [arg]).catch(() => ({})),
+      rpc.raw<Pool[]>('listpools', [arg, 1000, 0]).catch(() => []),
+      rpc.raw<Auction[]>('listauctions', [false, 100, 0, arg]).catch(() => null),
+    ])
+      .then(([a, h, p, au]) => {
         if (loadedAt !== key) return;
         asset = a;
         history = h ?? {};
         pools = p ?? [];
+        ownAuctions = au;
         error = '';
       })
       .catch((e) => {
@@ -59,7 +66,8 @@
   const holding = $derived(ba.mine?.assets.find((a) => a.asset === id) ?? null);
   const controlled = $derived(!!holding?.control);
   const price = $derived(chnPrice(id));
-  const auctions = $derived(ba.auctions.filter((a) => a.base_id === id || a.quote_id === id));
+  let ownAuctions = $state<Auction[] | null>(null);
+  const auctions = $derived(ownAuctions ?? ba.auctions.filter((a) => a.base_id === id || a.quote_id === id));
   const chnPool = $derived(pools.find((p) => isChn(p.asset_b_id) || isChn(p.asset_a_id)));
   const series = $derived(chnPool ? priceSeries(chnPool, id).map((p) => ({ x: p.h, y: p.p })) : []);
   const supplyUnits = $derived(asset ? asset.minted : 0);

@@ -30,6 +30,8 @@ export interface BitAssetsInfo {
   reservations: number;
   pools: number;
   auctions: number;
+  /** Auctions, those collected included (older nodes: absent). */
+  auctions_all?: number;
   /** The height of the next block, which the prices are for. */
   height: number;
   reveal_depth: number;
@@ -232,6 +234,30 @@ export function unitsOf(value: number | string, decimals: number): bigint {
   return m[1] ? -units : units;
 }
 
+/**
+ * How far the units of an amount the node gave as a JSON number may be off: a number past 2^53 units is
+ * a double, not the exact digits the node wrote (audit 7 E-BA6). Zero when exact.
+ */
+export function unitsError(value: number | string, decimals: number): bigint {
+  if (typeof value === 'string' || !Number.isFinite(value) || value === 0) return 0n;
+  const scaled = Math.abs(value) * 10 ** decimals;
+  if (scaled <= Number.MAX_SAFE_INTEGER) return 0n;
+  // One unit in the last place of the double, in units, and one more for the rounding to decimals.
+  const ulp = 2 ** (Math.floor(Math.log2(Math.abs(value))) - 52);
+  return BigInt(Math.ceil(ulp * 10 ** decimals)) + 1n;
+}
+
+/** The units of an amount, never more than the node meant (a balance: "Max"). */
+export function unitsAtMost(value: number | string, decimals: number): bigint {
+  const units = unitsOf(value, decimals) - unitsError(value, decimals);
+  return units < 0n ? 0n : units;
+}
+
+/** The units of an amount, never less than the node meant (a cap: what buys all that is left). */
+export function unitsAtLeast(value: number | string, decimals: number): bigint {
+  return unitsOf(value, decimals) + unitsError(value, decimals);
+}
+
 /** An amount in units, written with its decimals ("12.50"), the thousands grouped or not, trailing zeros trimmed or not. */
 export function formatUnits(units: bigint, decimals: number, options: { group?: boolean; trim?: boolean; max?: number } = {}): string {
   const group = options.group ?? true;
@@ -328,6 +354,14 @@ export function readsAsAnotherAsset(name: string): boolean {
   return /^\d{4}-\d{4}(-\d{4})?$/.test(name);
 }
 
+/**
+ * bitassets::NameMimicsNumber (wallet and relay policy): '#', '(' or ')', or four digits, a dash and four digits
+ * anywhere: shown with its number, such a name would read as the number of another asset (audit 7 E-BA4).
+ */
+export function nameMimicsNumber(name: string): boolean {
+  return /[#()]/.test(name) || /\d{4}-\d{4}/.test(name);
+}
+
 /** What is wrong with a name for a new asset ('' when nothing). */
 export function nameProblem(name: string): string {
   if (name === '') return '';
@@ -337,6 +371,7 @@ export function nameProblem(name: string): string {
   if (name.toLowerCase() === 'chn') return 'CHN is the coin of the chain.';
   if (/^0[xX]/.test(name)) return 'A name does not start with "0x": that is how a hash is written.';
   if (readsAsAnotherAsset(name)) return 'A name does not read as the number of an asset (such as 1739-0029).';
+  if (nameMimicsNumber(name)) return 'A name holds no "#", "(" or ")", nor four digits, a dash and four digits: shown with its number, it would read as the number of another asset.';
   return '';
 }
 

@@ -12,7 +12,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetSelect from './AssetSelect.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsOf, type Pool } from './model';
+  import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsAtMost, unitsOf, type Pool } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
 
   let a = $state('');
@@ -65,8 +65,8 @@
   });
   const deposit = $derived(offer && offer.a > 0n && offer.b > 0n ? provide(units, offer.a, offer.b) : null);
   const shareAfter = $derived(deposit ? Number(deposit.shares) / Number((setsPrice ? deposit.shares + MIN_LIQUIDITY : units.shares + deposit.shares) || 1n) : 0);
-  const heldA = $derived(isChn(a) ? (wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null) : (ba.mine?.assets.find((x) => x.asset === a) ? unitsOf(ba.mine.assets.find((x) => x.asset === a)!.balance, da) : 0n));
-  const heldB = $derived(isChn(b) ? (wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null) : (ba.mine?.assets.find((x) => x.asset === b) ? unitsOf(ba.mine.assets.find((x) => x.asset === b)!.balance, db) : 0n));
+  const heldA = $derived(isChn(a) ? (wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null) : (ba.mine?.assets.find((x) => x.asset === a) ? unitsAtMost(ba.mine.assets.find((x) => x.asset === a)!.balance, da) : 0n));
+  const heldB = $derived(isChn(b) ? (wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null) : (ba.mine?.assets.find((x) => x.asset === b) ? unitsAtMost(ba.mine.assets.find((x) => x.asset === b)!.balance, db) : 0n));
 
   const problem = $derived.by(() => {
     if (!a || !b || a === b) return 'Pick two different assets.';
@@ -83,47 +83,63 @@
   async function add() {
     const wallet = wallets.current;
     if (wallet === null || aUnits === null || bUnits === null || !deposit || problem || busy) return;
+    // What the confirmation shows is what is signed: the store refreshes while the dialog is open, so the
+    // amounts, the pool's state and the deposit are taken now and the parameters built from them (audit 7
+    // E-BA1). Both amounts always go: into a pool someone provides to, they are the most that goes in.
+    const sA = a;
+    const sB = b;
+    const sAUnits = aUnits;
+    const sBUnits = bUnits;
+    const sDa = da;
+    const sDb = db;
+    const sSetsPrice = setsPrice;
+    const sAbandoned = !!pool?.abandoned;
+    const sDeposit = deposit;
+    const sSlippage = slippage;
+    const sShare = shareAfter;
     // Named with their numbers in the confirmation: look-alike labels told apart (audit port-2 #5).
-    const la = nameOf(a);
-    const lb = nameOf(b);
+    const la = nameOf(sA);
+    const lb = nameOf(sB);
     // The pool may have changed since the amounts were typed (made, reopened or left): asked again.
     let now: Pool | null = null;
     try {
-      now = await rpc.raw<Pool>('getpool', [assetArg(a), assetArg(b)]);
+      now = await rpc.raw<Pool>('getpool', [assetArg(sA), assetArg(sB)]);
     } catch {
       now = null;
     }
     const nowSets = !now || now.abandoned;
-    if (nowSets !== setsPrice) {
+    if (nowSets !== sSetsPrice) {
       await inform(t('Add liquidity'), nowSets ? t('Nobody provides liquidity to this pool any more since you typed the amounts: give both amounts, which set its price.') : t('A pool of these assets was made meanwhile: its price sets the second amount now. Check the amounts.'), 'warning');
       void refreshBitAssets();
       return;
     }
-    const message = setsPrice
-      ? pool?.abandoned
-        ? t('Reopen the %1 / %2 pool with %3 %1 and %4 %2?', la, lb, formatUnits(aUnits, da), formatUnits(bUnits, db))
-        : t('Make the %1 / %2 pool with %3 %1 and %4 %2?', la, lb, formatUnits(aUnits, da), formatUnits(bUnits, db))
-      : t('Add about %1 %2 and %3 %4 to their pool?', formatUnits(deposit.take0, da), la, formatUnits(deposit.take1, db), lb);
-    const informative = setsPrice
-      ? t('Its price starts at 1 %1 = %2 %3: check it is the price you want. Should someone open it first, your deposit goes in at their price, what it does not take comes back, and it is refused if it gives %4% fewer shares than quoted.', la, formatPrice(Number(bUnits) / 10 ** db / (Number(aUnits) / 10 ** da)), lb, String(slippage))
-      : t('About %1 shares, %2 of the pool. Should the pool move first, what its price does not take comes back.', String(deposit.shares), formatPercent(shareAfter * 100));
+    const message = sSetsPrice
+      ? sAbandoned
+        ? t('Reopen the %1 / %2 pool with %3 %1 and %4 %2?', la, lb, formatUnits(sAUnits, sDa), formatUnits(sBUnits, sDb))
+        : t('Make the %1 / %2 pool with %3 %1 and %4 %2?', la, lb, formatUnits(sAUnits, sDa), formatUnits(sBUnits, sDb))
+      : t('Add about %1 %2 and %3 %4 to their pool?', formatUnits(sDeposit.take0, sDa), la, formatUnits(sDeposit.take1, sDb), lb);
+    const informative = sSetsPrice
+      ? t('Its price starts at 1 %1 = %2 %3: check it is the price you want. Should someone open it first, the deposit is refused, not put in at their price.', la, formatPrice(Number(sBUnits) / 10 ** sDb / (Number(sAUnits) / 10 ** sDa)), lb)
+      : t('About %1 shares, %2 of the pool. Should the pool move first, what its price does not take comes back.', String(sDeposit.shares), formatPercent(sShare * 100));
     const r = await ask({
-      title: setsPrice ? (pool?.abandoned ? t('Reopen a pool') : t('Make a pool')) : t('Add liquidity'),
+      title: sSetsPrice ? (sAbandoned ? t('Reopen a pool') : t('Make a pool')) : t('Add liquidity'),
       message,
       informative,
-      level: pool?.abandoned ? 'warning' : 'question',
+      level: sAbandoned ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
-        { id: 'yes', label: setsPrice ? 'Make it' : 'Add', kind: 'primary' },
+        { id: 'yes', label: sSetsPrice ? 'Make it' : 'Add', kind: 'primary' },
       ],
     });
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const params: unknown[] = setsPrice ? [assetArg(a), amountParam(aUnits, da), assetArg(b), amountParam(bUnits, db), slippage] : [assetArg(a), amountParam(aUnits, da), assetArg(b), null, slippage];
+      // The amounts confirmed (the second, into a pool someone provides to, the most that goes in), and what
+      // was expected: a deposit meant to set the price is refused if someone opened the pool meanwhile.
+      const params: unknown[] = [assetArg(sA), amountParam(sAUnits, sDa), assetArg(sB), amountParam(sSetsPrice ? sBUnits : sDeposit.take1, sDb), sSlippage, sSetsPrice];
       const done = await walletRpc<{ txid: string; amount_a: number; amount_b: number; shares: number }>(wallet, 'addliquidity', params);
       if (!done) return;
-      toast('success', t('Adding liquidity'), t('%1 %2 and %3 %4 into their pool, for about %5 shares, with the next block.', formatAmount(done.amount_a, da), la, formatAmount(done.amount_b, db), lb, String(done.shares)));
+      toast('success', t('Adding liquidity'), t('%1 %2 and %3 %4 into their pool, for about %5 shares, with the next block.', formatAmount(done.amount_a, sDa), la, formatAmount(done.amount_b, sDb), lb, String(done.shares)));
       aText = '';
       bText = '';
       void refreshBitAssets();

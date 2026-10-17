@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Choosing an asset (CHN first): each by its id, its label and number shown, since labels may look alike
-  // and ids never do (as chains-qt chose them).
+  // Choosing an asset (CHN first): each by its id, its number first and its label quoted, since labels may
+  // look alike, and even hold another asset's number (audit 7 E-BA4), while numbers never do.
   import { CHN_ID } from './model';
 
   interface Choice {
@@ -37,7 +37,7 @@
   <select {id} bind:value {disabled}>
     {#if placeholder}<option value="" disabled>{placeholder}</option>{/if}
     {#each list as c (c.id)}
-      <option value={c.id} translate="no">{c.label}{c.seq ? ` · #${c.seq}` : ''}{c.held ? ` · ${c.held}` : ''}</option>
+      <option value={c.id} translate="no">{c.seq ? `#${c.seq} · "${c.label}"` : c.label}{c.held ? ` · ${c.held}` : ''}</option>
     {/each}
   </select>
 </div>

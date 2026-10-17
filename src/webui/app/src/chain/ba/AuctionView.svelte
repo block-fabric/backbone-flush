@@ -15,7 +15,7 @@
   import { barWidth } from './actions';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, AUCTION_STATUS, auctionPriceAt, auctionProgress, formatAmount, formatPrice, formatUnits, isChn, unitPrice, unitsOf, type Auction, type AuctionUnits, type BidQuote } from './model';
+  import { amountParam, AUCTION_STATUS, auctionPriceAt, auctionProgress, formatAmount, formatPrice, formatUnits, isChn, unitPrice, unitsAtLeast, unitsAtMost, unitsOf, type Auction, type AuctionUnits, type BidQuote } from './model';
   import { ba, decimalsOf, nameOf, refreshBitAssets } from './store.svelte';
 
   let { auction }: { auction: Auction } = $props();
@@ -61,7 +61,7 @@
   const heldQuote = $derived.by(() => {
     if (isChn(auction.quote_id)) return wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null;
     const h = ba.mine?.assets.find((a) => a.asset === auction.quote_id);
-    return h ? unitsOf(h.balance, h.decimals) : 0n;
+    return h ? unitsAtMost(h.balance, h.decimals) : 0n;
   });
   let generation = 0;
   $effect(() => {
@@ -136,7 +136,9 @@
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; pays: number; buys: number }>(wallet, 'bidauction', [auction.auction, amountParam(unitsOf(now.cost_of_remaining, dq), dq), true]);
+      // The cost as a cap, rounded up where the JSON number is not exact (audit 7 E-BA6): the wallet pays what
+      // all that is left costs, never more, and refuses only a cost above the cap.
+      const done = await walletRpc<{ txid: string; pays: number; buys: number }>(wallet, 'bidauction', [auction.auction, amountParam(unitsAtLeast(now.cost_of_remaining, dq), dq), true]);
       if (!done) return;
       toast('success', t('Bidding'), t('%1 %2 for the %3 %4 left, with the next block.', formatAmount(done.pays, dq), now.quote, formatAmount(done.buys, db), now.base));
       void refreshBitAssets();

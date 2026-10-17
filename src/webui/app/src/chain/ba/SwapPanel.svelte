@@ -12,7 +12,7 @@
   import AssetSelect from './AssetSelect.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
+  import { amountParam, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
@@ -58,7 +58,7 @@
   const held = $derived.by(() => {
     if (isChn(pay)) return wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null;
     const h = ba.mine?.assets.find((a) => a.asset === pay);
-    return h ? unitsOf(h.balance, h.decimals) : 0n;
+    return h ? unitsAtMost(h.balance, h.decimals) : 0n;
   });
   const slip = $derived(custom.trim() !== '' && Number(custom) >= 0 && Number(custom) < 100 ? Number(custom) : slippage);
 
@@ -129,9 +129,21 @@
   async function swap() {
     const wallet = wallets.current;
     if (wallet === null || amount === null || out === null || least === null || problem || busy) return;
+    // What the confirmation shows is what is signed: taken now, not read again after the dialogs (the quote
+    // follows the pool while they are open). The least shown is the least the wallet signs (min_out, audit 7
+    // E-BA2): should the pool have moved below it, the wallet refuses.
+    const sPay = pay;
+    const sGet = get;
+    const sAmount = amount;
+    const sOut = out;
+    const sLeast = least;
+    const sSlip = slip;
+    const sPayDecimals = payDecimals;
+    const sGetDecimals = getDecimals;
+    const sFee = quote?.fee ?? 0;
     // Named with their numbers in the confirmations: look-alike labels told apart (audit port-2 #5).
-    const payLabel = nameOf(pay);
-    const getLabel = nameOf(get);
+    const payLabel = nameOf(sPay);
+    const getLabel = nameOf(sGet);
     if (impact > WARN_IMPACT) {
       const r = await ask({
         title: t('Price impact'),
@@ -146,8 +158,8 @@
     }
     const r = await ask({
       title: t('Swap'),
-      message: t('Pay %1 %2 for about %3 %4?', formatUnits(amount, payDecimals), payLabel, formatUnits(out, getDecimals), getLabel),
-      informative: t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(least, getDecimals), getLabel, String(slip), formatAmount(quote?.fee ?? 0, payDecimals), payLabel, isChn(get) ? t('CHN comes by the coinbase of the next block.') : ''),
+      message: t('Pay %1 %2 for about %3 %4?', formatUnits(sAmount, sPayDecimals), payLabel, formatUnits(sOut, sGetDecimals), getLabel),
+      informative: t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('CHN comes by the coinbase of the next block.') : ''),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -157,9 +169,9 @@
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; quote: number; min_out: number }>(wallet, 'swapasset', [assetArg(pay), amountParam(amount, payDecimals), assetArg(get), slip, MAX_IMPACT]);
+      const done = await walletRpc<{ txid: string; quote: number; min_out: number }>(wallet, 'swapasset', [assetArg(sPay), amountParam(sAmount, sPayDecimals), assetArg(sGet), sSlip, MAX_IMPACT, amountParam(sLeast, sGetDecimals)]);
       if (!done) return;
-      toast('success', t('Swapping'), t('%1 %2 for about %3 %4 (at least %5), with the next block.', formatUnits(amount, payDecimals), payLabel, formatAmount(done.quote, getDecimals), getLabel, formatAmount(done.min_out, getDecimals)));
+      toast('success', t('Swapping'), t('%1 %2 for about %3 %4 (at least %5), with the next block.', formatUnits(sAmount, sPayDecimals), payLabel, formatAmount(done.quote, sGetDecimals), getLabel, formatAmount(done.min_out, sGetDecimals)));
       amountText = '';
       void refreshBitAssets();
     } catch (e) {
@@ -207,7 +219,7 @@
 
     {#if simple && quote && out !== null && least !== null && amount !== null}
       <div class="plain" data-testid="swap-plain">
-        <p>You pay <strong>{formatUnits(amount, payDecimals)} <SafeText text={labelOf(pay)} /></strong> and get about <strong>{formatUnits(out, getDecimals)} <SafeText text={labelOf(get)} /></strong>.</p>
+        <p>You pay <strong>{formatUnits(amount, payDecimals)} <SafeText text={nameOf(pay)} /></strong> and get about <strong>{formatUnits(out, getDecimals)} <SafeText text={nameOf(get)} /></strong>.</p>
         <p class="muted small">At least {formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /> if the price moves first (<Term id="slippage">slippage</Term> {slip}%). The market keeps {formatAmount(quote.fee, payDecimals)} <SafeText text={labelOf(pay)} /> as its <Term id="fee">fee</Term>.</p>
         {#if impact > 2}<p class="ba-warn small">This is a large trade for this market: the price you get is {impact.toFixed(1)}% worse than its price now.</p>{/if}
       </div>

@@ -11,7 +11,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
   import { curvePoints, formatAmount, formatPercent, formatPrice, isChn, type Pool } from './model';
-  import { ba, decimalsOf, priceSeries, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, morePools, priceSeries, showMorePools, tradeIntent } from './store.svelte';
 
   let query = $state('');
   let showClosed = $state(false);
@@ -107,6 +107,9 @@
           </tbody>
         </table>
       </div>
+    {/if}
+      {#if morePools()}
+      <p class="ba-help more-pools">{t('Showing %1 of %2 pools.', formatCount(ba.pools.length), formatCount(ba.info?.pools ?? 0))} <button type="button" class="btn small" onclick={showMorePools}>Show more</button></p>
     {/if}
   </section>
 {/if}

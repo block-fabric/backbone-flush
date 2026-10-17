@@ -14,7 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsOf, type Asset, type DataField, type Holding } from './model';
+  import { amountParam, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
   import { nameOf, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
@@ -22,7 +22,7 @@
   const id = $derived(holding.asset);
   const arg = $derived(assetArg(holding.asset));
   const decimals = $derived(holding.decimals);
-  const balance = $derived(unitsOf(holding.balance, holding.decimals));
+  const balance = $derived(unitsAtMost(holding.balance, holding.decimals));
   // While the control coin moves (a mint, a change, waiting for a block), what it does waits too (as chains-qt).
   const control = $derived(holding.control && !holding.control_pending);
 

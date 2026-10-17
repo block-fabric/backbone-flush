@@ -13,7 +13,7 @@
   import './ba/ba.css';
   import AssetBadge from './ba/AssetBadge.svelte';
   import UnitsInput from './ba/UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, formatAmount, formatUnits, unitsOf } from './ba/model';
+  import { amountParam, assetArg, CHN_ID, formatAmount, formatUnits, unitsAtMost, unitsOf } from './ba/model';
   import { ba, nameOf, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
 
   let { active = $bindable(false) }: { active?: boolean } = $props();
@@ -34,7 +34,7 @@
 
   const holding = $derived(holdings.find((h) => h.asset === what) ?? null);
   const decimals = $derived(holding?.decimals ?? 0);
-  const held = $derived(holding ? unitsOf(holding.balance, holding.decimals) : 0n);
+  const held = $derived(holding ? unitsAtMost(holding.balance, holding.decimals) : 0n);
 
   let to = $state('');
   let toValid = $state(false);

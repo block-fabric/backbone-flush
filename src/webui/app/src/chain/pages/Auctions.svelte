@@ -18,8 +18,8 @@
   import AuctionView from '../ba/AuctionView.svelte';
   import Chart from '../ba/Chart.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
-  import { amountParam, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsOf, type Auction } from '../ba/model';
-  import { ba, decimalsOf, labelOf, nameOf, refreshBitAssets, sellIntent, startBitAssets } from '../ba/store.svelte';
+  import { amountParam, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsAtMost, unitsOf, type Auction } from '../ba/model';
+  import { ba, decimalsOf, labelOf, moreAuctions, nameOf, refreshBitAssets, sellIntent, showMoreAuctions, startBitAssets } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
 
@@ -48,7 +48,7 @@
     if (filter !== 'closed') return;
     void ba.height;
     rpc
-      .raw<Auction[]>('listauctions', [true])
+      .raw<Auction[]>('listauctions', [true, 1000, 0])
       .then((all) => (closed = (all ?? []).filter((a) => a.status === 'closed')))
       .catch(() => (closed = []));
   });
@@ -65,7 +65,7 @@
       : ba.auctions.filter((a) => filter === 'live' || (filter === 'open' && a.status === 'open') || (filter === 'upcoming' && a.status === 'upcoming') || (filter === 'done' && (a.status === 'sold out' || a.status === 'ended'))),
   );
   const counts = $derived({
-    live: ba.auctions.length,
+    live: Math.max(ba.auctions.length, ba.info?.auctions ?? 0),
     open: ba.auctions.filter((a) => a.status === 'open').length,
     upcoming: ba.auctions.filter((a) => a.status === 'upcoming').length,
     done: ba.auctions.filter((a) => a.status === 'sold out' || a.status === 'ended').length,
@@ -106,7 +106,7 @@
   const heldBase = $derived.by(() => {
     if (isChn(base)) return wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null;
     const h = ba.mine?.assets.find((a) => a.asset === base);
-    return h ? unitsOf(h.balance, h.decimals) : 0n;
+    return h ? unitsAtMost(h.balance, h.decimals) : 0n;
   });
   const startParsed = $derived(parseUnits(startText, dquote));
   const endParsed = $derived(parseUnits(endText, dquote));
@@ -209,6 +209,9 @@
               </li>
             {/each}
           </ul>
+          {#if filter !== 'closed' && moreAuctions()}
+            <p class="ba-help more-auctions">{t('Showing the newest %1 of %2 auctions.', formatCount(ba.auctions.length), formatCount(ba.info?.auctions ?? 0))} <button type="button" class="btn small" onclick={showMoreAuctions}>Show more</button></p>
+          {/if}
         </section>
         {#if shown}
           {#key shown.auction}<AuctionView auction={shown} />{/key}
