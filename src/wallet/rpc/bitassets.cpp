@@ -300,6 +300,24 @@ std::optional<OwnReservation> FindReservation(CWallet& wallet, const AssetId& na
 }
 
 /**
+ * A registration of `name` by this wallet that the mempool dropped (the rules refused it at a later tip,
+ * say: it was stale), made abandoned so that its reservation can be registered again. Not with
+ * -walletbroadcast=0, where a transaction out of the mempool is one the user keeps to send.
+ */
+void AbandonDroppedRegistration(CWallet& wallet, const AssetId& name)
+{
+    if (!wallet.GetBroadcastTransactions()) return;
+    LOCK(wallet.cs_wallet);
+    for (auto& [txid, wtx] : wallet.mapWallet) {
+        if (wallet.GetTxDepthInMainChain(wtx) != 0 || wtx.isAbandoned() || wtx.InMempool()) continue;
+        const auto marker{bitassets::GetMarker(*wtx.GetTx())};
+        if (!marker || !marker->operation) continue;
+        const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)};
+        if (reg && reg->name == name) wallet.AbandonTransaction(wtx);
+    }
+}
+
+/**
  * The first height from which a block may take the registration of a reservation made in the block
  * at `made`, it and every block after it: a reservation is revealed only `reveal_depth` blocks after
  * the block that made it.
@@ -411,6 +429,8 @@ RPCMethod registerasset()
     const int decimals{request.params[2].isNull() ? 0 : request.params[2].getInt<int>()};
     if (decimals < 0 || decimals > bitassets::MAX_DECIMALS) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The decimals are from 0 to %u", bitassets::MAX_DECIMALS));
     const uint64_t supply{bitassets::ParseUnits(request.params[1], decimals, /*allow_zero=*/true)};
+    // A registration sent before that the mempool dropped holds the reservation: abandoned, it frees it.
+    AbandonDroppedRegistration(*pwallet, asset);
     const auto reservation{FindReservation(*pwallet, asset)};
     if (!reservation) throw JSONRPCError(RPC_INVALID_PARAMETER, "This wallet has no reservation of the name in a block (see reserveasset)");
     // Not before the rules let it be revealed: the registration would not be taken.
