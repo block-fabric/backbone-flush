@@ -24,6 +24,16 @@ based sidechain, with Bitcoin's keys and transactions, and without the defects o
   (`reveal_depth`). The app waits as long by itself, and registers then.
 - **A name may not read as another asset**: not CHN (in any case), not like a number
   (`1739-0029`, `0001-1739-0029`), not starting with `0x`.
+- **Nor carry another asset's number** where names are shown with their numbers (`GOLD (#1739-0029)`):
+  the wallet does not reserve or publish a name holding `#`, `(`, `)` or four digits, a dash and
+  four digits, and the mempool does not relay the registration of one (`ba-name-look-alike`). This
+  is policy, not consensus: a block producer may still publish one, so the app shows every asset
+  number first (`#5555-1234 · "GOLD (#1739-0029)"`). Text shaped as a number that is none
+  (`0000-1739-0029`) is an error in every command, never the asset of that name.
+- **The front-running window that remains**: a registration not mined within the reveal depth can
+  be seen in the mempool, and a block producer who reserved the same name meanwhile (after seeing
+  it) could register it in its own block once its own reservation is deep enough. This is inherent
+  to commit-reveal; registering as soon as the depth allows (the app does) keeps the window short.
 - **An asset is known by the SHA-256 hash of its name.** The registration publishes the name
   unless asked not to; an asset can be named by its name, `0x` and its hash, or its number
   (`1739-0029` for the first), and CHN by `CHN`, in the node's commands and the wallet's alike.
@@ -94,6 +104,8 @@ spends a token without carrying it on, or outputs one it does not have, is inval
   amount that buys all that is left pays only what that costs. The app's "Buy all that is left" pays the
   amount it shows (less, should the price fall first).
 - An auction starts within 52560 blocks (about a year) of the one that makes it.
+- A closed (collected) auction stays in the state for good, as its history; `listauctions` leaves
+  closed ones out unless asked (`include_closed`).
 
 ## Retiring an asset
 
@@ -138,6 +150,15 @@ from its blocks at startup (a pruned node cannot, and has to be resynced).
 
 Node: `getasset`, `listassets`, `getassethistory`, `getbitassetsinfo`, `listpools`, `getpool`,
 `quoteswap`, `listauctions`, `getauction`, `quotebid`.
+`listassets`, `listpools` and `listauctions` return a page at a time (`count`, at most 1000 for
+pools and auctions, and `skip`; `listauctions` also by asset). The pools and auctions are ordered,
+and `getbitassetsinfo` counted, once per block from a snapshot of the state read without the chain
+lock, so polling them costs a page, not the whole table.
+
+`swapasset` takes the least the caller showed (`min_out`): if the pool moved since its quote, so
+that what the wallet would sign as the least is lower, it refuses instead of signing for less.
+`addliquidity` takes what the caller expects (`sets_price`): a deposit that was to make a pool is
+refused if someone made it meanwhile, rather than going in at their price.
 Wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `listmyassets`, `sendasset`,
 `mintasset`, `burnasset`, `updateasset`, `transferassetcontrol`, `fixassetsupply`, `swapasset`,
 `addliquidity`, `removeliquidity`, `createauction`, `bidauction`, `collectauction`,
@@ -159,6 +180,9 @@ Wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `listmyasset
   down (the original rounded up, for the bidder), single 0.3% fee (the original took it twice),
   minimum liquidity, receipts required, checked arithmetic throughout.
 - Transactions are checked against the state when they enter the mempool, and stale ones leave it
-  after each block; two registrations of a name in one block are refused.
+  after each block; two registrations of a name in one block are refused. After a block, only the
+  transactions whose check read what the block changed (the keys of the state noted when each was
+  last checked), bids and auctions made to start at a height, and those not checked yet are checked
+  again: the work is that of what blocks change, not that of the mempool.
 - Added: burning, fixing the supply, giving control, auction cancellation, prices and quotes,
   the wallet's activity.
