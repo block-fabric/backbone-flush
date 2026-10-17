@@ -180,6 +180,8 @@ AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<A
             if (const auto asset{lookup(*seq)}) return *asset;
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No asset has the number %s (it may have been retired)", text));
         }
+        // Shaped as a number that is none ("0000-1739-0029"): an error, never the asset of that name.
+        if (ShapedAsNumber(text)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s is not the number of an asset (a number of three groups does not start with 0000)", text));
     }
     return HashName(text);
 }

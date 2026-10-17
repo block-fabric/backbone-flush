@@ -441,6 +441,16 @@ bool IsAssetName(const std::string& name);
  * one (a private name is checked as far as it can be: CHN).
  */
 bool ReadsAsAnotherAsset(const std::string& name);
+/**
+ * Whether a name holds what reads as the number of an asset where names are shown with their numbers
+ * ("GOLD (#1739-0029)"): '#', '(' or ')', or four digits, a dash and four digits anywhere. Policy, not
+ * consensus: the wallet refuses to reserve or publish one, and the mempool does not relay its
+ * registration (ba-name-look-alike); a block may still hold one (a private name published by a block
+ * producer), which every page shows number first ("#5555-1234 · \"GOLD (#1739-0029)\"").
+ */
+bool NameMimicsNumber(const std::string& name);
+/** Whether text is shaped as a number ("1739-0029", "0000-1739-0029"): groups of four digits, two or three, with dashes. */
+bool ShapedAsNumber(const std::string& text);
 
 /** The number of an asset in the order of registration, shown as BitNames shows its numbers. */
 std::string FormatSeq(uint32_t seq);
@@ -773,6 +783,42 @@ bool StoreLayoutCurrent(const sidechain::StoreView& view);
 std::set<uint32_t> TokenOutputs(const CTransaction& tx);
 /** Whether a script is one a token can be carried by, or CHN paid to: a standard one someone can spend. */
 bool Spendable(const CScript& script);
+
+/**
+ * A view that notes what is read through it: the keys read one by one, and the prefixes read in key
+ * order. Whatever a check made through it found, it finds again as long as no key it read, nor any key
+ * under a prefix it read, changes (the mempool checks a transaction with a marker again only then:
+ * CTxMemPool::m_bitassets_reads).
+ */
+class RecordingView : public sidechain::StoreView
+{
+public:
+    explicit RecordingView(const sidechain::StoreView& base) : m_base{base} {}
+    std::optional<sidechain::StoreBytes> Get(std::span<const unsigned char> key) const override
+    {
+        m_keys.emplace(key.begin(), key.end());
+        return m_base.Get(key);
+    }
+    std::optional<std::pair<sidechain::StoreBytes, sidechain::StoreBytes>> Next(std::span<const unsigned char> from, std::span<const unsigned char> prefix) const override
+    {
+        m_prefixes.emplace(prefix.begin(), prefix.end());
+        return m_base.Next(from, prefix);
+    }
+    const std::set<sidechain::StoreBytes>& Keys() const { return m_keys; }
+    const std::set<sidechain::StoreBytes>& Prefixes() const { return m_prefixes; }
+
+private:
+    const sidechain::StoreView& m_base;
+    mutable std::set<sidechain::StoreBytes> m_keys;
+    mutable std::set<sidechain::StoreBytes> m_prefixes;
+};
+
+/**
+ * Whether what a transaction's operation is checked against depends on the height as well as on the
+ * state: an auction made to start at a height (refused once it passed), a bid (refused once its
+ * auction ends). The mempool checks those again at every change of the tip.
+ */
+bool CheckDependsOnHeight(const CTransaction& tx);
 
 } // namespace bitassets
 

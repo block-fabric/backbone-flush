@@ -832,6 +832,10 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         // One registration of an asset at a time: the second could never be mined.
         if (const auto marker{bitassets::GetMarker(tx)}; marker && marker->operation) {
             if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) {
+                // Policy: a published name that reads as another asset's number where names are shown with theirs.
+                if (m_pool.m_opts.require_standard && reg->text && bitassets::NameMimicsNumber(*reg->text)) {
+                    return ws.m_state.Invalid(TxValidationResult::TX_NOT_STANDARD, "ba-name-look-alike");
+                }
                 if (const auto other{m_pool.m_bitassets_registrations.find(reg->name)}; other != m_pool.m_bitassets_registrations.end() && !ws.m_conflicts.contains(other->second)) {
                     return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "ba-registration-in-mempool");
                 }
@@ -5908,10 +5912,30 @@ void Chainstate::RemoveStaleDrivechainTxs()
         }
         // Asset transactions that the state as it is now no longer allows: a pool that moved past
         // the price a trade accepts, an auction that ended, an asset registered by another.
+        // Only those whose check read what changed since the last check (m_bitassets_reads), those
+        // not checked against a tip yet and those whose check depends on the height: the work is that
+        // of what blocks changed, not that of the mempool. All of them when all may have changed.
         std::string reject_reason;
-        for (const Txid& txid : m_mempool->m_bitassets_txs) {
+        std::set<Txid> to_check;
+        if (changed_all) {
+            to_check = m_mempool->m_bitassets_txs;
+        } else {
+            to_check = m_mempool->BitAssetsReaders(changed);
+            to_check.insert(m_mempool->m_bitassets_unindexed.begin(), m_mempool->m_bitassets_unindexed.end());
+        }
+        for (const Txid& txid : to_check) {
             const CTransactionRef tx{m_mempool->get(txid)};
-            if (tx && !SideState().BitAssets().CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) stale.push_back(tx);
+            if (!tx) continue;
+            const bitassets::RecordingView reads{side.View()};
+            if (!bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) {
+                stale.push_back(tx);
+                continue;
+            }
+            if (bitassets::CheckDependsOnHeight(*tx)) {
+                m_mempool->SetBitAssetsReads(txid, std::nullopt);
+            } else {
+                m_mempool->SetBitAssetsReads(txid, CTxMemPool::BitAssetsReads{{reads.Keys().begin(), reads.Keys().end()}, {reads.Prefixes().begin(), reads.Prefixes().end()}});
+            }
         }
         // The sidechain's own rules (ChainHooks::HasTxRules), checked at entry against the tip then:
         // a block may have changed the state they read (a name or an asset taken by another transaction
