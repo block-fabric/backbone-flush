@@ -254,6 +254,7 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
     }
     if (const auto marker{bitassets::GetMarker(tx)}) {
         m_bitassets_txs.insert(tx.GetHash());
+        m_bitassets_unindexed.insert(tx.GetHash());
         if (marker->operation) {
             if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) m_bitassets_registrations[reg->name] = tx.GetHash();
             if (const auto* release{std::get_if<bitassets::ReleaseAsset>(&*marker->operation)}) m_bitassets_releases[release->asset] = tx.GetHash();
@@ -287,6 +288,50 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
         entry.GetTxSize(),
         entry.GetFee()
     );
+}
+
+void CTxMemPool::SetBitAssetsReads(const Txid& txid, std::optional<BitAssetsReads> reads)
+{
+    AssertLockHeld(cs);
+    if (const auto old{m_bitassets_reads.find(txid)}; old != m_bitassets_reads.end()) {
+        const auto forget{[&](auto& readers, const std::vector<std::vector<unsigned char>>& keys) {
+            for (const auto& key : keys) {
+                if (const auto found{readers.find(key)}; found != readers.end()) {
+                    found->second.erase(txid);
+                    if (found->second.empty()) readers.erase(found);
+                }
+            }
+        }};
+        forget(m_bitassets_key_readers, old->second.keys);
+        forget(m_bitassets_prefix_readers, old->second.prefixes);
+        m_bitassets_reads.erase(old);
+    }
+    if (!reads) {
+        if (m_bitassets_txs.contains(txid)) m_bitassets_unindexed.insert(txid);
+        return;
+    }
+    m_bitassets_unindexed.erase(txid);
+    for (const auto& key : reads->keys) m_bitassets_key_readers[key].insert(txid);
+    for (const auto& prefix : reads->prefixes) m_bitassets_prefix_readers[prefix].insert(txid);
+    m_bitassets_reads.emplace(txid, std::move(*reads));
+}
+
+std::set<Txid> CTxMemPool::BitAssetsReaders(const std::set<std::vector<unsigned char>>& changed) const
+{
+    AssertLockHeld(cs);
+    std::set<Txid> readers;
+    for (const auto& key : changed) {
+        if (const auto found{m_bitassets_key_readers.find(key)}; found != m_bitassets_key_readers.end()) readers.insert(found->second.begin(), found->second.end());
+        if (m_bitassets_prefix_readers.empty()) continue;
+        // Every prefix of the key, itself included.
+        std::vector<unsigned char> prefix;
+        prefix.reserve(key.size());
+        for (size_t n{0}; n <= key.size(); ++n) {
+            if (const auto found{m_bitassets_prefix_readers.find(prefix)}; found != m_bitassets_prefix_readers.end()) readers.insert(found->second.begin(), found->second.end());
+            if (n < key.size()) prefix.push_back(key[n]);
+        }
+    }
+    return readers;
 }
 
 void CTxMemPool::QueueRuleCheck(const Txid& txid)
@@ -355,8 +400,16 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
     }
 
     if (m_bitassets_txs.erase(it->GetTx().GetHash()) > 0) {
-        std::erase_if(m_bitassets_registrations, [&](const auto& entry) { return entry.second == it->GetTx().GetHash(); });
-        std::erase_if(m_bitassets_releases, [&](const auto& entry) { return entry.second == it->GetTx().GetHash(); });
+        // By the keys its marker names: not a scan of the maps for each transaction that goes.
+        if (const auto marker{bitassets::GetMarker(it->GetTx())}; marker && marker->operation) {
+            const auto erase_own{[&](std::map<uint256, Txid>& map, const uint256& key) {
+                if (const auto entry{map.find(key)}; entry != map.end() && entry->second == it->GetTx().GetHash()) map.erase(entry);
+            }};
+            if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) erase_own(m_bitassets_registrations, reg->name);
+            if (const auto* release{std::get_if<bitassets::ReleaseAsset>(&*marker->operation)}) erase_own(m_bitassets_releases, release->asset);
+        }
+        SetBitAssetsReads(it->GetTx().GetHash(), std::nullopt);
+        m_bitassets_unindexed.erase(it->GetTx().GetHash());
     }
     if (const auto rules{m_rule_keys_of.find(it->GetTx().GetHash())}; rules != m_rule_keys_of.end()) {
         if (rules->second) {

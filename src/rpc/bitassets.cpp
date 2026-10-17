@@ -13,6 +13,8 @@
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
+#include <sidechain/state.h>
+#include <sync.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <validation.h>
@@ -20,6 +22,7 @@
 #include <univalue.h>
 
 #include <cmath>
+#include <memory>
 
 using bitassets::AssetId;
 using bitassets::AssetLabel;
@@ -264,6 +267,76 @@ UniValue AuctionToJSON(Chainstate& chainstate, const bitassets::State& state, co
     return obj;
 }
 
+/**
+ * What the lists of pools and auctions are paged over, and the counts getbitassetsinfo gives: made
+ * once per tip, from a snapshot of the state read without cs_main (a poll of every open page, every
+ * few seconds, does not walk tables anyone can grow while block validation waits). Pages read the
+ * entries they show from the state as it is then.
+ */
+struct ListIndex {
+    uint256 tip;
+    struct AuctionEntry {
+        int created;
+        Txid id;
+        bool closed;
+        AssetId base, quote;
+    };
+    //! Newest first.
+    std::vector<AuctionEntry> auctions;
+    //! In the order of their ids.
+    std::vector<uint256> pools;
+    size_t assets{0}, reservations{0}, open_auctions{0};
+};
+
+Mutex g_list_index_mutex;
+std::shared_ptr<const ListIndex> g_list_index GUARDED_BY(g_list_index_mutex);
+
+std::shared_ptr<const ListIndex> MakeListIndex(const bitassets::State& state, const uint256& tip)
+{
+    auto index{std::make_shared<ListIndex>()};
+    index->tip = tip;
+    state.ForEachAsset([&](const AssetId&, const bitassets::AssetRecord&) { ++index->assets; return true; });
+    state.ForEachReservation([&](const Txid&, const uint256&) { ++index->reservations; return true; });
+    state.ForEachAuction([&](const Txid& id, const bitassets::Auction& a) {
+        if (!a.closed) ++index->open_auctions;
+        index->auctions.push_back({a.created, id, a.closed, a.base, a.quote});
+        return true;
+    });
+    std::stable_sort(index->auctions.begin(), index->auctions.end(), [](const auto& x, const auto& y) { return x.created > y.created; });
+    state.ForEachPool([&](const uint256& id, const bitassets::Pool&) { index->pools.push_back(id); return true; });
+    return index;
+}
+
+std::shared_ptr<const ListIndex> GetListIndex(ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(!::cs_main, !g_list_index_mutex)
+{
+    LOCK(g_list_index_mutex);
+    uint256 tip;
+    std::shared_ptr<const sidechain::StoreView> view;
+    {
+        LOCK(::cs_main);
+        Chainstate& chainstate{chainman.ActiveChainstate()};
+        tip = chainstate.m_chain.Tip()->GetBlockHash();
+        if (g_list_index && g_list_index->tip == tip) return g_list_index;
+        view = chainstate.SideCache().SharedSnapshot();
+        if (!view) {
+            g_list_index = MakeListIndex(StateOf(chainman), tip);
+            return g_list_index;
+        }
+    }
+    g_list_index = MakeListIndex(sidechain::State{*view}.BitAssets(), tip);
+    return g_list_index;
+}
+
+/** count and skip of a paged list. */
+std::pair<size_t, size_t> PageArgs(const UniValue& count_arg, const UniValue& skip_arg)
+{
+    const int count{count_arg.isNull() ? 100 : count_arg.getInt<int>()};
+    const int skip{skip_arg.isNull() ? 0 : skip_arg.getInt<int>()};
+    if (count < 0 || skip < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Negative count or skip");
+    if (count > 1000) throw JSONRPCError(RPC_INVALID_PARAMETER, "At most 1000 at a time (count)");
+    return {static_cast<size_t>(count), static_cast<size_t>(skip)};
+}
+
 RPCMethod getasset()
 {
     return RPCMethod{
@@ -393,7 +466,7 @@ RPCMethod getbitassetsinfo()
 {
     return RPCMethod{
         "getbitassetsinfo",
-        "How many assets, reservations, pools and auctions there are.",
+        "How many assets, reservations, pools and auctions there are (counted once per block).",
         {},
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -401,6 +474,7 @@ RPCMethod getbitassetsinfo()
             {RPCResult::Type::NUM, "reservations", "Reservations not registered yet"},
             {RPCResult::Type::NUM, "pools", "Pools"},
             {RPCResult::Type::NUM, "auctions", "Auctions not closed"},
+            {RPCResult::Type::NUM, "auctions_all", "Auctions, those closed included"},
             {RPCResult::Type::NUM, "height", "The height of the next block, which the prices are for"},
             {RPCResult::Type::NUM, "reveal_depth", "How many blocks after the block that made a reservation a block may take its registration"},
         }},
@@ -408,18 +482,15 @@ RPCMethod getbitassetsinfo()
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
-    LOCK(::cs_main);
-    const bitassets::State state{StateOf(chainman)};
+    // Counted once per tip (ListIndex), not at every call.
+    const auto index{GetListIndex(chainman)};
     UniValue result(UniValue::VOBJ);
-    // Counted: for information.
-    size_t assets{0}, reservations{0}, open_auctions{0};
-    state.ForEachAsset([&](const AssetId&, const bitassets::AssetRecord&) { ++assets; return true; });
-    state.ForEachReservation([&](const Txid&, const uint256&) { ++reservations; return true; });
-    state.ForEachAuction([&](const Txid&, const bitassets::Auction& a) { if (!a.closed) ++open_auctions; return true; });
-    result.pushKV("assets", assets);
-    result.pushKV("reservations", reservations);
-    result.pushKV("pools", state.PoolCount());
-    result.pushKV("auctions", open_auctions);
+    result.pushKV("assets", index->assets);
+    result.pushKV("reservations", index->reservations);
+    result.pushKV("pools", index->pools.size());
+    result.pushKV("auctions", index->open_auctions);
+    result.pushKV("auctions_all", index->auctions.size());
+    LOCK(::cs_main);
     result.pushKV("height", chainman.ActiveChain().Height() + 1);
     result.pushKV("reveal_depth", chainman.GetConsensus().sidechain.bitassets_reveal_depth);
     return result;
@@ -431,24 +502,34 @@ RPCMethod listpools()
 {
     return RPCMethod{
         "listpools",
-        "The pools, with what they hold and their prices.",
+        "The pools, with what they hold and their prices, a page at a time (pools in getbitassetsinfo says how many).",
         {
             {"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Only the pools of this asset, which then comes first"},
+            {"count", RPCArg::Type::NUM, RPCArg::Default{100}, "How many, at most 1000"},
+            {"skip", RPCArg::Type::NUM, RPCArg::Default{0}, "How many to skip"},
         },
         RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", PoolResults()}}},
-        RPCExamples{HelpExampleCli("listpools", "") + HelpExampleCli("listpools", "\"GOLD\"")},
+        RPCExamples{HelpExampleCli("listpools", "") + HelpExampleCli("listpools", "\"GOLD\"") + HelpExampleCli("listpools", "null 100 100")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const auto [count, skip]{PageArgs(request.params[1], request.params[2])};
+    const auto index{request.params[0].isNull() ? GetListIndex(chainman) : nullptr};
     LOCK(::cs_main);
     const bitassets::State state{StateOf(chainman)};
     const std::optional<AssetId> only{request.params[0].isNull() ? std::nullopt : std::optional{ParseAsset(request.params[0], state)}};
     UniValue result(UniValue::VARR);
     std::vector<std::pair<uint256, bitassets::Pool>> pools;
     if (only) {
+        // By the index of pools by asset.
         pools = state.PoolsOf(*only);
+        pools.erase(pools.begin(), pools.begin() + std::min(skip, pools.size()));
+        if (pools.size() > count) pools.resize(count);
     } else {
-        state.ForEachPool([&](const uint256& id, const bitassets::Pool& pool) { pools.emplace_back(id, pool); return true; });
+        for (size_t n{skip}; n < index->pools.size() && pools.size() < count; ++n) {
+            // Gone since the index was made (the tip moved): left out.
+            if (const auto pool{state.GetPool(index->pools[n])}) pools.emplace_back(index->pools[n], *pool);
+        }
     }
     for (const auto& [id, pool] : pools) {
         // A pool with CHN shows its price in CHN.
@@ -552,27 +633,40 @@ RPCMethod listauctions()
 {
     return RPCMethod{
         "listauctions",
-        "The auctions, newest first.",
+        "The auctions, newest first, a page at a time (auctions and auctions_all in getbitassetsinfo say how many).",
         {
             {"include_closed", RPCArg::Type::BOOL, RPCArg::Default{false}, "Also those collected already"},
+            {"count", RPCArg::Type::NUM, RPCArg::Default{100}, "How many, at most 1000"},
+            {"skip", RPCArg::Type::NUM, RPCArg::Default{0}, "How many to skip"},
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Only those that sell this asset or sell for it"},
         },
         RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", AuctionResults()}}},
-        RPCExamples{HelpExampleCli("listauctions", "")},
+        RPCExamples{HelpExampleCli("listauctions", "") + HelpExampleCli("listauctions", "false 100 100") + HelpExampleCli("listauctions", "true 10 0 \"GOLD\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
     const bool closed{!request.params[0].isNull() && request.params[0].get_bool()};
+    const auto [count, skip]{PageArgs(request.params[1], request.params[2])};
+    const auto index{GetListIndex(chainman)};
     LOCK(::cs_main);
     const bitassets::State state{StateOf(chainman)};
+    const std::optional<AssetId> only{request.params[3].isNull() ? std::nullopt : std::optional{ParseAsset(request.params[3], state)}};
     const int height{chainman.ActiveChain().Height() + 1};
-    std::vector<std::pair<Txid, bitassets::Auction>> auctions;
-    state.ForEachAuction([&](const Txid& id, const bitassets::Auction& auction) {
-        if (!auction.closed || closed) auctions.emplace_back(id, auction);
-        return true;
-    });
-    std::stable_sort(auctions.begin(), auctions.end(), [](const auto& x, const auto& y) { return x.second.created > y.second.created; });
     UniValue result(UniValue::VARR);
-    for (const auto& [id, auction] : auctions) result.push_back(AuctionToJSON(chainman.ActiveChainstate(), state, id, auction, height));
+    size_t skipped{0};
+    for (const auto& entry : index->auctions) {
+        if (result.size() >= count) break;
+        if (entry.closed && !closed) continue;
+        if (only && entry.base != *only && entry.quote != *only) continue;
+        if (skipped < skip) {
+            ++skipped;
+            continue;
+        }
+        // As it is now (the tip may have moved since the index was made).
+        const auto auction{state.GetAuction(entry.id)};
+        if (!auction || (auction->closed && !closed)) continue;
+        result.push_back(AuctionToJSON(chainman.ActiveChainstate(), state, entry.id, *auction, height));
+    }
     return result;
 },
     };

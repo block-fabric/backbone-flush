@@ -1096,6 +1096,7 @@ BOOST_AUTO_TEST_CASE(assembly_fills_the_refund_and_payout_bounds)
     BOOST_CHECK(InBlock(next, refund_txs[2]));
     BOOST_CHECK_EQUAL(count(next, is_swap), swaps - bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
     BOOST_CHECK_EQUAL(m_node.mempool->size(), 0U);
+}
 
 BOOST_AUTO_TEST_CASE(unreachable_record_failures_forgotten)
 {

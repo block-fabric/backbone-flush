@@ -14,7 +14,9 @@
 """
 
 import hashlib
+import hmac
 import struct
+import time
 from decimal import Decimal
 
 from feature_bitassets import BitAssetsTest
@@ -268,6 +270,54 @@ class BitAssetsInvalidTest(BitAssetsTest):
         self.mine_txs()
         assert_equal(other.listmyassets()["reservations"], [])
 
+        self.log.info("A registration the mempool dropped is sent again, its reservation freed")
+        other.reserveasset("AGAIN")
+        self.mine_txs()
+        self.mine_txs()
+        dropped = other.registerasset("AGAIN", 1)["txid"]
+        assert dropped in other.getrawmempool()
+        # Expired out of the mempool (two weeks later), as if evicted: the wallet still has it, unconfirmed.
+        now = int(time.time())
+        other.setmocktime(now + 15 * 24 * 3600)
+        other.sendtoaddress(other.getnewaddress(), 1)
+        assert dropped not in other.getrawmempool()
+        assert_equal(other.gettransaction(dropped)["confirmations"], 0)
+        again = other.registerasset("AGAIN", 1)["txid"]
+        assert again != dropped
+        assert other.gettransaction(dropped)["details"][0]["abandoned"]
+        other.setmocktime(0)
+        self.mine_txs()
+        assert_equal(side.getasset("AGAIN")["registration"], again)
+
+        self.log.info("A block taken back makes a registration too recent again: it leaves the mempool")
+        side.reserveasset("SHALLOW")
+        self.mine_txs()
+        self.mine_txs()
+        shallow = side.registerasset("SHALLOW", 1)["txid"]
+        shallow_hex = side.gettransaction(shallow)["hex"]
+        self.sync_mempools()
+        tip = side.getbestblockhash()
+        side.invalidateblock(tip)
+        assert shallow not in side.getrawmempool()
+        side.reconsiderblock(tip)
+        side.sendrawtransaction(shallow_hex)
+        self.mine_txs()
+        assert_equal(side.getasset("SHALLOW")["registration"], shallow)
+
+        self.log.info("A published name that reads as another asset's number is not relayed, but is valid in a block")
+        look_alike = b"GOLD (#1739-0029)"
+        assert_raises_rpc_error(-8, "would read as the number of another asset", side.reserveasset, look_alike.decode())
+        nonce = bytes(32)
+        commitment = hmac.new(nonce, name_id(look_alike.decode()) + bytes(mine), hashlib.sha256).digest()
+        reserve = side.sendrawtransaction(self.build(side, [(0, mine), (0, marker_script(marker(RESERVE, commitment, [(0, token(RESERVATION, bytes(32)))])))]))
+        self.mine_txs()
+        self.mine_txs()
+        look_alike_id = name_id(look_alike.decode())
+        register = self.build(side, [(0, mine), (0, marker_script(marker(REGISTER, look_alike_id + nonce + varint(0) + b"\x00" + b"\x00" * 6 + b"\x01" + ser_string(look_alike), [(0, token(CONTROL, look_alike_id))])))], [(reserve, 0)])
+        self.assert_refused(side, register, "ba-name-look-alike", send=True)
+        # Policy only: a block may hold it.
+        self.template([register])
+
         self.log.info("A pool and an auction, for what follows")
         side.addliquidity("GOLD", 500, "CHN", 5)
         self.mine_txs()
@@ -296,6 +346,21 @@ class BitAssetsInvalidTest(BitAssetsTest):
         side.reconsiderblock(made_block)
         assert_equal(self.snapshot(side), after)
         self.check_in_sync()
+
+        self.log.info("A block taken back makes a collection wait again: it leaves the mempool")
+        end = side.getauction(made)["end_height"]
+        while side.getblockcount() < end:
+            self.mine_txs()
+        collect = side.collectauction(made)["txid"]
+        collect_hex = side.gettransaction(collect)["hex"]
+        tip = side.getbestblockhash()
+        side.invalidateblock(tip)
+        # The next block is the auction's last: it still takes bids, and is not collected yet.
+        assert collect not in side.getrawmempool()
+        side.reconsiderblock(tip)
+        side.sendrawtransaction(collect_hex)
+        self.mine_txs()
+        assert_equal(side.getauction(made)["status"], "closed")
 
         self.log.info("The assets survive a restart, and a reindex rebuilds them")
         side.updateasset("GOLD", {"info": "Gold, kept in Zurich", "ipv4": "203.0.113.7:8333"})

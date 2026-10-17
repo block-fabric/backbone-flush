@@ -273,6 +273,30 @@ bool ReadsAsAnotherAsset(const std::string& name)
     return true;
 }
 
+bool ShapedAsNumber(const std::string& text)
+{
+    if (text.size() != 9 && text.size() != 14) return false;
+    for (size_t i{0}; i < text.size(); ++i) {
+        const bool dash{i % 5 == 4};
+        if (dash ? text[i] != '-' : (text[i] < '0' || text[i] > '9')) return false;
+    }
+    return true;
+}
+
+bool NameMimicsNumber(const std::string& name)
+{
+    if (name.find_first_of("#()") != std::string::npos) return true;
+    const auto digit{[](char c) { return c >= '0' && c <= '9'; }};
+    for (size_t i{0}; i + 9 <= name.size(); ++i) {
+        bool shaped{name[i + 4] == '-'};
+        for (size_t j{0}; shaped && j < 9; ++j) {
+            if (j != 4 && !digit(name[i + j])) shaped = false;
+        }
+        if (shaped) return true;
+    }
+    return false;
+}
+
 namespace {
 /** Whether an asset is CHN by name, in any case. */
 bool IsChnName(const AssetId& asset)
@@ -550,6 +574,22 @@ std::set<uint32_t> TokenOutputs(const CTransaction& tx)
     if (!marker) return outputs;
     for (const MarkerOutput& out : marker->outputs) outputs.insert(out.n);
     return outputs;
+}
+
+bool CheckDependsOnHeight(const CTransaction& tx)
+{
+    const auto marker{GetMarker(tx)};
+    if (!marker || !marker->operation) return false;
+    // Fail closed: only the operations whose checks read no height (the heights they write into
+    // records do not decide their validity) are left to the keys they read. Every other one, and any
+    // operation added later, is checked again at every change of the tip: an auction made to start at
+    // a height, a bid (its auction ends), a registration (its reveal depth, which a reorganization can
+    // take back), a collection (its auction collectable from a height).
+    const Operation& op{*marker->operation};
+    const bool independent{std::holds_alternative<Reserve>(op) || std::holds_alternative<Mint>(op) || std::holds_alternative<UpdateAsset>(op) ||
+                           std::holds_alternative<Burn>(op) || std::holds_alternative<Swap>(op) || std::holds_alternative<AddLiquidity>(op) ||
+                           std::holds_alternative<RemoveLiquidity>(op) || std::holds_alternative<ReleaseAsset>(op)};
+    return !independent;
 }
 
 struct State::Plan {
