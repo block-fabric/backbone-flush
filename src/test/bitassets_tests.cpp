@@ -1880,9 +1880,16 @@ BOOST_AUTO_TEST_CASE(mempool_recheck_reads)
     BOOST_REQUIRE_MESSAGE(f.Apply(first, &reason), reason);
     BOOST_CHECK(touches(f.undo.parts.back()));
     BOOST_CHECK(!f.state.CheckTx(swap, f.height, reason));
-    // Bids and auctions made to start at a height are checked at every tip.
+    // Bids, auctions made to start at a height, registrations (reveal depth) and collections are
+    // checked at every tip; so is any operation not known to read no height.
     BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, Bid{swap.GetHash(), 5, 1, CScript{}}, {})));
     BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, CreateAuction{GOLD, 100, CHN, 4'000, 400, f.height + 1, 10}, {})));
+    bitassets::Register reg;
+    reg.name = GOLD;
+    BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, reg, {})));
+    BOOST_CHECK(CheckDependsOnHeight(MakeTx({}, Collect{swap.GetHash(), HOLDER}, {})));
+    BOOST_CHECK(!CheckDependsOnHeight(MakeTx({}, Reserve{uint256{}}, {})));
+    BOOST_CHECK(!CheckDependsOnHeight(MakeTx({}, std::nullopt, {})));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

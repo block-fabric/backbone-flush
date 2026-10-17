@@ -3412,6 +3412,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
         }
         view.Flush(/*reallocate_cache=*/false); // local CCoinsViewCache goes out of scope
         NoteSideChanges(side_store.Changes());
+        // A block taken back lowers the height, which more than the keys it changed may depend on
+        // (a reservation's reveal depth, an auction collectable from a height): the mempool checks
+        // every transaction against the new tip, not only those that read what changed.
+        m_side_changed_all = true;
         side_store.MergeInto(SideCache());
         // The block's records stay (readers skip blocks out of the active chain; reconnected, it
         // writes them again): erasing them would not be crash-safe, the coins being flushed later.

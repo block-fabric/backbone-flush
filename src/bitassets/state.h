@@ -814,9 +814,10 @@ private:
 };
 
 /**
- * Whether what a transaction's operation is checked against depends on the height as well as on the
- * state: an auction made to start at a height (refused once it passed), a bid (refused once its
- * auction ends). The mempool checks those again at every change of the tip.
+ * Whether what a transaction's operation is checked against may depend on the height as well as on
+ * the state: an auction made to start at a height, a bid, a registration (reveal depth), a collection,
+ * and any operation not known to read no height (fail closed). The mempool checks those again at every
+ * change of the tip.
  */
 bool CheckDependsOnHeight(const CTransaction& tx);
 

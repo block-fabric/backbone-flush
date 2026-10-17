@@ -580,7 +580,16 @@ bool CheckDependsOnHeight(const CTransaction& tx)
 {
     const auto marker{GetMarker(tx)};
     if (!marker || !marker->operation) return false;
-    return std::holds_alternative<CreateAuction>(*marker->operation) || std::holds_alternative<Bid>(*marker->operation);
+    // Fail closed: only the operations whose checks read no height (the heights they write into
+    // records do not decide their validity) are left to the keys they read. Every other one, and any
+    // operation added later, is checked again at every change of the tip: an auction made to start at
+    // a height, a bid (its auction ends), a registration (its reveal depth, which a reorganization can
+    // take back), a collection (its auction collectable from a height).
+    const Operation& op{*marker->operation};
+    const bool independent{std::holds_alternative<Reserve>(op) || std::holds_alternative<Mint>(op) || std::holds_alternative<UpdateAsset>(op) ||
+                           std::holds_alternative<Burn>(op) || std::holds_alternative<Swap>(op) || std::holds_alternative<AddLiquidity>(op) ||
+                           std::holds_alternative<RemoveLiquidity>(op) || std::holds_alternative<ReleaseAsset>(op)};
+    return !independent;
 }
 
 struct State::Plan {
