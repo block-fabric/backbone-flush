@@ -106,7 +106,17 @@ function units(n: number, d: number): bigint {
   return unitsOf(n, d);
 }
 
+// What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
+// the call: here, at once, as the node would.
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction'];
+
 async function fakeNode(r: BridgeRequest): Promise<unknown> {
+  if (r.method === 'rpc.confirmedMethods') return { confirmed: CONFIRMED, keyed: ['listmyassets', 'listassetactivity'] };
+  if (r.method === 'rpc.confirmed') {
+    const c = r.params as { method: string; params: unknown[]; wallet?: string };
+    expect(CONFIRMED).toContain(c.method);
+    return fakeNode({ ...r, kind: 'rpc', method: c.method, params: c.params, wallet: c.wallet } as BridgeRequest);
+  }
   calls.push(r);
   const p = (r.params ?? []) as unknown[];
   const fail = (message: string, code = -8) => {
@@ -427,6 +437,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.click(within(panel).getByRole('button', { name: 'Mint' }));
     await answer('yes');
     await waitFor(() => expect(called('mintasset')[0]?.params).toEqual([assetArg(GOLD), '10.5']));
+    // Done: the form closes (the host confirmed and ran it).
+    await waitFor(() => expect(panel.querySelector('#mint-amount')).toBeNull());
 
     await fireEvent.click(within(panel).getByRole('button', { name: 'Change its data' }));
     await waitFor(() => expect((panel.querySelector('#data-info') as HTMLTextAreaElement).value).toBe('One gram of gold'));
@@ -438,6 +450,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.click(within(panel).getByRole('button', { name: 'Save' }));
     await answer('yes');
     await waitFor(() => expect(called('updateasset')[0]?.params).toEqual([assetArg(GOLD), { info: 'One gram of gold, in Zurich', commitment: null, ipv4: '203.0.113.7' }]));
+    await waitFor(() => expect(panel.querySelector('#data-info')).toBeNull());
 
     await fireEvent.click(within(panel).getByRole('button', { name: 'Burn some' }));
     await fireEvent.input(panel.querySelector('#burn-amount')!, { target: { value: '500' } });
@@ -446,6 +459,7 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.click(within(panel).getByRole('button', { name: 'Burn' }));
     await answer('yes');
     await waitFor(() => expect(called('burnasset')[0]?.params).toEqual([assetArg(GOLD), '5']));
+    await waitFor(() => expect(panel.querySelector('#burn-amount')).toBeNull());
 
     await fireEvent.click(within(panel).getByRole('button', { name: 'Control and supply' }));
     await fireEvent.click(within(panel).getByRole('button', { name: 'Fix the supply for good' }));
@@ -520,6 +534,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
     await answer('yes');
     await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
+    // Done (the host confirmed and ran it): the form is cleared.
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // A larger trade moves the price more than 2%: asked about first.
     await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '2' } });
     await waitFor(() => expect(called('quoteswap').some((c) => (c.params as unknown[])[1] === '2')).toBe(true));
@@ -559,6 +575,8 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('GOLD (#1739-0029)'));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '1']));
+    // Done (the host confirmed and ran it): the form is cleared.
+    await waitFor(() => expect((document.querySelector('#bid-amount') as HTMLInputElement).value).toBe(''));
     await fireEvent.click(screen.getByRole('button', { name: 'Buy all that is left' }));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[1]?.params).toEqual([id('d'), '5.4', true]));
@@ -688,6 +706,8 @@ describe('Simple mode', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
     await answer('yes');
     await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10]));
+    // Done (the host confirmed and ran it): the form is cleared.
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // Asked for by a link: the pools are shown.
     nav.tab = 'pools';
     await waitFor(() => expect(screen.getByRole('table', { name: 'Pools' })).toBeTruthy());

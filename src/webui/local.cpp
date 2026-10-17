@@ -91,37 +91,45 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         // What the wallet holds and did: they need the keys too (a reservation is told by a signature of the wallet).
         {"listmyassets", Bridge::Thread::WORKER},
         {"listassetactivity", Bridge::Thread::WORKER},
-        // What the wallet does: transactions it signs (the keys, below).
-        {"reserveasset", Bridge::Thread::WORKER},
-        {"registerasset", Bridge::Thread::WORKER},
-        {"releaseassetreservation", Bridge::Thread::WORKER},
-        {"sendasset", Bridge::Thread::WORKER},
-        {"mintasset", Bridge::Thread::WORKER},
-        {"burnasset", Bridge::Thread::WORKER},
-        {"updateasset", Bridge::Thread::WORKER},
-        {"transferassetcontrol", Bridge::Thread::WORKER},
-        {"fixassetsupply", Bridge::Thread::WORKER},
-        {"releaseasset", Bridge::Thread::WORKER},
-        {"swapasset", Bridge::Thread::WORKER},
-        {"addliquidity", Bridge::Thread::WORKER},
-        {"removeliquidity", Bridge::Thread::WORKER},
-        {"createauction", Bridge::Thread::WORKER},
-        {"bidauction", Bridge::Thread::WORKER},
-        {"collectauction", Bridge::Thread::WORKER},
+        // What the wallet does, transactions it signs: confirmed on the desktop (ConfirmedRpcMethods, below).
     };
 }
 
 std::set<std::string> KeyedRpcMethods()
 {
-    // Each signs a transaction, but listmyassets and listassetactivity, which sign the nonce of a reservation to tell it
-    // (the wallet asks for its keys to be unlocked for them all, src/wallet/rpc/bitassets.cpp ReadyWallet).
-    return {"listmyassets", "listassetactivity", "reserveasset", "registerasset", "releaseassetreservation", "sendasset", "mintasset", "burnasset",
-            "updateasset", "transferassetcontrol", "fixassetsupply", "releaseasset", "swapasset", "addliquidity", "removeliquidity",
-            "createauction", "bidauction", "collectauction"};
+    // They sign the nonce of a reservation to tell it (src/wallet/rpc/bitassets.cpp ReadyWallet): the passphrase of a locked
+    // wallet asked by the host.
+    return {"listmyassets", "listassetactivity"};
 }
 
-void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm)
+std::map<std::string, confirm::Method> ConfirmedRpcMethods()
 {
+    // What the pages do that pays or signs: never the page's to call by itself. The host shows each call on the desktop, its
+    // destinations whole first, then its amounts, then the rest of its parameters, with the passphrase of a locked wallet
+    // typed there, and runs it with the keys unlocked for it alone (confirm.h, audit 7 #1).
+    return {
+        {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), /*fee_unknown=*/true}},
+        {"registerasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Register an asset", "Register", "The wallet registers an asset it reserved, with the supply shown."), /*fee_unknown=*/true}},
+        {"releaseassetreservation", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release a reservation", "Release", "The wallet gives up a reservation of an asset name."), /*fee_unknown=*/true}},
+        {"sendasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Send an asset", "Send", "The wallet sends units of an asset to the address shown.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
+        {"mintasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Mint an asset", "Mint", "The wallet mints more units of an asset it controls.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
+        {"burnasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Burn an asset", "Burn", "The wallet destroys units of an asset: they cannot come back.", {}, {"amount"}), /*fee_unknown=*/true}},
+        {"updateasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Update an asset", "Update", "The wallet signs a change of an asset it controls."), /*fee_unknown=*/true}},
+        {"transferassetcontrol", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Transfer the control of an asset", "Transfer", "The wallet gives the control of an asset to the address shown: it cannot be taken back.", {"address"}, {}), /*fee_unknown=*/true}},
+        {"fixassetsupply", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Fix the supply of an asset", "Fix the supply", "The wallet fixes the supply of an asset for good: no more can ever be minted."), /*fee_unknown=*/true}},
+        {"releaseasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release an asset", "Release", "The wallet gives up an asset it controls."), /*fee_unknown=*/true}},
+        {"swapasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Swap", "Swap", "The wallet trades an asset in a pool, for at least what is shown.", {}, {"amount_in"}), /*fee_unknown=*/true}},
+        {"addliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Add liquidity", "Add", "The wallet puts both assets into a pool, for shares of it.", {}, {"amount_a", "amount_b"}), /*fee_unknown=*/true}},
+        {"removeliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of a pool, for both assets."), /*fee_unknown=*/true}},
+        {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), /*fee_unknown=*/true}},
+        {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
+        {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},
+    };
+}
+
+void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm, confirm::KeysFn keys)
+{
+    (void)keys;
     // The journal of the app: the assets being created (what to register once each reservation is deep enough), and
     // the prices of the pools as the app saw them; in a file of the data directory, with a sanity cap.
     bridge.RegisterHost("bitassets.store.load", [node](const UniValue&) {
