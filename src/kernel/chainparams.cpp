@@ -550,6 +550,7 @@ public:
         if (opts.sidechain_slot) {
             consensus.sidechain.enabled = true;
             consensus.sidechain.slot = *opts.sidechain_slot;
+            consensus.sidechain.main_activation_height = opts.sidechain_activation_height;
             consensus.sidechain.bundle_retry_delay = 5;
             consensus.sidechain.bitassets_reveal_depth = 2;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
