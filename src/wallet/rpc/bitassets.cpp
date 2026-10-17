@@ -335,6 +335,9 @@ std::string LabelOfAsset(CWallet& wallet, const AssetId& asset)
 
 } // namespace
 
+//! bitassets::NameMimicsNumber: refused by the wallet, not relayed by the mempool.
+constexpr const char* NAME_MIMICS_NUMBER{"The name holds '#', '(', ')' or four digits, a dash and four digits: shown with its number, it would read as the number of another asset"};
+
 RPCMethod reserveasset()
 {
     return RPCMethod{
@@ -358,6 +361,7 @@ RPCMethod reserveasset()
     const std::string name{request.params[0].get_str()};
     if (!bitassets::IsAssetName(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A name is 1 to %u printable characters, without a space at either end", bitassets::MAX_NAME_TEXT_SIZE));
     if (bitassets::ReadsAsAnotherAsset(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The name reads as another asset (CHN, a number such as 1739-0029, or \"0x\" and a hash)");
+    if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, NAME_MIMICS_NUMBER);
     const AssetId asset{bitassets::HashName(name)};
     if (pwallet->chain().getBitAsset(asset)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset of this name is registered");
     const CTxDestination dest{NewDestination(*pwallet, ReservationLabel(name))};
@@ -424,7 +428,11 @@ RPCMethod registerasset()
     reg.supply = supply;
     reg.decimals = decimals;
     if (!request.params[3].isNull()) reg.data = bitassets::ParseData(request.params[3]);
-    if (request.params[4].isNull() || request.params[4].get_bool()) reg.text = name;
+    if (request.params[4].isNull() || request.params[4].get_bool()) {
+        // Published, it would read as another asset's number where names are shown with theirs.
+        if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, std::string{NAME_MIMICS_NUMBER} + " (register it unpublished: public false)");
+        reg.text = name;
+    }
     std::vector<Out> outs{{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset)}};
     if (supply > 0) outs.push_back({ChangeDestination(*pwallet), AssetToken(asset, supply)});
     const CTransactionRef tx{Send(*pwallet, reg, outs, {reservation->outpoint})};
@@ -808,6 +816,7 @@ RPCMethod swapasset()
             {"asset_out", RPCArg::Type::STR, RPCArg::Optional::NO, "What comes out"},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{0.5}, "How much less than the quote, in percent, the trade may give if the pool moves first"},
             {"max_impact", RPCArg::Type::NUM, RPCArg::Default{10}, "The worst price impact accepted, in percent: a trade too large for the pool, which would pay far more than the pool's price, is refused (100: anything)"},
+            {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least that should come out, as the caller showed it (its own quote less the slippage): if the pool moved since, so that the quote now, less the slippage, is below it, the trade is refused rather than signed for less"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -844,6 +853,14 @@ RPCMethod swapasset()
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The trade is too large for this pool: its price would be %.2f%% worse than the pool's (at most %.2f%% accepted; see max_impact)", impact, max_impact));
     }
     const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote, slippage))};
+    // The least the caller confirmed: never signed for less (the pool may have moved since its quote).
+    if (!request.params[5].isNull()) {
+        const uint64_t confirmed{bitassets::ParseUnits(request.params[5], out.decimals)};
+        if (min_out < confirmed) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The pool moved: the trade now gives at least %s %s, less than the %s %s asked for (min_out). Quote it again",
+                                                                bitassets::FormatUnits(min_out, out.decimals), out.label, bitassets::FormatUnits(confirmed, out.decimals), out.label));
+        }
+    }
     std::vector<COutPoint> inputs;
     std::vector<Out> outs;
     CAmount chn_in{0};
@@ -877,6 +894,7 @@ RPCMethod addliquidity()
             {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
             {"amount_b", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "How much of it: needed for a new pool, or an abandoned one. Into a pool someone provides liquidity to, the amounts are the most to put in: only what the pool's price takes goes in"},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How many fewer shares than quoted, in percent, it may give if the pool moves first"},
+            {"sets_price", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "What the caller expects: true, that the amounts set the price (a new pool, or an abandoned one), and refused if someone provides liquidity to the pool by now; false, that they go in at the pool's price, and refused if they would set it. Left out: either"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -901,6 +919,11 @@ RPCMethod addliquidity()
     // pool holds is the dust every pool keeps for good, at whatever price the last trade or the last
     // provider left it: anyone can set it, and nobody should deposit at it unawares.
     const bool sets_price{!pool || bitassets::amm::Abandoned(*pool)};
+    // What the caller showed: a deposit that was to set the price never goes in at someone else's.
+    if (!request.params[5].isNull() && request.params[5].get_bool() != sets_price) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, sets_price ? "Nobody provides liquidity to this pool (any more): the amounts would set its price, which was not expected (sets_price)"
+                                                             : "Someone opened this pool meanwhile: the amounts would go in at its price, not set it (sets_price). Look at its price first");
+    }
     uint64_t amount_b;
     if (!request.params[3].isNull()) {
         amount_b = bitassets::ParseUnits(request.params[3], b.decimals);
