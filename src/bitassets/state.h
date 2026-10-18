@@ -171,6 +171,11 @@ struct AssetData {
     friend bool operator==(const AssetData&, const AssetData&) = default;
 };
 
+// windows.h (winnt.h) defines DELETE, an access right, as a macro; it would break the enumerator below.
+#if defined(WIN32) && defined(DELETE)
+#undef DELETE
+#endif
+
 /** How an update treats one field: delete it, leave it, or set it. */
 enum class UpdateKind : uint8_t { DELETE = 0, RETAIN = 1, SET = 2 };
 
