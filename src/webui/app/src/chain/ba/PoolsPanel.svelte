@@ -10,7 +10,7 @@
   import { nav } from '../../lib/nav.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
-  import { curvePoints, formatAmount, formatPercent, formatPrice, isChn, type Pool } from './model';
+  import { approx, curvePoints, formatAmount, formatPercent, formatPrice, isChn, type Pool } from './model';
   import { ba, decimalsOf, morePools, priceSeries, showMorePools, tradeIntent } from './store.svelte';
 
   let query = $state('');
@@ -33,8 +33,8 @@
 
   /** What a pool traded, in CHN where one side is CHN (else in trades). */
   function volumeChn(p: Pool): number {
-    if (isChn(p.asset_a_id)) return p.volume_a;
-    if (isChn(p.asset_b_id)) return p.volume_b;
+    if (isChn(p.asset_a_id)) return approx(p.volume_a);
+    if (isChn(p.asset_b_id)) return approx(p.volume_b);
     return 0;
   }
 
@@ -64,7 +64,7 @@
       <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(pool.price)}</strong><span class="faint"><SafeText text={pool.asset_b} /> for 1 <SafeText text={pool.asset_a} /></span></div>
       <div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, decimalsOf(pool.asset_a_id), { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, decimalsOf(pool.asset_b_id), { max: 4 })} <SafeText text={pool.asset_b} /></span></div>
       <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatCount(pool.swaps)}</strong><span class="faint">trades since block {formatCount(pool.created)}</span></div>
-      <div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatCount(position.shares)) : t('of %1 shares', formatCount(pool.shares))}</span></div>
+      <div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>
     </section>
     <div class="ba-cols">
       <section class="panel">
@@ -76,7 +76,7 @@
       <section class="panel">
         <div class="panel-head"><h3>The curve</h3></div>
         <div class="panel-body">
-          <Chart points={curvePoints(pool.reserve_a, pool.reserve_b)} marks={[{ x: pool.reserve_a, y: pool.reserve_b }]} logX yZero area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => formatPrice(x, 4)} formatY={(y) => formatPrice(y, 4)} />
+          <Chart points={curvePoints(approx(pool.reserve_a), approx(pool.reserve_b))} marks={[{ x: approx(pool.reserve_a), y: approx(pool.reserve_b) }]} logX yZero area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => formatPrice(x, 4)} formatY={(y) => formatPrice(y, 4)} />
           <p class="ba-help">Volume: {formatAmount(pool.volume_a, decimalsOf(pool.asset_a_id))} <SafeText text={pool.asset_a} /> and {formatAmount(pool.volume_b, decimalsOf(pool.asset_b_id))} <SafeText text={pool.asset_b} /> traded in.</p>
         </div>
       </section>

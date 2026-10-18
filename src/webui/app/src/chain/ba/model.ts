@@ -49,6 +49,21 @@ export interface AssetData {
 export const DATA_FIELDS = ['info', 'commitment', 'ipv4', 'ipv6', 'encryptionkey', 'signingkey'] as const;
 export type DataField = (typeof DATA_FIELDS)[number];
 
+/**
+ * An amount of an asset as the node gives it, in whole assets with its decimals: a number, or the text of its digits
+ * when a double cannot hold it (past 2^53 units: the results of EXACT_METHODS are read exactly, lib/exactjson.ts).
+ * Exact through unitsOf / formatAmount; approx() for a ratio or an order only.
+ */
+export type Amount = number | string;
+
+/** The RPC methods of BitAssets whose results carry amounts: read exactly (audit 7 E-BA6). */
+export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid'];
+
+/** An amount as a double: for a ratio, a chart, an order; never for what is shown or sent. */
+export function approx(value: Amount | undefined | null): number {
+  return value === undefined || value === null ? 0 : typeof value === 'number' ? value : Number(value);
+}
+
 export interface Asset {
   /** The hash of its name (hex). */
   asset: string;
@@ -59,15 +74,15 @@ export interface Asset {
   /** Its number: 1739-0029. */
   seq: string;
   decimals: number;
-  supply: number;
-  minted: number;
-  burned: number;
+  supply: Amount;
+  minted: Amount;
+  burned: Amount;
   fixed: boolean;
   registered: number;
   registration: string;
   data?: AssetData;
   releasable: boolean;
-  release_fee?: number;
+  release_fee?: Amount;
   control?: { txid: string; vout: number; address?: string };
 }
 
@@ -77,13 +92,13 @@ export interface Pool {
   asset_b: string;
   asset_a_id: string;
   asset_b_id: string;
-  reserve_a: number;
-  reserve_b: number;
+  reserve_a: Amount;
+  reserve_b: Amount;
   /** What one of the first asset is worth in the second. */
   price?: number;
-  shares: number;
-  volume_a: number;
-  volume_b: number;
+  shares: Amount;
+  volume_a: Amount;
+  volume_b: Amount;
   swaps: number;
   created: number;
   abandoned: boolean;
@@ -97,14 +112,14 @@ export interface Auction {
   quote: string;
   base_id: string;
   quote_id: string;
-  amount: number;
-  remaining: number;
-  proceeds: number;
-  start_price: number;
-  end_price: number;
+  amount: Amount;
+  remaining: Amount;
+  proceeds: Amount;
+  start_price: Amount;
+  end_price: Amount;
   unit_price: number;
-  price: number;
-  cost_of_remaining: number;
+  price: Amount;
+  cost_of_remaining: Amount;
   start_height: number;
   end_height: number;
   bids: number;
@@ -116,12 +131,12 @@ export interface Holding {
   asset: string;
   label: string;
   decimals: number;
-  balance: number;
-  pending: number;
+  balance: Amount;
+  pending: Amount;
   outputs: number;
   control: boolean;
   control_pending: boolean;
-  supply: number;
+  supply: Amount;
   fixed: boolean;
 }
 
@@ -140,10 +155,10 @@ export interface Position {
   asset_b: string;
   asset_a_id: string;
   asset_b_id: string;
-  shares: number;
+  shares: Amount;
   percent: number;
-  value_a: number;
-  value_b: number;
+  value_a: Amount;
+  value_b: Amount;
 }
 
 export interface Holdings {
@@ -162,19 +177,19 @@ export interface Activity {
 }
 
 export interface SwapQuote {
-  amount_in: number;
-  amount_out: number;
+  amount_in: Amount;
+  amount_out: Amount;
   price: number;
   spot_price: number;
   price_impact: number;
-  fee: number;
+  fee: Amount;
   abandoned: boolean;
 }
 
 export interface BidQuote {
-  buys: number;
-  remaining: number;
-  cost_of_remaining: number;
+  buys: Amount;
+  remaining: Amount;
+  cost_of_remaining: Amount;
   open: boolean;
 }
 
@@ -599,7 +614,7 @@ export function auctionCostOfRemaining(a: AuctionUnits, height: number): bigint 
 
 /** The share of an auction sold, and of its time gone, from 0 to 1. */
 export function auctionProgress(a: Pick<Auction, 'amount' | 'remaining' | 'start_height' | 'end_height'>, height: number): { sold: number; time: number } {
-  const sold = a.amount > 0 ? 1 - a.remaining / a.amount : 0;
+  const sold = approx(a.amount) > 0 ? 1 - approx(a.remaining) / approx(a.amount) : 0;
   const span = a.end_height - a.start_height + 1;
   const time = height < a.start_height ? 0 : span > 0 ? Math.min(1, (height - a.start_height + 1) / span) : 1;
   return { sold: Math.max(0, Math.min(1, sold)), time };

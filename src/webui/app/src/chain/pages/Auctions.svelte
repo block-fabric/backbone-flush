@@ -18,7 +18,7 @@
   import AuctionView from '../ba/AuctionView.svelte';
   import Chart from '../ba/Chart.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
-  import { amountParam, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsAtMost, unitsOf, type Auction } from '../ba/model';
+  import { amountParam, approx, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsAtMost, unitsOf, type Auction } from '../ba/model';
   import { ba, decimalsOf, labelOf, moreAuctions, nameOf, refreshBitAssets, sellIntent, showMoreAuctions, startBitAssets } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
@@ -87,7 +87,7 @@
   let duration = $state(60);
   let startIn = $state(1);
   let busy = $state(false);
-  const holdings = $derived((ba.mine?.assets ?? []).filter((h) => h.balance > 0));
+  const holdings = $derived((ba.mine?.assets ?? []).filter((h) => approx(h.balance) > 0));
   const sellChoices = $derived(holdings.map((h) => ({ id: h.asset, label: h.label, held: formatAmount(h.balance, h.decimals, { max: 4 }) })));
   const quoteChoices = $derived(ba.assets.map((a) => ({ id: a.asset, label: a.label, seq: a.seq })));
   $effect(() => {

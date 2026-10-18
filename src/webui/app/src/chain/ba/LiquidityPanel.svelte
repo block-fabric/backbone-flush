@@ -47,7 +47,7 @@
     return {
       reserve0: unitsOf(flip ? pool.reserve_b : pool.reserve_a, da),
       reserve1: unitsOf(flip ? pool.reserve_a : pool.reserve_b, db),
-      shares: BigInt(Math.round(pool.shares)),
+      shares: unitsOf(pool.shares, 0),
       chn0: isChn(a),
       chn1: isChn(b),
     };

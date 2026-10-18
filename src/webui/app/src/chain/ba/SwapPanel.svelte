@@ -12,7 +12,7 @@
   import AssetSelect from './AssetSelect.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
+  import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
@@ -109,14 +109,15 @@
   const reserves = $derived.by(() => {
     if (!pool) return null;
     const payFirst = pool.asset_a_id === pay;
-    return { pay: payFirst ? pool.reserve_a : pool.reserve_b, get: payFirst ? pool.reserve_b : pool.reserve_a };
+    // As doubles: for the curve and the price shown, never for what is sent.
+    return { pay: approx(payFirst ? pool.reserve_a : pool.reserve_b), get: approx(payFirst ? pool.reserve_b : pool.reserve_a) };
   });
   const curve = $derived(reserves ? curvePoints(reserves.pay, reserves.get) : []);
   const marks = $derived.by(() => {
     if (!reserves) return [];
     const now = { x: reserves.pay, y: reserves.get };
     if (!quote) return [now];
-    return [now, { x: reserves.pay + quote.amount_in, y: reserves.get - quote.amount_out, alt: true }];
+    return [now, { x: reserves.pay + approx(quote.amount_in), y: reserves.get - approx(quote.amount_out), alt: true }];
   });
 
   function flip() {

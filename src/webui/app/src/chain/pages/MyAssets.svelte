@@ -23,6 +23,7 @@
   import UnitsInput from '../ba/UnitsInput.svelte';
   import {
     amountParam,
+    approx,
     assetArg,
     formatAmount,
     formatPercent,
@@ -60,7 +61,7 @@
 
   const noWallet = $derived(!walletsEnabled() || wallets.current === null);
   const mine = $derived(ba.wallet === wallets.current ? ba.mine : null);
-  const holdings = $derived((mine?.assets ?? []).slice().sort((a, b) => (chnPrice(b.asset) ?? 0) * b.balance - (chnPrice(a.asset) ?? 0) * a.balance || a.label.localeCompare(b.label)));
+  const holdings = $derived((mine?.assets ?? []).slice().sort((a, b) => (chnPrice(b.asset) ?? 0) * approx(b.balance) - (chnPrice(a.asset) ?? 0) * approx(a.balance) || a.label.localeCompare(b.label)));
   let picked = $state<string | null>(null);
   $effect(() => {
     void nav.focus;
@@ -74,7 +75,7 @@
     if (holdings.length && (picked === null || !holdings.some((h) => h.asset === picked))) picked = holdings[0].asset;
   });
   const holding = $derived(holdings.find((h) => h.asset === picked) ?? null);
-  const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * h.balance, 0));
+  const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * approx(h.balance), 0));
   const priced = $derived(holdings.filter((h) => chnPrice(h.asset) !== undefined).length);
 
   // --- Being issued: what this app is creating, and the reservations of the wallet ---
@@ -160,9 +161,9 @@
     const flip = pool.asset_a_id !== pos.asset_a_id;
     const ra = unitsOf(flip ? pool.reserve_b : pool.reserve_a, da);
     const rb = unitsOf(flip ? pool.reserve_a : pool.reserve_b, db);
-    const held = BigInt(Math.round(pos.shares));
+    const held = unitsOf(pos.shares, 0);
     const shares = percent >= 100 ? held : (held * BigInt(Math.round(percent * 100))) / 10000n;
-    const [a, b] = withdraw({ reserve0: ra, reserve1: rb, shares: BigInt(Math.round(pool.shares)), chn0: /^0+$/.test(pos.asset_a_id), chn1: /^0+$/.test(pos.asset_b_id) }, shares);
+    const [a, b] = withdraw({ reserve0: ra, reserve1: rb, shares: unitsOf(pool.shares, 0), chn0: /^0+$/.test(pos.asset_a_id), chn1: /^0+$/.test(pos.asset_b_id) }, shares);
     return { a, b };
   }
   async function removeLiquidity(pos: Position) {
@@ -267,7 +268,7 @@
     {/if}
 
     <section class="ba-figures">
-      <div class="panel ba-figure"><span class="muted">Assets held</span><strong>{holdings.filter((h) => h.balance > 0).length}</strong><span class="faint">{tn('%n controlled', holdings.filter((h) => h.control).length)}</span></div>
+      <div class="panel ba-figure"><span class="muted">Assets held</span><strong>{holdings.filter((h) => approx(h.balance) > 0).length}</strong><span class="faint">{tn('%n controlled', holdings.filter((h) => h.control).length)}</span></div>
       <div class="panel ba-figure"><span class="muted">Worth</span><strong>{formatPrice(worth)} CHN</strong><span class="faint">{priced} of {holdings.length} with a market</span></div>
       {#if simple}
         <div class="panel ba-figure"><span class="muted">Being created</span><strong>{issuingCount}</strong><span class="faint">in your assets once registered</span></div>
@@ -298,12 +299,12 @@
                       <SafeText text={h.label} />
                       <span class="faint small line">
                         {#if h.control}<span class="ba-tag accent">controlled</span>{/if}
-                        <span>{h.supply > 0 ? formatPercent((h.balance / h.supply) * 100) : '–'} of the supply</span>
+                        <span>{approx(h.supply) > 0 ? formatPercent((approx(h.balance) / approx(h.supply)) * 100) : '–'} of the supply</span>
                       </span>
                     </span>
                     <span class="side">
                       <strong class="num">{formatAmount(h.balance, h.decimals, { max: 6 })}</strong>
-                      {#if h.pending > 0}<span class="ba-warn small">+{formatAmount(h.pending, h.decimals, { max: 6 })} waiting</span>{:else if price !== undefined}<span class="faint small">≈ {formatPrice(price * h.balance)} CHN</span>{/if}
+                      {#if approx(h.pending) > 0}<span class="ba-warn small">+{formatAmount(h.pending, h.decimals, { max: 6 })} waiting</span>{:else if price !== undefined}<span class="faint small">≈ {formatPrice(price * approx(h.balance))} CHN</span>{/if}
                     </span>
                   </button>
                 </li>
@@ -396,7 +397,7 @@
               </header>
               <div class="ba-bar"><span use:barWidth={pos.percent / 100}></span></div>
               <dl class="ba-lines">
-                <dt>Shares</dt><dd>{formatCount(pos.shares)}</dd>
+                <dt>Shares</dt><dd>{formatAmount(pos.shares, 0)}</dd>
                 <dt>Worth now</dt><dd>{formatAmount(pos.value_a, decimalsOf(pos.asset_a_id))} <SafeText text={pos.asset_a} /></dd>
                 <dt></dt><dd>{formatAmount(pos.value_b, decimalsOf(pos.asset_b_id))} <SafeText text={pos.asset_b} /></dd>
               </dl>
@@ -443,7 +444,7 @@
                   <span><strong>{formatAmount(a.amount, decimalsOf(a.base_id))}</strong> <SafeText text={a.base} /> <span class="faint">for</span> <SafeText text={a.quote} /></span>
                   <span class="ba-tag" class:accent={a.status === 'open'}>{t(AUCTION_STATUS[a.status] ?? 'Ended')}</span>
                 </header>
-                <div class="ba-bar" title={t('Sold')}><span use:barWidth={a.amount ? 1 - a.remaining / a.amount : 0}></span></div>
+                <div class="ba-bar" title={t('Sold')}><span use:barWidth={approx(a.amount) ? 1 - approx(a.remaining) / approx(a.amount) : 0}></span></div>
                 <dl class="ba-lines">
                   <dt>Left</dt><dd>{formatAmount(a.remaining, decimalsOf(a.base_id))} <SafeText text={a.base} /></dd>
                   <dt>Brought in</dt><dd>{formatAmount(a.proceeds, decimalsOf(a.quote_id))} <SafeText text={a.quote} /></dd>

@@ -13,7 +13,7 @@
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import AssetView from '../ba/AssetView.svelte';
-  import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
+  import { approx, assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
   import { ba, chnPrice, poolOf, startBitAssets } from '../ba/store.svelte';
 
   $effect(() => startBitAssets());
@@ -83,7 +83,7 @@
   function traded(id: string): number {
     const p = poolOf(id, '0'.repeat(64));
     if (!p) return 0;
-    return p.asset_a_id === id ? p.volume_b : p.volume_a;
+    return approx(p.asset_a_id === id ? p.volume_b : p.volume_a);
   }
 
   const counts = $derived({
@@ -106,7 +106,7 @@
       if (!q) return true;
       return a.label.toLowerCase().includes(q) || a.seq === q || a.asset.startsWith(q.replace(/^0x/, '')) || (a.data?.info ?? '').toLowerCase().includes(q);
     });
-    const value = (a: Asset) => (chnPrice(a.asset) ?? 0) * a.supply;
+    const value = (a: Asset) => (chnPrice(a.asset) ?? 0) * approx(a.supply);
     out = [...out].sort((a, b) => {
       switch (sort) {
         case 'oldest':
@@ -114,7 +114,7 @@
         case 'name':
           return a.label.localeCompare(b.label);
         case 'supply':
-          return b.supply - a.supply;
+          return approx(b.supply) - approx(a.supply);
         case 'value':
           return value(b) - value(a);
         case 'traded':

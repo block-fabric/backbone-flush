@@ -15,7 +15,7 @@
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
-  import { assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
+  import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
   import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { id, onback }: { id: string; onback?: () => void } = $props();
@@ -71,8 +71,8 @@
   const chnPool = $derived(pools.find((p) => isChn(p.asset_b_id) || isChn(p.asset_a_id)));
   const series = $derived(chnPool ? priceSeries(chnPool, id).map((p) => ({ x: p.h, y: p.p })) : []);
   const supplyUnits = $derived(asset ? asset.minted : 0);
-  const burnedShare = $derived(asset && asset.minted > 0 ? asset.burned / asset.minted : 0);
-  const heldShare = $derived(asset && holding && asset.supply > 0 ? holding.balance / asset.supply : 0);
+  const burnedShare = $derived(asset && approx(asset.minted) > 0 ? approx(asset.burned) / approx(asset.minted) : 0);
+  const heldShare = $derived(asset && holding && approx(asset.supply) > 0 ? approx(holding.balance) / approx(asset.supply) : 0);
   /** The changes of each field, newest first; the registration's empty stamps left out (as chains-qt left them out). */
   const changes = $derived(
     DATA_FIELDS.flatMap((field) => (history[field] ?? []).filter((e, i) => !(i === 0 && e.value === null)).map((e) => ({ field, ...e }))).sort((a, b) => b.height - a.height),
@@ -150,8 +150,8 @@
       </div>
       <div class="hero-actions">
         <button type="button" class="btn primary" onclick={() => trade('0'.repeat(64))}><Icon name="swap" size={15} /> Trade</button>
-        {#if holding && holding.balance > 0}<button type="button" class="btn" onclick={send}><Icon name="send" size={15} /> Send</button>{/if}
-        {#if holding && holding.balance > 0}<button type="button" class="btn" onclick={sell}><Icon name="gavel" size={15} /> Sell by auction</button>{/if}
+        {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={send}><Icon name="send" size={15} /> Send</button>{/if}
+        {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={sell}><Icon name="gavel" size={15} /> Sell by auction</button>{/if}
         {#if controlled}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="crown" size={15} /> Manage</button>{/if}
       </div>
     </header>
@@ -159,7 +159,7 @@
     <section class="ba-figures">
       <div class="panel ba-figure"><span class="muted">Supply</span><strong>{formatAmount(asset.supply, asset.decimals)}</strong><span class="faint">{asset.decimals} decimals</span></div>
       <div class="panel ba-figure"><span class="muted">Price</span><strong>{price !== undefined ? formatPrice(price) : '–'}</strong><span class="faint">{price !== undefined ? 'CHN, in its pool' : 'No pool with CHN'}</span></div>
-      <div class="panel ba-figure"><span class="muted">Value of the supply</span><strong>{price !== undefined ? formatPrice(price * asset.supply) : '–'}</strong><span class="faint">CHN at that price</span></div>
+      <div class="panel ba-figure"><span class="muted">Value of the supply</span><strong>{price !== undefined ? formatPrice(price * approx(asset.supply)) : '–'}</strong><span class="faint">CHN at that price</span></div>
       <div class="panel ba-figure"><span class="muted">You hold</span><strong>{holding ? formatAmount(holding.balance, asset.decimals) : '0'}</strong><span class="faint">{heldShare ? formatPercent(heldShare * 100) : '–'} of the supply</span></div>
     </section>
 

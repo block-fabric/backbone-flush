@@ -10,7 +10,7 @@
   import { wallets } from '../lib/state.svelte';
   import './ba/ba.css';
   import AssetBadge from './ba/AssetBadge.svelte';
-  import { formatAmount, formatPrice, isChn, unitPrice } from './ba/model';
+  import { approx, formatAmount, formatPrice, isChn, unitPrice } from './ba/model';
   import { ba, chnPrice, decimalsOf, pendingOf, startBitAssets } from './ba/store.svelte';
   import { simpleMode } from '../lib/uimode.svelte';
 
@@ -19,12 +19,12 @@
   const simple = $derived(simpleMode());
 
   const holdings = $derived(ba.wallet === wallets.current ? (ba.mine?.assets ?? []) : []);
-  const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * h.balance, 0));
+  const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * approx(h.balance), 0));
   const top = $derived(
     holdings
-      .filter((h) => h.balance > 0)
+      .filter((h) => approx(h.balance) > 0)
       .slice()
-      .sort((a, b) => (chnPrice(b.asset) ?? 0) * b.balance - (chnPrice(a.asset) ?? 0) * a.balance)
+      .sort((a, b) => (chnPrice(b.asset) ?? 0) * approx(b.balance) - (chnPrice(a.asset) ?? 0) * approx(a.balance))
       .slice(0, 3),
   );
   const issuing = $derived(pendingOf(wallets.current).length + (ba.mine?.reservations.filter((r) => !pendingOf(wallets.current).some((p) => p.name === r.name)).length ?? 0));
@@ -49,7 +49,7 @@
     <Card title="My assets" icon="holdings" open={() => go('my-assets')} openLabel="Open My assets" stat>
       <span class="value num">{formatPrice(worth)} CHN</span>
       <dl class="pairs">
-        <dt>Assets held</dt><dd class="num">{holdings.filter((h) => h.balance > 0).length}</dd>
+        <dt>Assets held</dt><dd class="num">{holdings.filter((h) => approx(h.balance) > 0).length}</dd>
         <dt>Controlled</dt><dd class="num">{holdings.filter((h) => h.control).length}</dd>
         <dt>Being issued</dt><dd class="num">{issuing}</dd>
       </dl>

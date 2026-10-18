@@ -105,7 +105,7 @@ function fresh() {
   };
 }
 
-function units(n: number, d: number): bigint {
+function units(n: number | string, d: number): bigint {
   return unitsOf(n, d);
 }
 

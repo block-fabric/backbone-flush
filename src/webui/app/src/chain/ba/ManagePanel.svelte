@@ -14,7 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
+  import { amountParam, approx, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
   import { nameOf, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
@@ -229,7 +229,7 @@
     <div class="who">
       <h2><SafeText text={holding.label} /></h2>
       <p class="amount"><strong class="num">{formatAmount(holding.balance, decimals)}</strong> <span class="muted">of {formatAmount(holding.supply, decimals)} in all</span></p>
-      {#if holding.pending > 0}<p class="ba-warn small">+{formatAmount(holding.pending, decimals)} on the way: spendable after the next block</p>{/if}
+      {#if approx(holding.pending) > 0}<p class="ba-warn small">+{formatAmount(holding.pending, decimals)} on the way: spendable after the next block</p>{/if}
       {#if holding.control_pending}<p class="faint small">The control coin is moving, with a transaction waiting for a block: minting and changes are possible again after it.</p>{/if}
     </div>
   </header>

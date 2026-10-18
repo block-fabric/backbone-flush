@@ -13,7 +13,7 @@
   import './ba/ba.css';
   import AssetBadge from './ba/AssetBadge.svelte';
   import UnitsInput from './ba/UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, formatAmount, formatUnits, unitsAtMost, unitsOf } from './ba/model';
+  import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatUnits, unitsAtMost, unitsOf } from './ba/model';
   import { ba, nameOf, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
 
   let { active = $bindable(false) }: { active?: boolean } = $props();
@@ -21,7 +21,7 @@
   $effect(() => startBitAssets());
 
   let what = $state(CHN_ID);
-  const holdings = $derived(ba.wallet === wallets.current ? (ba.mine?.assets ?? []).filter((h) => h.balance > 0 || h.asset === what) : []);
+  const holdings = $derived(ba.wallet === wallets.current ? (ba.mine?.assets ?? []).filter((h) => approx(h.balance) > 0 || h.asset === what) : []);
   $effect(() => {
     if (sendIntent.asset) {
       what = sendIntent.asset;
@@ -94,7 +94,7 @@
     <form class="panel ba-form asset-send" onsubmit={(e) => { e.preventDefault(); void send(); }}>
       <h2 class="title"><AssetBadge id={holding.asset} label={holding.label} /> </h2>
       {#key formKey}<AddressInput id="asset-to" label="Pay to" bind:value={to} bind:valid={toValid} />{/key}
-      <UnitsInput id="asset-amount" label="Amount" {decimals} bind:units={amount} bind:text={amountText} max={held} unit={holding.label} hint={holding.pending > 0 ? t('%1 more on the way: spendable after the next block', formatAmount(holding.pending, decimals)) : ''} />
+      <UnitsInput id="asset-amount" label="Amount" {decimals} bind:units={amount} bind:text={amountText} max={held} unit={holding.label} hint={approx(holding.pending) > 0 ? t('%1 more on the way: spendable after the next block', formatAmount(holding.pending, decimals)) : ''} />
       <p class="ba-help">You hold {formatAmount(holding.balance, decimals)} <SafeText text={holding.label} />. The fee of the transaction is paid in CHN.</p>
       <div class="row">
         <button type="submit" class="btn primary" disabled={busy || !toValid || amount === null}><Icon name="send" size={17} /> {busy ? 'Working…' : 'Send'}</button>

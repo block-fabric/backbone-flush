@@ -6,14 +6,17 @@
 // bitassets.store.*, src/webui/local.cpp): the assets being created (the name, supply, decimals and data to
 // register once the reservation is deep enough, as chains-qt kept them in QSettings; registered by themselves,
 // as chains-qt did), and the prices of the pools as the app saw them (the charts).
-import { BridgeError, request } from '../../lib/bridge';
+import { BridgeError, request, setExactMethods } from '../../lib/bridge';
 import { errorText, walletRpc, withKeys } from '../../lib/dialogs.svelte';
 import { t } from '../../lib/i18n.svelte';
 import { every } from '../../lib/poll';
 import { rpc } from '../../lib/rpc';
 import { node, toast, wallets } from '../../lib/state.svelte';
 import { WalletError } from '../../lib/wallet';
-import type { Activity, Asset, AssetData, Auction, BitAssetsInfo, Holdings, Pool } from './model';
+import { EXACT_METHODS, type Activity, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holdings, type Pool } from './model';
+
+// Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
+setExactMethods(EXACT_METHODS);
 
 /** An asset this app is creating: reserved, then registered once the reservation is deep enough. */
 export interface PendingIssue {
@@ -592,6 +595,6 @@ export function chnPrice(id: string): number | undefined {
 }
 
 /** What the wallet can spend of an asset, in its units (CHN: undefined, the kit knows it). */
-export function heldOf(id: string): number | undefined {
+export function heldOf(id: string): Amount | undefined {
   return ba.mine?.assets.find((a) => a.asset === id)?.balance;
 }
