@@ -303,6 +303,28 @@ public:
     std::map<drivechain::SidechainId, Txid> m_bmm_requests GUARDED_BY(cs);
     //! The transaction that asks to take a withdrawal back; there is at most one per withdrawal.
     std::map<COutPoint, Txid> m_refunds GUARDED_BY(cs);
+    //! On BitAssets: the transactions with a marker, and the assets being registered, by the transaction that registers them.
+    std::set<Txid> m_bitassets_txs GUARDED_BY(cs);
+    std::map<uint256, Txid> m_bitassets_registrations GUARDED_BY(cs);
+    //! The assets being retired, by the transaction that retires them.
+    std::map<uint256, Txid> m_bitassets_releases GUARDED_BY(cs);
+    //! What the check of each transaction with a marker read of the state when it was last checked
+    //! against the tip (bitassets::RecordingView): it is checked again only once one of those keys,
+    //! or a key under one of those prefixes, changed...
+    struct BitAssetsReads {
+        std::vector<std::vector<unsigned char>> keys;
+        std::vector<std::vector<unsigned char>> prefixes;
+    };
+    std::map<Txid, BitAssetsReads> m_bitassets_reads GUARDED_BY(cs);
+    std::map<std::vector<unsigned char>, std::set<Txid>> m_bitassets_key_readers GUARDED_BY(cs);
+    std::map<std::vector<unsigned char>, std::set<Txid>> m_bitassets_prefix_readers GUARDED_BY(cs);
+    //! ... except these, checked again at every change of the tip: not checked against one yet, or
+    //! whose check depends on the height (bitassets::CheckDependsOnHeight).
+    std::set<Txid> m_bitassets_unindexed GUARDED_BY(cs);
+    /** Note what a transaction's check read (nullopt: check it again at every change of the tip). */
+    void SetBitAssetsReads(const Txid& txid, std::optional<BitAssetsReads> reads) EXCLUSIVE_LOCKS_REQUIRED(cs);
+    /** The transactions with a marker whose check read a key of these, or under one (each once). */
+    std::set<Txid> BitAssetsReaders(const std::set<std::vector<unsigned char>>& changed) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     //! On a sidechain, the transactions with rules of its own (sidechain::ChainHooks::HasTxRules): the
     //! keys of the state each one's rules read (TxRuleKeys), nothing if the hooks cannot tell...
     std::map<Txid, std::optional<std::vector<std::vector<unsigned char>>>> m_rule_keys_of GUARDED_BY(cs);

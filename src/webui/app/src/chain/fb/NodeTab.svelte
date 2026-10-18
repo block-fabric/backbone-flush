@@ -1,8 +1,7 @@
 <script lang="ts">
-  // Staking, This node: the node as a validator (its keys and their state, staking on or off, where its share of
-  // fees goes, what it made and missed), the slots it leads next, the staking income of the wallet and its coins
-  // by finality.
-  import Amount from '../../components/Amount.svelte';
+  // Staking, Validator: the node as a validator (its keys and their state, staking on or off, where its share of
+  // fees goes, what it made and missed) and the slots it leads next. (The staking income of the wallet and its
+  // coins by finality are in Overview: fb/OverviewTab.svelte.)
   import CopyButton from '../../components/CopyButton.svelte';
   import Icon from '../../components/Icon.svelte';
   import SafeText from '../../components/SafeText.svelte';
@@ -10,16 +9,10 @@
   import { errorText, inform } from '../../lib/dialogs.svelte';
   import { formatCount, formatTime } from '../../lib/format';
   import { t, tn } from '../../lib/i18n.svelte';
-  import { go } from '../../lib/nav.svelte';
-  import { wallets } from '../../lib/state.svelte';
-  import { coinsToSats } from '../../lib/units';
-  import { css } from '../../lib/actions';
   import { clock } from './clock.svelte';
   import Key from './Key.svelte';
-  import { slotsLed, stateText, stateTip, stateTone, untilText, validatorState, type Income } from './model';
+  import { slotsLed, stateText, stateTip, stateTone, untilText, validatorState } from './model';
   import { fb, refreshFb } from './store.svelte';
-
-  let { income }: { income: Income | null } = $props();
 
   const pos = $derived(fb.pos);
   const staking = $derived(fb.staking);
@@ -43,9 +36,6 @@
     }
   }
 
-  const finality = $derived(fb.finality);
-  const finalityTotal = $derived(finality ? coinsToSats(finality.soft) + coinsToSats(finality.anchored) + coinsToSats(finality.final) : 0n);
-  const part = (coins: number) => (finalityTotal > 0n ? Number((coinsToSats(coins) * 10000n) / finalityTotal) / 100 : 0);
 </script>
 
 <div class="side-cols">
@@ -123,65 +113,3 @@
     </div>
   </section>
 </div>
-
-<div class="side-cols">
-  <section class="panel" aria-labelledby="fb-income-title">
-    <div class="panel-head">
-      <h2 id="fb-income-title">Staking income of this wallet</h2>
-      <button type="button" class="btn small ghost" onclick={() => go('transactions')}>Transactions <Icon name="arrow" size={14} /></button>
-    </div>
-    {#if wallets.current === null || !income}
-      <p class="side-empty">Open a wallet to see what it earned from staking.</p>
-    {:else}
-      <div class="side-table-wrap">
-        <table class="side-table" aria-label="Staking income">
-          <thead><tr><th></th><th class="end">Today</th><th class="end">In all</th></tr></thead>
-          <tbody>
-            <tr><td title={t("The producer's share of the fees of the blocks of stake made, paid to this wallet")}>Staked</td><td class="end"><Amount sats={income.today.staked} /></td><td class="end"><Amount sats={income.staked} /></td></tr>
-            <tr><td title={t('The fee pot (and a share of the penalties) paid to this wallet for BMM: a BMM commitment it bid for, or a merged mined block')}>BMM rewards</td><td class="end"><Amount sats={income.today.bmm} /></td><td class="end"><Amount sats={income.bmm} /></td></tr>
-            <tr><td title={t("The reporter's share of the penalty of a validator that signed two blocks for a slot, for proofs this wallet's blocks carried")}>Slashing rewards</td><td class="end"><Amount sats={income.today.slashing} /></td><td class="end"><Amount sats={income.slashing} /></td></tr>
-            <tr class="total"><td>Total</td><td class="end"><Amount sats={income.today.staked + income.today.bmm + income.today.slashing} /></td><td class="end"><Amount sats={income.staked + income.bmm + income.slashing} /></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="side-note fb-small pad">{tn('From %n block(s) of stake whose share this wallet received (%1 today).', income.blocks, formatCount(income.today.blocks))}</p>
-    {/if}
-  </section>
-
-  <section class="panel" aria-labelledby="fb-coins-title">
-    <div class="panel-head"><h2 id="fb-coins-title">Coins of this wallet by finality</h2></div>
-    <div class="panel-body">
-      {#if wallets.current === null}
-        <p class="side-note">Open a wallet to see how final its coins are.</p>
-      {:else if !finality}
-        <p class="side-note">The node does not say how final the coins are.</p>
-      {:else}
-        <div class="fb-finality">
-          <div class="stack" role="img" aria-label={t('Soft %1 %, BMM-confirmed %2 %, final %3 %', part(finality.soft), part(finality.anchored), part(finality.final))}>
-            <span class="final" use:css={{ width: `${part(finality.final)}%` }}></span>
-            <span class="anchored" use:css={{ width: `${part(finality.anchored)}%` }}></span>
-            <span class="soft" use:css={{ width: `${part(finality.soft)}%` }}></span>
-          </div>
-          <dl>
-            <dt><i class="final"></i><span>Final</span></dt><dd><Amount sats={coinsToSats(finality.final)} /></dd>
-            <dt><i class="anchored"></i><span>BMM-confirmed</span></dt><dd><Amount sats={coinsToSats(finality.anchored)} /></dd>
-            <dt><i class="soft"></i><span>Soft</span></dt><dd><Amount sats={coinsToSats(finality.soft)} /></dd>
-          </dl>
-          <p class="side-note fb-small">
-            Soft: only blocks of stake are on it, like an unconfirmed payment with slashing behind it. BMM-confirmed: a BMM commitment on the mainchain covers it; undoing it takes the mainchain's merged miners, not stake. Final: enough BMM commitments cover it.
-            {#if fb.anchors}{t('The chain is BMM-confirmed up to block %1 and final up to block %2.', formatCount(Math.max(0, fb.anchors.anchoredheight)), fb.anchors.finalheight >= 0 ? formatCount(fb.anchors.finalheight) : '–')}{/if}
-          </p>
-        </div>
-      {/if}
-    </div>
-  </section>
-</div>
-
-<style>
-  .total td {
-    font-weight: 650;
-  }
-  .pad {
-    padding: 0.6rem 0.8rem 0.9rem;
-  }
-</style>

@@ -5,6 +5,8 @@
 #ifndef BITCOIN_WEBUI_LOCAL_H
 #define BITCOIN_WEBUI_LOCAL_H
 
+#include <univalue.h>
+#include <util/fs.h>
 #include <webui/bridge.h>
 #include <webui/confirm.h>
 #include <webui/guard.h>
@@ -58,6 +60,19 @@ using NodeFn = std::function<interfaces::Node&()>;
  * keys(wallet, dialog, always, fee_unknown, run), as rpc.confirmed does (confirm.h KeysFn); empty without wallets.
  */
 void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm, confirm::KeysFn keys);
+
+/**
+ * BitAssets: the journal of the app (bitassets.store.load, bitassets.store.save), a JSON object in a file of
+ * the data directory of the network, written whole and flushed before it replaces the old one: the assets
+ * being created (the name, supply and data to register once the reservation is deep enough, as chains-qt
+ * kept them in QSettings) and the prices of the pools as the app saw them (the chain keeps no history of them).
+ */
+inline constexpr const char* JOURNAL_FILE{"bitassets-journal.json"};
+inline constexpr size_t MAX_STORE_BYTES{32 << 20};
+/** The object of a store; null when there is none (or it could not be read: then kept aside as <file>.unreadable). */
+UniValue ReadStore(const fs::path& path);
+/** Write a store (an object). Throws HostError. */
+void WriteStore(const fs::path& path, const UniValue& value);
 
 /**
  * What each output of the coinbase of a block of the wallet pays, by the chain's own words (a short id,

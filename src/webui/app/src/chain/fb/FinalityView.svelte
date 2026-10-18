@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Finality & BMM: how far the chain is BMM-confirmed and final, the blocks still waiting for a BMM commitment,
+  // Staking, Network, Finality & BMM (the page of its own FastBlocks had): how far the chain is BMM-confirmed and final, the blocks still waiting for a BMM commitment,
   // the newest BMM blocks (blocks of stake that record a BMM commitment, and merged mined ones), the tickets this
   // node knows (what BMM bidders ask the mainchain to commit to), commitments the active chain leaves out, the fee
   // pot BMM bidders win, and what this node itself bids (-validatoranchorbid). getanchorinfo, getposinfo, getblock;
@@ -7,7 +7,6 @@
   import Amount from '../../components/Amount.svelte';
   import Icon from '../../components/Icon.svelte';
   import Pager from '../../components/Pager.svelte';
-  import SafeText from '../../components/SafeText.svelte';
   import { stacked } from '../../lib/actions';
   import { formatCount, formatTime, shortHash } from '../../lib/format';
   import { t, tn } from '../../lib/i18n.svelte';
@@ -17,9 +16,9 @@
   import { side, startSide } from '../../lib/sidestate.svelte';
   import { coinsToSats } from '../../lib/units';
   import { CHAIN } from '../config';
-  import '../fb/fb.css';
-  import { blockKind, finalityText, kindText, type BlockKind } from '../fb/model';
-  import { fb, followTip, startFb } from '../fb/store.svelte';
+  import './fb.css';
+  import { blockKind, finalityText, kindText, type BlockKind } from './model';
+  import { fb, followTip, startFb } from './store.svelte';
 
   $effect(() => startFb());
   $effect(() => {
@@ -99,17 +98,8 @@
   const anchoring = $derived(fb.anchoring);
 </script>
 
-<div class="page fb-page finality">
-  <header class="page-head">
-    <h1>Finality &amp; BMM</h1>
-    {#if anchors}<span class="muted">{tn('a block is final after %n BMM commitment(s)', anchors.finalanchors)}</span>{/if}
-  </header>
+<div class="fb-view finality">
 
-  {#if fb.error}
-    <p class="side-note side-bad" role="alert"><SafeText text={fb.error} /></p>
-  {:else if pos?.stalled && pos.active}
-    <p class="side-note side-warn" role="status">No blocks of stake lately: merged mined blocks carry the transactions until they come again.</p>
-  {/if}
 
   <section class="side-stats" aria-label="Finality">
     <div class="panel side-stat">

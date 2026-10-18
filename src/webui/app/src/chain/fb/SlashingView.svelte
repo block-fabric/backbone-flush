@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Slashing & jail: the rules a validator lives by, the penalties and rewards so far (getposinfo), the proofs this
+  // Staking, Network, Slashing & jail (the page of its own FastBlocks had): the rules a validator lives by, the penalties and rewards so far (getposinfo), the proofs this
   // node knows that a leader signed two blocks for one slot (listevidence: the validator, the slot, the two blocks,
   // the proof to copy), the validators jailed or banned now (listbonds with all, or the set's own word without a
   // wallet), and a proof given by hand (submitevidence: the node checks it, keeps it and relays it).
@@ -15,10 +15,10 @@
   import { rpc } from '../../lib/rpc';
   import { node, wallets } from '../../lib/state.svelte';
   import { coinsToSats } from '../../lib/units';
-  import '../fb/fb.css';
-  import Key from '../fb/Key.svelte';
-  import type { Evidence, WalletBond } from '../fb/model';
-  import { fb, followTip, refreshFb, startFb } from '../fb/store.svelte';
+  import './fb.css';
+  import Key from './Key.svelte';
+  import type { Evidence, WalletBond } from './model';
+  import { fb, followTip, refreshFb, startFb } from './store.svelte';
 
   $effect(() => startFb());
   $effect(() => {
@@ -92,10 +92,7 @@
   }
 </script>
 
-<div class="page fb-page slashing">
-  <header class="page-head"><h1>Slashing &amp; jail</h1></header>
-
-  {#if fb.error}<p class="side-note side-bad" role="alert"><SafeText text={fb.error} /></p>{/if}
+<div class="fb-view slashing">
 
   <section class="side-stats" aria-label="Penalties">
     <div class="panel side-stat">

@@ -7,6 +7,8 @@
 
 #include <validation.h>
 
+#include <bitassets/state.h>
+
 #include <arith_uint256.h>
 #include <chain.h>
 #include <checkqueue.h>
@@ -654,6 +656,8 @@ private:
         CAmount m_base_fees;
         /** Base fees + any fee delta set by the user with prioritisetransaction. */
         CAmount m_modified_fees;
+        /** On a sidechain: the CHN payouts and refunds of withdrawals the transaction would give rise to (relay policy). */
+        size_t m_side_payouts{0};
 
         /** If we're doing package validation (i.e. m_package_feerates=true), the "effective"
          * package feerate of this transaction is the total fees divided by the total size of
@@ -801,6 +805,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
                 if (!withdrawal) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bad-sc-withdrawal");
                 if (withdrawal->amount < side_params.min_withdrawal) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bad-sc-withdrawal-amount");
             } else if (const auto refund{sidechain::ParseRefundScript(out.scriptPubKey)}) {
+                ++ws.m_side_payouts;
                 std::string reject_reason;
                 const bool main_pending{side.MainPendingNext(*Assert(m_active_chainstate.m_chainman.m_mainchain), side_params)};
                 if (!side.CheckRefund(*refund, reject_reason, main_pending)) return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reject_reason);
@@ -809,14 +814,41 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
                 }
             }
         }
+
+        // The assets. A token is spent once its output is in a block: what an unconfirmed output
+        // carries is not known until then.
+        std::string reject_reason;
+        for (const CTxIn& in : tx.vin) {
+            if (const CTransactionRef parent{m_pool.get(in.prevout.hash)}; parent && bitassets::TokenOutputs(*parent).contains(in.prevout.n)) {
+                return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "ba-token-unconfirmed");
+            }
+        }
+        const int height{m_active_chainstate.m_chain.Height() + 1};
+        size_t payouts{0};
+        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts)) {
+            return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
+        }
+        ws.m_side_payouts += payouts;
+        // One registration of an asset at a time: the second could never be mined.
+        if (const auto marker{bitassets::GetMarker(tx)}; marker && marker->operation) {
+            if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) {
+                // Policy: a published name that reads as another asset's number where names are shown with theirs.
+                if (m_pool.m_opts.require_standard && reg->text && bitassets::NameMimicsNumber(*reg->text)) {
+                    return ws.m_state.Invalid(TxValidationResult::TX_NOT_STANDARD, "ba-name-look-alike");
+                }
+                if (const auto other{m_pool.m_bitassets_registrations.find(reg->name)}; other != m_pool.m_bitassets_registrations.end() && !ws.m_conflicts.contains(other->second)) {
+                    return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "ba-registration-in-mempool");
+                }
+            }
+            // One release of an asset at a time: PreChecks made the one waiting a conflict, which this
+            // one replaces under the replacement rules, or refused this one.
+        }
         // The rules of the sidechain's own, as the next block would apply them (none in the template),
         // on an overlay that is dropped.
         sidechain::StoreOverlay scratch{side.View(), /*journal=*/false};
         sidechain::State scratch_state{scratch};
-        std::vector<CTxOut> payouts;
-        std::string reject_reason;
-        const int next_height{m_active_chainstate.m_chain.Height() + 1};
-        if (!sidechain::Hooks().ApplyTx(scratch_state, tx, next_height, /*peg_step=*/false, payouts, reject_reason)) {
+        std::vector<CTxOut> hook_payouts;
+        if (!sidechain::Hooks().ApplyTx(scratch_state, tx, height, /*peg_step=*/false, hook_payouts, reject_reason)) {
             return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reject_reason);
         }
     }
@@ -939,6 +971,23 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
                     return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bip125-replacement-disallowed");
                 }
                 ws.m_conflicts.insert(other->second);
+            }
+        }
+    }
+
+    // Releases of an asset (BitAssets): anyone may retire a dead asset, and the outcome is the same
+    // whoever does, so a release waiting in the mempool competes with another of the same asset
+    // under the replacement rules, as BMM requests do. Otherwise a release paying the least fee
+    // that relays would hold the asset, and its name, until it is mined or expires.
+    if (!m_pool.m_bitassets_releases.empty()) {
+        if (const auto marker{bitassets::GetMarker(tx)}; marker && marker->operation) {
+            if (const auto* release{std::get_if<bitassets::ReleaseAsset>(&*marker->operation)}) {
+                if (const auto other{m_pool.m_bitassets_releases.find(release->asset)}; other != m_pool.m_bitassets_releases.end() && other->second != hash) {
+                    if (!args.m_allow_replacement) {
+                        return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "bip125-replacement-disallowed");
+                    }
+                    ws.m_conflicts.insert(other->second);
+                }
             }
         }
     }
@@ -1112,6 +1161,16 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // blocks and transactions in a package. Package transactions will be checked using package
     // feerate later.
     if (!bypass_limits && !args.m_package_feerates && !CheckFeeRate(ws.m_vsize, ws.m_modified_fees, state)) return false;
+
+    // Relay policy, not consensus: a transaction pays for the CHN payouts and refunds it would give rise
+    // to, as the state stands at the tip, by its own fee (bitassets::PAYOUT_POLICY_VSIZE).
+    if (ws.m_side_payouts > 0 && !bypass_limits && m_pool.m_opts.require_standard) {
+        const CAmount needed{m_pool.m_opts.min_relay_feerate.GetFee(static_cast<int32_t>(ws.m_side_payouts * bitassets::PAYOUT_POLICY_VSIZE))};
+        if (ws.m_modified_fees < needed) {
+            return state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "ba-payouts-too-dense",
+                                 strprintf("%u payouts need a fee of %d, not %d", ws.m_side_payouts, needed, ws.m_modified_fees));
+        }
+    }
 
     ws.m_iters_conflicting = m_pool.GetIterSet(ws.m_conflicts);
 
@@ -1611,7 +1670,9 @@ PackageMempoolAcceptResult MemPoolAccept::AcceptMultipleTransactionsInternal(con
     if (txns.size() > 1) {
         const bool on_sidechain{m_active_chainstate.m_chainman.GetConsensus().sidechain.enabled};
         for (const CTransactionRef& tx : txns) {
+            // BitAssets markers too: their mempool rules see the mempool, not the other members of the package.
             const bool drivechain_tx{drivechain::GetBmmRequest(*tx).has_value() || (on_sidechain && sidechain::CheckedAgainstMempool(*tx)) ||
+                                     std::any_of(tx->vout.begin(), tx->vout.end(), [](const CTxOut& out) { return bitassets::IsMarkerScript(out.scriptPubKey); }) ||
                                      std::any_of(tx->vout.begin(), tx->vout.end(), [](const CTxOut& out) { return drivechain::ParseEscrowScript(out.scriptPubKey).has_value(); })};
             if (drivechain_tx) {
                 package_state.Invalid(PackageValidationResult::PCKG_POLICY, "package-drivechain-tx");
@@ -3351,6 +3412,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
         }
         view.Flush(/*reallocate_cache=*/false); // local CCoinsViewCache goes out of scope
         NoteSideChanges(side_store.Changes());
+        // A block taken back lowers the height, which more than the keys it changed may depend on
+        // (a reservation's reveal depth, an auction collectable from a height): the mempool checks
+        // every transaction against the new tip, not only those that read what changed.
+        m_side_changed_all = true;
         side_store.MergeInto(SideCache());
         // The block's records stay (readers skip blocks out of the active chain; reconnected, it
         // writes them again): erasing them would not be crash-safe, the coins being flushed later.
@@ -5834,7 +5899,7 @@ void Chainstate::RemoveStaleDrivechainTxs()
     if (!m_mempool) return;
     AssertLockHeld(m_mempool->cs);
     // (On a sidechain the hooks' own rules are checked again whatever else is in the mempool.)
-    if (!m_chainman.GetConsensus().sidechain.enabled && m_mempool->m_bmm_requests.empty() && m_mempool->m_escrow_txs.empty() && m_mempool->m_refunds.empty()) return;
+    if (!m_chainman.GetConsensus().sidechain.enabled && m_mempool->m_bmm_requests.empty() && m_mempool->m_escrow_txs.empty() && m_mempool->m_refunds.empty() && m_mempool->m_bitassets_txs.empty()) return;
     const CBlockIndex* tip{m_chain.Tip()};
     if (!tip) return;
 
@@ -5848,6 +5913,33 @@ void Chainstate::RemoveStaleDrivechainTxs()
         for (const auto& [withdrawal, txid] : m_mempool->m_refunds) {
             if (side.GetWithdrawal(withdrawal) && !side.InBundle(withdrawal) && !main_pending) continue;
             if (const CTransactionRef tx{m_mempool->get(txid)}) stale.push_back(tx);
+        }
+        // Asset transactions that the state as it is now no longer allows: a pool that moved past
+        // the price a trade accepts, an auction that ended, an asset registered by another.
+        // Only those whose check read what changed since the last check (m_bitassets_reads), those
+        // not checked against a tip yet and those whose check depends on the height: the work is that
+        // of what blocks changed, not that of the mempool. All of them when all may have changed.
+        std::string reject_reason;
+        std::set<Txid> to_check;
+        if (changed_all) {
+            to_check = m_mempool->m_bitassets_txs;
+        } else {
+            to_check = m_mempool->BitAssetsReaders(changed);
+            to_check.insert(m_mempool->m_bitassets_unindexed.begin(), m_mempool->m_bitassets_unindexed.end());
+        }
+        for (const Txid& txid : to_check) {
+            const CTransactionRef tx{m_mempool->get(txid)};
+            if (!tx) continue;
+            const bitassets::RecordingView reads{side.View()};
+            if (!bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) {
+                stale.push_back(tx);
+                continue;
+            }
+            if (bitassets::CheckDependsOnHeight(*tx)) {
+                m_mempool->SetBitAssetsReads(txid, std::nullopt);
+            } else {
+                m_mempool->SetBitAssetsReads(txid, CTxMemPool::BitAssetsReads{{reads.Keys().begin(), reads.Keys().end()}, {reads.Prefixes().begin(), reads.Prefixes().end()}});
+            }
         }
         // The sidechain's own rules (ChainHooks::HasTxRules), checked at entry against the tip then:
         // a block may have changed the state they read (a bond slashed under an unbond, a second bond
@@ -6198,14 +6290,18 @@ util::Result<void> Chainstate::LoadDrivechainState()
     drivechain::SidechainDB scdb;
     // On failure ReadState leaves `scdb` empty: nothing half read is used.
     const bool have_state{db.ReadState(DrivechainStateName(), scdb)};
-    if (have_state && scdb.GetBlockHash() == tip->GetBlockHash()) {
+    // BitAssets: a store whose assets are in the layout of an earlier version is derived again from
+    // the blocks (bitassets::STORE_LAYOUT), as a snapshot of an earlier format is.
+    const bool layout_current{bitassets::StoreLayoutCurrent(cache)};
+    if (!layout_current) LogInfo("The assets in the sidechain database are in an earlier layout: deriving it again from the blocks");
+    if (have_state && layout_current && scdb.GetBlockHash() == tip->GetBlockHash()) {
         m_scdb = std::move(scdb);
         db.WriteFormatVersion();
         SweepDrivechainUndo(*tip);
         return {};
     }
 
-    const CBlockIndex* pindex{!have_state || scdb.GetBlockHash().IsNull() ? nullptr : m_blockman.LookupBlockIndex(scdb.GetBlockHash())};
+    const CBlockIndex* pindex{!have_state || !layout_current || scdb.GetBlockHash().IsNull() ? nullptr : m_blockman.LookupBlockIndex(scdb.GetBlockHash())};
     if (m_from_snapshot_blockhash && (!pindex || tip->GetAncestor(pindex->nHeight) != pindex)) {
         // A chainstate created from a UTXO snapshot does not have the blocks the sidechain database
         // would have to be derived from. One written since, at a block of the chain, is brought

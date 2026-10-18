@@ -749,6 +749,54 @@ public:
         LOCK(m_node.mempool->cs);
         return IsRBFOptIn(tx, *m_node.mempool);
     }
+    std::optional<bitassets::Token> getBitAssetsToken(const COutPoint& outpoint) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetToken(outpoint);
+    }
+    std::optional<bitassets::AssetRecord> getBitAsset(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetAsset(asset);
+    }
+    std::optional<uint256> getBitAssetsReservation(const Txid& txid) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetReservation(txid);
+    }
+    std::optional<bitassets::Pool> getBitAssetsPool(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetPool(id);
+    }
+    std::optional<bitassets::Auction> getBitAssetsAuction(const Txid& txid) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetAuction(txid);
+    }
+    bool getBitAssetReleasable(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().Releasable(asset);
+    }
+    std::optional<bitassets::AssetId> getBitAssetOfSeq(uint32_t seq) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().AssetOfSeq(seq);
+    }
+    int getBitAssetsRevealDepth() override { return chainman().GetConsensus().sidechain.bitassets_reveal_depth; }
+    std::optional<int> getBitAssetsReservationHeight(const Txid& txid) override
+    {
+        LOCK(::cs_main);
+        const auto origin{chainman().ActiveChainstate().SideState().BitAssets().GetReservationOrigin(txid)};
+        if (!origin) return std::nullopt;
+        return origin->height;
+    }
+    int getBitAssetsHeight() override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChain().Height() + 1;
+    }
     std::optional<BmmRequestInfo> getMempoolBmmRequest(uint32_t slot) override
     {
         if (!m_node.mempool) return std::nullopt;

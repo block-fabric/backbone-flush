@@ -13,6 +13,6 @@
     ]
   },
   "addresses": {
-    "bech32_hrp": "fbl"
+    "bech32_hrp": "ly"
   }
 }

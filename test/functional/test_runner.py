@@ -183,6 +183,8 @@ BASE_SCRIPTS = [
     'feature_fastblocks_restart.py',
     'feature_fastblocks_unchecked.py',
     'feature_fastblocks_window.py',
+    'feature_bitassets.py',
+    'feature_bitassets_invalid.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',
     'feature_sidechain_catchup.py',
@@ -190,6 +192,7 @@ BASE_SCRIPTS = [
     'feature_sidechain_mainchain_pruned.py',
     'feature_sidechain_follower.py',
     'feature_sidechain_rules.py',
+    'feature_sidechain_payouts.py',
     'feature_sidechain_record.py',
     'feature_sidechain_mining_nofunds.py',
     'feature_drivechain_rebuild.py',
@@ -629,7 +632,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     # Warn if bitcoind is already running
     try:
         # pgrep exits with code zero when one or more matching processes found
-        if subprocess.run(["pgrep", "-x", "fastblocksd"], stdout=subprocess.DEVNULL).returncode == 0:
+        if subprocess.run(["pgrep", "-x", "layersd"], stdout=subprocess.DEVNULL).returncode == 0:
             print("%sWARNING!%s There is already a bitcoind process running on this system. Tests may fail unexpectedly due to resource contention!" % (BOLD[1], BOLD[0]))
     except OSError:
         # pgrep not supported

@@ -12,6 +12,7 @@
 #include <script/script.h>
 #include <serialize.h>
 #include <sidechain/store.h>
+#include <bitassets/state.h>
 #include <uint256.h>
 
 #include <cstdint>
@@ -58,6 +59,16 @@ inline constexpr size_t MAX_MAIN_SCRIPT_SIZE{80};
  */
 inline constexpr size_t MAX_PAYOUTS_PER_BLOCK{1000};
 /**
+ * Most refunds of withdrawals one block's transactions may ask for; a transaction that would go
+ * beyond is not valid in that block, and waits for the next (the miner leaves it out). Refunds are
+ * paid from the queue of what the mainchain gave rise to (TakePayouts), which has half of every block
+ * whatever the transactions do: they are not held back by what pools and auctions pay out. A fifth
+ * of that half, so that refunds, which cost no more than the fees of a withdrawal and of its
+ * refund, cannot hold deposits back either; far more than are ever asked for (a withdrawal is taken
+ * back only before a bundle takes it).
+ */
+inline constexpr size_t MAX_REFUNDS_PER_BLOCK{MAX_PAYOUTS_PER_BLOCK / 10};
+/**
  * Blocks during which a new withdrawal can still be taken back ahead of a bundle that would take it
  * (block assembly policy, not a rule): after that, a bundle goes before refund requests.
  */
@@ -72,6 +83,9 @@ inline constexpr int REFUND_GRACE_BLOCKS{6};
  */
 inline constexpr int PENDING_TREND_BLOCKS{12};
 inline constexpr uint32_t PENDING_TREND_MIN_RISE{3};
+
+/** The output index naming the withdrawal that pays the CHN freed by retiring an asset (BitAssets) to mainchain miners. */
+inline constexpr uint32_t RELEASE_WITHDRAWAL_INDEX{0xFFFFFF00};
 
 /** Coins burned on this chain, to be paid out on the mainchain. */
 struct Withdrawal {
@@ -167,9 +181,13 @@ public:
      */
     [[nodiscard]] bool ApplyPegStep(const CBlock& block, int height, const PegStep& step, const Consensus::SidechainParams& params, const Mainchain& mainchain,
                                     std::vector<CTxOut>& payouts, bool& main_pending, std::string& reject_reason);
-    /** The transactions of a block, but the coinbase (ApplyTx). @param[in] peg_step  whether the block takes the peg actions */
+    /**
+     * The transactions of a block, but the coinbase (ApplyTx). @param[in] peg_step  whether the block takes the peg actions
+     * @param[in,out] tx_payouts  what the assets pay out (see ApplyTx)
+     * @param[in,out] refunds     the refunds of withdrawals (see ApplyTx), paid with what the mainchain gave rise to
+     */
     [[nodiscard]] bool ApplyTxs(const CBlock& block, int height, const Consensus::SidechainParams& params, bool main_pending, bool peg_step,
-                                std::vector<CTxOut>& tx_payouts, std::string& reject_reason);
+                                std::vector<CTxOut>& tx_payouts, std::vector<CTxOut>& refunds, std::string& reject_reason);
 
     /**
      * Follow the mainchain up to `main_height`: note the outcome of the
@@ -205,12 +223,11 @@ public:
     /**
      * The payouts a block pays: at most MAX_PAYOUTS_PER_BLOCK, of what was owed
      * before it and of what it gave rise to, oldest first in each queue. What
-     * the mainchain gave rise to (`owed`: deposits) has a queue of its own, apart
-     * from what transactions did (`owed_tx`: refunds, and what a sidechain's own
-     * rules pay out), so that transactions, however many, cannot hold deposits
-     * back. Each queue has half of the block, and what one does not use goes to
-     * the other, so that neither holds the other back. The rest is queued for
-     * the next blocks. A block that takes no peg actions pays none (`max_payouts` 0): what it owes is queued.
+     * the mainchain gave rise to and the refunds of withdrawals (`owed`) have a
+     * queue of their own, apart from what pools and auctions pay out (`owed_tx`),
+     * so that those, however many, cannot hold deposits and refunds back. Each
+     * queue has half of the block, and what one does not use goes to the other,
+     * so that neither holds the other back. The rest is queued for the next blocks. A block that takes no peg actions pays none (`max_payouts` 0): what it owes is queued.
      */
     std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts = MAX_PAYOUTS_PER_BLOCK);
     /** Payouts owed and not paid yet, oldest first: from the mainchain, and from transactions. */
@@ -219,9 +236,13 @@ public:
     /**
      * Take in the withdrawals and the refund requests of a transaction that is not a coinbase.
      * All or nothing: a transaction that breaks a rule changes nothing.
+     * @param[in,out] payouts  what the assets pay out, of the block's transactions so far
+     *                         (at most bitassets::MAX_TX_PAYOUTS_PER_BLOCK)
+     * @param[in,out] refunds  the refunds of withdrawals, of the block's transactions so far
+     *                         (at most MAX_REFUNDS_PER_BLOCK)
      */
     [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                               std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending = false, bool peg_step = true);
+                               std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending = false, bool peg_step = true);
 
     /** Whether a refund request could be mined now. @param[in] main_pending  see MainPending */
     [[nodiscard]] bool CheckRefund(const RefundRequest& request, std::string& reject_reason, bool main_pending = false) const;
@@ -241,6 +262,9 @@ public:
     /** Height of the mainchain block that committed to the pending bundle; -1 if none. */
     int32_t BundleMainHeight() const;
 
+    /** The assets, pools and auctions, read only. */
+    bitassets::State BitAssets() const { return bitassets::State{*m_view}; }
+
     /** A hash of the whole state: the same on every node with the same chain. */
     uint256 Hash() const { return StoreHash(*m_view); }
 
@@ -254,7 +278,7 @@ public:
 protected:
     /** ApplyTx, on an overlay of its own. */
     [[nodiscard]] bool ApplyTxSteps(const CTransaction& tx, int height, const Consensus::SidechainParams& params,
-                                    std::vector<CTxOut>& payouts, std::string& reject_reason, bool main_pending, bool peg_step = true);
+                                    std::vector<CTxOut>& payouts, std::vector<CTxOut>& refunds, std::string& reject_reason, bool main_pending, bool peg_step = true);
 
 private:
     void AddWithdrawal(const Withdrawal& withdrawal);

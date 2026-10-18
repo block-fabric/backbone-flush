@@ -8,6 +8,7 @@
 
 #include <addresstype.h>
 #include <arith_uint256.h>
+#include <bitassets/state.h>
 #include <chain.h>
 #include <coins.h>
 #include <common/signmessage.h>
@@ -47,12 +48,14 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -877,8 +880,8 @@ BOOST_FIXTURE_TEST_CASE(release_names_the_activation_of_its_slot, BasicTestingSe
         ASSERT_DEBUG_LOG(slot + " but not the height of the block that activated the sidechain there (SidechainParams::main_activation_height): set it once the slot activates.");
         BOOST_CHECK(CheckSidechainActivation(ReleaseParams{*network, 0}));
     }
-    // This chain's own networks: slot 5 activated on the test network only (mainchain block 8621). The
-    // main network refuses to start; signet says so in the log.
+    // This chain's own networks: the test network names the block that activated its slot; the main
+    // network and signet do not yet.
     {
         ASSERT_DEBUG_LOG(slot + " but not the height of the block that activated the sidechain there (SidechainParams::main_activation_height): it must not run on the main network.");
         BOOST_CHECK(!CheckSidechainActivation(*main));
@@ -893,7 +896,7 @@ BOOST_FIXTURE_TEST_CASE(release_names_the_activation_of_its_slot, BasicTestingSe
         ASSERT_DEBUG_LOG(slot + " but not the height of the block that activated the sidechain there (SidechainParams::main_activation_height): set it once the slot activates.");
         BOOST_CHECK(CheckSidechainActivation(*CChainParams::TestNet()));
     }
-    // Nothing to say: the height named (the test network's own too); regtest (its slot is an option); not a sidechain; the
+    // Nothing to say: the height named; regtest (its slot is an option); not a sidechain; the
     // template's own networks, which no slot activated.
     auto quiet{DebugLogHelper{"This release names slot", [](const std::string* line) {
                                   BOOST_CHECK_MESSAGE(!line, "unexpected log line: " + (line ? *line : std::string{}));
@@ -944,6 +947,229 @@ BOOST_AUTO_TEST_CASE(refunds_are_not_accepted_in_packages)
     const auto plain{WITH_LOCK(::cs_main, return ProcessNewPackage(Chain(), *m_node.mempool, Package{MakeTransactionRef(parent), MakeTransactionRef(pays_for_it)}, /*test_accept=*/false, /*client_maxfeerate=*/{}))};
     BOOST_CHECK_MESSAGE(plain.m_state.IsValid(), plain.m_state.ToString());
     BOOST_CHECK(InMempool(parent) && InMempool(pays_for_it));
+}
+
+namespace {
+/** Installs hooks for the life of the object; the template's again after. */
+struct InstallHooks {
+    explicit InstallHooks(std::unique_ptr<sidechain::ChainHooks> hooks) { sidechain::SetHooks(std::move(hooks)); }
+    ~InstallHooks() { sidechain::SetHooks(nullptr); }
+};
+
+/** Hooks whose peg actions of their own owe `count` outputs in every block that takes the peg actions. */
+struct PegOwedHooks : sidechain::ChainHooks {
+    size_t count;
+    explicit PegOwedHooks(size_t n) : count{n} {}
+    bool BeforePegStep(sidechain::State&, const CBlock&, int, const sidechain::PegStep&, const Consensus::SidechainParams&,
+                       std::vector<CTxOut>& owed_tx, std::string&) const override
+    {
+        for (size_t i{0}; i < count; ++i) owed_tx.emplace_back(static_cast<CAmount>(7 + i), CScript() << OP_2);
+        return true;
+    }
+};
+
+/** Hooks under which no block takes the peg actions. */
+struct NoPegHooks : sidechain::ChainHooks {
+    bool GetPegStep(const CBlock&, const sidechain::Mainchain&, std::optional<sidechain::PegStep>& step, std::string&) const override
+    {
+        step.reset();
+        return true;
+    }
+};
+
+bool HasRefund(const CTransaction& tx)
+{
+    return std::any_of(tx.vout.begin(), tx.vout.end(), [](const CTxOut& out) { return sidechain::ParseRefundScript(out.scriptPubKey).has_value(); });
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(assembly_fills_the_refund_and_payout_bounds)
+{
+    // Block assembly against validation, with more refunds in the mempool than a block takes
+    // (MAX_REFUNDS_PER_BLOCK) and more swaps paying CHN out than its transactions may give rise to
+    // (bitassets::MAX_TX_PAYOUTS_PER_BLOCK): the block is filled to both bounds and is valid. So it
+    // is with peg actions of the sidechain's own that owe outputs: they take none of that room. And a
+    // block without the peg actions (SidechainAssembly::Peg::NONE) keeps the bounds too, pays nothing,
+    // and takes only what its filter lets in.
+    const size_t refunds{sidechain::MAX_REFUNDS_PER_BLOCK + 20}, swaps{bitassets::MAX_TX_PAYOUTS_PER_BLOCK + 20};
+    constexpr CAmount FEE_COIN{20000};
+    const auto spend{[&](const std::vector<std::pair<COutPoint, CTxOut>>& coins, std::vector<CTxOut> outputs, CAmount fee = TX_FEE) {
+        CMutableTransaction tx;
+        std::map<COutPoint, Coin> spent;
+        CAmount in{0};
+        for (const auto& [prevout, out] : coins) {
+            tx.vin.emplace_back(prevout);
+            spent.emplace(prevout, Coin{out, 1, /*fCoinBaseIn=*/false});
+            in += out.nValue;
+        }
+        CAmount out_value{0};
+        for (const CTxOut& out : outputs) out_value += out.nValue;
+        if (in - out_value - fee > 0) outputs.emplace_back(in - out_value - fee, script);
+        tx.vout = std::move(outputs);
+        FillableSigningProvider keystore;
+        BOOST_REQUIRE(keystore.AddKey(key));
+        std::map<int, bilingual_str> errors;
+        BOOST_REQUIRE(SignTransaction(tx, &keystore, spent, SignOptions{.sighash_type = SIGHASH_ALL}, errors));
+        return tx;
+    }};
+    // Token outputs (to the key, of no value), the marker, then the change.
+    const auto assets{[&](const std::vector<std::pair<COutPoint, CTxOut>>& coins, std::optional<bitassets::Operation> op,
+                          const std::vector<std::optional<bitassets::Token>>& outs, CAmount chn_in = 0, CAmount fee = TX_FEE) {
+        bitassets::Marker marker;
+        marker.operation = std::move(op);
+        std::vector<CTxOut> outputs;
+        for (const auto& token : outs) {
+            marker.outputs.push_back({static_cast<uint32_t>(outputs.size()), token});
+            outputs.emplace_back(0, script);
+        }
+        outputs.emplace_back(chn_in, bitassets::MarkerScript(marker));
+        return spend(coins, outputs, fee);
+    }};
+    const auto send{[&](const CMutableTransaction& tx) {
+        const auto result{Accept(tx)};
+        BOOST_REQUIRE_MESSAGE(result.m_result_type == MempoolAcceptResult::ResultType::VALID, result.m_state.ToString());
+    }};
+    const auto out_of{[](const CMutableTransaction& tx, uint32_t n) { return std::pair{COutPoint{tx.GetHash(), n}, tx.vout[n]}; }};
+
+    // Coins of their own for each transaction, and GOLD, with a pool of GOLD and CHN.
+    COutPoint deposit;
+    const CTxOut deposited{Fund(100 * COIN, deposit)};
+    std::vector<CTxOut> coin_outs(8, CTxOut{COIN, script});
+    coin_outs.emplace_back(20 * COIN, script);
+    const CMutableTransaction coins{spend({{deposit, deposited}}, coin_outs)};
+    send(coins);
+    // And a coin for the fee of each transaction that spends GOLD below.
+    const size_t fee_count{swaps + 20};
+    const CMutableTransaction fee_coins{spend({std::pair{COutPoint{coins.GetHash(), 7}, coins.vout[7]}}, std::vector<CTxOut>(fee_count, CTxOut{FEE_COIN, script}))};
+    send(fee_coins);
+    Mine();
+    size_t next_fee{0};
+    const auto fee_coin{[&] { BOOST_REQUIRE_LT(next_fee, fee_count); return std::pair{COutPoint{fee_coins.GetHash(), static_cast<uint32_t>(next_fee)}, fee_coins.vout[next_fee++]}; }};
+    const bitassets::AssetId gold{bitassets::HashName("GOLD")};
+    const uint256 nonce{bitassets::HashName("nonce GOLD")};
+    const CMutableTransaction reserve{assets({out_of(coins, 0)}, bitassets::Reserve{bitassets::ReservationCommitment(gold, nonce, script)},
+                                            {bitassets::Token{bitassets::Token::Kind::RESERVATION, uint256{}, 1}})};
+    send(reserve);
+    for (int i{0}; i < Params().bitassets_reveal_depth; ++i) Mine();
+    bitassets::Register reg;
+    reg.name = gold;
+    reg.nonce = nonce;
+    reg.supply = 20'000'000;
+    const CMutableTransaction registered{assets({out_of(reserve, 0), out_of(coins, 1)}, reg,
+                                               {bitassets::Token{bitassets::Token::Kind::CONTROL, gold, 1}, bitassets::Token{bitassets::Token::Kind::ASSET, gold, 20'000'000}})};
+    send(registered);
+    Mine();
+    const CMutableTransaction pool{assets({out_of(registered, 1), out_of(coins, 8)}, bitassets::AddLiquidity{gold, bitassets::CHN, 10'000'000, 10 * COIN, 1},
+                                          {bitassets::Token{bitassets::Token::Kind::ASSET, gold, 10'000'000}, std::nullopt, std::nullopt}, 10 * COIN)};
+    send(pool);
+    Mine();
+    // GOLD in coins of 1000 each, for the swaps: 60 a transaction (a marker names 64 outputs at most).
+    constexpr size_t PER_SPLIT{60};
+    const size_t splits{(swaps + PER_SPLIT - 1) / PER_SPLIT};
+    std::vector<std::optional<bitassets::Token>> lots(splits, bitassets::Token{bitassets::Token::Kind::ASSET, gold, 1000 * PER_SPLIT});
+    lots.push_back(bitassets::Token{bitassets::Token::Kind::ASSET, gold, 10'000'000 - 1000 * PER_SPLIT * splits});
+    const CMutableTransaction split{assets({out_of(pool, 0), out_of(coins, 2)}, std::nullopt, lots)};
+    send(split);
+    Mine();
+    std::vector<CMutableTransaction> swap_txs;
+    for (size_t s{0}; s < splits; ++s) {
+        const CMutableTransaction lot{assets({out_of(split, s), fee_coin()}, std::nullopt, std::vector<std::optional<bitassets::Token>>(PER_SPLIT, bitassets::Token{bitassets::Token::Kind::ASSET, gold, 1000}), 0, FEE_COIN)};
+        send(lot);
+        for (size_t i{0}; i < PER_SPLIT && swap_txs.size() < swaps; ++i) {
+            // A coin of its own pays the fee, all of it: the swap's only output is its marker.
+            swap_txs.push_back(assets({out_of(lot, i), fee_coin()}, bitassets::Swap{gold, 1000, bitassets::CHN, 1, script}, {}, 0, FEE_COIN));
+        }
+    }
+    Mine();
+
+    // The withdrawals, refundable by the key; then requests for every refund, in transactions of 50, 50 and 20.
+    std::vector<CTxOut> withdrawal_outs(refunds, CTxOut{Params().min_withdrawal + MAIN_FEE, sidechain::WithdrawalScript(MAIN_FEE, key.GetPubKey().GetID(), script)});
+    const CMutableTransaction withdrawals{spend({out_of(coins, 3)}, withdrawal_outs)};
+    send(withdrawals);
+    BOOST_REQUIRE(InBlock(Mine(), withdrawals));
+    const auto refund_out{[&](size_t n) {
+        sidechain::RefundRequest request;
+        request.withdrawal = COutPoint{withdrawals.GetHash(), static_cast<uint32_t>(n)};
+        BOOST_REQUIRE(key.SignCompact(MessageHash(sidechain::RefundMessage(request.withdrawal)), request.signature));
+        return CTxOut{0, sidechain::RefundScript(request)};
+    }};
+    std::vector<CMutableTransaction> refund_txs;
+    for (const auto& [from, to, fee] : std::vector<std::tuple<size_t, size_t, CAmount>>{{0, 50, 10 * TX_FEE}, {50, 100, 10 * TX_FEE}, {100, refunds, TX_FEE}}) {
+        std::vector<CTxOut> outs;
+        for (size_t n{from}; n < to; ++n) outs.push_back(refund_out(n));
+        refund_txs.push_back(spend({out_of(coins, 4 + refund_txs.size())}, outs, fee));
+        send(refund_txs.back());
+    }
+    for (const CMutableTransaction& tx : swap_txs) send(tx);
+    BOOST_REQUIRE_EQUAL(m_node.mempool->size(), swaps + refund_txs.size());
+
+    const auto count{[](const CBlock& block, const std::function<bool(const CTransaction&)>& which) {
+        return static_cast<size_t>(std::count_if(block.vtx.begin() + 1, block.vtx.end(), [&](const CTransactionRef& tx) { return which(*tx); }));
+    }};
+    const auto is_swap{[](const CTransaction& tx) { return !HasRefund(tx); }};
+    const CScript refund_script{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+    const auto check_valid{[&](const CBlock& block) {
+        LOCK(::cs_main);
+        const BlockValidationState state{TestBlockValidity(Chain(), block, /*check_pow=*/false, /*check_merkle_root=*/true)};
+        BOOST_CHECK_MESSAGE(state.IsValid(), state.ToString());
+    }};
+    node::BlockCreateOptions options;
+    options.coinbase_output_script = CScript() << OP_TRUE;
+    options.test_block_validity = true;
+
+    // The template's block: the two transactions of 50 refunds, not the third; MAX_TX_PAYOUTS_PER_BLOCK
+    // swaps. The coinbase pays the refunds, then the swaps; and the block is valid.
+    const auto assembled{[&](node::SidechainAssembly assembly = {}) {
+        CBlock block{node::BlockAssembler{Chain(), m_node.mempool.get(), options, std::move(assembly)}.CreateNewBlock()->block};
+        block.hashMerkleRoot = BlockMerkleRoot(block);
+        return block;
+    }};
+    {
+        const CBlock block{assembled()};
+        BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
+        BOOST_CHECK(InBlock(block, refund_txs[0]) && InBlock(block, refund_txs[1]) && !InBlock(block, refund_txs[2]));
+        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        const std::vector<CTxOut>& paid{block.vtx[0]->vout};
+        BOOST_REQUIRE_GE(paid.size(), 1 + sidechain::MAX_REFUNDS_PER_BLOCK + bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        for (size_t i{1}; i <= sidechain::MAX_REFUNDS_PER_BLOCK; ++i) BOOST_CHECK(paid[i] == (CTxOut{Params().min_withdrawal + MAIN_FEE, refund_script}));
+        for (size_t i{1 + sidechain::MAX_REFUNDS_PER_BLOCK}; i < 1 + sidechain::MAX_REFUNDS_PER_BLOCK + bitassets::MAX_TX_PAYOUTS_PER_BLOCK; ++i) {
+            BOOST_CHECK(paid[i].scriptPubKey == script && paid[i].nValue >= static_cast<CAmount>(bitassets::MIN_CHN_PAYOUT));
+        }
+        check_valid(block);
+    }
+    // Peg actions of the sidechain's own that owe outputs: the same transactions, and what they owe paid first.
+    {
+        InstallHooks installed{std::make_unique<PegOwedHooks>(7)};
+        const CBlock block{assembled()};
+        BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
+        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        const std::vector<CTxOut>& paid{block.vtx[0]->vout};
+        BOOST_REQUIRE_GE(paid.size(), 1 + sidechain::MAX_REFUNDS_PER_BLOCK + 7 + bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        for (size_t i{0}; i < 7; ++i) BOOST_CHECK(paid[1 + sidechain::MAX_REFUNDS_PER_BLOCK + i] == (CTxOut{static_cast<CAmount>(7 + i), CScript() << OP_2}));
+        check_valid(block);
+    }
+    // No peg actions, and a filter that keeps the refunds out: the swaps up to the bound, nothing paid.
+    {
+        InstallHooks installed{std::make_unique<NoPegHooks>()};
+        node::SidechainAssembly assembly;
+        assembly.peg = node::SidechainAssembly::Peg::NONE;
+        assembly.tx_filter = [](const CTransaction& tx) { return !HasRefund(tx); };
+        const CBlock block{assembled(assembly)};
+        BOOST_CHECK_EQUAL(count(block, HasRefund), 0U);
+        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        const std::vector<CTxOut>& outs{block.vtx[0]->vout};
+        BOOST_CHECK(std::all_of(outs.begin() + 1, outs.end(), [](const CTxOut& out) { return out.nValue == 0 && out.scriptPubKey.IsUnspendable(); }));
+        check_valid(block);
+    }
+
+    // Mined: the rest goes in the next block.
+    const CBlock block{Mine()};
+    BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
+    BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+    const CBlock next{Mine()};
+    BOOST_CHECK(InBlock(next, refund_txs[2]));
+    BOOST_CHECK_EQUAL(count(next, is_swap), swaps - bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+    BOOST_CHECK_EQUAL(m_node.mempool->size(), 0U);
 }
 
 BOOST_AUTO_TEST_CASE(unreachable_record_failures_forgotten)

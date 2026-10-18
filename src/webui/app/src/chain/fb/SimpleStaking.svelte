@@ -163,7 +163,7 @@
     </p>
 
     {#if plain === 'nokey'}
-      <p class="side-note side-warn">This node has no validator key, so it cannot take turns. Starting the node with a key file (-validatorkeyfile) makes it a validator: see This node in <button type="button" class="link" onclick={() => { setUiMode('advanced'); go('staking', 'node'); }}>Advanced mode</button>.</p>
+      <p class="side-note side-warn">This node has no validator key, so it cannot take turns. Starting the node with a key file (-validatorkeyfile) makes it a validator: see Validator in <button type="button" class="link" onclick={() => { setUiMode('advanced'); go('staking', 'validator'); }}>Advanced mode</button>.</p>
     {:else if plain === 'error'}
       <p class="side-note side-bad"><SafeText text={staking?.producererror ?? ''} /></p>
     {:else if plain === 'paused-jailed'}
