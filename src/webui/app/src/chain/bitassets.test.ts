@@ -389,10 +389,11 @@ describe('the journal of the app', () => {
   });
 });
 
-describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
+// Layers: the pages of BitAssets on Layers (its Staking first).
+describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
   it('are in the Chain section and the menus, before the tools, with their quick actions', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
-    expect(own).toEqual(['assets', 'my-assets', 'issue', 'trade', 'auctions']);
+    expect(own).toEqual(['staking', 'assets', 'my-assets', 'issue', 'trade', 'auctions']);
     expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...own, 'explorer']);
     expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...own, 'explorer']);
     expect(chainBeforeTools(HOME_QUICK_ACTIONS.map((q) => q.page), (p) => p)).toBeNull();
@@ -401,10 +402,10 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     for (const c of LOCAL_COMMANDS) expect(chain.items.map((i) => i.label)).toContain(c.label);
     chain.items.find((c) => c.label === 'Add liquidity…')!.run();
     expect([nav.page, nav.tab]).toEqual(['trade', 'liquidity']);
-    // Alt+6 opens Assets, as it did in bitassets-qt (audit port-2 #8).
-    expect(handleShortcut(new KeyboardEvent('keydown', { key: '6', altKey: true }))).toBe(true);
+    // Alt+6 opened Assets in bitassets-qt (audit port-2 #8); on Layers Alt+6 is Staking, Alt+7 Assets.
+    expect(handleShortcut(new KeyboardEvent('keydown', { key: '7', altKey: true }))).toBe(true);
     expect(nav.page).toBe('assets');
-    expect(CHAIN.uriScheme).toBe('bitassets');
+    expect(CHAIN.uriScheme).toBe('layers');
   });
 
   it('Assets: the cards, searched and filtered; an asset opened whole, its markets and the history of its data', async () => {

@@ -153,7 +153,7 @@
         reservation: done.txid,
       });
       if (!saved) {
-        await inform(t('The journal of BitAssets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in My assets, with its supply and data.', name), 'warning');
+        await inform(t('The journal of the assets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in My assets, with its supply and data.', name), 'warning');
       }
       created = name;
       step = 'done';

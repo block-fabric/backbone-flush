@@ -42,8 +42,8 @@
   </div>
   <div class="panel side-stat">
     <span class="muted" title={t("How the fees of a block of stake are shared: the producer's share, and the rest (the fee pot, paid to BMM bidders, or to the validators)")}>Fee split</span>
-    <strong class="num" id="fb-fee-split">{split ? split.headline : '–'}</strong>
-    <span class="faint">{split ? split.detail : ''}</span>
+    <strong class="num" id="fb-fee-split">{split ? t('%1 % · %2 %', split.producer, split.rest) : '–'}</strong>
+    <span class="faint">{split ? (split.restTo === 'pot' ? t('the producer · the fee pot (BMM bidders)') : t('the producer · all validators, by stake')) : ''}</span>
   </div>
   <div class="panel side-stat">
     <span class="muted">Rewards today</span>

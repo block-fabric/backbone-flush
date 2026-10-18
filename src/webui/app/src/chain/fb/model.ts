@@ -435,10 +435,13 @@ export function dailyEstimate(stake: bigint, otherStake: bigint, slotSeconds: nu
   return BigInt(Math.round(share * blocksPerDay * avgFeeSats * producerShare));
 }
 
-/** How the fees of a block of stake are shared (Staking, Overview), in words. */
+/** How the fees of a block of stake are shared (Staking, Overview): percentages, and who gets the rest. */
 export interface FeeSplit {
-  headline: string;
-  detail: string;
+  /** The producer's share of the fees, in percent. */
+  producer: number;
+  /** The rest, in percent, and where it goes. */
+  rest: number;
+  restTo: 'pot' | 'validators';
 }
 /**
  * The fee split of the chain's rules as getposinfo says it. Before the fee split of the validators (a node that does not
@@ -446,5 +449,5 @@ export interface FeeSplit {
  */
 export function feeSplitOf(pos: PosInfo): FeeSplit {
   void pos;
-  return { headline: '50 % · 50 %', detail: 'the producer · the fee pot (BMM bidders)' };
+  return { producer: 50, rest: 50, restTo: 'pot' };
 }

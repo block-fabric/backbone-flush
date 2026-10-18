@@ -221,7 +221,7 @@ export async function writeJournal(): Promise<boolean> {
   } catch (e) {
     if (!journalWarned) {
       journalWarned = true;
-      toast('warning', t('The journal of BitAssets could not be saved'), t('Assets being created may have to be registered again by hand after a restart: %1', errorText(e)), 15000);
+      toast('warning', t('The journal of the assets could not be saved'), t('Assets being created may have to be registered again by hand after a restart: %1', errorText(e)), 15000);
     }
     return false;
   }
