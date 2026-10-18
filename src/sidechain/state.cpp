@@ -178,6 +178,11 @@ std::optional<PendingBundle> State::Bundle() const { return BUNDLE.Get(*m_view).
 std::optional<Withdrawal> State::GetWithdrawal(const COutPoint& outpoint) const { return WITHDRAWALS.Get(*m_view, outpoint); }
 std::vector<CTxOut> State::Queue() const { return ReadQueue(*m_view, QUEUE, QUEUE_ENDS); }
 std::vector<CTxOut> State::TxQueue() const { return ReadQueue(*m_view, TX_QUEUE, TX_QUEUE_ENDS); }
+uint64_t State::TxQueueLength() const
+{
+    const QueueEnds ends{TX_QUEUE_ENDS.Get(*m_view)};
+    return ends.tail - ends.head;
+}
 
 void State::ForEachWithdrawal(const std::function<bool(const Withdrawal&)>& fn) const
 {
@@ -474,7 +479,9 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     // in CHN, the coinbase pays.
     CAmount released{0};
     bitassets::State assets{Writable()};
-    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth)) return false;
+    // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
+    // never outgrows what the next block with the peg actions is sure to pay.
+    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, TxQueueLength())) return false;
     // CHN freed by retiring an asset go to mainchain miners: a withdrawal of 1 satoshi, burned on the
     // mainchain (a bundle has to pay something), whose fee is the rest, however few (1 satoshi
     // included). Nobody can take it back.

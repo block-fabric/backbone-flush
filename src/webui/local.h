@@ -51,6 +51,8 @@ void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm);
  * "Mined" (chain/local.ts, COINBASE_ROLES). The template has none: empty.
  */
 std::vector<std::string> CoinbaseRoles(interfaces::Chain& chain, const uint256& block);
+
+/**
  * BitAssets: the journal of the app (bitassets.store.load, bitassets.store.save), a JSON object in a file of
  * the data directory of the network, written whole and flushed before it replaces the old one: the assets
  * being created (the name, supply and data to register once the reservation is deep enough, as chains-qt
