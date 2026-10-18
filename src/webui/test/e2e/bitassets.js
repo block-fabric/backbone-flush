@@ -302,7 +302,7 @@
     await log(`ASSET ${gold.asset}`);
     {
       // The confirmations of the desktop: what the chain's pages paid or signed, each with its facts.
-      const titles = ["Add liquidity", "Bid in an auction", "Burn an asset", "Collect an auction", "Create an auction", "Fix the supply of an asset", "Mint an asset", "Register an asset", "Release a reservation", "Release an asset", "Remove liquidity", "Reserve an asset", "Send an asset", "Swap", "Transfer the control of an asset", "Update an asset"];
+      const titles = ["Create an asset", "Add liquidity", "Bid in an auction", "Burn an asset", "Collect an auction", "Create an auction", "Fix the supply of an asset", "Mint an asset", "Register an asset", "Release a reservation", "Release an asset", "Remove liquidity", "Reserve an asset", "Send an asset", "Swap", "Transfer the control of an asset", "Update an asset"];
       const asked = (await host('test.confirmed', {})).filter((q) => titles.includes(q.title));
       await check(`the desktop confirmed what the pages paid or signed (${asked.length})`, asked.length > 0 && asked.every((q) => q.rows.length > 1), JSON.stringify(asked.map((q) => q.title)));
     }
