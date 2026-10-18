@@ -9,3 +9,7 @@ webui_local_e2e(fastblocks 29840
   --app-arg=-validatorkeyfile={tmp}/validator.key
   --app-arg=-validatorpayout=rsc1qqghd0tuw5wc9k0ec22t8qr7gy3tz5c5sx6gvwx
   --app-arg=-validatoranchorbid=0.00001)
+# The page scripts of BitAssets' own pages, run against a live mainchain as webui_e2e_<name>
+# (webui_local_e2e of test/CMakeLists.txt, from the template).
+# bitassets.js: an asset issued, minted, pooled, swapped, auctioned and sent.
+webui_local_e2e(bitassets 29770)

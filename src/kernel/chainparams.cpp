@@ -240,11 +240,13 @@ public:
         };
 
         // This chain is a sidechain of the Chains mainchain.
-        MakeSidechain({.slot = 5, .genesis_message = "FastBlocks: a block every 15 seconds, anchored by the mainchain", .genesis_time = 1791763200,
-                       .message_start = {0x66, 0x62, 0x6c, 0x01}, .default_port = 9155, .bech32_hrp = "fbl"});
+        // Layers: FastBlocks' blocks of stake with BitAssets' assets (doc/layers.md).
+        MakeSidechain({.slot = 7, .genesis_message = "Layers: assets on a fast chain", .genesis_time = 1792281600,
+                       .message_start = {0x6c, 0x79, 0x72, 0x01}, .default_port = 9255, .bech32_hrp = "ly"});
         // Set when the slot activates on the mainchain: the height of the block that activated it.
         consensus.sidechain.main_activation_height = 0;
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
+        consensus.sidechain.bitassets_reveal_depth = 6;
         // A tenth of the mainchain's withdrawal_min_score (64800); proposals within a day.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -369,14 +371,14 @@ public:
         // This chain is a sidechain of the Chains testnet.
         // A new genesis at each restart of the test network (audit 7, finding 3): a chain of an earlier
         // start shares no genesis with this one, so it is no branch of it (its blocks, bonds, unbonds
-        // and signatures name another genesis). The reset of 2026-10-17 04:10 UTC; was "FastBlocks testnet
-        // 17/Oct/2026: a block every 15 seconds", 1792224000 (and "FastBlocks testnet", 1791763200, before).
-        MakeSidechain({.slot = 5, .genesis_message = "FastBlocks testnet 17/Oct/2026: a fresh start", .genesis_time = 1792210200,
-                       .message_start = {0x66, 0x62, 0x6c, 0x02}, .default_port = 19155, .bech32_hrp = "tfbl"});
+        // and signatures name another genesis). Layers' first, of 2026-10-18 15:30 UTC.
+        MakeSidechain({.slot = 7, .genesis_message = "Layers testnet 18/Oct/2026: assets on a fast chain", .genesis_time = 1792337400,
+                       .message_start = {0x6c, 0x79, 0x72, 0x02}, .default_port = 19255, .bech32_hrp = "tly"});
         // The mainchain of the test network votes on a withdrawal bundle within 600 blocks.
         consensus.sidechain.bundle_retry_delay = 20;
+        consensus.sidechain.bitassets_reveal_depth = 3;
         // The height of the mainchain block that activated the slot; nothing is left out at 0.
-        consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 5 activates on the reset test network (kernel/testnet_activation.h)
+        consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 7 activates on the test network (kernel/testnet_activation.h)
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
         // A tenth of the testnet mainchain's withdrawal_min_score (300); proposals within an hour.
         consensus.sidechain.pending_min_score = 30;
@@ -509,12 +511,11 @@ public:
         };
 
         // This chain is a sidechain of the Chains signet. Its own blocks are not signed.
-        // A new genesis, as the test network's (audit 7, finding 3). Was "FastBlocks signet 17/Oct/2026: a block
-        // every 15 seconds", 1792224000 (and "FastBlocks signet", 1791763200, before).
-        MakeSidechain({.slot = 5, .genesis_message = "FastBlocks signet 17/Oct/2026: a fresh start", .genesis_time = 1792210200,
-                       .message_start = {0x66, 0x62, 0x6c, 0x03}, .default_port = 39155, .bech32_hrp = "tfbl"});
+        MakeSidechain({.slot = 7, .genesis_message = "Layers signet 18/Oct/2026: assets on a fast chain", .genesis_time = 1792281600,
+                       .message_start = {0x6c, 0x79, 0x72, 0x03}, .default_port = 39255, .bech32_hrp = "tly"});
         consensus.sidechain.main_activation_height = 0;
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
+        consensus.sidechain.bitassets_reveal_depth = 3;
         // The Chains signet has the rules of its main network.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -618,11 +619,11 @@ public:
         consensus.nMinimumChainWork = uint256{};
         consensus.defaultAssumeValid = uint256{};
 
-        pchMessageStart[0] = 0x66;
-        pchMessageStart[1] = 0x62;
-        pchMessageStart[2] = 0x6c;
+        pchMessageStart[0] = 0x6c;
+        pchMessageStart[1] = 0x79;
+        pchMessageStart[2] = 0x72;
         pchMessageStart[3] = 0x04;
-        nDefaultPort = 29155;
+        nDefaultPort = 29255;
         nPruneAfterHeight = opts.fastprune ? 100 : 1000;
 
         // On request this chain is a sidechain, with what tests need to be quick.
@@ -632,7 +633,8 @@ public:
             consensus.sidechain.main_activation_height = opts.sidechain_activation_height;
             consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
             consensus.sidechain.bundle_retry_delay = 5;
-                // A tenth of the regtest mainchain's withdrawal_min_score (30).
+            consensus.sidechain.bitassets_reveal_depth = 2;
+            // A tenth of the regtest mainchain's withdrawal_min_score (30).
             consensus.sidechain.pending_min_score = 3;
             consensus.sidechain.unproposed_expiry_blocks = 20;
             // A sidechain has no sidechains of its own.

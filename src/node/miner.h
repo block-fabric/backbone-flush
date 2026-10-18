@@ -125,6 +125,12 @@ private:
     const BlockCreateOptions m_options;
     const SidechainAssembly m_sidechain;
 
+    /**
+     * On a sidechain, while the mempool's transactions are added: applies a chunk to the sidechain
+     * state of the block, and says whether it keeps the rules there. A chunk that does not is left out.
+     */
+    std::function<bool(const std::vector<CTxMemPoolEntryRef>&)> m_side_check;
+
     // utility functions
     /** Clear the block's state and prepare for assembling a new block */
     void resetBlock();

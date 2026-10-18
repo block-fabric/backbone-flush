@@ -30,22 +30,22 @@ INVALID_DATA = [
     ),
     (ONE_ERROR, "Invalid Bech32 checksum", [len(ONE_ERROR) - 1]),
     (
-        "FBL13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KYUH5XX",
+        "LY13W508D6QEJXTDG4Y5R3ZARVARY0C5XW7KC94WLQ",
         "Version 1+ witness address must use Bech32m checksum",
         [],
     ),
     (
-        "fbl1rw5nqju6e",
+        "ly1rw5fzuetl",
         "Version 1+ witness address must use Bech32m checksum",  # Invalid program length
         [],
     ),
     (
-        "fbl10w508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kw5p4xe56",
+        "ly10w508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kw50u0vwy",
         "Version 1+ witness address must use Bech32m checksum",  # Invalid program length
         [],
     ),
     (
-        "FBL1QR508D6QEJXTDG4Y5R3ZARVARYVUUR8DV",
+        "LY1QR508D6QEJXTDG4Y5R3ZARVARYVS2PF87",
         "Invalid Bech32 v0 address program size (16 bytes), per BIP141",
         [],
     ),
@@ -60,16 +60,16 @@ INVALID_DATA = [
         [_LAST_LETTER],
     ),
     (
-        "fbl1zw508d6qejxtdg4y5r3zarvaryvqf2yckq",
+        "ly1zw508d6qejxtdg4y5r3zarvaryvqwkvc48",
         "Version 1+ witness address must use Bech32m checksum",  # Wrong padding
         [],
     ),
     (
-        "tfbl1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3pme7z54",
+        "tly1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3ps7yvkw",
         "Invalid or unsupported Segwit (Bech32) or Base58 encoding.",  # tchn1, Non-zero padding in 8-to-5 conversion
         [],
     ),
-    ("fbl1jpdfhc", "Empty Bech32 data section", []),
+    ("ly1cfnn9j", "Empty Bech32 data section", []),
     # BIP 350
     (
         "tc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq5zuyut",
@@ -77,27 +77,27 @@ INVALID_DATA = [
         [],
     ),
     (
-        "fbl1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzjrvdw",
+        "ly1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqrr0mp0",
         "Version 1+ witness address must use Bech32m checksum",  # Invalid checksum (Bech32 instead of Bech32m)
         [],
     ),
     (
-        "tfbl1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqpq7aus",
+        "tly1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq28yn7t",
         "Invalid or unsupported Segwit (Bech32) or Base58 encoding.",  # tchn1, Invalid checksum (Bech32 instead of Bech32m)
         [],
     ),
     (
-        "FBL1S0XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQPDFT9U",
+        "LY1S0XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQQU9UFA",
         "Version 1+ witness address must use Bech32m checksum",  # Invalid checksum (Bech32 instead of Bech32m)
         [],
     ),
     (
-        "fbl1qw508d6qejxtdg4y5r3zarvary0c5xw7kwjp8pm",
+        "ly1qw508d6qejxtdg4y5r3zarvary0c5xw7kjtraca",
         "Version 0 witness address must use Bech32 checksum",  # Invalid checksum (Bech32m instead of Bech32)
         [],
     ),
     (
-        "tfbl1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqr28m28",
+        "tly1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqgda4gu",
         "Invalid or unsupported Segwit (Bech32) or Base58 encoding.",  # tchn1, Invalid checksum (Bech32m instead of Bech32)
         [],
     ),
@@ -107,18 +107,18 @@ INVALID_DATA = [
         [len(INVALID_CHARACTER) - 3],
     ),
     (
-        "FBL130XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQT6FZAQ",
+        "LY130XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ2T943P",
         "Invalid Bech32 address witness version",
         [],
     ),
-    ("fbl1pw5zcshyz", "Invalid Bech32 address program size (1 byte)", []),
+    ("ly1pw5c67j4y", "Invalid Bech32 address program size (1 byte)", []),
     (
-        "fbl1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v8n0nx0muaewav25ngusve",
+        "ly1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v8n0nx0muaewav25ap49k8",
         "Invalid Bech32 address program size (41 bytes)",
         [],
     ),
     (
-        "FBL1QR508D6QEJXTDG4Y5R3ZARVARYVUUR8DV",
+        "LY1QR508D6QEJXTDG4Y5R3ZARVARYVS2PF87",
         "Invalid Bech32 v0 address program size (16 bytes), per BIP141",
         [],
     ),
@@ -128,60 +128,60 @@ INVALID_DATA = [
         [],
     ),
     (
-        "fbl1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v07q7wgcjz",
+        "ly1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v07q4nhw39",
         "Invalid padding in Bech32 data section",  # zero padding of more than 4 bits
         [],
     ),
     (
-        "tfbl1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vpphrt2t",
+        "tly1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vp2se9gs",
         "Invalid or unsupported Segwit (Bech32) or Base58 encoding.",  # tchn1, Non-zero padding in 8-to-5 conversion
         [],
     ),
-    ("fbl1jpdfhc", "Empty Bech32 data section", []),
+    ("ly1cfnn9j", "Empty Bech32 data section", []),
 ]
 VALID_DATA = [
     # BIP 350
     (
-        "FBL1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KMW3TYE",
+        "LY1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7K8HN3AL",
         "0014751e76e8199196d454941c45d1b3a323f1433bd6",
     ),
     # (
-    #   "tfbl1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qx02hf8",
+    #   "tly1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qdgsetu",
     #   "00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262",
     # ),
     (
-        "fbl1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qdqwfkj",
+        "ly1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3qv3z76n",
         "00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262",
     ),
     (
-        "fbl1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7kr8ftsv",
+        "ly1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k6rz735",
         "5128751e76e8199196d454941c45d1b3a323f1433bd6751e76e8199196d454941c45d1b3a323f1433bd6",
     ),
-    ("FBL1SW50QFHT8N2", "6002751e"),
-    ("fbl1zw508d6qejxtdg4y5r3zarvaryvyad5sa", "5210751e76e8199196d454941c45d1b3a323"),
+    ("LY1SW50Q00QWGF", "6002751e"),
+    ("ly1zw508d6qejxtdg4y5r3zarvaryvgt0660", "5210751e76e8199196d454941c45d1b3a323"),
     # (
-    #   "tfbl1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvses2ezega",
+    #   "tly1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesp7ch2x",
     #   "0020000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433",
     # ),
     (
-        "fbl1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsespkx8hg",
+        "ly1qqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesq82smf",
         "0020000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433",
     ),
     # (
-    #   "tfbl1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsesqwzssp",
+    #   "tly1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsestfc7j6",
     #   "5120000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433",
     # ),
     (
-        "fbl1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvsestpxw05",
+        "ly1pqqqqp399et2xygdj5xreqhjjvcmzhxw4aywxecjdzew6hylgvses2s2er4",
         "5120000000c4a5cad46221b2a187905e5266362b99d5e91c6ce24d165dab93e86433",
     ),
     (
-        "fbl1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqhwnqgv",
+        "ly1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqkllhyd",
         "512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
     ),
     # PayToAnchor(P2A)
     (
-        "fbl1pfees3e5r03",
+        "ly1pfeeshpl25j",
         "51024e73",
     ),
 ]

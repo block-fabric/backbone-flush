@@ -183,10 +183,110 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblock->nTime = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
     m_lock_time_cutoff = pindexPrev->GetMedianTimePast();
 
+    // Sidechain: the state the block's transactions are applied to, as the block will be connected --
+    // after what the mainchain did and the bundle the block commits to -- so that the block is filled
+    // with transactions that keep the rules in it: a chunk that would break them (a transaction whose
+    // payouts or refunds the block has no more room for, say) is left out, and the rest of the mempool
+    // still fills the block.
+    ChainstateManager& chainman{m_chainstate.m_chainman};
+    const Consensus::SidechainParams& side_params{chainparams.GetConsensus().sidechain};
+    std::optional<sidechain::StoreOverlay> side_store;
+    std::optional<sidechain::State> side;
+    // What the sidechain's own peg actions owe is kept apart from what the transactions pay out, as in
+    // State::ConnectBlock: it takes none of their room.
+    std::vector<CTxOut> side_outputs, side_peg_owed, side_tx_outputs, side_refunds;
+    std::optional<uint256> bundle_hash;
+    bool main_pending{false};
+    // Whether the block takes the peg actions: always so in the template (SidechainAssembly).
+    const bool peg_step{m_sidechain.peg != SidechainAssembly::Peg::NONE};
+    if (side_params.enabled) {
+        const sidechain::Mainchain& mainchain{*Assert(chainman.m_mainchain)};
+        // On an overlay of the chainstate's store, dropped after: nothing is copied.
+        side_store.emplace(m_chainstate.SideCache(), /*journal=*/false);
+        side.emplace(*side_store);
+        std::string reject_reason;
+        // The block is built for the next mainchain block to commit to (or as the sidechain asks).
+        const int main_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.main_height : mainchain.Height()};
+        const uint256 bundle_nonce{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.nonce : pindexPrev->GetBlockHash()};
+        const std::optional<int32_t> max_withdrawal_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.max_withdrawal_height : std::nullopt};
+        // The height the peg actions count as at (PegStep::peg_height): the block's in the template.
+        const std::optional<int32_t> step_peg_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.peg_height : std::nullopt};
+        const int peg_height{step_peg_height.value_or(nHeight)};
+        // The peg actions of the sidechain's own come first, as in State::ConnectBlock (none in the
+        // template). They see the block as far as it is known now; what they owe is paid as what the
+        // block's transactions pay out.
+        if (peg_step) {
+            CBlock known;
+            known.nVersion = pblock->nVersion;
+            known.hashPrevBlock = pindexPrev->GetBlockHash();
+            known.nTime = pblock->nTime;
+            known.vSections = m_sidechain.sections;
+            CMutableTransaction coinbase;
+            coinbase.vin.resize(1);
+            coinbase.vout.emplace_back(0, m_options.coinbase_output_script);
+            known.vtx.push_back(MakeTransactionRef(std::move(coinbase)));
+            const sidechain::PegStep step{.main_height = main_height, .nonce = bundle_nonce, .max_withdrawal_height = max_withdrawal_height, .peg_height = step_peg_height};
+            if (!sidechain::Hooks().BeforePegStep(*side, known, nHeight, step, side_params, side_peg_owed, reject_reason)) {
+                throw std::runtime_error(strprintf("%s: the sidechain's own peg actions refuse the block (%s)", __func__, reject_reason));
+            }
+        }
+        if (peg_step && !side->ApplyMainEvents(main_height, mainchain, peg_height, side_params, side_outputs, reject_reason)) {
+            throw std::runtime_error(strprintf("%s: the block does not fit the mainchain on record (%s)", __func__, reject_reason));
+        }
+        main_pending = peg_step && side->MainPending(mainchain, side_params);
+        std::vector<COutPoint> bundled;
+        const auto bundle{peg_step ? side->NextBundle(peg_height, bundle_nonce, side_params, &bundled, max_withdrawal_height) : std::nullopt};
+        // Not a bundle the mainchain has closed already: the block would be invalid. One proposed ahead
+        // and still pending is fine, as in State::ConnectBlock (all closes on record are before the
+        // next mainchain block, which commits to this one).
+        const auto closed{bundle ? mainchain.ClosedHeight(bundle->GetHash().ToUint256()) : std::nullopt};
+        if (bundle && !(closed && *closed <= main_height)) {
+            // A bundle takes its withdrawals out of reach of refunds. Someone who just made a
+            // withdrawal can still take it back: while every withdrawal of the bundle is recent, the
+            // bundle waits for refunds that may go in this block. Once one has waited longer, the
+            // bundle goes first, and requests in this block to refund one of its withdrawals break the
+            // rules (bad-sc-refund-in-bundle) and are left out, with what depends on them -- otherwise a
+            // refund kept pending on purpose, of ever new withdrawals, would hold every withdrawal back.
+            const bool overdue{std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) {
+                const auto found{side->GetWithdrawal(withdrawal)};
+                return found && nHeight - found->height > sidechain::REFUND_GRACE_BLOCKS;
+            })};
+            const bool refund_pending{!overdue && m_mempool && WITH_LOCK(m_mempool->cs, return std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) EXCLUSIVE_LOCKS_REQUIRED(m_mempool->cs) { return m_mempool->m_refunds.contains(withdrawal); }))};
+            if (!refund_pending) {
+                bundle_hash = bundle->GetHash().ToUint256();
+                if (!side->StartBundle(*bundle_hash, peg_height, bundle_nonce, side_params, reject_reason, max_withdrawal_height)) bundle_hash.reset();
+            }
+        }
+        // A chunk goes in whole or not at all: on an overlay of its own, kept if every transaction of
+        // it keeps the rules.
+        m_side_check = [&](const std::vector<CTxMemPoolEntryRef>& txs) {
+            sidechain::StoreOverlay chunk_store{*side_store, /*journal=*/false};
+            sidechain::State chunk{chunk_store};
+            const size_t paid{side_tx_outputs.size()}, refunded{side_refunds.size()};
+            std::string reason;
+            for (const auto& tx : txs) {
+                // A transaction this kind of block does not take stays out, with what depends on it (SidechainAssembly).
+                if (m_sidechain.tx_filter && !m_sidechain.tx_filter(tx.get().GetTx())) {
+                    LogDebug(BCLog::MINING, "%s: leaving out transaction %s, which this kind of block does not take\n", __func__, tx.get().GetTx().GetHash().ToString());
+                    side_tx_outputs.resize(paid);
+                    side_refunds.resize(refunded);
+                    return false;
+                }
+                if (!chunk.ApplyTx(tx.get().GetTx(), nHeight, side_params, side_tx_outputs, side_refunds, reason, main_pending, peg_step)) {
+                    LogDebug(BCLog::MINING, "%s: leaving out transaction %s, which breaks the sidechain rules in this block (%s)\n", __func__, tx.get().GetTx().GetHash().ToString(), reason);
+                    side_tx_outputs.resize(paid);
+                    side_refunds.resize(refunded);
+                    return false;
+                }
+            }
+            chunk_store.MergeInto(*side_store);
+            return true;
+        };
+    }
+
     // Drivechain: the messages this node puts in the coinbase, and the
     // withdrawal bundles that can be paid out. Withdrawals go last, so that
     // they spend the escrow output as the deposits in the block leave it.
-    ChainstateManager& chainman{m_chainstate.m_chainman};
     // What the active chain closed, for good: a failed bundle the sidechain database forgot is not proposed again.
     const auto history{[&](drivechain::SidechainId slot, const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) -> std::optional<int> {
         const auto closure{chainman.m_blockman.m_drivechain_db->FindClosure(slot, hash, [&](const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
@@ -225,6 +325,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         m_withdrawal_weight = 0;
         m_withdrawal_sigops = 0;
     }
+    m_side_check = nullptr;
+    // What is in the block so far has been applied to the sidechain state.
+    const size_t side_applied{pblock->vtx.size()};
 
     const drivechain::BlockAdditions drivechain_additions{additions_for(block_txs())};
     // A template that is asked not to take transactions from the mempool gets none from here either.
@@ -244,43 +347,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
     // Sidechain: what the coinbase has to pay because of what the mainchain did
     // and of the transactions in the block, and the withdrawal bundle to commit to.
-    std::vector<CTxOut> side_outputs, side_tx_outputs;
-    if (const Consensus::SidechainParams& side_params{chainparams.GetConsensus().sidechain}; side_params.enabled) {
-        const sidechain::Mainchain& mainchain{*Assert(chainman.m_mainchain)};
-        // On an overlay of the chainstate's store, dropped after: nothing is copied.
-        sidechain::StoreOverlay side_store{m_chainstate.SideCache(), /*journal=*/false};
-        sidechain::State side{side_store};
+    if (side) {
         std::string reject_reason;
-        // The block is built for the next mainchain block to commit to (or as the sidechain asks).
-        const bool peg_step{m_sidechain.peg != SidechainAssembly::Peg::NONE};
-        const int main_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.main_height : mainchain.Height()};
-        const uint256 bundle_nonce{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.nonce : pindexPrev->GetBlockHash()};
-        const std::optional<int32_t> max_withdrawal_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.max_withdrawal_height : std::nullopt};
-        // The height the peg actions count as at (PegStep::peg_height): the block's in the template.
-        const std::optional<int32_t> step_peg_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.peg_height : std::nullopt};
-        const int peg_height{step_peg_height.value_or(nHeight)};
-        // The peg actions of the sidechain's own come first, as in State::ConnectBlock (none in the
-        // template). They see the block as far as it is known now; what they owe is paid as refunds are.
-        std::vector<CTxOut> side_hook_outputs;
-        if (peg_step) {
-            CBlock known;
-            known.nVersion = pblock->nVersion;
-            known.hashPrevBlock = pindexPrev->GetBlockHash();
-            known.nTime = pblock->nTime;
-            known.vSections = m_sidechain.sections;
-            CMutableTransaction coinbase;
-            coinbase.vin.resize(1);
-            coinbase.vout.emplace_back(0, m_options.coinbase_output_script);
-            known.vtx.push_back(MakeTransactionRef(std::move(coinbase)));
-            const sidechain::PegStep step{.main_height = main_height, .nonce = bundle_nonce, .max_withdrawal_height = max_withdrawal_height, .peg_height = step_peg_height};
-            if (!sidechain::Hooks().BeforePegStep(side, known, nHeight, step, side_params, side_hook_outputs, reject_reason)) {
-                throw std::runtime_error(strprintf("%s: the sidechain's own peg actions refuse the block (%s)", __func__, reject_reason));
-            }
-        }
-        if (peg_step && !side.ApplyMainEvents(main_height, mainchain, peg_height, side_params, side_outputs, reject_reason)) {
-            throw std::runtime_error(strprintf("%s: the block does not fit the mainchain on record (%s)", __func__, reject_reason));
-        }
-        const bool main_pending{peg_step && side.MainPending(mainchain, side_params)};
         // Take transactions out of the block, with what spends their outputs.
         const auto drop{[&](std::set<Txid> dropped) {
             // The fee and sigop lists have no entry for the coinbase: transaction i is entry i - 1.
@@ -306,67 +374,32 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
             pblocktemplate->vTxFees = std::move(fees);
             pblocktemplate->vTxSigOpsCost = std::move(sigops);
         }};
-        std::optional<uint256> bundle_hash;
-        std::vector<COutPoint> bundled;
-        const auto bundle{peg_step ? side.NextBundle(peg_height, bundle_nonce, side_params, &bundled, max_withdrawal_height) : std::nullopt};
-        // Not a bundle the mainchain has closed already: the block would be invalid. One proposed ahead
-        // and still pending is fine, as in State::ConnectBlock (all closes on record are before the
-        // next mainchain block, which commits to this one).
-        const auto closed{bundle ? mainchain.ClosedHeight(bundle->GetHash().ToUint256()) : std::nullopt};
-        if (bundle && !(closed && *closed <= main_height)) {
-            // A bundle takes its withdrawals out of reach of refunds. Someone who just made a
-            // withdrawal can still take it back: while every withdrawal of the bundle is recent, the
-            // bundle waits for refunds that may go in this block. Once one has waited longer, the
-            // bundle goes first, and requests in this block to refund one of its withdrawals leave it,
-            // with what depends on them -- otherwise a refund kept pending on purpose, of ever new
-            // withdrawals, would hold every withdrawal back.
-            const bool overdue{std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) {
-                const auto found{side.GetWithdrawal(withdrawal)};
-                return found && nHeight - found->height > sidechain::REFUND_GRACE_BLOCKS;
-            })};
-            const bool refund_pending{!overdue && m_mempool && WITH_LOCK(m_mempool->cs, return std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) EXCLUSIVE_LOCKS_REQUIRED(m_mempool->cs) { return m_mempool->m_refunds.contains(withdrawal); }))};
-            const std::set<COutPoint> taken(bundled.begin(), bundled.end());
-            std::set<Txid> dropped;
-            for (size_t i{1}; !refund_pending && i < pblock->vtx.size(); ++i) {
-                const CTransaction& tx{*pblock->vtx[i]};
-                const bool refunds_taken{std::any_of(tx.vout.begin(), tx.vout.end(), [&](const CTxOut& out) {
-                    const auto refund{sidechain::ParseRefundScript(out.scriptPubKey)};
-                    return refund && taken.contains(refund->withdrawal);
-                })};
-                const bool depends{std::any_of(tx.vin.begin(), tx.vin.end(), [&](const CTxIn& in) { return dropped.contains(in.prevout.hash); })};
-                if (refunds_taken || depends) dropped.insert(tx.GetHash());
-            }
-            if (!dropped.empty()) drop(std::move(dropped));
-            if (!refund_pending) {
-                bundle_hash = bundle->GetHash().ToUint256();
-                if (!side.StartBundle(*bundle_hash, peg_height, bundle_nonce, side_params, reject_reason, max_withdrawal_height)) bundle_hash.reset();
-            }
-        }
-        // A transaction of the mempool can break the rules of the sidechain in this block: a refund of a
-        // withdrawal that the mainchain events above paid, say. It is left out, with what depends on it,
-        // rather than making no block at all -- the mempool is only cleaned when the tip changes.
-        // One pass: a transaction that breaks a rule leaves the state as it was (ApplyTx is all or
-        // nothing), and what depends on it comes after it in the block, so it goes before it is applied.
-        side_tx_outputs = std::move(side_hook_outputs);
-        for (size_t i{1}; i < pblock->vtx.size();) {
+        // What was added after the transactions of the mempool (the drivechain's own) has to keep the
+        // rules of the sidechain too: what breaks them is left out, with what depends on it. One pass:
+        // a transaction that breaks a rule leaves the state as it was (ApplyTx is all or nothing), and
+        // what depends on it comes after it in the block, so it goes before it is applied.
+        for (size_t i{side_applied}; i < pblock->vtx.size();) {
             if (m_sidechain.tx_filter && !m_sidechain.tx_filter(*pblock->vtx[i])) {
                 LogDebug(BCLog::MINING, "%s: leaving out transaction %s, which this kind of block does not take\n", __func__, pblock->vtx[i]->GetHash().ToString());
                 drop({pblock->vtx[i]->GetHash()});
                 continue;
             }
-            if (side.ApplyTx(*pblock->vtx[i], nHeight, side_params, side_tx_outputs, reject_reason, main_pending, peg_step)) {
+            if (side->ApplyTx(*pblock->vtx[i], nHeight, side_params, side_tx_outputs, side_refunds, reject_reason, main_pending, peg_step)) {
                 ++i;
                 continue;
             }
             LogInfo("%s: leaving out transaction %s, which breaks the sidechain rules in this block (%s)", __func__, pblock->vtx[i]->GetHash().ToString(), reject_reason);
             drop({pblock->vtx[i]->GetHash()});
         }
-        // As many of the payouts owed as a block may pay; the rest wait for the next block.
-        side_outputs = side.TakePayouts(std::move(side_outputs), std::move(side_tx_outputs), peg_step ? sidechain::MAX_PAYOUTS_PER_BLOCK : 0);
+        // As many of the payouts owed as a block may pay; the rest wait for the next block. Refunds
+        // wait with the deposits (State::ConnectBlock).
+        side_outputs.insert(side_outputs.end(), side_refunds.begin(), side_refunds.end());
+        side_peg_owed.insert(side_peg_owed.end(), side_tx_outputs.begin(), side_tx_outputs.end());
+        side_outputs = side->TakePayouts(std::move(side_outputs), std::move(side_peg_owed), peg_step ? sidechain::MAX_PAYOUTS_PER_BLOCK : 0);
         if (bundle_hash) side_outputs.emplace_back(0, sidechain::BundleCommitScript(*bundle_hash));
         // A merged mined block: outputs of the sidechain's own (none in the template).
         if (m_sidechain.peg == SidechainAssembly::Peg::BMM) {
-            const auto own{sidechain::Hooks().MergeMinedOutputs(side.View(), *pindexPrev, pblock->nTime)};
+            const auto own{sidechain::Hooks().MergeMinedOutputs(side->View(), *pindexPrev, pblock->nTime)};
             side_outputs.insert(side_outputs.end(), own.begin(), own.end());
         }
         m_chainstate.ReleaseSideCursor();
@@ -570,8 +603,10 @@ void BlockAssembler::addChunks()
             chunk_weight += tx.get().GetTxWeight();
         }
 
-        // Check to see if this chunk will fit.
-        if (!TestChunkBlockLimits(chunk_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions)) {
+        // Check to see if this chunk will fit, and keeps the rules of the sidechain in this block (which
+        // skips the rest of its cluster too, so that what depends on it stays out).
+        if (!TestChunkBlockLimits(chunk_weight, chunk_sig_ops) || !TestChunkTransactions(selected_transactions) ||
+            (m_side_check && !m_side_check(selected_transactions))) {
             // This chunk won't fit, so we skip it and will try the next best one.
             m_mempool->SkipBuilderChunk();
             ++nConsecutiveFailed;

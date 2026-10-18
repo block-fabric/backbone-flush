@@ -578,10 +578,10 @@ BOOST_AUTO_TEST_CASE(bundle_withdrawal_height)
     sidechain::EmptyStore empty;
     sidechain::StoreOverlay store{empty, /*journal=*/true};
     sidechain::State state{store};
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
-    BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(COIN)}, 1), 1, params, payouts, reason), reason);
-    BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(2 * COIN)}, 2), 5, params, payouts, reason), reason);
+    BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(COIN)}, 1), 1, params, payouts, refunds, reason), reason);
+    BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(2 * COIN)}, 2), 5, params, payouts, refunds, reason), reason);
     std::vector<COutPoint> all, low, none;
     BOOST_REQUIRE(state.NextBundle(10, uint256{0xa}, params, &all));
     BOOST_CHECK_EQUAL(all.size(), 2U);
@@ -659,11 +659,11 @@ BOOST_AUTO_TEST_CASE(block_without_peg_step)
         block.vtx.push_back(MakeTransactionRef(refund));
         BOOST_CHECK(!state.ConnectBlock(block, 1, params, mainchain, minted, reason));
         BOOST_CHECK_EQUAL(reason, "bad-sc-refund-not-peg");
-        std::vector<CTxOut> payouts;
-        BOOST_CHECK(!state.ApplyTx(refund, 1, params, payouts, reason, /*main_pending=*/false, /*peg_step=*/false));
+        std::vector<CTxOut> payouts, refunds;
+        BOOST_CHECK(!state.ApplyTx(refund, 1, params, payouts, refunds, reason, /*main_pending=*/false, /*peg_step=*/false));
         BOOST_CHECK_EQUAL(reason, "bad-sc-refund-not-peg");
         // With the peg actions it is checked as any refund (and this one refunds nothing).
-        BOOST_CHECK(!state.ApplyTx(refund, 1, params, payouts, reason, /*main_pending=*/false, /*peg_step=*/true));
+        BOOST_CHECK(!state.ApplyTx(refund, 1, params, payouts, refunds, reason, /*main_pending=*/false, /*peg_step=*/true));
         BOOST_CHECK_EQUAL(reason, "bad-sc-refund-unknown");
     }
     // Withdrawals are made in it all the same.
@@ -689,9 +689,9 @@ BOOST_AUTO_TEST_CASE(template_refunds_anywhere)
     sidechain::RefundRequest request;
     request.withdrawal = COutPoint{Txid::FromUint256(uint256{3}), 0};
     request.signature.assign(65, 1);
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
-    BOOST_CHECK(!state.ApplyTx(Tx({CTxOut{0, sidechain::RefundScript(request)}}), 1, params, payouts, reason, /*main_pending=*/false, /*peg_step=*/false));
+    BOOST_CHECK(!state.ApplyTx(Tx({CTxOut{0, sidechain::RefundScript(request)}}), 1, params, payouts, refunds, reason, /*main_pending=*/false, /*peg_step=*/false));
     BOOST_CHECK_EQUAL(reason, "bad-sc-refund-unknown");
 }
 
@@ -746,15 +746,16 @@ BOOST_AUTO_TEST_CASE(own_tx_rules)
     sidechain::StoreOverlay store{empty, /*journal=*/true};
     sidechain::State state{store};
     std::vector<CTxOut> payouts{CTxOut{1, CScript() << OP_2}};
+    std::vector<CTxOut> refunds;
     std::string reason;
     const CTransaction bad{Tx({WithdrawalOut(params.min_withdrawal + 1000), CTxOut{9, CScript() << OP_4}, CTxOut{0, CScript() << OP_3}})};
-    BOOST_CHECK(!state.ApplyTx(bad, 5, params, payouts, reason));
+    BOOST_CHECK(!state.ApplyTx(bad, 5, params, payouts, refunds, reason));
     BOOST_CHECK_EQUAL(reason, "bad-test-output");
     BOOST_CHECK(store.Changes().empty());
     BOOST_CHECK_EQUAL(payouts.size(), 1U);
     // One that keeps them: its withdrawal, what they wrote, and what they owe.
     const CTransaction good{Tx({WithdrawalOut(params.min_withdrawal + 1000), CTxOut{9, CScript() << OP_4}}, 0x78)};
-    BOOST_CHECK_MESSAGE(state.ApplyTx(good, 5, params, payouts, reason), reason);
+    BOOST_CHECK_MESSAGE(state.ApplyTx(good, 5, params, payouts, refunds, reason), reason);
     BOOST_CHECK(state.GetWithdrawal(COutPoint{good.GetHash(), 0}));
     BOOST_CHECK(NOTED_TABLE.Get(state.View(), 9) == std::optional<int64_t>{5});
     BOOST_REQUIRE_EQUAL(payouts.size(), 2U);
@@ -1972,11 +1973,11 @@ BOOST_AUTO_TEST_CASE(peg_height)
     AppendMain(mainchain, 100);
     sidechain::EmptyStore empty;
     sidechain::StoreOverlay base{empty, /*journal=*/false};
-    std::vector<CTxOut> payouts;
+    std::vector<CTxOut> payouts, refunds;
     std::string reason;
     {
         sidechain::State state{base};
-        BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(COIN)}, 1), 1, params, payouts, reason), reason);
+        BOOST_REQUIRE_MESSAGE(state.ApplyTx(Tx({WithdrawalOut(COIN)}, 1), 1, params, payouts, refunds, reason), reason);
     }
     hooks.step = sidechain::PegStep{.main_height = 0, .nonce = uint256{0xa}, .max_withdrawal_height = 1, .peg_height = 2};
     const auto expected{sidechain::State{base}.NextBundle(2, uint256{0xa}, params, nullptr, 1)};

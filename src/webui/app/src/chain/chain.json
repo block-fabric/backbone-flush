@@ -1,20 +1,20 @@
 {
   "comment": "The chain of this app, in one place: read by CMake (src/webui/CMakeLists.txt, which makes webui/chainconfig.h for the host) and by the interface (chain/config.ts). A sidechain sets its own here; see doc/webui.md.",
-  "name": "FastBlocks",
-  "bin": "fastblocks",
+  "name": "Layers",
+  "bin": "layers",
   "role": "sidechain",
   "coin": { "ticker": "CHN", "name": "Chains" },
-  "uriScheme": "fastblocks",
+  "uriScheme": "layers",
   "brand": {
-    "color": "#ff8a3d",
-    "iconHue": 190,
-    "mark": ["M6 18a10 10 0 1 0 20 0a10 10 0 1 0-20 0", "M13 3.5h6", "M16 3.5V8", "M24.2 9.8l1.8-1.8", "M17.5 11.5l-5 7.5h4l-1.5 5.5 5-7.5h-4z"]
+    "color": "#8f7cff",
+    "iconHue": 250,
+    "mark": ["M16 4L29 11 16 18 3 11z", "M3 16.5l13 7 13-7", "M3 22l13 7 13-7"]
   },
   "networks": {
-    "main": { "p2p": 9155, "rpc": 9154, "hrp": "fbl", "pubkey": 28, "script": 88 },
-    "test": { "p2p": 19155, "rpc": 19154, "hrp": "tfbl", "pubkey": 111, "script": 196 },
-    "signet": { "p2p": 39155, "rpc": 39154, "hrp": "tfbl", "pubkey": 111, "script": 196 },
-    "regtest": { "p2p": 29155, "rpc": 29154, "hrp": "rsc", "pubkey": 111, "script": 196 }
+    "main": { "p2p": 9255, "rpc": 9254, "hrp": "ly", "pubkey": 28, "script": 88 },
+    "test": { "p2p": 19255, "rpc": 19254, "hrp": "tly", "pubkey": 111, "script": 196 },
+    "signet": { "p2p": 39255, "rpc": 39254, "hrp": "tly", "pubkey": 111, "script": 196 },
+    "regtest": { "p2p": 29255, "rpc": 29254, "hrp": "rsc", "pubkey": 111, "script": 196 }
   },
   "mainchain": {
     "name": "Chains",
@@ -29,9 +29,9 @@
   },
   "links": {
     "website": "https://blockfab.org/drivechains/",
-    "source": "https://github.com/block-fabric/fastblocks-app",
-    "issues": "https://github.com/block-fabric/fastblocks-app/issues",
-    "guide": "https://github.com/block-fabric/fastblocks-app/blob/main/doc/fastblocks.md"
+    "source": "https://github.com/block-fabric/layers-app",
+    "issues": "https://github.com/block-fabric/layers-app/issues",
+    "guide": "https://github.com/block-fabric/layers-app/blob/main/doc/layers.md"
   },
   "blockWeight": 1500000,
   "drop": ["sidechains", "sidechain-nodes", "mine"]

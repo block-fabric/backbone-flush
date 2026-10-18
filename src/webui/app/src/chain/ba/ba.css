@@ -1,0 +1,476 @@
+/* The pages of BitAssets: shared pieces, in the colour tokens of themes.css only (text in the text tokens;
+   the hue of an asset, from its hash, only for the ring and the tint of its avatar and the lines of charts). */
+
+.ba-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 82rem;
+}
+
+/* A row of figures under the title of a page. */
+.ba-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
+  gap: 0.75rem;
+}
+.ba-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.8rem 1rem;
+  min-width: 0;
+}
+.ba-figure strong {
+  font-size: 1.35rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ba-figure .muted,
+.ba-figure .faint {
+  font-size: 0.85rem;
+}
+
+/* Chips to pick from: filters, presets. */
+.ba-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.ba-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.9rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2, var(--raised));
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ba-chip:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.ba-chip[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.ba-chip .count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ba-chip[aria-pressed='true'] .count {
+  color: var(--text);
+}
+
+/* Small tags: fixed supply, controlled, private name. */
+.ba-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.ba-tag.accent {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+.ba-tag.warn {
+  border-color: var(--warning);
+  color: var(--text);
+  background: var(--warning-soft);
+}
+.ba-tag.danger {
+  border-color: var(--negative);
+  color: var(--text);
+  background: var(--danger-soft);
+}
+
+/* Two columns that fall to one in a narrow window. */
+.ba-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(24rem, 100%), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.ba-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(min(22rem, 100%), 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@container (max-width: 760px) {
+  .ba-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .ba-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Lists of rows that are buttons: assets, positions, auctions. */
+.ba-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ba-list > li + li {
+  border-top: 1px solid var(--line);
+}
+.ba-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ba-row:hover {
+  background: var(--raised);
+}
+.ba-row[aria-current='true'],
+.ba-row[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+.ba-row .main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.ba-row .main > :first-child {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ba-row .side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A bar that fills to a share (the width set through the CSS object model: no inline style). */
+.ba-bar {
+  position: relative;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: var(--raised);
+  overflow: hidden;
+}
+.ba-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.ba-bar > span.burned {
+  background: var(--negative);
+}
+.ba-bar > span.time {
+  background: var(--text-faint);
+}
+
+/* A form in a panel. */
+.ba-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.ba-form .field {
+  margin: 0;
+}
+.ba-inline {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.ba-inline > input,
+.ba-inline > .grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ba-problems {
+  margin: 0;
+  padding: 0.55rem 0.8rem;
+  border-radius: var(--radius-s);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.ba-problems.bad {
+  background: var(--danger-soft);
+}
+.ba-help {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.ba-empty {
+  margin: 0;
+  padding: 1.6rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* Lines of label and value: a preview, a quote. */
+.ba-lines {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.35rem 1rem;
+  margin: 0;
+  font-size: 0.92rem;
+}
+.ba-lines dt {
+  color: var(--text-muted);
+}
+.ba-lines dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ba-lines .strong {
+  font-weight: 650;
+}
+.ba-good {
+  color: var(--positive);
+}
+.ba-warn {
+  color: var(--warning);
+}
+.ba-bad {
+  color: var(--negative);
+}
+
+/* Steps of a process: the wizard, an asset being created. */
+.ba-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.ba-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.75rem 0.3rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  font-weight: 550;
+}
+.ba-steps li::before {
+  counter-increment: step;
+  content: counter(step);
+  display: inline-grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.ba-steps li.done::before {
+  content: '✓';
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.ba-steps li.now {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+.ba-steps li.now::before {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ba-steps li.bad {
+  border-color: var(--negative);
+  color: var(--text);
+}
+
+/* A chart. */
+.ba-chart {
+  position: relative;
+  width: 100%;
+}
+.ba-chart svg {
+  display: block;
+  overflow: visible;
+}
+.ba-chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.ba-chart .axis {
+  fill: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ba-chart .line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.ba-chart .line.alt {
+  stroke: var(--text-faint);
+  stroke-dasharray: 4 4;
+  stroke-width: 1.5;
+}
+.ba-chart .area {
+  fill: var(--chart-fill, var(--accent-soft));
+  stroke: none;
+}
+.ba-chart .dot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+.ba-chart .dot.alt {
+  fill: var(--warning);
+}
+.ba-chart .now {
+  stroke: var(--text-faint);
+  stroke-dasharray: 3 3;
+}
+.ba-chart .readout {
+  position: absolute;
+  top: 0.2rem;
+  right: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* Tables of the pages, as cards in a narrow panel (use:stacked). */
+.ba-wrap {
+  overflow-x: auto;
+  container-type: inline-size;
+}
+/* A panel too narrow for the columns (Trade → Pools is about 60 rem wide): each row a card, every cell under
+   the words of its column (use:stacked), nothing behind a sideways scroll (audit port-2 #13). */
+@container (max-width: 56rem) {
+  .ba-table,
+  .ba-table tbody,
+  .ba-table tr {
+    display: block;
+  }
+  .ba-table thead {
+    display: none;
+  }
+  .ba-table tr {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .ba-table tr:last-child {
+    border-bottom: 0;
+  }
+  .ba-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.2rem 0.8rem;
+    border: 0;
+    text-align: right;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .ba-table td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    text-align: left;
+  }
+}
+.ba-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+.ba-table th {
+  padding: 0.5rem 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ba-table td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.ba-table tr:last-child td {
+  border-bottom: 0;
+}
+.ba-table .end {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ba-table tbody tr.pick {
+  cursor: pointer;
+}
+.ba-table tbody tr.pick:hover {
+  background: var(--raised);
+}
+
+.ba-mono {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  overflow-wrap: anywhere;
+}
+.ba-back {
+  align-self: flex-start;
+}
+
+/* Small text of the pages on raised cards and rows (a figure's note, "≈ 9.5 CHN", "Open · yours"): the faint
+   colour falls under 4.5:1 there (4.30 in Midnight), so these pages use the muted one (audit port-2 #13). */
+.ba-page .faint {
+  color: var(--text-muted);
+}

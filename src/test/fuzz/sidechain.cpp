@@ -184,10 +184,13 @@ FUZZ_TARGET(sidechain_state, .init = initialize_sidechain)
         }
         // A transaction that breaks a rule changes nothing.
         const uint256 before_tx{state.Hash()};
-        if (!state.ApplyTx(CTransaction{tx}, height, params, tx_payouts, reason, main_pending)) {
-            assert(state.Hash() == before_tx);
+        std::vector<CTxOut> refunds;
+        if (!state.ApplyTx(CTransaction{tx}, height, params, tx_payouts, refunds, reason, main_pending)) {
+            assert(state.Hash() == before_tx && refunds.empty());
             continue;
         }
+        // Refunds wait with the deposits (State::ConnectBlock).
+        payouts.insert(payouts.end(), refunds.begin(), refunds.end());
         for (uint32_t n{0}; n < tx.vout.size(); ++n) {
             if (state.GetWithdrawal(COutPoint{tx.GetHash(), n})) made.emplace_back(tx.GetHash(), n);
         }

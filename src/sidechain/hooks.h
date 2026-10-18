@@ -310,7 +310,8 @@ public:
     virtual std::optional<std::vector<std::vector<unsigned char>>> TxRuleKeys(const CTransaction& tx) const { return std::nullopt; }
     /**
      * Peg actions of the sidechain's own, first in a block that takes them: what it adds to
-     * `owed_tx` is paid by the coinbase as refunds are. Block assembly calls it too, with the block
+     * `owed_tx` is paid by the coinbase with what the block's transactions pay out, ahead of it, and
+     * takes none of the room those have in a block (bitassets::MAX_TX_PAYOUTS_PER_BLOCK). Block assembly calls it too, with the block
      * as far as it is known then: its parent, version, time and sections (SidechainAssembly), and a
      * coinbase whose only output pays the coinbase script, with no value; no other transactions.
      */

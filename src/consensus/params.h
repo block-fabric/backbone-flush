@@ -101,6 +101,13 @@ struct SidechainParams {
     /** Number of blocks to wait after a withdrawal bundle failed before the next one can be made. */
     int bundle_retry_delay{144};
     /**
+     * BitAssets: a registration in block h reveals a reservation made in block r only if
+     * h - r >= bitassets_reveal_depth. Whoever makes a block sees every registration waiting for it,
+     * and could otherwise reserve the same name under a nonce of its own and register it in its own
+     * block, ahead of the one it saw.
+     */
+    int bitassets_reveal_depth{1};
+    /**
      * Height of the mainchain block that activated this sidechain in its slot (activationheight in
      * the mainchain's getsidechain). What the mainchain did up to that block, deposits included, was
      * for whatever held the slot before: it is not applied. The follower also stops if the mainchain
