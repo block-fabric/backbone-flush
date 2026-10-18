@@ -9,12 +9,13 @@
   import Icon from '../../components/Icon.svelte';
   import NoWallet from '../../components/NoWallet.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
+  import { blockSeconds } from '../../lib/pending.svelte';
   import { errorText, inform, prepareConfirm, walletRpcTwoSteps } from '../../lib/dialogs.svelte';
   import { t, tn } from '../../lib/i18n.svelte';
   import { niceTimeOffset } from '../../lib/format';
   import { go, PAGES } from '../../lib/nav.svelte';
   import { rpc } from '../../lib/rpc';
-  import { app, toast, wallets, walletsEnabled } from '../../lib/state.svelte';
+  import { app, node, toast, wallets, walletsEnabled } from '../../lib/state.svelte';
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
@@ -114,7 +115,8 @@
   };
 
   const depth = $derived(ba.info?.reveal_depth ?? 1);
-  const spacing = $derived(app.info?.blockSpacing ?? 600);
+  // The pace of the last blocks (a sidechain follows its mainchain), else the target: as the progress cards say it.
+  const spacing = $derived(blockSeconds(node.recent, app.info?.blockSpacing ?? 600));
 
   const canNext = $derived.by(() => {
     if (step === 'name') return !!name && !problem && availability === 'free';
