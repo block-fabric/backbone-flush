@@ -427,7 +427,8 @@ describe('the explorer of FastBlocks', () => {
 describe('the pages of FastBlocks', () => {
   it('are in the Chain section and the menus, before the tools, with Alt+6 to Alt+8 and a quick action', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
-    expect(own).toEqual(['staking', 'finality', 'slashing']);
+    // Layers: FastBlocks' three, then the pages of the assets.
+    expect(own).toEqual(['staking', 'finality', 'slashing', 'assets', 'my-assets', 'issue', 'trade', 'auctions']);
     expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...own, 'explorer']);
     expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...own, 'explorer']);
     expect(chainBeforeTools(HOME_QUICK_ACTIONS.map((q) => q.page), (p) => p)).toBeNull();
@@ -614,7 +615,10 @@ describe('the host side of the pages (local.cpp)', () => {
   const allowed = [...local.slice(local.indexOf('RpcMethods()'), local.indexOf('KeyedRpcMethods()')).matchAll(/\{"(\w+)", Bridge::Thread/g)].map((m) => m[1]);
 
   it('the pages read with the RPCs of the node, and nothing on the list spends, bonds or signs', () => {
-    expect(allowed.sort()).toEqual(['getanchorinfo', 'getleaderschedule', 'getposinfo', 'getstakinginfo', 'getvalidator', 'getvalidators', 'listbonds', 'listevidence', 'submitevidence']);
+    // Layers: FastBlocks' nine, then those of the assets (bitassets.test.ts checks them).
+    const fbs = ['getanchorinfo', 'getleaderschedule', 'getposinfo', 'getstakinginfo', 'getvalidator', 'getvalidators', 'listbonds', 'listevidence', 'submitevidence'];
+    expect(allowed.filter((m) => fbs.includes(m)).sort()).toEqual(fbs);
+    expect(allowed.filter((m) => !fbs.includes(m)).every((m) => /asset|pool|auction|quote|swap|liquidity|bid/.test(m))).toBe(true);
     for (const m of ['createbond', 'createunbond', 'setstaking', 'signbondpop']) expect(allowed).not.toContain(m);
   });
 
