@@ -22,13 +22,11 @@
 inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{0};
 
 /**
- * The fee split (Consensus::PosParams::fee_split_height, pos/feesplit.h) on the test network and signet:
- * the FastBlocks height of its first block. A placeholder until the coordinator of the test network
- * sets it (a height a little ahead of the tip, before the upgraded nodes are started; every node of the
- * network needs the same): until then the split never activates and the old rule (the producer keeps
- * up to 50 %, the rest to the pot) holds.
+ * The fee split (Consensus::PosParams::fee_split_height, pos/feesplit.h) on the test network and signet.
+ * Layers: from its first block (a new chain, every rule from genesis: no height to set later), as on the
+ * main network. (FastBlocks has a placeholder here, set when its test network upgrades.)
  */
-inline constexpr int TESTNET_FEE_SPLIT_HEIGHT{std::numeric_limits<int>::max()};
-inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{std::numeric_limits<int>::max()};
+inline constexpr int TESTNET_FEE_SPLIT_HEIGHT{0};
+inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{0};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

@@ -1,14 +1,14 @@
 {
   "chain": "signet",
   "test_chain": true,
-  "genesis": "45c28d194fe96b80fa74d455009ff70612b81fe4ce417bc2108d0e8895584301",
+  "genesis": "01e145bfed30341f947e3809ed6defa7b4ff669008c96007e832f1e04a85c468",
   "subsidy_halving_interval": 210000,
   "pow": {
     "limit": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "net": {
-    "default_port": 39155,
-    "magic": "66626c03",
+    "default_port": 39255,
+    "magic": "6c797203",
     "dns_seeds": [
     ]
   },
