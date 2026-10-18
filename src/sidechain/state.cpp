@@ -505,7 +505,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     bitassets::State assets{Writable()};
     // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
     // never outgrows what the next block with the peg actions is sure to pay.
-    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued())) return false;
+    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued(), params.DexActive(height))) return false;
     // CHN freed by retiring an asset go to mainchain miners: a withdrawal of 1 satoshi, burned on the
     // mainchain (a bundle has to pay something), whose fee is the rest, however few (1 satoshi
     // included). Nobody can take it back.
@@ -551,6 +551,8 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
 
     std::vector<CTxOut> refunds;
     if (!ApplyTxs(block, height, params, main_pending, step.has_value(), tx_payouts, refunds, reject_reason)) return false;
+    // Layers' DEX: the block's orders clear, at its end.
+    FinishTxs(height, block.nTime, params, tx_payouts);
 
     // The coinbase pays the deposits and the refunds, right after its first output, as many as a block
     // can; a block without the peg actions pays none, and what it gave rise to waits for one that has them.
@@ -618,6 +620,12 @@ bool State::ApplyTxs(const CBlock& block, int height, const Consensus::Sidechain
         if (!ApplyTx(*block.vtx[i], height, params, tx_payouts, refunds, reject_reason, main_pending, peg_step)) return false;
     }
     return true;
+}
+
+void State::FinishTxs(int height, uint32_t time, const Consensus::SidechainParams& params, std::vector<CTxOut>& tx_payouts)
+{
+    if (!params.DexActive(height)) return;
+    bitassets::State{Writable()}.FinishBlock(height, time, tx_payouts);
 }
 
 int32_t State::BundleMainHeight() const { return BUNDLE_MAIN_HEIGHT.Get(*m_view); }

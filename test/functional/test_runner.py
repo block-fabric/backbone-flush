@@ -187,6 +187,7 @@ BASE_SCRIPTS = [
     'feature_bitassets_invalid.py',
     'feature_layers.py',
     'feature_layers_genesis.py',
+    'feature_layers_dex.py',
     'feature_fastblocks_feesplit.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',

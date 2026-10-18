@@ -41,6 +41,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
         const auto deployment_name{arg.substr(0, found)};
         if (deployment_name == "feesplit") {
             options.fee_split_height = *height;
+        } else if (deployment_name == "dex") {
+            options.dex_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {
             options.activation_heights[*buried_deployment] = *height;
         } else {

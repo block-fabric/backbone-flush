@@ -5,6 +5,7 @@
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
 #include <addresstype.h>
+#include <bitassets/dex.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <core_io.h>
@@ -17,6 +18,7 @@
 #include <wallet/coincontrol.h>
 #include <wallet/receive.h>
 #include <wallet/rpc/util.h>
+#include <wallet/scriptpubkeyman.h>
 #include <wallet/spend.h>
 #include <wallet/wallet.h>
 
@@ -351,6 +353,48 @@ std::string LabelOfAsset(CWallet& wallet, const AssetId& asset)
     return bitassets::AssetLabel(asset, record ? &*record : nullptr);
 }
 
+
+/** An oracle an argument names: its name, or its id (64 hex digits). */
+uint256 ParseOracleArg(CWallet& wallet, const UniValue& value)
+{
+    const std::string text{value.get_str()};
+    if (text.size() == 64 && IsHex(text)) {
+        const auto id{uint256::FromHex(text)};
+        if (id && wallet.chain().getBitAssetsOracle(*id)) return *id;
+    }
+    const uint256 id{bitassets::dex::OracleId(text)};
+    if (!wallet.chain().getBitAssetsOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered", text));
+    return id;
+}
+
+/** An event an argument names: its id (64 hex digits), or the text it is the id of. */
+uint256 ParseEventArg(const UniValue& value)
+{
+    const std::string text{value.get_str()};
+    if (text.size() == 64 && IsHex(text)) return *uint256::FromHex(text);
+    return bitassets::dex::EventId(text);
+}
+
+/** The wallet's key of an x-only public key, if it has it. */
+std::optional<CKey> KeyOfXOnly(CWallet& wallet, const uint256& xonly)
+{
+    for (const unsigned char parity : {0x02, 0x03}) {
+        std::vector<unsigned char> bytes{parity};
+        bytes.insert(bytes.end(), xonly.begin(), xonly.end());
+        const CPubKey pubkey{bytes};
+        if (!pubkey.IsFullyValid()) continue;
+        const CScript script{GetScriptForDestination(WitnessV0KeyHash{pubkey})};
+        LOCK(wallet.cs_wallet);
+        for (ScriptPubKeyMan* spkm : wallet.GetScriptPubKeyMans(script)) {
+            const auto* desc{dynamic_cast<DescriptorScriptPubKeyMan*>(spkm)};
+            if (!desc) continue;
+            const auto provider{desc->GetSigningProvider(pubkey)};
+            CKey key;
+            if (provider && provider->GetKey(pubkey.GetID(), key)) return key;
+        }
+    }
+    return std::nullopt;
+}
 } // namespace
 
 //! bitassets::NameMimicsNumber: refused by the wallet, not relayed by the mempool.
@@ -885,12 +929,302 @@ RPCMethod swapasset()
     std::vector<Out> outs;
     CAmount chn_in{0};
     PayIn(*pwallet, in, amount_in, inputs, outs, chn_in);
-    ResultOuts(*pwallet, {out.id}, outs);
-    const CTransactionRef tx{Send(*pwallet, bitassets::Swap{in.id, amount_in, out.id, min_out, ChnTo(*pwallet, {out.id})}, outs, inputs, chn_in)};
+    // Layers' DEX: an order of the block's batch has one result output whatever comes out (what goes in comes
+    // back to it if it does not fill), and names where CHN go at either end.
+    const bool dex{pwallet->chain().getBitAssetsDexActive()};
+    if (dex) {
+        outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    } else {
+        ResultOuts(*pwallet, {out.id}, outs);
+    }
+    const CTransactionRef tx{Send(*pwallet, bitassets::Swap{in.id, amount_in, out.id, min_out, ChnTo(*pwallet, dex ? std::vector<AssetId>{in.id, out.id} : std::vector<AssetId>{out.id})}, outs, inputs, chn_in)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("quote", bitassets::AmountToJSON(quote, out.decimals));
     result.pushKV("min_out", bitassets::AmountToJSON(min_out, out.decimals));
+    return result;
+},
+    };
+}
+
+
+RPCMethod swaproute()
+{
+    return RPCMethod{
+        "swaproute",
+        "Layers' DEX: trade through several pools in one transaction, from the first asset of a path to its last (quoteroute finds one), "
+        "for at least the quote less the slippage. The order clears at the end of its block with every other order of the block, at each pool's "
+        "uniform price; if it would give less than its least, what went in comes back (its fee paid)." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"assets", RPCArg::Type::ARR, RPCArg::Optional::NO, "The path: its assets, first to last (2 to 5: up to 4 pools)",
+            {
+                {"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, std::string{bitassets::ASSET_ARG_HELP}},
+            }},
+            {"amount_in", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of the first goes in"},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{0.5}, "How much less than the quote, in percent, it may give"},
+            {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least the caller showed: refused rather than signed for less"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::NUM, "quote", "What it gives alone, if nothing moves the pools first"},
+            {RPCResult::Type::NUM, "min_out", "The least it gives"},
+        }},
+        RPCExamples{HelpExampleCli("swaproute", "'[\"GOLD\",\"CHN\",\"SILVER\"]' 10")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
+    std::vector<AssetInfo> path;
+    for (const UniValue& asset : request.params[0].getValues()) path.push_back(ParseAsset(*pwallet, asset));
+    if (path.size() < 2 || path.size() > bitassets::MAX_ROUTE_ASSETS) throw JSONRPCError(RPC_INVALID_PARAMETER, "A path has 2 to 5 assets");
+    std::vector<AssetId> ids;
+    for (const AssetInfo& asset : path) ids.push_back(asset.id);
+    if (std::set<AssetId>(ids.begin(), ids.end()).size() != ids.size()) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset twice on the path");
+    const AssetInfo& in{path.front()};
+    const AssetInfo& out{path.back()};
+    const uint64_t amount_in{bitassets::ParseUnits(request.params[1], in.decimals)};
+    const uint64_t slippage{Slippage(request.params[2], 0.5)};
+    uint64_t quote{amount_in};
+    for (size_t i{0}; i + 1 < ids.size(); ++i) {
+        const auto pool{pwallet->chain().getBitAssetsPool(bitassets::PoolId(ids[i], ids[i + 1]))};
+        if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("There is no pool of %s and %s", path[i].label, path[i + 1].label));
+        if (bitassets::amm::Abandoned(*pool)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Nobody provides liquidity to the pool of %s and %s", path[i].label, path[i + 1].label));
+        const auto cleared{bitassets::dex::ClearPool(pool->reserve0, pool->reserve1, {bitassets::dex::HopIn{pool->asset0 == ids[i], quote}})};
+        quote = cleared ? cleared->outs[0] : 0;
+        if (quote == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing");
+    }
+    if (out.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (in.id.IsNull() && amount_in < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s CHN at least (what comes back is paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote, slippage))};
+    if (!request.params[3].isNull()) {
+        const uint64_t confirmed{bitassets::ParseUnits(request.params[3], out.decimals)};
+        if (min_out < confirmed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The pools moved: the route now gives less than min_out. Quote it again");
+    }
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, in, amount_in, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::Route{ids, amount_in, min_out, ChnTo(*pwallet, {in.id, out.id})}, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("quote", bitassets::AmountToJSON(quote, out.decimals));
+    result.pushKV("min_out", bitassets::AmountToJSON(min_out, out.decimals));
+    return result;
+},
+    };
+}
+
+RPCMethod registeroracle()
+{
+    return RPCMethod{
+        "registeroracle",
+        "Layers' DEX: register an oracle under a name, with the key it signs its attestations with. Registering costs " + FormatMoney(bitassets::ORACLE_REGISTRATION_FEE) +
+            " CHN, paid to mainchain miners." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"name", RPCArg::Type::STR, RPCArg::Optional::NO, "Its name (1 to 64 printable characters)"},
+            {"pubkey", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The x-only key (BIP340) it signs with; a new key of this wallet if not given (publishoracle then signs with it)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "oracle", "Its id"},
+            {RPCResult::Type::STR_HEX, "pubkey", "Its key"},
+        }},
+        RPCExamples{HelpExampleCli("registeroracle", "\"prices\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
+    const std::string name{request.params[0].get_str()};
+    if (!bitassets::dex::IsOracleName(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A name is 1 to 64 printable characters, no space at either end");
+    const uint256 id{bitassets::dex::OracleId(name)};
+    if (pwallet->chain().getBitAssetsOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An oracle of this name is registered");
+    uint256 pubkey;
+    if (!request.params[1].isNull()) {
+        pubkey = ParseHashV(request.params[1], "pubkey");
+        // Hex as written, not reversed as a hash is.
+        const std::vector<unsigned char> bytes{ParseHex(request.params[1].get_str())};
+        std::copy(bytes.begin(), bytes.end(), pubkey.begin());
+    } else {
+        const CTxDestination dest{NewDestination(*pwallet, "oracle:" + name)};
+        const CScript script{GetScriptForDestination(dest)};
+        CPubKey key;
+        const auto provider{pwallet->GetSolvingProvider(script)};
+        if (!provider || !provider->GetPubKey(ToKeyID(std::get<WitnessV0KeyHash>(dest)), key)) throw JSONRPCError(RPC_WALLET_ERROR, "No key for the oracle");
+        const XOnlyPubKey xonly{key};
+        std::copy(xonly.begin(), xonly.end(), pubkey.begin());
+    }
+    if (!XOnlyPubKey{pubkey}.IsFullyValid()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a valid x-only public key");
+    const CTransactionRef tx{Send(*pwallet, bitassets::RegisterOracle{name, pubkey}, {}, {}, bitassets::ORACLE_REGISTRATION_FEE)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("oracle", id.GetHex());
+    result.pushKV("pubkey", HexStr(pubkey));
+    return result;
+},
+    };
+}
+
+RPCMethod publishoracle()
+{
+    return RPCMethod{
+        "publishoracle",
+        "Layers' DEX: publish an oracle's attestation of an event: its value, signed (BIP340) over the tagged hash of (oracle, event, value, height). "
+        "Signed by this wallet's key of the oracle, or given signed. Once per event." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description (any text), or its id (64 hex digits)"},
+            {"value", RPCArg::Type::NUM, RPCArg::Optional::NO, "The value (a signed 64-bit integer)"},
+            {"height", RPCArg::Type::NUM, RPCArg::DefaultHint{"the next block"}, "The height signed for: the attestation is valid in a block at it or later"},
+            {"signature", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The oracle's signature (64 bytes), if this wallet does not have its key"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "event", "The event's id"},
+            {RPCResult::Type::STR_HEX, "signature", "The signature"},
+        }},
+        RPCExamples{HelpExampleCli("publishoracle", "\"prices\" \"BTCUSD 2026-12-31\" 123456")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
+    const uint256 oracle{ParseOracleArg(*pwallet, request.params[0])};
+    const uint256 event{ParseEventArg(request.params[1])};
+    const int64_t value{request.params[2].getInt<int64_t>()};
+    const int32_t height{request.params[3].isNull() ? pwallet->chain().getBitAssetsHeight() : request.params[3].getInt<int32_t>()};
+    if (height < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "A height is not negative");
+    if (pwallet->chain().getBitAssetsAttestation(oracle, event)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The oracle attested this event already");
+    const auto record{*Assert(pwallet->chain().getBitAssetsOracle(oracle))};
+    std::array<unsigned char, 64> signature{};
+    if (!request.params[4].isNull()) {
+        const std::vector<unsigned char> bytes{ParseHex(request.params[4].get_str())};
+        if (bytes.size() != 64) throw JSONRPCError(RPC_INVALID_PARAMETER, "A signature is 64 bytes");
+        std::copy(bytes.begin(), bytes.end(), signature.begin());
+    } else {
+        const auto key{KeyOfXOnly(*pwallet, record.pubkey)};
+        if (!key) throw JSONRPCError(RPC_WALLET_ERROR, "This wallet does not have the oracle's key: give the signature");
+        if (!key->SignSchnorr(bitassets::dex::AttestationHash(oracle, event, value, height), signature, /*merkle_root=*/nullptr, GetRandHash())) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Cannot sign");
+        }
+    }
+    if (!bitassets::dex::CheckAttestation(record.pubkey, oracle, event, value, height, signature)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The signature is not the oracle's");
+    const CTransactionRef tx{Send(*pwallet, bitassets::Attest{oracle, event, value, height, signature}, {}, {})};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("event", event.GetHex());
+    result.pushKV("signature", HexStr(signature));
+    return result;
+},
+    };
+}
+
+RPCMethod createoraclecontract()
+{
+    return RPCMethod{
+        "createoraclecontract",
+        "Layers' DEX: lock an amount of an asset (CHN included) until an oracle attests an event; then the first outcome whose range holds the value "
+        "gets it all (none: the refund address). With no attestation in a block up to the expiry, the refund address gets it after. Anyone settles it "
+        "(settleoraclecontract). The oracle can lie, but can pay none but the addresses named here." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description, or its id"},
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, "What it locks. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},
+            {"outcomes", RPCArg::Type::ARR, RPCArg::Optional::NO, "1 to 8 outcomes, in order",
+            {
+                {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                {
+                    {"min", RPCArg::Type::NUM, RPCArg::Optional::NO, "The least value"},
+                    {"max", RPCArg::Type::NUM, RPCArg::Optional::NO, "The most"},
+                    {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "Who gets it"},
+                }},
+            }},
+            {"refund_address", RPCArg::Type::STR, RPCArg::Optional::NO, "Who gets it otherwise"},
+            {"expiry", RPCArg::Type::NUM, RPCArg::Optional::NO, "The last block an attestation counts in"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::STR_HEX, "txid", "The transaction: the contract's id"}}},
+        RPCExamples{HelpExampleCli("createoraclecontract", "\"prices\" \"BTCUSD 2026-12-31\" CHN 1 '[{\"min\":0,\"max\":99999,\"address\":\"tly1...\"},{\"min\":100000,\"max\":9223372036854775807,\"address\":\"tly1...\"}]' tly1... 50000")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
+    const uint256 oracle{ParseOracleArg(*pwallet, request.params[0])};
+    const uint256 event{ParseEventArg(request.params[1])};
+    const AssetInfo asset{ParseAsset(*pwallet, request.params[2])};
+    const uint64_t amount{bitassets::ParseUnits(request.params[3], asset.decimals)};
+    const auto script_of{[](const UniValue& value) {
+        const CTxDestination dest{DecodeDestination(value.get_str())};
+        if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address: " + value.get_str());
+        const CScript script{GetScriptForDestination(dest)};
+        if (!bitassets::Spendable(script)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not an address an asset can be paid to: " + value.get_str());
+        return script;
+    }};
+    std::vector<bitassets::OracleOutcome> outcomes;
+    for (const UniValue& item : request.params[4].getValues()) {
+        bitassets::OracleOutcome outcome;
+        outcome.lo = item.find_value("min").getInt<int64_t>();
+        outcome.hi = item.find_value("max").getInt<int64_t>();
+        if (outcome.lo > outcome.hi) throw JSONRPCError(RPC_INVALID_PARAMETER, "An outcome's min is above its max");
+        outcome.script = script_of(item.find_value("address"));
+        outcomes.push_back(std::move(outcome));
+    }
+    if (outcomes.empty() || outcomes.size() > bitassets::MAX_CONTRACT_OUTCOMES) throw JSONRPCError(RPC_INVALID_PARAMETER, "1 to 8 outcomes");
+    const CScript refund{script_of(request.params[5])};
+    const int32_t expiry{request.params[6].getInt<int32_t>()};
+    const int next{pwallet->chain().getBitAssetsHeight()};
+    if (expiry < next || int64_t{expiry} > int64_t{next} + bitassets::MAX_CONTRACT_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, "The expiry is from the next block to about a year after");
+    if (asset.id.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, asset, amount, inputs, outs, chn_in);
+    const CTransactionRef tx{Send(*pwallet, bitassets::CreateOracleContract{oracle, event, asset.id, amount, outcomes, refund, expiry}, outs, inputs, chn_in)};
+    return TxResult(tx);
+},
+    };
+}
+
+RPCMethod settleoraclecontract()
+{
+    return RPCMethod{
+        "settleoraclecontract",
+        "Layers' DEX: pay an oracle contract out to whom the oracle's attestation (or the expiry) names; anyone may (this wallet pays the fee). "
+        "CHN are paid by the coinbase of the block." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"contract", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction that made it"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR, "winner", "Who it pays"},
+        }},
+        RPCExamples{HelpExampleCli("settleoraclecontract", "\"txid\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    const Txid id{Txid::FromUint256(ParseHashV(request.params[0], "contract"))};
+    const auto contract{pwallet->chain().getBitAssetsContract(id)};
+    if (!contract) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such oracle contract");
+    if (contract->settled) throw JSONRPCError(RPC_INVALID_PARAMETER, "The contract is settled");
+    const auto winner{contract->Winner(pwallet->chain().getBitAssetsAttestation(contract->oracle, contract->event), pwallet->chain().getBitAssetsHeight())};
+    if (!winner) throw JSONRPCError(RPC_INVALID_PARAMETER, "The contract waits: no attestation yet, and it has not expired");
+    CTxDestination dest;
+    if (!ExtractDestination(*winner, dest)) throw JSONRPCError(RPC_MISC_ERROR, "The winner's script has no address");
+    std::vector<Out> outs;
+    // An asset goes to a result output of the winner's script; CHN, by the coinbase.
+    if (!contract->asset.IsNull()) outs.push_back({dest, std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::SettleOracleContract{id}, outs, {})};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("winner", EncodeDestination(dest));
     return result;
 },
     };
@@ -1394,6 +1728,21 @@ RPCMethod listassetactivity()
                 } else if constexpr (std::is_same_v<T, bitassets::ReleaseAsset>) {
                     operation = "release";
                     summary = "Retired a dead asset (its pools' CHN go to mainchain miners)";
+                } else if constexpr (std::is_same_v<T, bitassets::Route>) {
+                    operation = "route";
+                    summary = strprintf("Traded %s for at least %s through %u pools", amount(op.path.front(), op.amount_in), amount(op.path.back(), op.min_out), op.path.size() - 1);
+                } else if constexpr (std::is_same_v<T, bitassets::RegisterOracle>) {
+                    operation = "register oracle";
+                    summary = "Registered the oracle " + op.name;
+                } else if constexpr (std::is_same_v<T, bitassets::Attest>) {
+                    operation = "attest";
+                    summary = strprintf("Attested %d for an event", op.value);
+                } else if constexpr (std::is_same_v<T, bitassets::CreateOracleContract>) {
+                    operation = "oracle contract";
+                    summary = strprintf("Locked %s in an oracle contract", amount(op.asset, op.amount));
+                } else if constexpr (std::is_same_v<T, bitassets::SettleOracleContract>) {
+                    operation = "settle";
+                    summary = "Settled an oracle contract";
                 }
             }, *e.marker.operation);
         } else {

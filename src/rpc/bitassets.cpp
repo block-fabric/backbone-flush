@@ -4,6 +4,7 @@
 //
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
+#include <bitassets/dex.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <coins.h>
@@ -22,6 +23,7 @@
 #include <univalue.h>
 
 #include <cmath>
+#include <limits>
 #include <memory>
 
 using bitassets::AssetId;
@@ -735,6 +737,445 @@ RPCMethod quotebid()
     };
 }
 
+
+//
+// Layers' DEX (bitassets/dex.h).
+//
+
+/** A price as a plain decimal, 12 significant digits (PriceToJSON's format). */
+UniValue DecimalToJSON(double price)
+{
+    if (!(price > 0) || !std::isfinite(price)) {
+        UniValue zero;
+        zero.setNumStr("0");
+        return zero;
+    }
+    const int decimals{price >= 1 ? 8 : std::min(30, 12 - static_cast<int>(std::floor(std::log10(price))))};
+    std::string text{strprintf("%.*f", decimals, price)};
+    if (text.find('.') != std::string::npos) {
+        text.erase(text.find_last_not_of('0') + 1);
+        if (text.back() == '.') text.pop_back();
+    }
+    UniValue value;
+    value.setNumStr(text);
+    return value;
+}
+
+int NextHeight(ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return chainman.ActiveChain().Height() + 1; }
+
+/** An oracle an argument names: its name, or its id (64 hex digits). */
+uint256 ParseOracle(const UniValue& value, const bitassets::State& state)
+{
+    const std::string text{value.get_str()};
+    if (text.size() == 64 && IsHex(text)) {
+        const auto id{uint256::FromHex(text)};
+        if (id && state.GetOracle(*id)) return *id;
+    }
+    const uint256 id{bitassets::dex::OracleId(text)};
+    if (!state.GetOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered", text));
+    return id;
+}
+
+/** An event an argument names: its id (64 hex digits), or the text it is the id of. */
+uint256 ParseEvent(const UniValue& value)
+{
+    const std::string text{value.get_str()};
+    if (text.size() == 64 && IsHex(text)) return *uint256::FromHex(text);
+    return bitassets::dex::EventId(text);
+}
+
+std::string AddressOf(const CScript& script)
+{
+    CTxDestination dest;
+    return ExtractDestination(script, dest) ? EncodeDestination(dest) : HexStr(script);
+}
+
+UniValue OracleToJSON(const uint256& id, const bitassets::OracleRecord& oracle)
+{
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("oracle", id.GetHex());
+    obj.pushKV("name", oracle.name);
+    obj.pushKV("pubkey", HexStr(oracle.pubkey));
+    obj.pushKV("registration", oracle.registration.GetHex());
+    obj.pushKV("height", oracle.height);
+    obj.pushKV("attestations", oracle.attestations);
+    return obj;
+}
+
+const std::vector<RPCResult> ORACLE_RESULTS{
+    {RPCResult::Type::STR_HEX, "oracle", "Its id (the hash of its name)"},
+    {RPCResult::Type::STR, "name", "Its name"},
+    {RPCResult::Type::STR_HEX, "pubkey", "The x-only key it signs with (BIP340)"},
+    {RPCResult::Type::STR_HEX, "registration", "The transaction that registered it"},
+    {RPCResult::Type::NUM, "height", "The block that registered it"},
+    {RPCResult::Type::NUM, "attestations", "How many events it attested"},
+};
+
+RPCMethod getdexinfo()
+{
+    return RPCMethod{
+        "getdexinfo",
+        "Layers' DEX: whether its rules apply to the next block, and its bounds (doc/layers.md, \"The DEX\").",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "dex_height", "The first block of the DEX's rules (-1: never on this network)"},
+            {RPCResult::Type::BOOL, "active", "Whether the next block has them"},
+            {RPCResult::Type::NUM, "max_route_hops", "Most pools one order goes through"},
+            {RPCResult::Type::NUM, "max_block_orders", "Most orders a block clears"},
+            {RPCResult::Type::NUM, "clearing_passes", "Passes of the batch clearing before orders execute one after another"},
+            {RPCResult::Type::NUM, "twap_observations", "Observations each pool keeps"},
+            {RPCResult::Type::STR_AMOUNT, "oracle_registration_fee", "What registering an oracle costs (to mainchain miners)"},
+            {RPCResult::Type::NUM, "max_contract_outcomes", "Most outcomes an oracle contract names"},
+            {RPCResult::Type::NUM, "max_contract_duration", "Latest an oracle contract expires, in blocks"},
+        }},
+        RPCExamples{HelpExampleCli("getdexinfo", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const Consensus::SidechainParams& params{chainman.GetConsensus().sidechain};
+    LOCK(::cs_main);
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("dex_height", params.dex_height == std::numeric_limits<int>::max() ? -1 : params.dex_height);
+    result.pushKV("active", params.DexActive(NextHeight(chainman)));
+    result.pushKV("max_route_hops", static_cast<int>(bitassets::MAX_ROUTE_ASSETS - 1));
+    result.pushKV("max_block_orders", static_cast<int>(bitassets::MAX_BLOCK_ORDERS));
+    result.pushKV("clearing_passes", bitassets::MAX_CLEARING_PASSES);
+    result.pushKV("twap_observations", static_cast<int>(bitassets::TWAP_OBSERVATIONS));
+    result.pushKV("oracle_registration_fee", ValueFromAmount(bitassets::ORACLE_REGISTRATION_FEE));
+    result.pushKV("max_contract_outcomes", static_cast<int>(bitassets::MAX_CONTRACT_OUTCOMES));
+    result.pushKV("max_contract_duration", bitassets::MAX_CONTRACT_DURATION);
+    return result;
+},
+    };
+}
+
+RPCMethod quoteroute()
+{
+    return RPCMethod{
+        "quoteroute",
+        "The best routes through the pools from one asset to another, and what each gives alone (as the only order of a block). "
+        "The search is bounded: of each asset its 16 deepest pools, at most 20000 partial paths.",
+        {
+            {"asset_in", RPCArg::Type::STR, RPCArg::Optional::NO, "What is paid in. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},
+            {"asset_out", RPCArg::Type::STR, RPCArg::Optional::NO, "What comes out"},
+            {"max_hops", RPCArg::Type::NUM, RPCArg::Default{4}, "Most pools on a route (1 to 4)"},
+            {"count", RPCArg::Type::NUM, RPCArg::Default{5}, "Most routes returned"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "amount_in", "What goes in"},
+            {RPCResult::Type::NUM, "amount_out", "What the best route gives (0 if there is none)"},
+            {RPCResult::Type::ARR, "path", "The best route's assets, first to last (for swaproute); empty if none", {{RPCResult::Type::STR, "", "An asset's label"}}},
+            {RPCResult::Type::ARR, "routes", "The routes found, best first",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::ARR, "path", "Its assets", {{RPCResult::Type::STR, "", "An asset's label"}}},
+                    {RPCResult::Type::ARR, "path_ids", "The same, by hash (null for CHN)", {{RPCResult::Type::STR_HEX, "", "An asset"}}},
+                    {RPCResult::Type::NUM, "amount_out", "What it gives"},
+                    {RPCResult::Type::ARR, "hops", "Each pool's part",
+                    {
+                        {RPCResult::Type::OBJ, "", "",
+                        {
+                            {RPCResult::Type::STR_HEX, "pool", "The pool"},
+                            {RPCResult::Type::NUM, "amount_out", "What comes out of it"},
+                        }},
+                    }},
+                }},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("quoteroute", "\"GOLD\" 10 \"SILVER\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const int max_hops{request.params[3].isNull() ? 4 : request.params[3].getInt<int>()};
+    if (max_hops < 1 || max_hops > static_cast<int>(bitassets::MAX_ROUTE_ASSETS - 1)) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_hops is 1 to 4");
+    const int count{request.params[4].isNull() ? 5 : request.params[4].getInt<int>()};
+    if (count < 1 || count > 50) throw JSONRPCError(RPC_INVALID_PARAMETER, "count is 1 to 50");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId in{ParseAsset(request.params[0], state)}, out{ParseAsset(request.params[2], state)};
+    if (in == out) throw JSONRPCError(RPC_INVALID_PARAMETER, "The same asset in and out");
+    const uint8_t di{DecimalsOf(state, in)}, dout{DecimalsOf(state, out)};
+    const uint64_t amount_in{bitassets::ParseUnits(request.params[1], di)};
+    const auto routes{bitassets::dex::FindRoutes(state, in, out, amount_in, max_hops, count)};
+    const auto labels{[&](const std::vector<AssetId>& path) {
+        UniValue arr(UniValue::VARR);
+        for (const AssetId& asset : path) arr.push_back(LabelOf(state, asset));
+        return arr;
+    }};
+    UniValue list(UniValue::VARR);
+    for (const auto& route : routes) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("path", labels(route.path));
+        UniValue ids(UniValue::VARR);
+        for (const AssetId& asset : route.path) ids.push_back(asset.GetHex());
+        obj.pushKV("path_ids", std::move(ids));
+        obj.pushKV("amount_out", AmountToJSON(route.outs.back(), dout));
+        UniValue hops(UniValue::VARR);
+        for (size_t i{0}; i < route.outs.size(); ++i) {
+            UniValue hop(UniValue::VOBJ);
+            hop.pushKV("pool", bitassets::PoolId(route.path[i], route.path[i + 1]).GetHex());
+            hop.pushKV("amount_out", AmountToJSON(route.outs[i], DecimalsOf(state, route.path[i + 1])));
+            hops.push_back(std::move(hop));
+        }
+        obj.pushKV("hops", std::move(hops));
+        list.push_back(std::move(obj));
+    }
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("amount_in", AmountToJSON(amount_in, di));
+    result.pushKV("amount_out", AmountToJSON(routes.empty() ? 0 : routes.front().outs.back(), dout));
+    result.pushKV("path", routes.empty() ? UniValue{UniValue::VARR} : labels(routes.front().path));
+    result.pushKV("routes", std::move(list));
+    return result;
+},
+    };
+}
+
+RPCMethod getpooltwap()
+{
+    return RPCMethod{
+        "getpooltwap",
+        "The time-weighted average price of a pool over a window that ends at the tip's time: from the time of a block, or over the last seconds. "
+        "From the pool's price accumulators (Uniswap v2: price times seconds, at the end of every block that changes the pool, the block's time); "
+        "each pool keeps its last 1024 observations, and a window must start at or after the oldest.",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool (see listpools)"},
+            {"from_height", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The window starts at the time of this block of the active chain"},
+            {"seconds", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Or: the window is the last this many seconds"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "pool", "The pool"},
+            {RPCResult::Type::STR, "asset_a", "Its first asset (by hash)"},
+            {RPCResult::Type::STR, "asset_b", "Its second"},
+            {RPCResult::Type::NUM, "from_time", "The window's start"},
+            {RPCResult::Type::NUM, "to_time", "Its end: the tip's time, or the pool's last change if later"},
+            {RPCResult::Type::NUM, "seconds", "Its length"},
+            {RPCResult::Type::NUM, "twap_a", "The average price of a whole unit of asset_a, in asset_b"},
+            {RPCResult::Type::NUM, "twap_b", "The average price of a whole unit of asset_b, in asset_a"},
+            {RPCResult::Type::NUM, "spot_a", "The price of asset_a now, in asset_b"},
+            {RPCResult::Type::STR_HEX, "cumulative_a", "The accumulator of asset_a's price at the end (UQ64.64 seconds, modulo 2^256)"},
+            {RPCResult::Type::STR_HEX, "cumulative_b", "The same, of asset_b's"},
+            {RPCResult::Type::NUM, "observations", "Observations kept"},
+            {RPCResult::Type::NUM, "oldest_time", "The time of the oldest kept"},
+        }},
+        RPCExamples{HelpExampleCli("getpooltwap", "\"pool\" 1000") + HelpExampleCli("getpooltwap", "\"pool\" null 3600")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    if (request.params[1].isNull() == request.params[2].isNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Name the window's start: from_height, or seconds");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto pool{state.GetPool(id)};
+    if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const auto acc{state.GetAccumulator(id)};
+    if (!acc || acc->creation != pool->creation || acc->count == 0) throw JSONRPCError(RPC_MISC_ERROR, "The pool has no observations yet: a block has to change it under the DEX's rules first");
+    const uint64_t kept{std::min<uint64_t>(acc->count, bitassets::TWAP_OBSERVATIONS)};
+    const uint64_t first{acc->count - kept};
+    const auto at{[&](uint64_t n) { return *Assert(state.GetObservation(id, static_cast<uint32_t>(n % bitassets::TWAP_OBSERVATIONS))); }};
+    const bitassets::Observation last{at(acc->count - 1)}, oldest{at(first)};
+    const CChain& chain{chainman.ActiveChain()};
+    const uint32_t to_time{std::max(chain.Tip()->nTime, acc->last_time)};
+    uint32_t from_time;
+    if (!request.params[1].isNull()) {
+        const int height{request.params[1].getInt<int>()};
+        if (height < 0 || height > chain.Height()) throw JSONRPCError(RPC_INVALID_PARAMETER, "from_height is not a block of the active chain");
+        from_time = chain[height]->nTime;
+    } else {
+        const int64_t seconds{request.params[2].getInt<int64_t>()};
+        if (seconds <= 0 || seconds > to_time) throw JSONRPCError(RPC_INVALID_PARAMETER, "seconds is positive");
+        from_time = static_cast<uint32_t>(to_time - seconds);
+    }
+    if (from_time >= to_time) throw JSONRPCError(RPC_INVALID_PARAMETER, "The window is empty");
+    if (from_time < oldest.time) {
+        throw JSONRPCError(RPC_MISC_ERROR, strprintf("The window starts before the oldest observation of the pool kept (time %u)", oldest.time));
+    }
+    // The last observation at or before the start, by halving.
+    uint64_t lo{first}, hi{acc->count - 1};
+    while (lo < hi) {
+        const uint64_t mid{lo + (hi - lo + 1) / 2};
+        if (at(mid).time <= from_time) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    const auto [start0, start1]{bitassets::dex::CumulativeAt(at(lo), from_time)};
+    const auto [end0, end1]{bitassets::dex::CumulativeAt(last, to_time)};
+    const uint32_t seconds{to_time - from_time};
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    // Units of the other asset per unit, as whole assets.
+    const double scale0{std::pow(10.0, int{d0} - int{d1})};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("pool", id.GetHex());
+    result.pushKV("asset_a", LabelOf(state, pool->asset0));
+    result.pushKV("asset_b", LabelOf(state, pool->asset1));
+    result.pushKV("from_time", from_time);
+    result.pushKV("to_time", to_time);
+    result.pushKV("seconds", seconds);
+    result.pushKV("twap_a", DecimalToJSON(bitassets::dex::AveragePrice(bitassets::dex::CumulativeDelta(end0, start0), seconds) * scale0));
+    result.pushKV("twap_b", DecimalToJSON(bitassets::dex::AveragePrice(bitassets::dex::CumulativeDelta(end1, start1), seconds) / scale0));
+    result.pushKV("spot_a", PriceToJSON(pool->reserve0, d0, pool->reserve1, d1));
+    result.pushKV("cumulative_a", end0.GetHex());
+    result.pushKV("cumulative_b", end1.GetHex());
+    result.pushKV("observations", kept);
+    result.pushKV("oldest_time", oldest.time);
+    return result;
+},
+    };
+}
+
+RPCMethod listoracles()
+{
+    return RPCMethod{
+        "listoracles",
+        "The oracles registered, by id.",
+        {
+            {"start", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "List from this id on (the next page: the last id of the previous one, which is left out)"},
+            {"count", RPCArg::Type::NUM, RPCArg::Default{100}, "Most oracles listed (1 to 1000)"},
+        },
+        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", ORACLE_RESULTS}}},
+        RPCExamples{HelpExampleCli("listoracles", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const std::optional<uint256> start{request.params[0].isNull() ? std::nullopt : std::optional{ParseHashV(request.params[0], "start")}};
+    const int count{request.params[1].isNull() ? 100 : request.params[1].getInt<int>()};
+    if (count < 1 || count > 1000) throw JSONRPCError(RPC_INVALID_PARAMETER, "count is 1 to 1000");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    UniValue list(UniValue::VARR);
+    state.ForEachOracle([&](const uint256& id, const bitassets::OracleRecord& oracle) {
+        if (start && id == *start) return true;
+        list.push_back(OracleToJSON(id, oracle));
+        return list.size() < static_cast<size_t>(count);
+    }, start);
+    return list;
+},
+    };
+}
+
+RPCMethod getoraclevalue()
+{
+    return RPCMethod{
+        "getoraclevalue",
+        "What an oracle attested for an event, if it did.",
+        {
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description (any text, whose tagged hash is its id), or its id (64 hex digits)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "oracle", "The oracle's id"},
+            {RPCResult::Type::STR_HEX, "event", "The event's id"},
+            {RPCResult::Type::BOOL, "attested", "Whether the oracle attested it"},
+            {RPCResult::Type::NUM, "value", /*optional=*/true, "The value it attested"},
+            {RPCResult::Type::NUM, "signed_height", /*optional=*/true, "The height it signed for"},
+            {RPCResult::Type::NUM, "height", /*optional=*/true, "The block that has the attestation"},
+            {RPCResult::Type::STR_HEX, "txid", /*optional=*/true, "Its transaction"},
+        }},
+        RPCExamples{HelpExampleCli("getoraclevalue", "\"prices\" \"BTCUSD 2026-12-31\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const uint256 oracle{ParseOracle(request.params[0], state)};
+    const uint256 event{ParseEvent(request.params[1])};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("oracle", oracle.GetHex());
+    result.pushKV("event", event.GetHex());
+    const auto attestation{state.GetAttestation(oracle, event)};
+    result.pushKV("attested", attestation.has_value());
+    if (attestation) {
+        result.pushKV("value", attestation->value);
+        result.pushKV("signed_height", attestation->signed_height);
+        result.pushKV("height", attestation->height);
+        result.pushKV("txid", attestation->txid.GetHex());
+    }
+    return result;
+},
+    };
+}
+
+RPCMethod getoraclecontract()
+{
+    return RPCMethod{
+        "getoraclecontract",
+        "An oracle contract: what it holds, its outcomes, and who gets it.",
+        {
+            {"contract", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction that made it"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "contract", "Its id"},
+            {RPCResult::Type::STR_HEX, "oracle", "The oracle"},
+            {RPCResult::Type::STR_HEX, "event", "The event"},
+            {RPCResult::Type::STR, "asset", "What it holds"},
+            {RPCResult::Type::NUM, "amount", "How much"},
+            {RPCResult::Type::ARR, "outcomes", "Its outcomes, in order: the first whose range holds the value wins",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "min", "The least value"},
+                    {RPCResult::Type::NUM, "max", "The most"},
+                    {RPCResult::Type::STR, "address", "Who gets it"},
+                }},
+            }},
+            {RPCResult::Type::STR, "refund", "Who gets it if no outcome holds the value, or nothing is attested by the expiry"},
+            {RPCResult::Type::NUM, "expiry", "The last block an attestation counts in"},
+            {RPCResult::Type::NUM, "created", "The block that made it"},
+            {RPCResult::Type::STR, "status", "\"pending\", \"settleable\" (the next block can pay it out), or \"settled\""},
+            {RPCResult::Type::STR, "winner", /*optional=*/true, "Who gets it (settleable or settled)"},
+            {RPCResult::Type::NUM, "settled_height", /*optional=*/true, "The block that paid it out"},
+        }},
+        RPCExamples{HelpExampleCli("getoraclecontract", "\"txid\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const Txid id{Txid::FromUint256(ParseHashV(request.params[0], "contract"))};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto contract{state.GetContract(id)};
+    if (!contract) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such oracle contract");
+    const uint8_t decimals{DecimalsOf(state, contract->asset)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("contract", id.GetHex());
+    result.pushKV("oracle", contract->oracle.GetHex());
+    result.pushKV("event", contract->event.GetHex());
+    result.pushKV("asset", LabelOf(state, contract->asset));
+    result.pushKV("amount", AmountToJSON(contract->amount, decimals));
+    UniValue outcomes(UniValue::VARR);
+    for (const bitassets::OracleOutcome& outcome : contract->outcomes) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("min", outcome.lo);
+        obj.pushKV("max", outcome.hi);
+        obj.pushKV("address", AddressOf(outcome.script));
+        outcomes.push_back(std::move(obj));
+    }
+    result.pushKV("outcomes", std::move(outcomes));
+    result.pushKV("refund", AddressOf(contract->refund));
+    result.pushKV("expiry", contract->expiry);
+    result.pushKV("created", contract->created);
+    if (contract->settled) {
+        result.pushKV("status", "settled");
+        result.pushKV("winner", AddressOf(contract->paid_to));
+        result.pushKV("settled_height", contract->settled_height);
+    } else if (const auto winner{contract->Winner(state.GetAttestation(contract->oracle, contract->event), NextHeight(chainman))}) {
+        result.pushKV("status", "settleable");
+        result.pushKV("winner", AddressOf(*winner));
+    } else {
+        result.pushKV("status", "pending");
+    }
+    return result;
+},
+    };
+}
+
 } // namespace
 
 void RegisterBitAssetsRPCCommands(CRPCTable& t)
@@ -750,6 +1191,12 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &listauctions},
         {"bitassets", &getauction},
         {"bitassets", &quotebid},
+        {"bitassets", &getdexinfo},
+        {"bitassets", &quoteroute},
+        {"bitassets", &getpooltwap},
+        {"bitassets", &listoracles},
+        {"bitassets", &getoraclevalue},
+        {"bitassets", &getoraclecontract},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

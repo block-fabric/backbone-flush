@@ -189,6 +189,12 @@ public:
      */
     [[nodiscard]] bool ApplyTxs(const CBlock& block, int height, const Consensus::SidechainParams& params, bool main_pending, bool peg_step,
                                 std::vector<CTxOut>& tx_payouts, std::vector<CTxOut>& refunds, std::string& reject_reason);
+    /**
+     * Layers' DEX (from SidechainParams::dex_height; nothing before): the end of a block's transactions,
+     * after the last ApplyTx and before the payouts: the batch clearing of the block's orders, whose CHN
+     * fill `tx_payouts`, and the pools' price accumulators at the block's `time` (bitassets::State::FinishBlock).
+     */
+    void FinishTxs(int height, uint32_t time, const Consensus::SidechainParams& params, std::vector<CTxOut>& tx_payouts);
 
     /**
      * Follow the mainchain up to `main_height`: note the outcome of the

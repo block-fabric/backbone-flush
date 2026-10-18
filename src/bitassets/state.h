@@ -405,7 +405,93 @@ struct ReleaseAsset {
     friend bool operator==(const ReleaseAsset&, const ReleaseAsset&) = default;
 };
 
-using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset>;
+//
+// Layers' DEX (from SidechainParams::dex_height; bitassets/dex.h, doc/layers.md "The DEX"). Before that
+// height a marker of these kinds is not valid (bad-ba-marker), as it never was.
+//
+
+/**
+ * Trade `amount_in` of path[0] for at least `min_out` of path.back(), through the pools of each two
+ * assets that follow each other on the path (2 to MAX_ROUTE_ASSETS assets, all different), in one
+ * transaction: each hop pays its pool's fee. The trade is an order of the block's batch (Swap is one of
+ * one hop from the DEX's height on): it clears at the end of the block with every other order of the
+ * block. One result output, which gets what comes out (or, if the order does not fill, what went in
+ * back); CHN out (or back) is paid by the coinbase to `chn_to`, which the order names when either end
+ * is CHN.
+ */
+struct Route {
+    static constexpr uint8_t KIND{13};
+    std::vector<AssetId> path;
+    uint64_t amount_in{0};
+    uint64_t min_out{0};
+    CScript chn_to;
+    SERIALIZE_METHODS(Route, obj) { READWRITE(obj.path, VARINT(obj.amount_in), VARINT(obj.min_out), obj.chn_to); }
+    friend bool operator==(const Route&, const Route&) = default;
+};
+
+/** Register an oracle under a name, with the key it signs with; the marker burns ORACLE_REGISTRATION_FEE, which goes to mainchain miners. */
+struct RegisterOracle {
+    static constexpr uint8_t KIND{14};
+    std::string name;
+    //! An x-only secp256k1 public key (BIP340).
+    uint256 pubkey;
+    SERIALIZE_METHODS(RegisterOracle, obj) { READWRITE(obj.name, obj.pubkey); }
+    friend bool operator==(const RegisterOracle&, const RegisterOracle&) = default;
+};
+
+/** What an oracle says of an event: `value`, signed by its key (dex::AttestationHash), for a block at `height` or later. Once per event. */
+struct Attest {
+    static constexpr uint8_t KIND{15};
+    uint256 oracle;
+    uint256 event;
+    int64_t value{0};
+    int32_t height{0};
+    std::array<unsigned char, 64> signature{};
+    SERIALIZE_METHODS(Attest, obj) { READWRITE(obj.oracle, obj.event, obj.value, obj.height, obj.signature); }
+    friend bool operator==(const Attest&, const Attest&) = default;
+};
+
+/** An outcome of an oracle contract: the values from `lo` to `hi` pay the collateral to `script`. */
+struct OracleOutcome {
+    int64_t lo{0};
+    int64_t hi{0};
+    CScript script;
+    SERIALIZE_METHODS(OracleOutcome, obj) { READWRITE(obj.lo, obj.hi, obj.script); }
+    friend bool operator==(const OracleOutcome&, const OracleOutcome&) = default;
+};
+
+/**
+ * Lock `amount` of an asset (CHN included) until an oracle attests an event: then the first outcome
+ * whose range holds the value gets all of it (none: `refund`); with no attestation in a block up to
+ * `expiry`, `refund` gets it after that block. Settled by anyone (SettleOracleContract): the oracle
+ * chooses among the scripts named here, and can pay nobody else.
+ */
+struct CreateOracleContract {
+    static constexpr uint8_t KIND{16};
+    uint256 oracle;
+    uint256 event;
+    AssetId asset;
+    uint64_t amount{0};
+    std::vector<OracleOutcome> outcomes;
+    CScript refund;
+    int32_t expiry{0};
+    SERIALIZE_METHODS(CreateOracleContract, obj) { READWRITE(obj.oracle, obj.event, obj.asset, VARINT(obj.amount), obj.outcomes, obj.refund, obj.expiry); }
+    friend bool operator==(const CreateOracleContract&, const CreateOracleContract&) = default;
+};
+
+/** Pay an oracle contract out. CHN by the coinbase; an asset to the one result output, whose script must be the winner's. */
+struct SettleOracleContract {
+    static constexpr uint8_t KIND{17};
+    Txid contract;
+    SERIALIZE_METHODS(SettleOracleContract, obj) { READWRITE(obj.contract); }
+    friend bool operator==(const SettleOracleContract&, const SettleOracleContract&) = default;
+};
+
+using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
+                               Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract>;
+
+/** Whether an operation is one of the DEX's (valid from SidechainParams::dex_height only). */
+bool IsDexOperation(const Operation& op);
 
 /** The marker output of a transaction. */
 struct Marker {
@@ -680,6 +766,14 @@ struct Result {
     uint64_t amount{0};
 };
 
+struct Order;
+struct PoolSnapshot;
+struct PoolAccumulator;
+struct Observation;
+struct OracleRecord;
+struct Attestation;
+struct OracleContract;
+
 /**
  * The assets, on the store of the sidechain state (sidechain/store.h), one entry per key. Tables:
  * 0x30 what outputs carry, 0x31 assets, 0x32 reservations not revealed yet, 0x33 assets by number,
@@ -689,6 +783,12 @@ struct Result {
  * whole: 0x39 outputs by what they carry (its id, then its kind), 0x3a pools by asset, 0x3b
  * auctions not closed by asset. What a block changes,
  * the store's journal notes: its undo data.
+ *
+ * The DEX's (bitassets/dex.h), from SidechainParams::dex_height: 0x80 the price accumulators of the pools,
+ * 0x81 their observations (by pool, then place in the ring), 0x86 oracles, 0x87 attestations (by oracle,
+ * then event), 0x88 oracle contracts, 0x89 open contracts by the asset they hold; and, during a block
+ * only (State::FinishBlock erases them), 0x82 the reserves of the pools the block changes as they were
+ * before it, 0x83 the block's orders in their order, 0x84 how many there are, 0x85 their result outputs.
  */
 class State
 {
@@ -708,14 +808,24 @@ public:
      *                       (blocks of stake pay none), counted with `payouts` against MAX_TX_PAYOUTS_PER_BLOCK
      */
     [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released = nullptr, int reveal_depth = 0,
-                               size_t queued = 0);
+                               size_t queued = 0, bool dex = false);
+    /**
+     * The DEX: the end of a block's transactions (after the last ApplyTx of the block, with `dex`): clears
+     * the block's orders (dex.h), fills their payouts in `payouts` (the vector their ApplyTx added to),
+     * and updates the price accumulators of every pool the block changed, at the block's `time`. Never
+     * fails: an order that cannot fill is refunded.
+     */
+    void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts);
+    /** Policy (the mempool): whether a transaction's order, alone against the pools as they are, gives its min_out (true if it has none). */
+    bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) const;
     /** Whether an asset is dead and can be retired; if not, why (`why`). */
     bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
     /**
      * Whether ApplyTx would accept the transaction now (in a block with room for its payouts);
      * `results`, if given, gets what it would pay out, and `payouts` how many CHN payouts it gives rise to.
      */
-    [[nodiscard]] bool CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results = nullptr, int reveal_depth = 0, size_t* payouts = nullptr) const;
+    [[nodiscard]] bool CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results = nullptr, int reveal_depth = 0, size_t* payouts = nullptr,
+                               bool dex = false) const;
     /** What the inputs of a transaction carry, in the order of the inputs. */
     std::vector<std::pair<uint32_t, Token>> SpentTokens(const CTransaction& tx) const;
 
@@ -752,9 +862,29 @@ public:
      */
     CAmount HeldChn() const;
 
+    // The DEX's tables (dex.h).
+    std::optional<PoolAccumulator> GetAccumulator(const uint256& pool) const;
+    /** The observation at a place of a pool's ring (count % TWAP_OBSERVATIONS). */
+    std::optional<Observation> GetObservation(const uint256& pool, uint32_t place) const;
+    std::optional<OracleRecord> GetOracle(const uint256& id) const;
+    std::optional<Attestation> GetAttestation(const uint256& oracle, const uint256& event) const;
+    std::optional<OracleContract> GetContract(const Txid& id) const;
+    /** Oracles by id, from `from` on, until `fn` returns false. */
+    void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
+    void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
+    /** The attestations of an oracle, by event. */
+    void ForEachAttestation(const uint256& oracle, const std::function<bool(const uint256&, const Attestation&)>& fn) const;
+
 private:
     struct Plan;
     std::optional<Plan> MakePlan(const CTransaction& tx, int height, std::string& reject_reason, int reveal_depth) const;
+    /** The DEX's part of MakePlan (dex.cpp). */
+    bool PlanDex(const CTransaction& tx, const Operation& op, int height, Plan& plan, uint64_t& chn_taken, const std::function<void(const AssetId&, uint64_t)>& take,
+                 std::string& reject_reason) const;
+    /** The batch clearing (dex.cpp). */
+    void ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts);
+    /** Whether an order of this block holds an asset (keeps it from being retired). */
+    bool OrderHolds(const AssetId& asset) const;
 
     // Writes, with the indexes kept in step.
     sidechain::StoreOverlay& Writable() const;
@@ -767,6 +897,8 @@ private:
 
     const sidechain::StoreView* m_view;
     sidechain::StoreOverlay* m_overlay;
+    //! Whether the DEX's rules apply (ApplyTx, CheckTx, FinishBlock): pools changed are noted for the price accumulators.
+    mutable bool m_dex{false};
 };
 
 /**

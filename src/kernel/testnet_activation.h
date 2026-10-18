@@ -28,4 +28,13 @@ inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{4997};
 inline constexpr int TESTNET_FEE_SPLIT_HEIGHT{0};
 inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{0};
 
+/**
+ * Layers' DEX (Consensus::SidechainParams::dex_height, bitassets/dex.h: routes, batch clearing, price
+ * accumulators, oracles) on the test network, which runs since 2026-10-18 under the rules before it: the
+ * first block of Layers' test network with the DEX's rules. Never (INT_MAX) until the test network's
+ * nodes upgrade; set it a little ahead of the tip then (every node upgraded before the tip gets there).
+ * The main network and signet have them from their first block (0).
+ */
+inline constexpr int TESTNET_DEX_HEIGHT{std::numeric_limits<int>::max()};
+
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

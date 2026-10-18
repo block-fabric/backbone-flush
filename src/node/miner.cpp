@@ -397,6 +397,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
             LogInfo("%s: leaving out transaction %s, which breaks the sidechain rules in this block (%s)", __func__, pblock->vtx[i]->GetHash().ToString(), reject_reason);
             drop({pblock->vtx[i]->GetHash()});
         }
+        // Layers' DEX: the block's orders clear at its end, as State::ConnectBlock clears them (their CHN
+        // among the payouts of the transactions; the time is the block's, which only the price
+        // accumulators read: a block of stake's producer sets it to its slot's after, which changes no payout).
+        side->FinishTxs(nHeight, pblock->nTime, side_params, side_tx_outputs);
         // As many of the payouts owed as a block may pay; the rest wait for the next block. Refunds
         // wait with the deposits (State::ConnectBlock).
         side_outputs.insert(side_outputs.end(), side_refunds.begin(), side_refunds.end());

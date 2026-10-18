@@ -39,11 +39,14 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     if (!sidechain.enabled) return ParamsFingerprint(params);
     // Every field: a parameter added later has to be added here as well.
     // BitAssets' own rules (the reveal depth) count as well.
-    static_assert(sizeof(Consensus::SidechainParams) == 40, "a new sidechain parameter goes into the fingerprint");
+    static_assert(sizeof(Consensus::SidechainParams) == 48, "a new sidechain parameter goes into the fingerprint");
     HashWriter hasher{};
     hasher << std::string{"Sidechain parameters"} << ParamsFingerprint(params) << sidechain.slot << sidechain.min_withdrawal
            << sidechain.max_bundle_withdrawals << sidechain.bundle_retry_delay << sidechain.main_activation_height
            << sidechain.pending_min_score << sidechain.unproposed_expiry_blocks << sidechain.bitassets_reveal_depth;
+    // Layers' DEX: its height once set (a database of a chain connected without its rules is made again),
+    // nothing while it is never (as before it existed: a database of the rules before it is kept).
+    if (sidechain.dex_height != std::numeric_limits<int>::max()) hasher << std::string{"dex"} << sidechain.dex_height;
     return hasher.GetHash();
 }
 

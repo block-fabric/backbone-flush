@@ -50,6 +50,7 @@ add_executable(test_bitcoin
   sidechain_hooks_tests.cpp
   fastblocks_tests.cpp
   layers_tests.cpp
+  dex_tests.cpp
   sidechain_state_golden_tests.cpp
   sidechain_mainclient_tests.cpp
   sidechain_prune_tests.cpp

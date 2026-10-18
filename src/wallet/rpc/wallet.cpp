@@ -1084,6 +1084,11 @@ RPCMethod updateasset();
 RPCMethod transferassetcontrol();
 RPCMethod fixassetsupply();
 RPCMethod swapasset();
+RPCMethod swaproute();
+RPCMethod registeroracle();
+RPCMethod publishoracle();
+RPCMethod createoraclecontract();
+RPCMethod settleoraclecontract();
 RPCMethod addliquidity();
 RPCMethod removeliquidity();
 RPCMethod createauction();
@@ -1172,6 +1177,11 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &transferassetcontrol},
         {"wallet", &fixassetsupply},
         {"wallet", &swapasset},
+        {"wallet", &swaproute},
+        {"wallet", &registeroracle},
+        {"wallet", &publishoracle},
+        {"wallet", &createoraclecontract},
+        {"wallet", &settleoraclecontract},
         {"wallet", &addliquidity},
         {"wallet", &removeliquidity},
         {"wallet", &createauction},
