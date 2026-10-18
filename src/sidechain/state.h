@@ -229,12 +229,17 @@ public:
      * queue has half of the block, and what one does not use goes to the other,
      * so that neither holds the other back. The rest is queued for the next blocks. A block that takes no peg actions pays none (`max_payouts` 0): what it owes is queued.
      */
-    std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts = MAX_PAYOUTS_PER_BLOCK);
+    std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts = MAX_PAYOUTS_PER_BLOCK, size_t owed_tx_assets = 0);
     /** Payouts owed and not paid yet, oldest first: from the mainchain, and from transactions. */
     std::vector<CTxOut> Queue() const;
     std::vector<CTxOut> TxQueue() const;
     /** How many payouts of transactions wait (TxQueue), read in one look. */
     uint64_t TxQueueLength() const;
+    /**
+     * Layers: how many of those are the assets' (pools and auctions), apart from what the sidechain's own peg
+     * actions owe (unbonds, rewards): what the bound bitassets::MAX_TX_PAYOUTS_PER_BLOCK counts with a block's own.
+     */
+    uint64_t AssetPayoutsQueued() const;
     /**
      * Take in the withdrawals and the refund requests of a transaction that is not a coinbase.
      * All or nothing: a transaction that breaks a rule changes nothing.
