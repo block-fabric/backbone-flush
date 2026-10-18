@@ -1014,6 +1014,7 @@ public:
             case pos::CoinbaseRole::PRODUCER: roles.push_back(CoinbaseRole::STAKED); break;
             case pos::CoinbaseRole::ANCHOR: roles.push_back(CoinbaseRole::ANCHOR); break;
             case pos::CoinbaseRole::REPORTER: roles.push_back(CoinbaseRole::REPORTER); break;
+            case pos::CoinbaseRole::VALIDATOR: roles.push_back(CoinbaseRole::VALIDATOR); break;
             }
         }
         LOCK(g_coinbase_roles.mutex);

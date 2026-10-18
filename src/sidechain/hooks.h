@@ -324,6 +324,15 @@ public:
      */
     virtual bool AfterBlock(State& state, const CBlock& block, int height, const std::optional<PegStep>& step, CAmount minted,
                             const Consensus::SidechainParams& params, std::string& reject_reason) const;
+    /**
+     * After AfterBlock, when the fees of the block's transactions are known (Chainstate::ConnectBlock:
+     * `fees[i]` is the fee of block.vtx[i], 0 for the coinbase): what the coinbase does with them, by
+     * the sidechain's own rules (FastBlocks' fee split). Not called where the state is brought forward
+     * from blocks checked before, without their coins (RollForwardSidechainDB), as the coinbase's total
+     * (bad-cb-amount) is not checked there either. By default nothing.
+     */
+    virtual bool CheckFees(const State& state, const CBlock& block, int height, const std::optional<PegStep>& step, const std::vector<CAmount>& fees,
+                           std::string& reject_reason) const { return true; }
 
     //
     // Block production and services
@@ -337,6 +346,13 @@ public:
      * with cs_main held, by block assembly only.
      */
     virtual std::vector<CTxOut> MergeMinedOutputs(const StoreView& view, const CBlockIndex& prev, int64_t time) const;
+    /**
+     * Block assembly of a merged mined block: outputs of the sidechain's own for the fees of its
+     * transactions (`fees[i]` the fee of block.vtx[i + 1]), put last in the coinbase, and the amount they
+     * take from its first output (FastBlocks: the validators' share of the fees, to the validator pool).
+     * `main_height`: the mainchain block before the one that is to commit to it. By default none.
+     */
+    virtual CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const { return 0; }
 
     /**
      * Called by the Follower each round, once the record is up to date, in place of its own merged

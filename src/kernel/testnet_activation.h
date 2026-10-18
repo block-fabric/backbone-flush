@@ -5,6 +5,8 @@
 #ifndef BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 #define BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 
+#include <limits>
+
 /**
  * Layers on the Chains test network: the height of the Chains testnet block that activated Layers in
  * slot 7 (Consensus::SidechainParams::main_activation_height of the test network, and the PoS rules'
@@ -18,5 +20,13 @@
  * the activation; harmless, but start new datadirs with the height set).
  */
 inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{0};
+
+/**
+ * The fee split (Consensus::PosParams::fee_split_height, pos/feesplit.h) on the test network and signet.
+ * Layers: from its first block (a new chain, every rule from genesis: no height to set later), as on the
+ * main network. (FastBlocks has a placeholder here, set when its test network upgrades.)
+ */
+inline constexpr int TESTNET_FEE_SPLIT_HEIGHT{0};
+inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{0};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

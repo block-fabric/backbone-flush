@@ -33,7 +33,7 @@
  * The state is in the sidechain store, so the store's journal is its undo. Table bytes (0x50 to 0x5f
  * are FastBlocks'; the template has 'Q' 0x51 and 'R' 0x52, and FastBlocks 0x55 and 0x56 already):
  * 0x50 STAKE_STATE, 0x53 OFFENCES, 0x54 REWARDS, 0x57 VALIDATORS, 0x58 UNBOND_QUEUE, 0x59 ELIGIBLE,
- * 0x5a SETS, 0x5b ANCHOR_SETS, 0x5c ANCHOR_ORDER, 0x5d LIVENESS (and hooks.cpp's 0x5e EPOCH_SEEDS).
+ * 0x5a SETS, 0x5b ANCHOR_SETS, 0x5c ANCHOR_ORDER, 0x5d LIVENESS (and hooks.cpp's 0x5e EPOCH_SEEDS and 0x5f POOL, the validator pool of the fee split).
  */
 namespace pos {
 

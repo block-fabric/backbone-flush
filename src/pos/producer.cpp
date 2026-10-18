@@ -4,6 +4,8 @@
 
 #include <pos/producer.h>
 
+#include <pos/feesplit.h>
+
 #include <addresstype.h>
 #include <chain.h>
 #include <common/args.h>
@@ -320,12 +322,31 @@ std::optional<CBlock> Producer::Build(int64_t slot, const std::optional<AnchorAc
     }
     CBlock block{block_template->block};
 
-    // The fee split: the producer keeps its share, the rest goes to the pot.
     CMutableTransaction coinbase{*block.vtx.at(0)};
     const CAmount fees{coinbase.vout.at(0).nValue};
-    const CAmount share{ProducerShare(fees, params.producer_share_bps)};
-    coinbase.vout[0].nValue = share;
-    if (fees - share > 0) coinbase.vout.emplace_back(fees - share, PotScript());
+    const int height{WITH_LOCK(::cs_main, const CBlockIndex* prev{chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock)}; return prev ? prev->nHeight + 1 : -1)};
+    if (height < 0) {
+        error = "the block's parent is unknown";
+        return std::nullopt;
+    }
+    if (m_hooks.FeeSplitActive(height)) {
+        // The fee split (pos/feesplit.h): the producer keeps nothing; the bidder's share and the fees of
+        // peg transactions go to the pot, the validators' share to the validator pool.
+        const auto main_height{WITH_LOCK(::cs_main, return m_hooks.FeeSplitMainHeight(/*pos_block=*/true, slot, -1))};
+        if (!main_height) {
+            error = "the mainchain block that seeds the epoch is not on record yet";
+            return std::nullopt;
+        }
+        const FeeSplit split{SplitFees(block.vtx, block_template->vTxFees, /*fees_without_coinbase=*/true, m_hooks.FeeSplitSpacing(*main_height))};
+        coinbase.vout[0].nValue = 0;
+        if (split.Bidder() > 0) coinbase.vout.emplace_back(split.Bidder(), PotScript());
+        if (split.validators > 0) coinbase.vout.emplace_back(split.validators, PoolScript());
+    } else {
+        // Before it: the producer keeps its share, the rest goes to the pot.
+        const CAmount share{ProducerShare(fees, params.producer_share_bps)};
+        coinbase.vout[0].nValue = share;
+        if (fees - share > 0) coinbase.vout.emplace_back(fees - share, PotScript());
+    }
     block.vtx[0] = MakeTransactionRef(std::move(coinbase));
     node::RegenerateCommitments(block, chainman);
 

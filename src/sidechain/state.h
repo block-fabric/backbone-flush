@@ -160,10 +160,11 @@ public:
      *
      * @param[out] minted         the coins the coinbase has to create on top of the fees: deposits and refunds
      * @param[out] reject_reason  set when the block is invalid
+     * @param[in]  fees           the fee of each transaction of the block (0 for the coinbase), if known: for ChainHooks::CheckFees
      * @return false if the block is invalid, in which case the overlay holds a partial update and must be dropped.
      */
     [[nodiscard]] bool ConnectBlock(const CBlock& block, int height, const Consensus::SidechainParams& params, const Mainchain& mainchain,
-                                    CAmount& minted, std::string& reject_reason);
+                                    CAmount& minted, std::string& reject_reason, const std::vector<CAmount>* fees = nullptr);
 
     //
     // The steps of ConnectBlock, in the order it takes them. Block assembly

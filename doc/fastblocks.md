@@ -41,7 +41,9 @@ set once slot 5 activates on the test network reset on 17/Oct/2026).
 | Validators (min active / max) | 4 / 100 | 3 / 32 | 1 / 8 |
 | `max_unanchored_slots` | 240 (1 h) | 240 (1 h) | 100 |
 | `stall_seconds` | 1800 | 600 | 30 |
-| Producer share | 50 % | 50 % | 50 % |
+| Producer share (before the fee split) | 50 % | 50 % | 50 % |
+| Fee split from height (`fee_split_height`) | 0 (from the first block) | `TESTNET_FEE_SPLIT_HEIGHT` / `SIGNET_FEE_SPLIT_HEIGHT` (`src/kernel/testnet_activation.h`; never until set) | never, unless `-testactivationheight=feesplit@<height>` |
+| Bidder's share of ordinary fees | max(10 %, 50 % × min(1, 60 s / S)) | same | same |
 | Anchors that make a block final (wallets) | 6 | 3 | 1 |
 | Minimum stake | 1 CHN | 0.01 | 0.0001 |
 | Unbonding (anchors) | 2880 (two days) | 120 | 20 |
@@ -284,7 +286,9 @@ Every block (state):
 | A PoS block is signed by the leader of its slot, as the chain below it and the record say when it is connected (its header may have come before the node knew the epoch's set; the record may have moved the seed since) | `bad-pos-sig`, `bad-pos-inactive`, `pos-seed-unknown`, `bad-pos-set-unknown` (a set the state no longer has) |
 | The seeds the chain below a PoS block read (of the last block of stake's epoch, so of all: see Seed) are the record's: else a mainchain reorg moved them, and the blocks from the moved epoch are connected again first (a failure against the record, given back then; not the peer's fault) | `pos-seed-moved` |
 | A PoS block's leader is not banned in the state of the chain below it: from the block after the one that banned it, a banned validator leads no more, and its slots stay empty | `bad-pos-leader-banned` |
-| A PoS block's producer keeps at most 50 % of its fees: all the coinbase but the payouts and the pot ≤ 50 % of that and the pot | `bad-pos-producer-share` |
+| Before `fee_split_height`: a PoS block's producer keeps at most 50 % of its fees: all the coinbase but the payouts and the pot ≤ 50 % of that and the pot. From it: the producer keeps nothing: all the coinbase but the payouts, the pot and the pool is 0 | `bad-pos-producer-share` |
+| From `fee_split_height`: one validator pool output at most (`OP_RETURN 0xDE'VPL'`), in any block | `bad-pos-pool-multiple` |
+| From `fee_split_height`, against the fees of the block's transactions: the pool output is the validators' share of the ordinary fees, exactly; a PoS block's pot output is the bidder's share and the fees of its peg transactions, exactly (see "Fees, the pot and the validator pool"; reads the record: S) | `bad-pos-fee-split` |
 | A PoS block comes less than `max_unanchored_slots` after the first PoS block no anchor covers | `bad-pos-unanchored` |
 | A BMM block carries transactions only when the mainchain block before its commitment is `stall_seconds` after the last PoS block | `bad-pos-bmm-not-stalled` |
 | A refund request only in a block that takes the peg actions | `bad-sc-refund-not-peg` (template) |
@@ -841,13 +845,14 @@ as before.
 
 **Peg actions of an anchor** (before the template's, `BeforePegStep`): the pot
 and the share of the reserve to the payee; unbonds due and rewards owed; the
-liveness of earlier epochs (jailing); the set of the anchor.
+liveness of earlier epochs (jailing); the set of the anchor; from the fee split
+on, the validator pools of the epochs that are over, to the validators' owners.
 
 Tables: `0x50` the totals (bonded, unbonding, reserve, rewards owed, the set
 version), `0x53` offences punished, `0x54` rewards owed, `0x57` validators
 (owner, bonded, genesis stake, unbonds, sequence, jail, ban), `0x58` unbonds by
 the anchor they are paid at, `0x59` eligible validators by weight, `0x5a`–`0x5c`
-sets, `0x5d` liveness. (`0x51` and `0x52` are the template's `Q` and `R`.)
+sets, `0x5d` liveness, `0x5f` the validator pool by epoch (fee split). (`0x51` and `0x52` are the template's `Q` and `R`.)
 
 ## Evidence
 
@@ -973,7 +978,7 @@ last acknowledged one that it has neither a ticket nor a block of.
 
 | RPC | |
 |---|---|
-| `getposinfo` | The validators of the current epoch, slot and leader, anchors, the pot and its reserve, staking's totals, the producer |
+| `getposinfo` | The validators of the current epoch (with `poolshare`, each one's share by stake of the epoch's pool so far), slot and leader, anchors, the pot and its reserve, staking's totals, `feesplit` (active, `activationheight`, the seed's `mainheight`, `spacing` S, `bidderbps` / `validatorsbps`; the same for a BMM block made now, `bmm*`; the `pool` and `poolepochs`), the producer |
 | `getvalidators [epoch]` | The set of an epoch as the active chain fixes it (`known`, `seedknown`), the slots each one leads, and whether the active chain banned or jailed it since (`banned`, `jaileduntilepoch`) |
 | `getvalidator <pubkey>` | One validator: stake, slots, next slot, offences known, its bond (owner, bonded, unbonds and when they are paid, jail, ban) |
 | `signbondpop <owner> [pubkey]` | The proof of possession for a bond owned by `owner`, by a key of this node's producer |
@@ -981,11 +986,11 @@ last acknowledged one that it has neither a ticket nor a block of.
 | `getanchorinfo [count]` | The newest anchors, the anchored and final tips, the commitments the chain skipped, the pot, the tickets known |
 | `getsidechainstate` | Adds `pegbalance`: the coins the chain holds against the escrow (below) |
 | `submitevidence <hex>`, `listevidence` | Evidence (above) |
-| `setstaking true\|false`, `getstakinginfo [since]` | This node as a validator: on or off (on at start), its keys and their bonds, what it made (`produced` since it started; `blocksmade`, the blocks of stake on the active chain its keys signed, and `blocksmadesince` a time), its next slot |
+| `setstaking true\|false`, `getstakinginfo [since]` | This node as a validator: on or off (on at start), its keys and their bonds (and `poolshare`, each key's share of the current epoch's pool so far; `feesplit` as in `getposinfo`), what it made (`produced` since it started; `blocksmade`, the blocks of stake on the active chain its keys signed, and `blocksmadesince` a time), its next slot |
 | `createbond <pubkey> <amount> [pop] [owner]` (wallet) | Bond coins of the wallet to a key. The owner is the bond's, else that of a bond of this wallet to the key waiting in the mempool (bonding twice before a block names one owner), else the one given, else a new address; with a pop for a first bond, the owner it was signed for must be given. Without a pop, for a key this node does not hold, the error names the owner to have `signbondpop` sign for on the validator's node |
 | `createunbond <pubkey> [amount\|"all"]` (wallet) | Unbond some of the wallet's bond, or all of it (the default: all that is bonded when it is mined). One at a time: an unbond of the key in the mempool (named in the error) waits for a block first |
 | `listbonds [all]` (wallet) | The wallet's bonds (or every validator's) |
-| `listtransactions`, `listsinceblock`, `gettransaction` (wallet) | A coinbase output's `income`: `staked`, `anchor` or `reporter` (below) |
+| `listtransactions`, `listsinceblock`, `gettransaction` (wallet) | A coinbase output's `income`: `staked`, `anchor`, `reporter` or `validator` (below) |
 
 ## Staking income
 
@@ -994,18 +999,23 @@ through the chain interface's `getCoinbaseRoles`) is
 
 - **staked**: the first output of a block of stake, the producer's share of
   its fees (paid to `-validatorpayout`, else a new address of the node's first
-  wallet, else the first validator key's P2WPKH address);
+  wallet, else the first validator key's P2WPKH address); from the fee split on it
+  has no value (validators earn their share of the pool instead);
 - **anchor**: in a block that takes the peg actions (an acknowledgement, or a
   merged mined block), the pot and the share of the reserve paid to the
   anchor's payee (the ticket's, or the merged mined block's first output if
   it is an address);
 - **reporter**: the reward for a proof that a leader signed twice, paid at the
   peg step after the block that carried the proof to that block's first
-  output's script (if it is an address; otherwise to the reserve).
+  output's script (if it is an address; otherwise to the reserve);
+- **validator** (fee split): a validator's share of the validator pool of an
+  epoch, paid at the first anchor after it to its bond's owner: the payouts the
+  zero-value marker `OP_RETURN 0xDE'VPS' | count` counts, after it.
 
 The rest (a merged mined block's first output, deposits, refunds, unbonds) is
 "mined", as before. A block's payouts come after its first output in this
-order: what the mainchain gave rise to, the pot, unbonds, rewards, refunds. So
+order: what the mainchain gave rise to, the pot, unbonds, rewards, the marker and
+the validators' shares, refunds. So
 for an anchor block the node reads the blocks back to the anchor before it (that
 one included) for the proofs they carried (a leader's proofs against itself earn
 nothing), takes the last payouts to each reporter's script as its rewards, and
@@ -1017,7 +1027,8 @@ block are cached (10000 blocks).
 The wallet's transactions carry the roles (`interfaces::WalletTx::
 txout_coinbase_role`); the GUI's transaction list labels such outputs "Staked",
 "BMM reward" and "Slashing reward" instead of "Mined", and its type filter
-has the three. The wallet RPCs give a coinbase output's `income`.
+has the three, and "Validator share" for the fourth. The wallet RPCs give a coinbase output's
+`income` (`validator` for a share of the pool).
 
 ## The staking page
 
@@ -1034,7 +1045,11 @@ the wallet's transactions:
   chain (`blocksmade`, `blocksmadesince` local midnight) and since the node
   started, and the slots they missed since it started;
 - staking income of the wallet, today and in all: staked, BMM rewards,
-  slashing rewards (the transaction list's records of these types);
+  slashing rewards, validator shares (the transaction list's records of these types);
+- (fastblocks-app's Staking page) the fee split now, "Fee split now: validators X % /
+  BMM Y %" (or the block it starts at), with S, the validator pool not paid yet, and
+  this node's share of the current epoch's pool so far (`getposinfo` / `getstakinginfo`
+  `feesplit`, `poolshare`);
 - the wallet's coins by finality (soft, BMM-confirmed, final), and how far the
   chain is BMM-confirmed and final;
 - the validator set of the epoch (key, stake, share, slots, status: this node,
@@ -1078,30 +1093,80 @@ number of PoS blocks. Two chains with the same anchors and the same last
 commitment share that anchor, so comparing heights is comparing PoS blocks
 since it.
 
-## Fees and the pot
+## Fees, the pot and the validator pool
 
-A PoS block's producer keeps half its fees (output 0); the other half goes to
-a pot output (`OP_RETURN 0xDE504F54`), which takes the coins out of
-circulation into the state. An acknowledgement pays the pot accrued up to P
-to the ticket's payee; a BMM block pays the pot accrued up to its parent to
-its first output's script, if that is an address (`IsRewardPayee`, above:
-P2PKH, P2SH, P2WPKH, P2WSH or P2TR); otherwise the pot, and the share of the
-reserve that anchor releases, go to the reserve (consensus; audit 7, finding 1:
-a payout to a script no block can carry, owed when the payout queue was behind,
-stopped the peg steps after it). A ticket's payee is checked when the ticket is
-(`bad-pos-ticket-payee`). Bidders bid for the pot on the mainchain, so its
-value reaches the mainchain's miners.
+Bids for BMM commitments stay on the mainchain, with its miners. On FastBlocks the bidder (the payee
+of the anchor's ticket, or a BMM block's own first output) and the validators share the fees.
+
+**Before `fee_split_height`** (the old rule, exactly as it was): a PoS block's producer keeps half its
+fees (output 0); the other half goes to a pot output (`OP_RETURN 0xDE504F54`), which takes the coins
+out of circulation into the state. A BMM block's merged miner keeps its fees.
+
+**From `fee_split_height`** (consensus; `pos/feesplit.h`, `FastBlocksHooks::CheckFees`):
+
+- the fees of *peg transactions* go to the bidder whole: a transaction with a withdrawal output (well
+  formed or not: `IsWithdrawalScript`) or a refund request. Bonds and unbonds are staking, not the peg:
+  ordinary fees;
+- the other (*ordinary*) fees F are split: the bidder takes B = max(⌊F / 10⌋, min(⌊F / 2⌋, ⌊30 F / S⌋))
+  -- b = max(10 %, 50 % × min(1, 60 s / S)), rounded down to the satoshi -- and the validators the
+  rest, F − B (so the odd satoshi of a 50/50 split is theirs). At S ≤ 60 s exactly 50/50; the floor of
+  10 % is reached at S = 300 s; S = 90 s gives a third, 120 s a quarter. The split is of the block's
+  ordinary fees together, not transaction by transaction;
+- **S** is the median spacing of the last 11 mainchain blocks, from the record every node keeps: the
+  spacings of the median times (`MainBlock::time`, what the record has) of the blocks from
+  max(H − 11, `main_activation_height`) to H, the middle one sorted (the upper middle for an even
+  count; 60 s if fewer than two blocks count, as below the slot's activation, which the record may
+  start below). H is a height the block cannot choose: for a PoS block, the block that seeds its epoch
+  (`SeedHeight`, the highest whose median time is at or before the epoch's start less
+  `seed_lookahead_seconds`; the block waits for it as for its leader, `pos-seed-unknown`); for a BMM
+  block, the block before the one that committed to it (`PegStep::main_height`). Neither depends on the
+  time since the last anchor nor on acknowledgements: withholding acknowledgements, or tickets, moves
+  nothing. A mainchain reorg that moves a seed connects the blocks of the epoch again (`pos-seed-moved`,
+  as for leaders), and one that moves a commitment takes its BMM block back: a failure against the
+  record, not the peer's;
+- a PoS block's producer keeps none of it: its output 0 has no value; its pot output holds the bidder's
+  share and the peg fees, its pool output (`OP_RETURN 0xDE'VPL'`) the validators' share. A BMM block's
+  first output keeps the bidder's share and the peg fees (its own pot, as before: an anchor pays the
+  pot accrued to the block it anchors), and its pool output the validators' share.
+
+The pot is paid as before: an acknowledgement pays the pot accrued up to P to the ticket's payee; a BMM
+block pays the pot accrued up to its parent to its first output's script, if that is an address
+(`IsRewardPayee`: P2PKH, P2SH, P2WPKH, P2WSH or P2TR); otherwise the pot, and the share of the reserve
+that anchor releases, go to the reserve (audit 7, finding 1). A ticket's payee is checked when the
+ticket is (`bad-pos-ticket-payee`). Bidders bid for the pot on the mainchain, so its value reaches the
+mainchain's miners.
+
+**The validator pool** (table `0x5f`, by epoch). The validators' share of a block goes to the pool of
+the epoch of its slot. The pool of an epoch is shared at the peg step of the first anchor whose
+earliest epoch (its own for a PoS block; for a BMM block, that of two hours before its time) is after
+it -- the first anchor after the epoch ends, as other payouts -- among the validators of that epoch's
+set, as the chain fixes it (`SetFor`, read before the anchor's staking peg actions, which may prune it),
+by their weight in the set (bonded and genesis stake, as for leaders): each ⌊pool × weight / W⌋, W the
+weight of those taking part. A validator jailed or banned at the distribution (in the state after the
+anchor's jailing: `jailed_until_epoch` after the anchor's set epoch, or banned) takes no share, and the
+others share it all. A share is paid to the validator's bond owner, P2WPKH of the owner key hash (the
+only address the chain knows of a validator), in the coinbase's payouts, after the unbonds and the
+rewards, behind a zero-value marker `OP_RETURN 0xDE'VPS' | count (4 bytes, little-endian)` that counts
+them (for wallets). A genesis validator that never bonded has no owner: its share goes to the reserve.
+What the rounding leaves (and the whole pool, if nobody can take it: no set known, no weight, all
+excluded) is carried to the next epoch's pool: that of the anchor's earliest epoch, the next one not
+over (so that a remainder of an old epoch, paid late, does not walk an epoch an anchor behind the
+others). A peg step pays the pools of 16 epochs at most (the rest
+at the next ones). Shares of 0 are not paid. So the producer of a block gains nothing over the other
+validators of its epoch: the share is by stake, not by blocks made.
 
 ## Peg balance
 
 `getsidechainstate` gives `pegbalance` as of the tip (design §6.3): `utxos`
 (spendable coins), `withdrawals` (coins burned by withdrawals waiting or in a
-bundle: amounts and mainchain fees), `pot` (accrued less paid), `bonded` and
+bundle: amounts and mainchain fees), `pot` (accrued less paid), `pool` (the
+validator pool of the fee split, not shared out yet), `bonded` and
 `unbonding` stake, the `reserve` of penalties, the `rewards` owed for proofs,
-`payouts` (owed and not paid yet: deposits, refunds, the pot, unbonds and
-rewards due), their `total`, and `mainheight`, the mainchain block the chain acted on up to.
-Without fees left unclaimed (a producer may claim less than its share; what it
-leaves is lost) and coins burned (`OP_RETURN` outputs), `total` is the escrow
+`payouts` (owed and not paid yet: deposits, refunds, the pot, unbonds,
+rewards and the validators' shares of the pool due), their `total`, and `mainheight`, the mainchain block the chain acted on up to.
+Without fees left unclaimed (before the fee split a producer may claim less than its share,
+and a merged miner less than its fees; what it leaves is lost; from the split on, a PoS block's
+pot and pool are exact) and coins burned (`OP_RETURN` outputs), `total` is the escrow
 the mainchain held for slot 5 after the block `mainheight`; with them, less.
 Every FastBlocks functional test checks this on every node after every step
 (`test_framework/fastblocks.py`, `assert_peg_balance`).
@@ -1391,6 +1456,31 @@ Found and left as they are (decisions):
   it leads fewer than 10 slots an epoch: on the main network (120 slots) with
   13 or more equal validators, on the test networks (20 slots) unless it holds
   half the stake.
+
+## The fee split (decision of 2026-10-18)
+
+The user's design: bids for BMM commitments stay on Chains with its miners; on FastBlocks the BMM
+bidder collects the fees of peg transactions whole and its share b = max(10 %, 50 % × min(1, 60 s / S))
+of the ordinary fees, the validators the rest, through a pool shared by stake among all validators of
+an epoch (not kept by the block's producer). See "Fees, the pot and the validator pool" for the rules.
+Choices made in building it:
+
+- S comes from a mainchain height every node has and no block chooses: the epoch's seed block for a
+  PoS block (so S changes at most once an epoch, an epoch after the mainchain did, and cannot depend on
+  acknowledgements), the block before its commitment for a BMM block. The record keeps median times,
+  so S is the median of the spacings of the median times (for blocks at a steady pace, the spacing);
+- integers: B rounded down, the validators take the rest; each share of the pool rounded down, the
+  remainder to the next epoch's pool; a genesis validator without a bond's owner: its share to the
+  reserve (paid out to bidders with the pots, 1/`pot_reserve_anchors` an anchor);
+- the pool's shares go to the bond owner's P2WPKH, the only address the chain has for a validator, at
+  the first anchor after the epoch, behind a marker the wallets read;
+- activation: `PosParams::fee_split_height`, a height of FastBlocks. Main 0 (the main network has not
+  started: from its first block). Test network and signet: `TESTNET_FEE_SPLIT_HEIGHT` and
+  `SIGNET_FEE_SPLIT_HEIGHT` in `src/kernel/testnet_activation.h`, placeholders (`INT_MAX`: never) that
+  the coordinator sets to a height a little ahead of the tip before the upgraded nodes start (every
+  node of the network needs the same); regtest: never, unless `-testactivationheight=feesplit@<height>`
+  (so the tests of the old rule run unchanged). Before it the old rule holds exactly; a pool output there
+  only burns its coins.
 
 ## The decisions of 2026-10-16
 

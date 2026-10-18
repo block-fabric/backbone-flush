@@ -47,7 +47,17 @@ struct PosParams {
      */
     int64_t stall_seconds{1800};
     //! The producer of a PoS block may keep at most this share of its fees, in basis points; the rest goes to the pot.
+    //! Below fee_split_height only.
     int64_t producer_share_bps{5000};
+    /**
+     * The first block (of this chain) of the fee split (pos/feesplit.h): the fees of peg transactions go
+     * to the BMM bidder, the other fees split between the bidder and the validator pool by the spacing of
+     * mainchain blocks, the pool shared by stake among the validators of each epoch; the producer of a
+     * block of stake keeps none. Below it, producer_share_bps. Main 0; the test network and signet
+     * TESTNET_FEE_SPLIT_HEIGHT / SIGNET_FEE_SPLIT_HEIGHT (kernel/testnet_activation.h); regtest never,
+     * unless -testactivationheight=feesplit@<height>.
+     */
+    int fee_split_height{0};
     //! A PoS block may be this far ahead of the node's clock, at most.
     int64_t max_future_seconds{2};
     //! Not consensus: wallets call a block final once this many anchors cover it.

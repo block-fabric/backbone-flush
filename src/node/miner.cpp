@@ -195,6 +195,11 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // What the sidechain's own peg actions owe is kept apart from what the transactions pay out, as in
     // State::ConnectBlock: it takes none of their room.
     std::vector<CTxOut> side_outputs, side_peg_owed, side_tx_outputs, side_refunds;
+    // What the sidechain's own rules put last in the coinbase of a merged mined block for the fees of its
+    // transactions, and what they take from its first output (ChainHooks::MergeMinedFeeOutputs).
+    std::vector<CTxOut> fee_outputs;
+    CAmount fee_take{0};
+    int side_main_height{0};
     std::optional<uint256> bundle_hash;
     bool main_pending{false};
     // Whether the block takes the peg actions: always so in the template (SidechainAssembly).
@@ -207,6 +212,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         std::string reject_reason;
         // The block is built for the next mainchain block to commit to (or as the sidechain asks).
         const int main_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.main_height : mainchain.Height()};
+        side_main_height = main_height;
         const uint256 bundle_nonce{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.nonce : pindexPrev->GetBlockHash()};
         const std::optional<int32_t> max_withdrawal_height{m_sidechain.peg == SidechainAssembly::Peg::STEP ? m_sidechain.step.max_withdrawal_height : std::nullopt};
         // The height the peg actions count as at (PegStep::peg_height): the block's in the template.
@@ -401,6 +407,8 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         if (m_sidechain.peg == SidechainAssembly::Peg::BMM) {
             const auto own{sidechain::Hooks().MergeMinedOutputs(side->View(), *pindexPrev, pblock->nTime)};
             side_outputs.insert(side_outputs.end(), own.begin(), own.end());
+            // ... and for the fees of its transactions, last in the coinbase, taken from its first output.
+            fee_take = sidechain::Hooks().MergeMinedFeeOutputs(*pblock, nHeight, side_main_height, pblocktemplate->vTxFees, fee_outputs);
         }
         m_chainstate.ReleaseSideCursor();
     }
@@ -426,7 +434,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     // Block subsidy + fees
-    const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus())};
+    const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus()) - fee_take};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
     // Sidechain payouts come right after the first output, as the rules want them.
@@ -436,6 +444,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // Drivechain messages. Mining clients that build their own coinbase have to include them.
     for (const CTxOut& message : drivechain_additions.coinbase_outputs) {
         coinbaseTx.vout.push_back(message);
+    }
+    // The sidechain's own outputs for the fees (MergeMinedFeeOutputs).
+    for (const CTxOut& output : fee_outputs) {
+        coinbaseTx.vout.push_back(output);
     }
 
     // Start the coinbase scriptSig with the block height as required by BIP34.
@@ -475,6 +487,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         coinbase_tx.required_outputs.push_back(final_coinbase->vout[witness_index]);
     }
     coinbase_tx.required_outputs.insert(coinbase_tx.required_outputs.end(), drivechain_additions.coinbase_outputs.begin(), drivechain_additions.coinbase_outputs.end());
+    coinbase_tx.required_outputs.insert(coinbase_tx.required_outputs.end(), fee_outputs.begin(), fee_outputs.end());
 
     LogDebug(BCLog::MINING, "CreateNewBlock(): block weight: %u txs: %u fees: %ld sigops %d\n", GetBlockWeight(*pblock), nBlockTx, nFees, nBlockSigOpsCost);
 

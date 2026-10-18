@@ -2809,6 +2809,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
 
     std::vector<int> prevheights;
     CAmount nFees = 0;
+    //! The fee of each transaction (0 for the coinbase), for the sidechain's rules (ChainHooks::CheckFees).
+    std::vector<CAmount> tx_fees(block.vtx.size(), 0);
     int nInputs = 0;
     int64_t nSigOpsCost = 0;
     blockundo.vtxundo.reserve(block.vtx.size() - 1);
@@ -2831,6 +2833,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
                 break;
             }
             nFees += txfee;
+            tx_fees[i] = txfee;
             if (!MoneyRange(nFees)) {
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
                               "accumulated fee in the block out of range");
@@ -2956,7 +2959,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     sidechain::StoreOverlay block_store{side_base, /*journal=*/true};
     if (state.IsValid()) {
         std::string reject_reason;
-        const auto side{m_chainman.SideContext(minted, block_store)};
+        auto side{m_chainman.SideContext(minted, block_store)};
+        if (side) side->fees = &tx_fees;
         const uint256 scdb_hash{scdb->GetBlockHash()};
         // A sidechain database that has not seen a block yet is empty and fits any block.
         if (scdb->GetBlockHash().IsNull()) scdb->SetBlockHash(hashPrevBlock);
@@ -3001,7 +3005,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         } else if (scdb_check) {
             CAmount check_minted{0};
             sidechain::StoreOverlay check_store{side_base, /*journal=*/true};
-            const auto check_side{m_chainman.SideContext(check_minted, check_store)};
+            auto check_side{m_chainman.SideContext(check_minted, check_store)};
+            if (check_side) check_side->fees = &tx_fees;
             drivechain::BlockUndo check_undo;
             std::vector<drivechain::Deposit> check_deposits;
             std::string check_reason;
