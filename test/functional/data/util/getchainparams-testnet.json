@@ -1,14 +1,14 @@
 {
   "chain": "test",
   "test_chain": true,
-  "genesis": "90349e0658ac21fb95b9861835777dce9b69df822c008d5e9fe3c3efebb61b14",
+  "genesis": "f5afe992fc3a171812bea74cadb957ffc4427d95dc861a9b9b27ba4641642a25",
   "subsidy_halving_interval": 210000,
   "pow": {
     "limit": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "net": {
-    "default_port": 19155,
-    "magic": "66626c02",
+    "default_port": 19255,
+    "magic": "6c797202",
     "dns_seeds": [
     ]
   },
