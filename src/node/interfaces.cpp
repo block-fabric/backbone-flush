@@ -792,6 +792,26 @@ public:
         if (!origin) return std::nullopt;
         return origin->height;
     }
+    bool getBitAssetsDexActive() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.DexActive(chainman().ActiveChain().Height() + 1);
+    }
+    std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetOracle(id);
+    }
+    std::optional<bitassets::Attestation> getBitAssetsAttestation(const uint256& oracle, const uint256& event) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetAttestation(oracle, event);
+    }
+    std::optional<bitassets::OracleContract> getBitAssetsContract(const Txid& id) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetContract(id);
+    }
     int getBitAssetsHeight() override
     {
         LOCK(::cs_main);

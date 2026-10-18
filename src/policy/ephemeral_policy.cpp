@@ -60,12 +60,11 @@ bool CheckEphemeralSpends(const Package& package, CFeeRate dust_relay_rate, cons
             }
 
             // Check for dust on parents
+            // (GetDust: the outputs that carry BitAssets tokens carry no value by design and are no
+            // ephemeral dust; a child spends the parent's CHN change without them.)
             if (parent_ref) {
-                for (uint32_t out_index = 0; out_index < parent_ref->vout.size(); out_index++) {
-                    const auto& tx_output = parent_ref->vout[out_index];
-                    if (IsDust(tx_output, dust_relay_rate)) {
-                        unspent_parent_dust.insert(COutPoint(parent_txid, out_index));
-                    }
+                for (const uint32_t out_index : GetDust(*parent_ref, dust_relay_rate)) {
+                    unspent_parent_dust.insert(COutPoint(parent_txid, out_index));
                 }
             }
 

@@ -825,8 +825,13 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         }
         const int height{m_active_chainstate.m_chain.Height() + 1};
         size_t payouts{0};
-        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts)) {
+        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts, side_params.DexActive(height))) {
             return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
+        }
+        // Layers' DEX: an order whose min_out the pools as they are cannot give it alone is not relayed. Valid,
+        // a block could take it (it would be refunded, its fee paid); the mempool keeps what can fill.
+        if (side_params.DexActive(height) && !side.BitAssets().OrderFillsAlone(tx, reject_reason)) {
+            return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reject_reason);
         }
         ws.m_side_payouts += payouts;
         // One registration of an asset at a time: the second could never be mined.
@@ -5926,7 +5931,12 @@ void Chainstate::RemoveStaleDrivechainTxs()
         // of what blocks changed, not that of the mempool. All of them when all may have changed.
         std::string reject_reason;
         std::set<Txid> to_check;
-        if (changed_all) {
+        // Layers' DEX: the rules of the assets change at its height; every asset transaction is checked again
+        // when the next block's rules are not those of the last check.
+        const Consensus::SidechainParams& side_params{m_chainman.GetConsensus().sidechain};
+        const bool dex{side_params.DexActive(tip->nHeight + 1)};
+        const bool dex_changed{std::exchange(m_mempool_dex_active, dex) != dex};
+        if (changed_all || dex_changed) {
             to_check = m_mempool->m_bitassets_txs;
         } else {
             to_check = m_mempool->BitAssetsReaders(changed);
@@ -5936,7 +5946,8 @@ void Chainstate::RemoveStaleDrivechainTxs()
             const CTransactionRef tx{m_mempool->get(txid)};
             if (!tx) continue;
             const bitassets::RecordingView reads{side.View()};
-            if (!bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) {
+            if (!bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, side_params.bitassets_reveal_depth, nullptr, dex) ||
+                (dex && !bitassets::State{reads}.OrderFillsAlone(*tx, reject_reason))) {
                 stale.push_back(tx);
                 continue;
             }

@@ -11,12 +11,14 @@
 
 #include <addresstype.h>
 #include <bitassets/state.h>
+#include <chainparams.h>
 #include <consensus/params.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <sidechain/state.h>
 #include <sidechain/store.h>
 #include <test/util/setup_common.h>
+#include <util/chaintype.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -163,6 +165,24 @@ BOOST_AUTO_TEST_CASE(asset_payouts_bound_counts_their_own_across_blocks_of_stake
     BOOST_CHECK_EQUAL(chain.state.TxQueueLength(), 0U);
     BOOST_CHECK_EQUAL(chain.state.AssetPayoutsQueued(), 0U);
     BOOST_CHECK(!chain.store.Get(sidechain::StoreBytes{'a'}));
+}
+
+/** The first block of every network, as getblockhash 0 shows it (feature_layers_genesis.py checks the
+ * daemon, layers-util and doc/layers.md against the same). The test network's is that of the network
+ * running since 2026-10-18: it must never change. */
+BOOST_AUTO_TEST_CASE(genesis_hashes)
+{
+    const std::vector<std::pair<ChainType, std::string>> expected{
+        {ChainType::MAIN, "164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857"},
+        {ChainType::TESTNET, "252a644146ba279b9b1a86dc957d42c4ff57b9ad4ca7be1218173afc92e9aff5"},
+        {ChainType::SIGNET, "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101"},
+        {ChainType::REGTEST, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"},
+    };
+    for (const auto& [chain, hash] : expected) {
+        const auto params{CreateChainParams(*m_node.args, chain)};
+        BOOST_CHECK_EQUAL(params->GenesisBlock().GetHash().GetHex(), hash);
+        BOOST_CHECK_EQUAL(params->GetConsensus().hashGenesisBlock.GetHex(), hash);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

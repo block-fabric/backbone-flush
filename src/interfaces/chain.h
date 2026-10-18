@@ -5,6 +5,7 @@
 #ifndef BITCOIN_INTERFACES_CHAIN_H
 #define BITCOIN_INTERFACES_CHAIN_H
 
+#include <bitassets/dex.h>
 #include <bitassets/state.h>
 #include <blockfilter.h>
 #include <common/settings.h>
@@ -212,6 +213,14 @@ public:
     virtual int getBitAssetsRevealDepth() = 0;
     //! BitAssets: the height of the block that made a reservation not revealed yet, if it is in one.
     virtual std::optional<int> getBitAssetsReservationHeight(const Txid& txid) = 0;
+    //! Layers' DEX: whether the next block has its rules (SidechainParams::dex_height).
+    virtual bool getBitAssetsDexActive() = 0;
+    //! Layers' DEX: an oracle, by id.
+    virtual std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) = 0;
+    //! Layers' DEX: what an oracle attested for an event.
+    virtual std::optional<bitassets::Attestation> getBitAssetsAttestation(const uint256& oracle, const uint256& event) = 0;
+    //! Layers' DEX: an oracle contract, by the transaction that made it.
+    virtual std::optional<bitassets::OracleContract> getBitAssetsContract(const Txid& id) = 0;
     //! The merged-mining request (BIP301 M8) in the mempool for a sidechain slot, if any: the sidechain
     //! block it asks for, the mainchain block it is for, and the fee it pays.
     struct BmmRequestInfo {

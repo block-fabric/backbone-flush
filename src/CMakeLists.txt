@@ -120,6 +120,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   core_io.cpp
   bitassets/rpcutil.cpp
   bitassets/state.cpp
+  bitassets/dex.cpp
   sidechain/script.cpp
   pos/bond.cpp
   drivechain/sidechain.cpp

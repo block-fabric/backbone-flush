@@ -6,6 +6,8 @@
 
 #include <bitassets/state.h>
 
+#include <bitassets/dex.h>
+
 #include <arith_uint256.h>
 
 #include <crypto/hmac_sha256.h>
@@ -199,6 +201,12 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
         case Bid::KIND: ReadOperation<Bid>(s, marker.operation); break;
         case Collect::KIND: ReadOperation<Collect>(s, marker.operation); break;
         case ReleaseAsset::KIND: ReadOperation<ReleaseAsset>(s, marker.operation); break;
+        // The DEX's (valid from SidechainParams::dex_height: MakePlan).
+        case Route::KIND: ReadOperation<Route>(s, marker.operation); break;
+        case RegisterOracle::KIND: ReadOperation<RegisterOracle>(s, marker.operation); break;
+        case Attest::KIND: ReadOperation<Attest>(s, marker.operation); break;
+        case CreateOracleContract::KIND: ReadOperation<CreateOracleContract>(s, marker.operation); break;
+        case SettleOracleContract::KIND: ReadOperation<SettleOracleContract>(s, marker.operation); break;
         default: return std::nullopt;
         }
         ReadOutputs(s, marker.outputs);
@@ -495,9 +503,16 @@ const CScript* ChnTo(const Operation& op)
     if (const auto* remove{std::get_if<RemoveLiquidity>(&op)}) return &remove->chn_to;
     if (const auto* bid{std::get_if<Bid>(&op)}) return &bid->chn_to;
     if (const auto* collect{std::get_if<Collect>(&op)}) return &collect->chn_to;
+    if (const auto* route{std::get_if<Route>(&op)}) return &route->chn_to;
     return nullptr;
 }
 } // namespace
+
+bool IsDexOperation(const Operation& op)
+{
+    return std::holds_alternative<Route>(op) || std::holds_alternative<RegisterOracle>(op) || std::holds_alternative<Attest>(op) ||
+           std::holds_alternative<CreateOracleContract>(op) || std::holds_alternative<SettleOracleContract>(op);
+}
 
 bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
 {
@@ -563,6 +578,20 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         if (create->duration < 1 || create->duration > MAX_AUCTION_DURATION || create->start_height < 0) return invalid("bad-ba-auction-duration");
     } else if (const auto* bid{std::get_if<Bid>(&op)}) {
         if (!positive(bid->quote_amount) || bid->min_base > MAX_AMOUNT) return invalid("bad-ba-bid");
+    } else if (const auto* route{std::get_if<Route>(&op)}) {
+        if (route->path.size() < 2 || route->path.size() > MAX_ROUTE_ASSETS || !positive(route->amount_in) || route->min_out > MAX_AMOUNT) return invalid("bad-ba-route");
+        // All different: no pool twice, no cycle.
+        const std::set<AssetId> distinct{route->path.begin(), route->path.end()};
+        if (distinct.size() != route->path.size()) return invalid("bad-ba-route");
+    } else if (const auto* oracle{std::get_if<RegisterOracle>(&op)}) {
+        if (!dex::IsOracleName(oracle->name) || !XOnlyPubKey{oracle->pubkey}.IsFullyValid()) return invalid("bad-ba-oracle");
+    } else if (const auto* contract{std::get_if<CreateOracleContract>(&op)}) {
+        if (!positive(contract->amount) || contract->outcomes.empty() || contract->outcomes.size() > MAX_CONTRACT_OUTCOMES) return invalid("bad-ba-contract");
+        if (!Spendable(contract->refund)) return invalid("bad-ba-contract-script");
+        for (const OracleOutcome& outcome : contract->outcomes) {
+            if (outcome.lo > outcome.hi) return invalid("bad-ba-contract");
+            if (!Spendable(outcome.script)) return invalid("bad-ba-contract-script");
+        }
     }
     return true;
 }
@@ -588,7 +617,13 @@ bool CheckDependsOnHeight(const CTransaction& tx)
     const Operation& op{*marker->operation};
     const bool independent{std::holds_alternative<Reserve>(op) || std::holds_alternative<Mint>(op) || std::holds_alternative<UpdateAsset>(op) ||
                            std::holds_alternative<Burn>(op) || std::holds_alternative<Swap>(op) || std::holds_alternative<AddLiquidity>(op) ||
-                           std::holds_alternative<RemoveLiquidity>(op) || std::holds_alternative<ReleaseAsset>(op)};
+                           std::holds_alternative<RemoveLiquidity>(op) || std::holds_alternative<ReleaseAsset>(op) ||
+                           // The DEX's (only from its height: the mempool checks every asset transaction again
+                           // when the next block's rules change, RemoveStaleDrivechainTxs). An attestation signed for a
+                           // height stays valid at every later one; a settlement's winner, once the next block can pay
+                           // it, is fixed (an attestation after the expiry does not count).
+                           std::holds_alternative<Route>(op) || std::holds_alternative<RegisterOracle>(op) || std::holds_alternative<Attest>(op) ||
+                           std::holds_alternative<SettleOracleContract>(op)};
     return !independent;
 }
 
@@ -618,6 +653,13 @@ struct State::Plan {
     //! A Bid in an asset with an output for what comes back of it: after the other results, carrying
     //! that (nothing if nothing comes back).
     std::optional<Result> back;
+    //! The DEX (dex.h): an order of the block's batch (its result output and payout filled in later).
+    std::optional<Order> order;
+    std::optional<std::pair<uint256, OracleRecord>> oracle;
+    std::optional<std::pair<std::pair<uint256, uint256>, Attestation>> attestation;
+    std::optional<std::pair<Txid, OracleContract>> contract;
+    //! A settlement in an asset: the script its result output must have.
+    std::optional<CScript> result_script;
 };
 
 namespace {
@@ -635,6 +677,24 @@ const sidechain::Table<uint256, ReservationOrigin> ORIGINS{0x3d};
 constexpr uint8_t HISTORY{0x3e};
 //! Missing: the layout before it was written down (1).
 const sidechain::Cell<uint32_t> LAYOUT{0x3f, 1};
+
+// The DEX's (dex.h), from SidechainParams::dex_height: none before.
+const sidechain::Table<uint256, PoolAccumulator> ACCUMULATORS{0x80};
+//! By pool, then place in the ring (uint32).
+constexpr uint8_t OBSERVATIONS{0x81};
+//! During a block only.
+const sidechain::Table<uint256, PoolSnapshot> SNAPSHOTS{0x82};
+const sidechain::Table<uint32_t, Order> ORDERS{0x83};
+const sidechain::Cell<uint32_t> ORDER_COUNT{0x84, 0};
+const sidechain::Table<COutPoint, uint8_t> PENDING_RESULTS{0x85};
+const sidechain::Table<uint256, OracleRecord> ORACLES{0x86};
+//! By oracle, then event.
+constexpr uint8_t ATTESTATIONS{0x87};
+const sidechain::Table<uint256, OracleContract> CONTRACTS{0x88};
+//! Contracts not settled, by the asset they hold (CHN not indexed), then id.
+constexpr uint8_t CONTRACTS_BY_ASSET{0x89};
+//! The bytes of the DEX's indexes, taken (sidechain::DuplicateTableIds) as the tables' are.
+const sidechain::TableId DEX_INDEXES_TAKEN[]{sidechain::TableId{OBSERVATIONS}, sidechain::TableId{ATTESTATIONS}, sidechain::TableId{CONTRACTS_BY_ASSET}};
 
 sidechain::StoreBytes Key2(uint8_t table, const uint256& a, const uint256& b)
 {
@@ -674,6 +734,12 @@ sidechain::StoreBytes Prefix(uint8_t table, const uint256& head)
 {
     sidechain::StoreBytes key{table};
     sidechain::KeyCodec<uint256>::Encode(key, head);
+    return key;
+}
+sidechain::StoreBytes ObservationKey(const uint256& pool, uint32_t place)
+{
+    sidechain::StoreBytes key{Prefix(OBSERVATIONS, pool)};
+    sidechain::KeyCodec<uint32_t>::Encode(key, place);
     return key;
 }
 } // namespace
@@ -769,6 +835,8 @@ void State::SetPool(const uint256& id, const std::optional<Pool>& pool)
 {
     sidechain::StoreOverlay& out{Writable()};
     const auto old{GetPool(id)};
+    // The DEX: the reserves before the block's first change, for the price accumulators (FinishBlock).
+    if (m_dex && !SNAPSHOTS.Contains(out, id)) SNAPSHOTS.Put(out, id, PoolSnapshot{old ? old->reserve0 : 0, old ? old->reserve1 : 0});
     // The count of each asset's pools that have providers.
     const int provided{(pool && !amm::Abandoned(*pool) ? 1 : 0) - (old && !amm::Abandoned(*old) ? 1 : 0)};
     if (provided != 0) {
@@ -889,7 +957,20 @@ bool State::Releasable(const AssetId& asset, std::string* why) const
     // one look, however many auctions quote it.
     if (record->holding_auctions > 0) return no("an auction of it is not collected");
     if (record->provided_pools > 0) return no("a pool of it has liquidity providers");
+    // The DEX (none before its height): what an order of this block trades through, or a contract holds.
+    if (OrderHolds(asset)) return no("an order of this block trades it");
+    if (const sidechain::StoreBytes prefix{Prefix(CONTRACTS_BY_ASSET, asset)}; m_view->Next(prefix, prefix)) return no("an oracle contract holds some of it");
     return true;
+}
+
+bool State::OrderHolds(const AssetId& asset) const
+{
+    bool holds{false};
+    ORDERS.ForEach(*m_view, [&](const uint32_t&, const Order& order) {
+        holds = std::find(order.path.begin(), order.path.end(), asset) != order.path.end();
+        return !holds;
+    });
+    return holds;
 }
 
 std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, std::string& reject_reason, int reveal_depth) const
@@ -907,6 +988,8 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
 
     const Txid txid{tx.GetHash()};
     const Operation* op{marker->operation ? &*marker->operation : nullptr};
+    // The DEX's operations are not known before its height: their markers were never valid.
+    if (op && IsDexOperation(*op) && !m_dex) return invalid("bad-ba-marker");
     CAmount chn_in{0};
     for (size_t i{0}; i < tx.vout.size(); ++i) {
         if (IsMarkerScript(tx.vout[i].scriptPubKey)) chn_in = tx.vout[i].nValue;
@@ -957,7 +1040,10 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         return record ? record->registration : Txid{};
     }};
 
-    if (const auto* reserve{op ? std::get_if<Reserve>(op) : nullptr}) {
+    if (op && m_dex && (std::holds_alternative<Swap>(*op) || IsDexOperation(*op))) {
+        // The DEX: swaps and routes are orders of the block's batch; oracles and their contracts.
+        if (!PlanDex(tx, *op, height, plan, chn_taken, take, reject_reason)) return std::nullopt;
+    } else if (const auto* reserve{op ? std::get_if<Reserve>(op) : nullptr}) {
         credit(Token::Kind::RESERVATION, txid.ToUint256(), 1);
         plan.reservation_made = std::make_pair(txid, reserve->commitment);
         // Where it is made: the output that carries it (the books below hold it to exactly one).
@@ -1319,7 +1405,12 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
             result_tokens.push_back(Token{Token::Kind::ASSET, plan.back->asset, plan.back->amount});
         }
     }
-    if (result_tokens.size() != result_outputs) return invalid("bad-ba-results");
+    if (plan.order) {
+        // An order: one result output, which gets what comes out, or what went in back, at the block's end.
+        if (result_outputs != 1 || !result_tokens.empty()) return invalid("bad-ba-results");
+    } else if (result_tokens.size() != result_outputs) {
+        return invalid("bad-ba-results");
+    }
     for (const auto& [key, balance] : books) {
         if (balance != 0) return invalid(balance > 0 ? "bad-ba-tokens-lost" : "bad-ba-tokens-unbacked");
     }
@@ -1328,13 +1419,121 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
     size_t next_result{0};
     for (const MarkerOutput& out : marker->outputs) {
         if (out.token) continue;
+        if (plan.order) {
+            plan.order->result_n = out.n;
+            continue;
+        }
+        // An oracle contract pays the winner's script, and nobody else.
+        if (plan.result_script && tx.vout[out.n].scriptPubKey != *plan.result_script) return invalid("bad-ba-contract-payee");
         if (const auto& token{result_tokens[next_result++]}) plan.created.emplace_back(COutPoint{txid, out.n}, *token);
     }
     return plan;
 }
 
-bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results, int reveal_depth, size_t* payouts) const
+bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Plan& plan, uint64_t& chn_taken, const std::function<void(const AssetId&, uint64_t)>& take,
+                    std::string& reject_reason) const
 {
+    const auto invalid{[&](const char* reason) {
+        reject_reason = reason;
+        return false;
+    }};
+    const Txid txid{tx.GetHash()};
+    if (std::holds_alternative<Swap>(op) || std::holds_alternative<Route>(op)) {
+        Order order;
+        order.txid = txid;
+        if (const auto* swap{std::get_if<Swap>(&op)}) {
+            order.path = {swap->asset_in, swap->asset_out};
+            order.amount_in = swap->amount_in;
+            order.min_out = swap->min_out;
+            order.chn_to = swap->chn_to;
+        } else {
+            const Route& route{std::get<Route>(op)};
+            order.path = route.path;
+            order.amount_in = route.amount_in;
+            order.min_out = route.min_out;
+            order.chn_to = route.chn_to;
+        }
+        // Every pool of the path, open (one closed or gone by the block's end: the order is refunded).
+        for (size_t i{0}; i + 1 < order.path.size(); ++i) {
+            const auto pool{FindPool(order.path[i], order.path[i + 1])};
+            if (!pool) return invalid("bad-ba-no-pool");
+            if (amm::Abandoned(*pool)) return invalid("bad-ba-pool-closed");
+        }
+        // CHN out, or back, is paid to chn_to; CHN back is paid out, MIN_CHN_PAYOUT at least.
+        const bool chn_end{order.path.front().IsNull() || order.path.back().IsNull()};
+        if (chn_end && order.chn_to.empty()) return invalid("bad-ba-chn-to");
+        if (order.path.front().IsNull() && order.amount_in < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        take(order.path.front(), order.amount_in);
+        // Its place among the payouts; the amount at the block's end.
+        if (chn_end) plan.payouts.emplace_back(0, order.chn_to);
+        plan.order = std::move(order);
+        return true;
+    }
+    if (const auto* reg{std::get_if<RegisterOracle>(&op)}) {
+        const uint256 id{dex::OracleId(reg->name)};
+        if (GetOracle(id)) return invalid("bad-ba-oracle-taken");
+        // The fee goes to mainchain miners, as CHN freed by retiring an asset do.
+        chn_taken += ORACLE_REGISTRATION_FEE;
+        plan.released += ORACLE_REGISTRATION_FEE;
+        plan.oracle = std::make_pair(id, OracleRecord{reg->name, reg->pubkey, txid, height, 0});
+        return true;
+    }
+    if (const auto* att{std::get_if<Attest>(&op)}) {
+        const auto oracle{GetOracle(att->oracle)};
+        if (!oracle) return invalid("bad-ba-no-oracle");
+        if (att->height > height) return invalid("bad-ba-attestation-early");
+        if (GetAttestation(att->oracle, att->event)) return invalid("bad-ba-attested");
+        if (!dex::CheckAttestation(oracle->pubkey, att->oracle, att->event, att->value, att->height, att->signature)) return invalid("bad-ba-attestation-sig");
+        OracleRecord record{*oracle};
+        ++record.attestations;
+        plan.oracle = std::make_pair(att->oracle, std::move(record));
+        plan.attestation = std::make_pair(std::make_pair(att->oracle, att->event), Attestation{att->value, att->height, height, txid});
+        return true;
+    }
+    if (const auto* create{std::get_if<CreateOracleContract>(&op)}) {
+        if (!GetOracle(create->oracle)) return invalid("bad-ba-no-oracle");
+        if (create->expiry <= height || int64_t{create->expiry} > int64_t{height} + MAX_CONTRACT_DURATION) return invalid("bad-ba-contract-expiry");
+        if (!create->asset.IsNull() && !HasAsset(create->asset)) return invalid("bad-ba-asset-unknown");
+        // CHN are paid out by the coinbase, MIN_CHN_PAYOUT at least.
+        if (create->asset.IsNull() && (create->amount < MIN_CHN_PAYOUT || create->amount > static_cast<uint64_t>(MAX_MONEY))) return invalid("bad-ba-chn-dust");
+        take(create->asset, create->amount);
+        OracleContract contract;
+        contract.oracle = create->oracle;
+        contract.event = create->event;
+        contract.asset = create->asset;
+        contract.amount = create->amount;
+        contract.outcomes = create->outcomes;
+        contract.refund = create->refund;
+        contract.expiry = create->expiry;
+        contract.created = height;
+        plan.contract = std::make_pair(txid, std::move(contract));
+        return true;
+    }
+    if (const auto* settle{std::get_if<SettleOracleContract>(&op)}) {
+        const auto found{GetContract(settle->contract)};
+        if (!found) return invalid("bad-ba-no-contract");
+        if (found->settled) return invalid("bad-ba-contract-settled");
+        const auto winner{found->Winner(GetAttestation(found->oracle, found->event), height)};
+        if (!winner) return invalid("bad-ba-contract-pending");
+        OracleContract contract{*found};
+        contract.settled = true;
+        contract.paid_to = *winner;
+        contract.settled_height = height;
+        if (found->asset.IsNull()) {
+            plan.payouts.emplace_back(static_cast<CAmount>(found->amount), *winner);
+        } else {
+            plan.results.push_back({found->asset, found->amount});
+            plan.result_script = *winner;
+        }
+        plan.contract = std::make_pair(settle->contract, std::move(contract));
+        return true;
+    }
+    return invalid("bad-ba-marker");
+}
+
+bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results, int reveal_depth, size_t* payouts, bool dex) const
+{
+    m_dex = dex;
     auto plan{MakePlan(tx, height, reject_reason, reveal_depth)};
     if (!plan) return false;
     if (results) *results = std::move(plan->results);
@@ -1342,8 +1541,19 @@ bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reas
     return true;
 }
 
-bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released, int reveal_depth, size_t queued)
+bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released, int reveal_depth, size_t queued, bool dex)
 {
+    m_dex = dex;
+    // The DEX: the result output of an order of this block carries what the block's end gives it; it
+    // cannot be spent in the block, before it carries anything.
+    if (dex && !tx.IsCoinBase()) {
+        for (const CTxIn& in : tx.vin) {
+            if (PENDING_RESULTS.Contains(*m_view, in.prevout)) {
+                reject_reason = "bad-ba-result-pending";
+                return false;
+            }
+        }
+    }
     const auto plan{MakePlan(tx, height, reject_reason, reveal_depth)};
     if (!plan) return false;
     // Room for payouts is bounded: what a block pays, the coinbase creates, and every node keeps what
@@ -1352,6 +1562,11 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     // than the next block with the peg actions is sure to pay (sidechain::State::TakePayouts).
     if (!plan->payouts.empty() && queued + payouts.size() + plan->payouts.size() > MAX_TX_PAYOUTS_PER_BLOCK) {
         reject_reason = "bad-ba-block-payouts-full";
+        return false;
+    }
+    // The DEX: room for orders is bounded, as for payouts; the miner leaves the transaction for a later block.
+    if (plan->order && ORDER_COUNT.Get(*m_view) >= MAX_BLOCK_ORDERS) {
+        reject_reason = "bad-ba-block-orders-full";
         return false;
     }
     sidechain::StoreOverlay& out{Writable()};
@@ -1388,8 +1603,252 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     }
     if (released) *released = plan->released;
     if (plan->auction) SetAuction(plan->auction->first, plan->auction->second);
+    // The DEX.
+    if (plan->order) {
+        Order order{*plan->order};
+        // Its payout is its transaction's only one: the next place.
+        if (!plan->payouts.empty()) order.payout = static_cast<int32_t>(payouts.size());
+        const uint32_t n{ORDER_COUNT.Get(out)};
+        PENDING_RESULTS.Put(out, COutPoint{order.txid, order.result_n}, 0);
+        ORDERS.Put(out, n, order);
+        ORDER_COUNT.Put(out, n + 1);
+    }
+    if (plan->oracle) ORACLES.Put(out, plan->oracle->first, plan->oracle->second);
+    if (plan->attestation) out.Put(Key2(ATTESTATIONS, plan->attestation->first.first, plan->attestation->first.second), sidechain::EncodeValue(plan->attestation->second));
+    if (plan->contract) {
+        const auto& [id, contract]{*plan->contract};
+        CONTRACTS.Put(out, id.ToUint256(), contract);
+        if (!contract.asset.IsNull()) {
+            const sidechain::StoreBytes key{Key2(CONTRACTS_BY_ASSET, contract.asset, id.ToUint256())};
+            if (contract.settled) {
+                out.Erase(key);
+            } else {
+                out.Put(key, {});
+            }
+        }
+    }
     payouts.insert(payouts.end(), plan->payouts.begin(), plan->payouts.end());
     return true;
+}
+
+void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
+{
+    m_dex = true;
+    sidechain::StoreOverlay& out{Writable()};
+    std::vector<Order> orders;
+    ORDERS.ForEach(out, [&](const uint32_t&, const Order& order) {
+        orders.push_back(order);
+        return true;
+    });
+    if (!orders.empty()) {
+        ClearOrders(orders, payouts);
+        // The places of CHN that are not paid (a CHN order filled, an order for CHN refunded): out of the
+        // payouts, the last first, so that the others keep theirs. CHN paid are MIN_CHN_PAYOUT at least.
+        std::vector<size_t> unused;
+        for (uint32_t i{0}; i < orders.size(); ++i) {
+            ORDERS.Erase(out, i);
+            PENDING_RESULTS.Erase(out, COutPoint{orders[i].txid, orders[i].result_n});
+            const int32_t at{orders[i].payout};
+            if (at >= 0 && static_cast<size_t>(at) < payouts.size() && payouts[at].nValue == 0) unused.push_back(at);
+        }
+        std::sort(unused.rbegin(), unused.rend());
+        for (const size_t at : unused) payouts.erase(payouts.begin() + at);
+        ORDER_COUNT.Put(out, 0);
+    }
+    // The price accumulators of every pool the block changed (Uniswap v2): the price it had since its
+    // last change, as the block found it, times the seconds since; then an observation of the block.
+    std::vector<std::pair<uint256, PoolSnapshot>> changed;
+    SNAPSHOTS.ForEach(out, [&](const uint256& id, const PoolSnapshot& snapshot) {
+        changed.emplace_back(id, snapshot);
+        return true;
+    });
+    for (const auto& [id, before] : changed) {
+        SNAPSHOTS.Erase(out, id);
+        const auto pool{GetPool(id)};
+        if (!pool) continue;
+        auto acc{ACCUMULATORS.Get(out, id)};
+        if (!acc || acc->creation != pool->creation) {
+            // A pool new to the accumulators (made, or first changed since the DEX's height): from now.
+            acc = PoolAccumulator{};
+            acc->creation = pool->creation;
+            acc->last_time = time;
+        } else if (time > acc->last_time) {
+            const uint32_t elapsed{time - acc->last_time};
+            acc->price0_cumulative = dex::Accumulate(acc->price0_cumulative, dex::PriceQ64(before.reserve1, before.reserve0), elapsed);
+            acc->price1_cumulative = dex::Accumulate(acc->price1_cumulative, dex::PriceQ64(before.reserve0, before.reserve1), elapsed);
+            acc->last_time = time;
+        }
+        const Observation obs{height, acc->last_time, acc->price0_cumulative, acc->price1_cumulative, pool->reserve0, pool->reserve1};
+        out.Put(ObservationKey(id, static_cast<uint32_t>(acc->count % TWAP_OBSERVATIONS)), sidechain::EncodeValue(obs));
+        ++acc->count;
+        ACCUMULATORS.Put(out, id, *acc);
+    }
+}
+
+void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts)
+{
+    const size_t n{orders.size()};
+    using Pools = std::map<uint256, std::optional<Pool>>;
+    const auto hop_pool{[&](size_t i, size_t hop) { return PoolId(orders[i].path[hop], orders[i].path[hop + 1]); }};
+    // The pools of the orders as the block's transactions left them.
+    Pools start;
+    for (size_t i{0}; i < n; ++i) {
+        for (size_t hop{0}; hop + 1 < orders[i].path.size(); ++hop) {
+            const uint256 id{hop_pool(i, hop)};
+            if (!start.contains(id)) start.emplace(id, GetPool(id));
+        }
+    }
+    // One pass: the orders in `active` cleared together on `pools`, a round per hop, the pools of a round
+    // in the order of their ids; what each gets (nullopt: it misses).
+    const auto pass{[&](const std::vector<bool>& active, Pools& pools) {
+        std::vector<std::optional<uint64_t>> amount(n);
+        for (size_t i{0}; i < n; ++i) {
+            if (active[i]) amount[i] = orders[i].amount_in;
+        }
+        for (size_t hop{0}; hop + 1 < MAX_ROUTE_ASSETS; ++hop) {
+            std::map<uint256, std::vector<size_t>> by_pool;
+            for (size_t i{0}; i < n; ++i) {
+                if (amount[i] && hop + 1 < orders[i].path.size()) by_pool[hop_pool(i, hop)].push_back(i);
+            }
+            for (const auto& [id, members] : by_pool) {
+                std::optional<Pool>& pool{pools.at(id)};
+                std::vector<dex::HopIn> ins;
+                for (size_t i : members) ins.push_back({pool && pool->asset0 == orders[i].path[hop], *amount[i]});
+                // A pool gone, or closed, since the order: it misses.
+                const auto cleared{pool && !amm::Abandoned(*pool) ? dex::ClearPool(pool->reserve0, pool->reserve1, ins) : std::nullopt};
+                if (!cleared) {
+                    for (size_t i : members) amount[i].reset();
+                    continue;
+                }
+                pool->reserve0 = cleared->reserve0;
+                pool->reserve1 = cleared->reserve1;
+                for (size_t j{0}; j < members.size(); ++j) {
+                    uint64_t& volume{ins[j].zero_in ? pool->volume0 : pool->volume1};
+                    volume = Add(volume, ins[j].amount).value_or(MAX_AMOUNT);
+                    ++pool->swaps;
+                    if (cleared->outs[j] == 0) {
+                        amount[members[j]].reset();
+                    } else {
+                        amount[members[j]] = cleared->outs[j];
+                    }
+                }
+            }
+        }
+        // What comes out, against what each order asks (CHN: no less than is paid out).
+        for (size_t i{0}; i < n; ++i) {
+            if (amount[i] && (*amount[i] < orders[i].min_out || (orders[i].path.back().IsNull() && *amount[i] < MIN_CHN_PAYOUT))) amount[i].reset();
+        }
+        return amount;
+    }};
+    const auto pay{[&](const Order& order, const AssetId& asset, uint64_t amount) {
+        if (asset.IsNull()) {
+            if (order.payout >= 0 && static_cast<size_t>(order.payout) < payouts.size()) payouts[order.payout] = CTxOut{static_cast<CAmount>(amount), order.chn_to};
+        } else {
+            SetToken(COutPoint{order.txid, order.result_n}, Token{Token::Kind::ASSET, asset, amount});
+        }
+    }};
+    const auto fill{[&](size_t i, uint64_t out) { pay(orders[i], orders[i].path.back(), out); }};
+    const auto refund{[&](size_t i) { pay(orders[i], orders[i].path.front(), orders[i].amount_in); }};
+    const auto commit{[&](const Pools& pools) {
+        for (const auto& [id, pool] : pools) {
+            if (pool && pool != start.at(id)) SetPool(id, *pool);
+        }
+    }};
+
+    // Batch: clear every order together; take those that miss out and clear the rest again, from the start.
+    std::vector<bool> active(n, true);
+    for (int round{0}; round < MAX_CLEARING_PASSES; ++round) {
+        Pools pools{start};
+        const auto got{pass(active, pools)};
+        bool missed{false};
+        for (size_t i{0}; i < n; ++i) {
+            if (active[i] && !got[i]) {
+                active[i] = false;
+                missed = true;
+            }
+        }
+        if (missed) continue;
+        commit(pools);
+        for (size_t i{0}; i < n; ++i) {
+            if (active[i]) {
+                fill(i, *got[i]);
+            } else {
+                refund(i);
+            }
+        }
+        return;
+    }
+    // It did not settle: one after another, in the block's order, each alone against the pools as the
+    // ones before left them; one that misses is refunded and leaves them as they were.
+    Pools pools{start};
+    for (size_t i{0}; i < n; ++i) {
+        Pools trial;
+        for (size_t hop{0}; hop + 1 < orders[i].path.size(); ++hop) trial.emplace(hop_pool(i, hop), pools.at(hop_pool(i, hop)));
+        std::vector<bool> one(n, false);
+        one[i] = true;
+        const auto got{pass(one, trial)};
+        if (!got[i]) {
+            refund(i);
+            continue;
+        }
+        for (auto& [id, pool] : trial) pools.at(id) = std::move(pool);
+        fill(i, *got[i]);
+    }
+    commit(pools);
+}
+
+bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) const
+{
+    const auto marker{GetMarker(tx)};
+    if (!marker || !marker->operation) return true;
+    std::vector<AssetId> path;
+    uint64_t amount_in{0}, min_out{0};
+    if (const auto* swap{std::get_if<Swap>(&*marker->operation)}) {
+        path = {swap->asset_in, swap->asset_out};
+        amount_in = swap->amount_in;
+        min_out = swap->min_out;
+    } else if (const auto* route{std::get_if<Route>(&*marker->operation)}) {
+        path = route->path;
+        amount_in = route->amount_in;
+        min_out = route->min_out;
+    } else {
+        return true;
+    }
+    const auto outs{dex::QuoteRoute(*this, path, amount_in)};
+    if (!outs || outs->back() < min_out || (path.back().IsNull() && outs->back() < MIN_CHN_PAYOUT)) {
+        reject_reason = "ba-swap-price";
+        return false;
+    }
+    return true;
+}
+
+std::optional<PoolAccumulator> State::GetAccumulator(const uint256& pool) const { return ACCUMULATORS.Get(*m_view, pool); }
+std::optional<Observation> State::GetObservation(const uint256& pool, uint32_t place) const
+{
+    const auto bytes{m_view->Get(ObservationKey(pool, place))};
+    if (!bytes) return std::nullopt;
+    return sidechain::DecodeValue<Observation>(*bytes);
+}
+std::optional<OracleRecord> State::GetOracle(const uint256& id) const { return ORACLES.Get(*m_view, id); }
+std::optional<Attestation> State::GetAttestation(const uint256& oracle, const uint256& event) const
+{
+    const auto bytes{m_view->Get(Key2(ATTESTATIONS, oracle, event))};
+    if (!bytes) return std::nullopt;
+    return sidechain::DecodeValue<Attestation>(*bytes);
+}
+std::optional<OracleContract> State::GetContract(const Txid& id) const { return CONTRACTS.Get(*m_view, id.ToUint256()); }
+void State::ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from) const { ORACLES.ForEach(*m_view, fn, from); }
+void State::ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const
+{
+    CONTRACTS.ForEach(*m_view, [&](const uint256& id, const OracleContract& contract) { return fn(Txid::FromUint256(id), contract); });
+}
+void State::ForEachAttestation(const uint256& oracle, const std::function<bool(const uint256&, const Attestation&)>& fn) const
+{
+    m_view->ForEach(Prefix(ATTESTATIONS, oracle), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes& value) {
+        std::span<const unsigned char> in{key};
+        in = in.subspan(33);
+        return fn(sidechain::KeyCodec<uint256>::Decode(in), sidechain::DecodeValue<Attestation>(value));
+    });
 }
 
 CAmount State::HeldChn() const
@@ -1404,6 +1863,11 @@ CAmount State::HeldChn() const
         if (auction.closed) return true;
         if (auction.base == CHN) held += static_cast<CAmount>(auction.remaining);
         if (auction.quote == CHN) held += static_cast<CAmount>(auction.proceeds);
+        return true;
+    });
+    // The DEX: CHN oracle contracts hold, until settled.
+    ForEachContract([&](const Txid&, const OracleContract& contract) {
+        if (!contract.settled && contract.asset == CHN) held += static_cast<CAmount>(contract.amount);
         return true;
     });
     return held;
