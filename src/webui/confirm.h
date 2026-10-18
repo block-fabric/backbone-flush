@@ -116,6 +116,15 @@ struct Reveal {
 };
 
 /**
+ * When a second step runs, from the chain's own info (`info_method`, its field `depth_field`: how deep the first must be):
+ * "once the reservation is 3 blocks deep (about 3 min)", with the chain's block time.
+ */
+std::function<std::string(const Call&)> AfterDepth(std::string info_method, std::string depth_field);
+
+/** The parameters of two calls name the same thing: their first parameters are the same string. */
+bool SameFirstParam(const UniValue& first, const UniValue& second);
+
+/**
  * How a call is confirmed. A describer gives the question (nothing for a call that needs none: turning something off).
  *  - NODE: a method of the node (a vote, an ack, mining): asked always.
  *  - SPEND: a method of a wallet that pays or signs: asked always, with the passphrase in the same question when the

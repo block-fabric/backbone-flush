@@ -167,6 +167,24 @@ std::function<std::optional<Window::ConfirmDialog>(const Call&)> Generic(std::st
     };
 }
 
+std::function<std::string(const Call&)> AfterDepth(std::string info_method, std::string depth_field)
+{
+    return [=](const Call& call) {
+        const UniValue info{call.Read(info_method, UniValue{UniValue::VARR})};
+        const UniValue& depth{info.isObject() ? info.find_value(depth_field) : NullUniValue};
+        if (!depth.isNum()) return std::string{"once the reservation is deep enough"};
+        const int64_t blocks{depth.getInt<int64_t>()};
+        const int64_t seconds{(blocks + 1) * Params().GetConsensus().nPowTargetSpacing};
+        const std::string about{seconds < 90 ? strprintf("about %d s", seconds) : strprintf("about %d min", (seconds + 30) / 60)};
+        return strprintf("once the reservation is %d block%s deep (%s)", blocks, blocks == 1 ? "" : "s", about);
+    };
+}
+
+bool SameFirstParam(const UniValue& first, const UniValue& second)
+{
+    return first.isArray() && second.isArray() && !first.empty() && !second.empty() && first[0].isStr() && second[0].isStr() && first[0].get_str() == second[0].get_str();
+}
+
 namespace {
 std::optional<Window::ConfirmDialog> SignMessage(const Call& call)
 {
