@@ -21,6 +21,7 @@ bitassets/main` bring their later work.
 | Magic bytes | `6c 79 72 01` ("lyr") | `6c 79 72 02` | `6c 79 72 03` | `6c 79 72 04` |
 | Address prefix | `ly` | `tly` | `tly` | `rsc` (the template's, as the other sidechains') |
 | First block | "Layers: assets on a fast chain" | "Layers testnet 18/Oct/2026: assets on a fast chain" (1792337400) | "Layers signet 18/Oct/2026: assets on a fast chain" | the template's |
+| Hash of the first block | `164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857` | `252a644146ba279b9b1a86dc957d42c4ff57b9ad4ca7be1218173afc92e9aff5` | `68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101` | `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206` |
 | Assets' reveal depth | 6 blocks | 3 | 3 | 2 |
 
 Programs: `layersd`, `layers-cli`, `layers-app` (the wallet, in the `layers-app`
@@ -28,6 +29,12 @@ tree), `layers-tx`, `layers-util`, `layers-wallet`; configuration `layers.conf`,
 data directory `~/.layers` (the Chains app runs it under its sidechains folder,
 `~/.chains/sidechains/layers/data`). Base58 prefixes are the template's (28/88 on
 main, 111/196 elsewhere).
+
+The hashes of the first blocks are as `getblockhash 0` shows them (and `layers-util
+getchainparams`, which printed them in the reverse byte order, upstream's `HexStr` of
+the hash, until 2026-10-18: the test network's showed as `f5afe992…2a25`).
+`feature_layers_genesis.py` checks that the daemon, the util, its test data and this
+table agree on every network.
 
 The test network's `main_activation_height` (and with it
 `pos.main_activation_height`, which FastBlocks' leader seed and first record use) is
