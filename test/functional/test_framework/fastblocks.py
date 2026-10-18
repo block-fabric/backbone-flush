@@ -40,7 +40,7 @@ def assert_peg_balance(main, nodes):
         node.syncmainchain()
         balance = node.getsidechainstate()["pegbalance"]
         # Layers: and the CHN the pools and the auctions hold ("assets").
-        parts = ("utxos", "withdrawals", "pot", "bonded", "unbonding", "reserve", "rewards", "payouts", "assets")
+        parts = ("utxos", "withdrawals", "pot", "pool", "bonded", "unbonding", "reserve", "rewards", "payouts", "assets")
         assert_equal(balance["total"], sum(balance[part] for part in parts))
         assert_equal(balance["total"], escrow_at(main, balance["mainheight"]))
         # The node's own check (audit 7, finding 3) says the same, when the tip did not move meanwhile.

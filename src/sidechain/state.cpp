@@ -528,7 +528,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
 }
 
 bool State::ConnectBlock(const CBlock& block, int height, const Consensus::SidechainParams& params, const Mainchain& mainchain,
-                         CAmount& minted, std::string& reject_reason)
+                         CAmount& minted, std::string& reject_reason, const std::vector<CAmount>* fees)
 {
     // Where the block takes the peg actions: in the template, every block, as the mainchain was up to
     // the block before the one that committed to it.
@@ -575,7 +575,8 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
             return false;
         }
     }
-    return Hooks().AfterBlock(*this, block, height, step, minted, params, reject_reason);
+    if (!Hooks().AfterBlock(*this, block, height, step, minted, params, reject_reason)) return false;
+    return !fees || Hooks().CheckFees(*this, block, height, step, *fees, reject_reason);
 }
 
 bool State::ApplyPegStep(const CBlock& block, int height, const PegStep& step, const Consensus::SidechainParams& params, const Mainchain& mainchain,

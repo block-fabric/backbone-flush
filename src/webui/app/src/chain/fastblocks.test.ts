@@ -21,6 +21,10 @@ import Staking from './pages/Staking.svelte';
 import {
   blockKind,
   bondProblem,
+  bpsText,
+  feeSplitText,
+  incomeTotal,
+  type FeeSplit,
   finalityOf,
   formatShare,
   incomeOf,
@@ -373,7 +377,8 @@ describe('the staking income in the history', () => {
   it('a coinbase output with a role is Staked, BMM reward or Slashing reward, and the type filter has them', () => {
     const r = parseRecords(records);
     expect(r.map((x) => typeText(x.type, x.role))).toEqual(['Staked', 'Staked', 'BMM reward', 'Slashing reward', 'Mined']);
-    expect(Object.keys(COINBASE_ROLES)).toEqual(['staked', 'bmm', 'slashing']);
+    expect(Object.keys(COINBASE_ROLES)).toEqual(['staked', 'bmm', 'slashing', 'validator']);
+    expect(typeText('mined', 'validator')).toBe('Validator share');
     expect(TYPE_FILTERS.map((f) => f.label)).toEqual(expect.arrayContaining(['Staked', 'BMM reward', 'Slashing reward']));
     const only = (type: string) => filterRecords(r, { type: type as never, search: '', minAmount: 0n, showInactive: false }).map((x: TxRecord) => x.role);
     expect(only('role:staked')).toEqual(['staked', 'staked']);
@@ -497,7 +502,7 @@ describe('the pages of FastBlocks', () => {
     expect(screen.getByRole('tab', { name: /Overview/ }).getAttribute('aria-selected')).toBe('true');
     await waitFor(() => expect(screen.getByRole('table', { name: 'Staking income' }).textContent).toMatch(/0\.10000000.*0\.15000000/));
     expect(screen.getByText('BMM-confirmed')).toBeTruthy();
-    expect(document.querySelector('#fb-fee-split')!.textContent).toMatch(/%/);
+    // (The fee split is in Overview too, when the node says it: 'the fee split' tests below.)
     expect(document.querySelector('#fb-leader-now')!.textContent).not.toBe('');
     // No fact of another tab: this node's state is in Validator.
     expect(document.querySelector('#fb-node-state')).toBeNull();
@@ -816,5 +821,64 @@ describe('Staking in Simple mode', () => {
     expect(stakingTabOf('node')).toEqual({ tab: 'validator', view: 'validators' });
     expect(stakingTabOf('bonds').tab).toBe('bonds');
     expect(stakingTabOf('').tab).toBe('overview');
+  });
+});
+
+describe('the fee split (doc/fastblocks.md, "Fees, the pot and the validator pool")', () => {
+  const split = (extra: Partial<FeeSplit> = {}): FeeSplit => ({
+    active: true,
+    activationheight: 30,
+    mainheight: 400,
+    spacing: 600,
+    bidderbps: 1000,
+    validatorsbps: 9000,
+    bmmmainheight: 410,
+    bmmspacing: 60,
+    bmmbidderbps: 5000,
+    pool: 0.0009,
+    poolepochs: [{ epoch: 50, amount: 0.0009 }],
+    ...extra,
+  });
+
+  it('says the split now, in percent, and before its height when it starts', () => {
+    expect(bpsText(5000)).toBe('50 %');
+    expect(bpsText(1000)).toBe('10 %');
+    expect(bpsText(3333)).toBe('33.33 %');
+    expect(bpsText(6667)).toBe('66.67 %');
+    expect(feeSplitText(split())).toBe('Fee split now: validators 90 % / BMM 10 %');
+    expect(feeSplitText(split({ spacing: 60, bidderbps: 5000, validatorsbps: 5000 }))).toBe('Fee split now: validators 50 % / BMM 50 %');
+    expect(feeSplitText(split({ active: false, bidderbps: 5000, validatorsbps: 5000 }))).toBe('Fee split from block 30: validators 50 % / BMM 50 %');
+    expect(feeSplitText(undefined)).toBe('');
+  });
+
+  it("a validator's share of the pool is income of the wallet: Validator share, in the totals", () => {
+    const share = [hash('6'), 0, 'mined', 'rsc1qowner', '', NOW, 3_000_000, 0, 'confirmed', 10, 0, true, 'k6', 5, 'c', true, false, true, 'validator'];
+    const r = parseRecords([...records, share]);
+    const income = incomeOf(r, NOW - 3600);
+    expect(income.validator).toBe(3_000_000n);
+    expect(income.today.validator).toBe(3_000_000n);
+    expect(incomeTotal(income)).toBe(income.staked + income.bmm + income.slashing + 3_000_000n);
+    expect(incomeTotal(income, true)).toBe(income.today.staked + income.today.bmm + income.today.slashing + 3_000_000n);
+    expect(TYPE_FILTERS.map((f) => f.label)).toContain('Validator share');
+    const local = readFileSync(join(__dirname, '../../../local.cpp'), 'utf8');
+    expect(local).toMatch(/CoinbaseRole::VALIDATOR: roles\.emplace_back\("validator"\)/);
+  });
+
+  it('the Staking page shows the split now, the pool and this node\'s share', async () => {
+    pos = { ...pos, feesplit: split() };
+    staking = { ...staking, poolshare: 0.0003, feesplit: split() };
+    render(Staking);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#fb-fee-split')!.textContent).toContain('Fee split now: validators 90 % / BMM 10 %'));
+    expect(document.querySelector('#fb-fee-split')!.textContent).toContain('every 600 s');
+    expect(document.querySelector('#fb-pool')!.textContent).toMatch(/0\.00090000/);
+    expect(document.querySelector('#fb-pool-share')!.textContent).toMatch(/0\.00030000/);
+    await waitFor(() => expect(screen.getByRole('table', { name: 'Staking income' }).textContent).toContain('Validator shares'));
+  });
+
+  it('without a split on the chain (an older node) the page says nothing of it', async () => {
+    render(Staking);
+    await loaded();
+    expect(document.querySelector('#fb-fee-split')).toBeNull();
   });
 });

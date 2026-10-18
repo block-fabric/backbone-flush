@@ -18,7 +18,7 @@
   import { coinsToSats, formatAmount, satsToCoins } from '../../lib/units';
   import { setUiMode } from '../../lib/uimode.svelte';
   import { clock } from './clock.svelte';
-  import { anchorsTime, bondProblem, dailyEstimate, nodeState, secondsUntilEpoch, simpleState, simpleTone, stakeSats, untilText, type Income } from './model';
+  import { anchorsTime, incomeTotal, bondProblem, dailyEstimate, nodeState, secondsUntilEpoch, simpleState, simpleTone, stakeSats, untilText, type Income } from './model';
   import { fb, refreshFb } from './store.svelte';
 
   let { income }: { income: Income | null } = $props();
@@ -175,8 +175,8 @@
     <dl class="facts figures">
       <dt>Staked by you</dt><dd><Amount sats={bonded} /></dd>
       {#if unbonding > 0n}<dt>Coming back</dt><dd><Amount sats={unbonding} /> <span class="faint">{t('in %1', backIn)}</span></dd>{/if}
-      <dt>Earned today</dt><dd>{#if income}<Amount sats={income.today.staked + income.today.bmm + income.today.slashing} />{:else}–{/if}</dd>
-      <dt>Earned in all</dt><dd>{#if income}<Amount sats={income.staked + income.bmm + income.slashing} />{:else}–{/if}</dd>
+      <dt>Earned today</dt><dd>{#if income}<Amount sats={incomeTotal(income, true)} />{:else}–{/if}</dd>
+      <dt>Earned in all</dt><dd>{#if income}<Amount sats={incomeTotal(income)} />{:else}–{/if}</dd>
       {#if ownStake > 0n && avgFee > 0}<dt>This node earns</dt><dd>{t('about %1 a day', formatAmount(perDayNow, prefs.unit, { withUnit: true }))}</dd>{/if}
     </dl>
 

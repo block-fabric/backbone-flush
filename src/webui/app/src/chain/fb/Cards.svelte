@@ -14,7 +14,7 @@
   import Card from '../../views/home/Card.svelte';
   import './fb.css';
   import { clock, startClock } from './clock.svelte';
-  import { incomeOf, midnightOf, nodeState, nodeStateText, shortKey, slotsLed, stateTone, untilText } from './model';
+  import { incomeOf, incomeTotal, midnightOf, nodeState, nodeStateText, shortKey, slotsLed, stateTone, untilText } from './model';
   import { fb, followTip, startFb } from './store.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import { simpleState, simpleTone } from './model';
@@ -68,8 +68,8 @@
       <span class="value"><span class="status {simpleTone(plain)}" id="fb-home-simple-state">{t(PLAIN[plain])}</span></span>
       <dl class="pairs">
         {#if wallets.current !== null}<dt>Staked</dt><dd><Amount sats={walletBonded} /></dd>{/if}
-        <dt>Earned today</dt><dd>{#if income}<Amount sats={income.today.staked + income.today.bmm + income.today.slashing} />{:else}–{/if}</dd>
-        <dt>Earned in all</dt><dd>{#if income}<Amount sats={income.staked + income.bmm + income.slashing} />{:else}–{/if}</dd>
+        <dt>Earned today</dt><dd>{#if income}<Amount sats={incomeTotal(income, true)} />{:else}–{/if}</dd>
+        <dt>Earned in all</dt><dd>{#if income}<Amount sats={incomeTotal(income)} />{:else}–{/if}</dd>
       </dl>
       {#snippet actions()}
         <button type="button" class="btn grow" onclick={() => go('staking')}><Icon name="stake" size={15} /> {walletBonded > 0n ? 'Manage staking' : 'Start staking'}</button>
@@ -83,8 +83,8 @@
       <dl class="pairs">
         <dt>This node's bond</dt><dd><Amount sats={bonded} /></dd>
         {#if wallets.current !== null}<dt>Bonded by this wallet</dt><dd><Amount sats={walletBonded} /></dd>{/if}
-        <dt>Income today</dt><dd>{#if income}<Amount sats={income.today.staked + income.today.bmm + income.today.slashing} />{:else}–{/if}</dd>
-        <dt>Income in all</dt><dd>{#if income}<Amount sats={income.staked + income.bmm + income.slashing} />{:else}–{/if}</dd>
+        <dt>Income today</dt><dd>{#if income}<Amount sats={incomeTotal(income, true)} />{:else}–{/if}</dd>
+        <dt>Income in all</dt><dd>{#if income}<Amount sats={incomeTotal(income)} />{:else}–{/if}</dd>
       </dl>
       {#snippet actions()}
         <button type="button" class="btn grow" onclick={() => go('staking', 'bonds')}><Icon name="stake" size={15} /> Bond</button>

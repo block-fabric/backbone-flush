@@ -432,6 +432,7 @@ std::vector<std::string> CoinbaseRoles(interfaces::Chain& chain, const uint256& 
         case interfaces::Chain::CoinbaseRole::STAKED: roles.emplace_back("staked"); break;
         case interfaces::Chain::CoinbaseRole::ANCHOR: roles.emplace_back("bmm"); break;
         case interfaces::Chain::CoinbaseRole::REPORTER: roles.emplace_back("slashing"); break;
+        case interfaces::Chain::CoinbaseRole::VALIDATOR: roles.emplace_back("validator"); break;
         case interfaces::Chain::CoinbaseRole::OTHER: roles.emplace_back(); break;
         }
     }

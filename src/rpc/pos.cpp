@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addresstype.h>
+#include <arith_uint256.h>
 #include <chain.h>
 #include <consensus/amount.h>
 #include <core_io.h>
@@ -11,6 +12,7 @@
 #include <key_io.h>
 #include <node/context.h>
 #include <pos/evidence.h>
+#include <pos/feesplit.h>
 #include <pos/finality.h>
 #include <pos/forkchoice.h>
 #include <pos/hooks.h>
@@ -124,6 +126,88 @@ std::optional<int64_t> NextSlotLed(const pos::FastBlocksHooks& hooks, Chainstate
         if (leader && std::find(keys.begin(), keys.end(), *leader) != keys.end()) return slot;
     }
     return std::nullopt;
+}
+
+/** The fee split now (pos/feesplit.h), for getposinfo and getstakinginfo. */
+std::vector<RPCResult> FeeSplitFields()
+{
+    return {
+        {RPCResult::Type::OBJ, "feesplit", "The fee split (from fee_split_height): the BMM bidder's share of ordinary fees, the validators' (the pool)", {
+            {RPCResult::Type::BOOL, "active", "Whether the next block takes it"},
+            {RPCResult::Type::NUM, "activationheight", "fee_split_height: its first block"},
+            {RPCResult::Type::NUM, "mainheight", "The mainchain block whose spacing blocks of stake of the current epoch take (the epoch's seed block), -1 if not on record yet"},
+            {RPCResult::Type::NUM, "spacing", "S: the median spacing of the last 11 mainchain blocks there, in seconds"},
+            {RPCResult::Type::NUM, "bidderbps", "The bidder's share of ordinary fees, in basis points: max(10 %, 50 % x min(1, 60 / S))"},
+            {RPCResult::Type::NUM, "validatorsbps", "The validators' share (10000 less it)"},
+            {RPCResult::Type::NUM, "bmmmainheight", "For a BMM block made now: the mainchain tip it follows"},
+            {RPCResult::Type::NUM, "bmmspacing", "S there"},
+            {RPCResult::Type::NUM, "bmmbidderbps", "The bidder's share there"},
+            {RPCResult::Type::STR_AMOUNT, "pool", "The validator pool: shares of fees not paid yet"},
+            {RPCResult::Type::ARR, "poolepochs", "By the epoch whose validators share it (paid at the first anchor after the epoch ends)",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "epoch", "The epoch"},
+                    {RPCResult::Type::STR_AMOUNT, "amount", "Its pool"},
+                }},
+            }},
+        }},
+    };
+}
+
+UniValue FeeSplitToJSON(const pos::FastBlocksHooks& hooks, ChainstateManager& chainman, int64_t slot)
+{
+    const Consensus::PosParams& params{hooks.Params()};
+    int next_height;
+    std::vector<std::pair<int64_t, int64_t>> pool;
+    std::optional<int> main_height;
+    int main_tip;
+    {
+        LOCK(::cs_main);
+        next_height = chainman.ActiveChain().Height() + 1;
+        pool = pos::PoolEntries(chainman.ActiveChainstate().SideState().View());
+        main_height = hooks.FeeSplitMainHeight(/*pos_block=*/true, slot, -1);
+        main_tip = chainman.m_mainchain ? chainman.m_mainchain->Height() : -1;
+    }
+    const int64_t spacing{main_height ? hooks.FeeSplitSpacing(*main_height) : pos::FEE_SPLIT_TARGET_SPACING};
+    const int64_t bmm_spacing{hooks.FeeSplitSpacing(main_tip)};
+    UniValue split(UniValue::VOBJ);
+    split.pushKV("active", hooks.FeeSplitActive(next_height));
+    split.pushKV("activationheight", params.fee_split_height);
+    split.pushKV("mainheight", main_height.value_or(-1));
+    split.pushKV("spacing", spacing);
+    split.pushKV("bidderbps", pos::BidderShareBps(spacing));
+    split.pushKV("validatorsbps", 10000 - pos::BidderShareBps(spacing));
+    split.pushKV("bmmmainheight", main_tip);
+    split.pushKV("bmmspacing", bmm_spacing);
+    split.pushKV("bmmbidderbps", pos::BidderShareBps(bmm_spacing));
+    CAmount total{0};
+    UniValue epochs(UniValue::VARR);
+    for (const auto& [epoch, amount] : pool) {
+        total += amount;
+        UniValue entry(UniValue::VOBJ);
+        entry.pushKV("epoch", epoch);
+        entry.pushKV("amount", ValueFromAmount(amount));
+        epochs.push_back(std::move(entry));
+    }
+    split.pushKV("pool", ValueFromAmount(total));
+    split.pushKV("poolepochs", std::move(epochs));
+    return split;
+}
+
+/** A validator's share, by stake, of the pool of an epoch so far (what it is paid if the epoch ended now, unless jailed or banned). */
+CAmount PoolShareOf(ChainstateManager& chainman, const EpochSchedule& schedule, int64_t epoch, int64_t stake)
+{
+    if (!schedule.set || schedule.set->TotalStake() <= 0 || stake <= 0) return 0;
+    CAmount pool{0};
+    for (const auto& [at, amount] : WITH_LOCK(::cs_main, return pos::PoolEntries(chainman.ActiveChainstate().SideState().View()))) {
+        if (at == epoch) pool = amount;
+    }
+    // (DistributePool's rounding: down.)
+    arith_uint256 product{static_cast<uint64_t>(pool)};
+    product *= arith_uint256{static_cast<uint64_t>(stake)};
+    product /= arith_uint256{static_cast<uint64_t>(schedule.set->TotalStake())};
+    return static_cast<CAmount>(product.GetLow64());
 }
 
 std::vector<uint256> LocalKeys(const pos::FastBlocksHooks& hooks)
@@ -256,6 +340,7 @@ RPCMethod getposinfo()
                 {
                     {RPCResult::Type::STR_HEX, "pubkey", "x-only key"},
                     {RPCResult::Type::NUM, "stake", "Weight in leader selection"},
+                    {RPCResult::Type::STR_AMOUNT, "poolshare", "Its share by stake of the epoch's validator pool so far (fee split): what it is paid at the end of the epoch if the pool stopped growing, unless jailed or banned"},
                 }},
             }},
             {RPCResult::Type::NUM, "anchors", "Anchors on the active chain (acknowledged tickets and BMM blocks)"},
@@ -281,6 +366,7 @@ RPCMethod getposinfo()
                 {RPCResult::Type::STR_AMOUNT, "minstake", "The least a validator must bond to take part"},
                 {RPCResult::Type::NUM, "unbondinganchors", "Anchors after an unbond that it is paid"},
             }},
+            FeeSplitFields()[0],
             {RPCResult::Type::STR_HEX, "chainkey", "The order of the active chain (nChainWork): anchors, last commitment height, height"},
             {RPCResult::Type::NUM, "tickets", "Anchor tickets this node knows"},
             {RPCResult::Type::NUM, "evidence", "Proofs this node knows that a leader signed two blocks for one slot"},
@@ -318,6 +404,7 @@ RPCMethod getposinfo()
             UniValue entry(UniValue::VOBJ);
             entry.pushKV("pubkey", HexStr(validator.pubkey));
             entry.pushKV("stake", validator.stake);
+            entry.pushKV("poolshare", ValueFromAmount(PoolShareOf(chainman, schedule, pos::EpochOf(slot, params), validator.stake)));
             validators.push_back(std::move(entry));
         }
     }
@@ -353,6 +440,7 @@ RPCMethod getposinfo()
     staking.pushKV("minstake", ValueFromAmount(params.min_stake));
     staking.pushKV("unbondinganchors", params.unbonding_anchors);
     result.pushKV("staking", std::move(staking));
+    result.pushKV("feesplit", FeeSplitToJSON(*hooks, chainman, slot));
     result.pushKV("chainkey", work.GetHex());
     result.pushKV("tickets", hooks->Tickets().size());
     result.pushKV("evidence", hooks->Evidence().Size());
@@ -773,7 +861,7 @@ RPCMethod getstakinginfo()
             {RPCResult::Type::BOOL, "validator", "Whether the node has validator keys (-validatorkeyfile)"},
             {RPCResult::Type::BOOL, "enabled", "Whether it makes blocks of stake (setstaking)"},
             {RPCResult::Type::STR, "producererror", "Why the block producer could not start, if it could not"},
-            {RPCResult::Type::STR, "payout", /*optional=*/true, "Where the producer's share of fees goes: -validatorpayout, else an address of the node's wallet, else the first validator key's (P2WPKH)"},
+            {RPCResult::Type::STR, "payout", /*optional=*/true, "Where the producer's share of fees goes (before the fee split: from it on, a block of stake pays its producer nothing, and the validators' shares of the pool go to their bonds' owners): -validatorpayout, else an address of the node's wallet, else the first validator key's (P2WPKH)"},
             {RPCResult::Type::ARR, "keys", "Its validator keys",
             {
                 {RPCResult::Type::OBJ, "", "",
@@ -781,11 +869,14 @@ RPCMethod getstakinginfo()
                     {RPCResult::Type::STR_HEX, "pubkey", "x-only key"},
                     {RPCResult::Type::BOOL, "inset", "Whether it is in the validator set"},
                     {RPCResult::Type::NUM, "stake", "Its stake (0 if not in the set)"},
+                    {RPCResult::Type::STR_AMOUNT, "poolshare", "Its share by stake of the current epoch's validator pool so far (fee split; paid to its bond's owner)"},
                     {RPCResult::Type::OBJ, "bond", /*optional=*/true, "Its bond, in the state of the active chain", BondFields()},
                 }},
             }},
             {RPCResult::Type::NUM, "stake", "The stake of its keys in the set"},
             {RPCResult::Type::NUM, "totalstake", "The stake of the whole set"},
+            {RPCResult::Type::STR_AMOUNT, "poolshare", "The share of its keys of the current epoch's validator pool so far"},
+            FeeSplitFields()[0],
             {RPCResult::Type::NUM, "produced", "Blocks made since the node started"},
             {RPCResult::Type::NUM, "blocksmade", "Blocks of stake on the active chain that its keys signed"},
             {RPCResult::Type::NUM, "blocksmadesince", /*optional=*/true, "Of which with a time at or after since"},
@@ -818,6 +909,7 @@ RPCMethod getstakinginfo()
     const EpochSchedule schedule{ScheduleOf(hooks, chainman, pos::EpochOf(slot, params))};
     UniValue entries(UniValue::VARR);
     int64_t stake{0};
+    CAmount pool_share{0};
     for (const uint256& key : keys) {
         const auto index{schedule.set ? schedule.set->Find(key) : std::nullopt};
         const int64_t key_stake{index ? schedule.set->Validators()[*index].stake : 0};
@@ -826,6 +918,9 @@ RPCMethod getstakinginfo()
         entry.pushKV("pubkey", HexStr(key));
         entry.pushKV("inset", index.has_value());
         entry.pushKV("stake", key_stake);
+        const CAmount key_share{PoolShareOf(chainman, schedule, pos::EpochOf(slot, params), key_stake)};
+        pool_share += key_share;
+        entry.pushKV("poolshare", ValueFromAmount(key_share));
         const auto record{WITH_LOCK(::cs_main, return pos::GetValidator(chainman.ActiveChainstate().SideState().View(), key))};
         if (record) entry.pushKV("bond", BondToJSON(*record, params));
         entries.push_back(std::move(entry));
@@ -833,6 +928,8 @@ RPCMethod getstakinginfo()
     result.pushKV("keys", std::move(entries));
     result.pushKV("stake", stake);
     result.pushKV("totalstake", schedule.set ? schedule.set->TotalStake() : 0);
+    result.pushKV("poolshare", ValueFromAmount(pool_share));
+    result.pushKV("feesplit", FeeSplitToJSON(hooks, chainman, slot));
     const pos::Producer::Status status{producer ? producer->GetStatus() : pos::Producer::Status{}};
     result.pushKV("produced", status.produced);
     const auto made{BlocksMade(chainman, keys)};
@@ -994,6 +1091,7 @@ std::vector<RPCResult> PegBalanceFields()
             {RPCResult::Type::STR_AMOUNT, "utxos", "Spendable coins (the UTXO set)"},
             {RPCResult::Type::STR_AMOUNT, "withdrawals", "Coins burned by withdrawals waiting or in a bundle (amounts and mainchain fees)"},
             {RPCResult::Type::STR_AMOUNT, "pot", "The fee pot: accrued less paid"},
+            {RPCResult::Type::STR_AMOUNT, "pool", "The validator pool: the validators' share of fees, not shared out yet (fee split)"},
             {RPCResult::Type::STR_AMOUNT, "bonded", "Coins bonded by validators"},
             {RPCResult::Type::STR_AMOUNT, "unbonding", "Coins unbonded, not paid yet"},
             {RPCResult::Type::STR_AMOUNT, "reserve", "Penalties not paid out yet (with the pot, at anchors)"},
@@ -1008,7 +1106,7 @@ std::vector<RPCResult> PegBalanceFields()
 void PushPegBalance(ChainstateManager& chainman, UniValue& result)
 {
     if (!pos::InstalledHooks()) return;
-    CAmount utxos{0}, withdrawals{0}, pot{0}, payouts{0}, assets{0};
+    CAmount utxos{0}, withdrawals{0}, pot{0}, pool{0}, payouts{0}, assets{0};
     pos::StakeState stake;
     int main_height;
     uint256 tip;
@@ -1030,6 +1128,7 @@ void PushPegBalance(ChainstateManager& chainman, UniValue& result)
         for (const CTxOut& out : side.TxQueue()) payouts += out.nValue;
         const pos::FastState fast{pos::GetFastState(chainstate.SideState().View())};
         pot = fast.pot_accrued - fast.pot_paid;
+        pool = pos::PoolTotal(chainstate.SideState().View());
         stake = pos::GetStakeState(chainstate.SideState().View());
         main_height = side.MainHeight();
         assets = side.BitAssets().HeldChn();
@@ -1040,13 +1139,14 @@ void PushPegBalance(ChainstateManager& chainman, UniValue& result)
     balance.pushKV("utxos", ValueFromAmount(utxos));
     balance.pushKV("withdrawals", ValueFromAmount(withdrawals));
     balance.pushKV("pot", ValueFromAmount(pot));
+    balance.pushKV("pool", ValueFromAmount(pool));
     balance.pushKV("bonded", ValueFromAmount(stake.bonded));
     balance.pushKV("unbonding", ValueFromAmount(stake.unbonding));
     balance.pushKV("reserve", ValueFromAmount(stake.pot_reserve));
     balance.pushKV("rewards", ValueFromAmount(stake.rewards_owed));
     balance.pushKV("payouts", ValueFromAmount(payouts));
     balance.pushKV("assets", ValueFromAmount(assets));
-    balance.pushKV("total", ValueFromAmount(utxos + withdrawals + pot + stake.bonded + stake.unbonding + stake.pot_reserve + stake.rewards_owed + payouts + assets));
+    balance.pushKV("total", ValueFromAmount(utxos + withdrawals + pot + pool + stake.bonded + stake.unbonding + stake.pot_reserve + stake.rewards_owed + payouts + assets));
     result.pushKV("pegbalance", std::move(balance));
 }
 

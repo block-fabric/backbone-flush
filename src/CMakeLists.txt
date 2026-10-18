@@ -228,6 +228,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   sidechain/hooks.cpp
   pos/evidence.cpp
   pos/finality.cpp
+  pos/feesplit.cpp
   pos/forkchoice.cpp
   pos/header.cpp
   pos/income.cpp

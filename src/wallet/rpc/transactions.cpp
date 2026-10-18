@@ -400,6 +400,7 @@ static void ListTransactions(const CWallet& wallet, const CWalletTx& wtx, Wallet
                         case interfaces::Chain::CoinbaseRole::STAKED: entry.pushKV("income", "staked"); break;
                         case interfaces::Chain::CoinbaseRole::ANCHOR: entry.pushKV("income", "anchor"); break;
                         case interfaces::Chain::CoinbaseRole::REPORTER: entry.pushKV("income", "reporter"); break;
+                        case interfaces::Chain::CoinbaseRole::VALIDATOR: entry.pushKV("income", "validator"); break;
                         case interfaces::Chain::CoinbaseRole::OTHER: break;
                         }
                     }
@@ -487,7 +488,7 @@ RPCMethod listtransactions()
                                 "for all other categories"},
                             {RPCResult::Type::STR, "label", /*optional=*/true, "A comment for the address/transaction, if any"},
                             {RPCResult::Type::NUM, "vout", "the vout value"},
-                            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice)"},
+                            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
                             {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the\n"
                                  "'send' category of transactions."},
                         },
@@ -578,7 +579,7 @@ static std::vector<RPCResult> ListSinceBlockTxFields()
             {RPCResult::Type::STR_AMOUNT, "amount", "The amount in " + CURRENCY_UNIT + ". This is negative for the 'send' category, and is positive\n"
                 "for all other categories"},
             {RPCResult::Type::NUM, "vout", "the vout value"},
-            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice)"},
+            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
             {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the\n"
                  "'send' category of transactions."},
         },
@@ -749,7 +750,7 @@ RPCMethod gettransaction()
                                 {RPCResult::Type::STR_AMOUNT, "amount", "The amount in " + CURRENCY_UNIT},
                                 {RPCResult::Type::STR, "label", /*optional=*/true, "A comment for the address/transaction, if any"},
                                 {RPCResult::Type::NUM, "vout", "the vout value"},
-                                {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice)"},
+                                {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
                                 {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the \n"
                                     "'send' category of transactions."},
                                 {RPCResult::Type::BOOL, "abandoned", "'true' if the transaction has been abandoned (inputs are respendable)."},

@@ -30,6 +30,7 @@
 #include <protocol.h>
 #include <node/miner.h>
 #include <pos/evidence.h>
+#include <pos/feesplit.h>
 #include <pos/finality.h>
 #include <pos/forkchoice.h>
 #include <pos/header.h>
@@ -110,11 +111,14 @@ struct InstallFastBlocks {
     std::vector<std::string> args;
     std::unique_ptr<const CChainParams> params;
     std::optional<int64_t> seed_lookahead;
-    explicit InstallFastBlocks(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt) : seed_lookahead{lookahead}
+    std::optional<int> fee_split_height;
+    explicit InstallFastBlocks(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt)
+        : seed_lookahead{lookahead}, fee_split_height{fee_split}
     {
         CChainParams::RegTestOptions options;
         options.sidechain_slot = 5;
         options.pos_seed_lookahead = lookahead;
+        options.dep_opts.fee_split_height = fee_split;
         if (with_validators) {
             ECC_Context ecc;
             for (const CKey& key : keys) {
@@ -139,6 +143,7 @@ std::vector<const char*> SetupArgs(InstallFastBlocks& installed)
     installed.args = {"-sidechainslot=5"};
     if (!installed.validators.empty()) installed.args.push_back("-posvalidators=" + installed.validators);
     if (installed.seed_lookahead) installed.args.push_back(strprintf("-posseedlookahead=%d", *installed.seed_lookahead));
+    if (installed.fee_split_height) installed.args.push_back(strprintf("-testactivationheight=feesplit@%d", *installed.fee_split_height));
     std::vector<const char*> args;
     for (const std::string& arg : installed.args) args.push_back(arg.c_str());
     return args;
@@ -159,8 +164,8 @@ struct FastBlocksSetup : public InstallFastBlocks, public TestingSetup {
     std::unique_ptr<pos::Producer> producer;
     int64_t base_slot{0};
 
-    explicit FastBlocksSetup(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt)
-        : InstallFastBlocks{with_validators, lookahead}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
+    explicit FastBlocksSetup(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt)
+        : InstallFastBlocks{with_validators, lookahead, fee_split}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
     {
         Hooks().Attach(m_node.chainman.get());
         Mock(START_TIME);
@@ -569,6 +574,57 @@ struct NoValidatorsSetup : public FastBlocksSetup {
 /** The genesis validators, and the seed of an epoch taken at its start (no lookahead). */
 struct SeedSetup : public FastBlocksSetup {
     SeedSetup() : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0} {}
+};
+
+/**
+ * The fee split from the chain's block `height` on (by default from the first), the seed of an epoch
+ * taken at its start (no lookahead), and a record of the mainchain whose spacing the test sets.
+ */
+struct FeeSplitSetup : public FastBlocksSetup {
+    explicit FeeSplitSetup(int height = 0) : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0, height} {}
+    /** `count` mainchain blocks `spacing` seconds apart, from now on. */
+    void Spaced(int64_t spacing, int count)
+    {
+        for (int n{0}; n < count; ++n) {
+            Mock(GetTime() + spacing);
+            Main();
+        }
+    }
+    /**
+     * The clock just after the start of the next epoch, and a BMM block there, committed to by a
+     * mainchain block after the epoch's start: the seed of the epoch is the last mainchain block before
+     * (whose spacing the blocks of stake of the epoch take). Returns the first slot of the epoch, as i
+     * of Slot(i).
+     */
+    int NextEpochWithBmm()
+    {
+        const int64_t epoch{pos::EpochOf(pos::SlotOf(GetTime(), Pos()), Pos()) + 1};
+        const int64_t first{epoch * Pos().slots_per_epoch};
+        Mock(pos::SlotTime(first, Pos()) + 1);
+        StartPos();
+        return static_cast<int>(first - base_slot);
+    }
+    CAmount PoolOf(int64_t epoch)
+    {
+        CAmount amount{0};
+        for (const auto& [at, value] : WITH_LOCK(::cs_main, return pos::PoolEntries(Chain().SideState().View()))) {
+            if (at == epoch) amount = value;
+        }
+        return amount;
+    }
+    static CAmount OutputsOf(const CTransaction& coinbase, bool (*is)(const CScript&))
+    {
+        CAmount total{0};
+        for (const CTxOut& out : coinbase.vout) {
+            if (is(out.scriptPubKey)) total += out.nValue;
+        }
+        return total;
+    }
+};
+
+/** The fee split from the chain's fourth block on. */
+struct FeeSplitLaterSetup : public FeeSplitSetup {
+    FeeSplitLaterSetup() : FeeSplitSetup{/*height=*/4} {}
 };
 
 /** Wait (real time) until `done`, at most `seconds`; whether it came. */
@@ -6441,6 +6497,349 @@ BOOST_FIXTURE_TEST_CASE(audit7_first_bond_anchor_on_chain, FastBlocksSetup)
     BOOST_CHECK(!record->first_bond_anchor.IsNull());
     BOOST_CHECK(Index(record->first_bond_anchor) != nullptr);
     BOOST_CHECK_EQUAL(StakingRules(TxWith({UnbondOut(keys[0], pos::UNBOND_ALL, record->unbond_seq, key)})), "");
+}
+
+// The fee split (pos/feesplit.h): b = max(10 %, 50 % · min(1, 60 / S)) of the ordinary fees, rounded down.
+BOOST_AUTO_TEST_CASE(fee_split_math)
+{
+    const CAmount fee{10000};
+    const std::vector<std::tuple<int64_t, CAmount, int64_t>> cases{
+        {30, 5000, 5000}, {60, 5000, 5000}, {90, 3333, 3333}, {120, 2500, 2500}, {300, 1000, 1000}, {600, 1000, 1000}, {3600, 1000, 1000}};
+    for (const auto& [spacing, bidder, bps] : cases) {
+        BOOST_CHECK_EQUAL(pos::BidderShare(fee, spacing), bidder);
+        BOOST_CHECK_EQUAL(pos::BidderShareBps(spacing), bps);
+    }
+    // The floor of 10 % is reached at S = 300 s exactly; below, the share falls with S.
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, 299), 1003);
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, 301), 1000);
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, 61), 4918);
+    // Rounding: down for the bidder, the rest (the odd satoshi of a 50/50 split) the validators'.
+    BOOST_CHECK_EQUAL(pos::BidderShare(10001, 60), 5000);
+    BOOST_CHECK_EQUAL(pos::BidderShare(10001, 90), 3333);
+    BOOST_CHECK_EQUAL(pos::BidderShare(7, 600), 0);
+    BOOST_CHECK_EQUAL(pos::BidderShare(19, 600), 1);
+    BOOST_CHECK_EQUAL(pos::BidderShare(1, 30), 0);
+    BOOST_CHECK_EQUAL(pos::BidderShare(0, 30), 0);
+    // Spacings of 0 or below (median times that did not move) count as fast blocks: 50/50.
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, 0), 5000);
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, -5), 5000);
+    // At the largest amounts, no overflow (30 · MAX_MONEY fits).
+    BOOST_CHECK_EQUAL(pos::BidderShare(MAX_MONEY, 90), MAX_MONEY / 3);
+    BOOST_CHECK_EQUAL(pos::BidderShare(MAX_MONEY, 1000000), MAX_MONEY / 10);
+
+    // The median of the spacings: the middle one, the upper middle for an even count, 60 for none.
+    BOOST_CHECK_EQUAL(pos::MedianSpacing({}), 60);
+    BOOST_CHECK_EQUAL(pos::MedianSpacing({90}), 90);
+    BOOST_CHECK_EQUAL(pos::MedianSpacing({300, 10, 90}), 90);
+    BOOST_CHECK_EQUAL(pos::MedianSpacing({10, 300, 90, 20}), 90);
+    BOOST_CHECK_EQUAL(pos::MedianSpacing({-3, 0, 5000}), 0);
+
+    // S from a record of median times: the last 11 spacings, none below the slot's activation.
+    sidechain::Mainchain record;
+    BOOST_REQUIRE(record.Start(100));
+    std::vector<int64_t> times{1000};
+    for (int i{0}; i < 5; ++i) times.push_back(times.back() + 600);
+    for (int i{0}; i < 11; ++i) times.push_back(times.back() + (i % 2 ? 30 : 90));
+    for (size_t i{0}; i < times.size(); ++i) {
+        sidechain::MainBlock block;
+        block.hash = uint256{static_cast<uint8_t>(i + 1)};
+        block.prev_hash = record.TipHash();
+        block.time = times[i];
+        BOOST_REQUIRE(record.Append(block));
+    }
+    const int tip{record.Height()};
+    BOOST_CHECK_EQUAL(tip, 100 + static_cast<int>(times.size()) - 1);
+    // The newest 11: six of 90, five of 30.
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, tip, 100), 90);
+    // Five blocks back: 6 of 600 ... the oldest spacings dominate.
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, 100 + 7, 100), 600);
+    // From the activation only: at its second block one spacing, at its first none.
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, 101, 100), 600);
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, 100, 100), 60);
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, 103, 102), 600);
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, 102, 102), 60);
+    BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, -1, 0), 60);
+}
+
+BOOST_AUTO_TEST_CASE(fee_split_peg_transactions)
+{
+    const CScript dest{Wpkh(0x01)};
+    CMutableTransaction plain;
+    plain.vout.emplace_back(1000, dest);
+    BOOST_CHECK(!pos::IsPegTx(CTransaction{plain}));
+    CMutableTransaction withdrawal{plain};
+    withdrawal.vout.emplace_back(5000, sidechain::WithdrawalScript(100, uint160{}, dest));
+    BOOST_CHECK(pos::IsPegTx(CTransaction{withdrawal}));
+    sidechain::RefundRequest request;
+    request.withdrawal = COutPoint{Txid::FromUint256(uint256::ONE), 0};
+    request.signature.assign(65, 1);
+    CMutableTransaction refund{plain};
+    refund.vout.emplace_back(0, sidechain::RefundScript(request));
+    BOOST_CHECK(pos::IsPegTx(CTransaction{refund}));
+    // Bonds and unbonds are staking, not the peg.
+    CMutableTransaction bond{plain};
+    bond.vout.emplace_back(COIN, pos::BondScript(uint256::ONE, uint160{}, std::array<unsigned char, 64>{}));
+    BOOST_CHECK(!pos::IsPegTx(CTransaction{bond}));
+    pos::Unbond unbond;
+    unbond.pubkey = uint256::ONE;
+    CMutableTransaction unbonding{plain};
+    unbonding.vout.emplace_back(0, pos::UnbondScript(unbond));
+    BOOST_CHECK(!pos::IsPegTx(CTransaction{unbonding}));
+
+    // A block's fees split by kind: peg fees whole to the bidder, the others by S.
+    std::vector<CTransactionRef> vtx{MakeTransactionRef(CMutableTransaction{}), MakeTransactionRef(plain), MakeTransactionRef(withdrawal),
+                                     MakeTransactionRef(refund), MakeTransactionRef(bond)};
+    const std::vector<CAmount> fees{0, 1000, 700, 300, 501};
+    const pos::FeeSplit split{pos::SplitFees(vtx, fees, /*fees_without_coinbase=*/false, 90)};
+    BOOST_CHECK_EQUAL(split.peg, 1000);
+    BOOST_CHECK_EQUAL(split.ordinary, 1501);
+    BOOST_CHECK_EQUAL(split.bidder_ordinary, 500);
+    BOOST_CHECK_EQUAL(split.validators, 1001);
+    BOOST_CHECK_EQUAL(split.Bidder(), 1500);
+    // The same with the block template's list of fees (no entry for the coinbase).
+    const std::vector<CAmount> template_fees{1000, 700, 300, 501};
+    BOOST_CHECK(pos::SplitFees(vtx, template_fees, /*fees_without_coinbase=*/true, 90).validators == split.validators);
+
+    // The markers.
+    BOOST_CHECK(pos::IsPoolScript(pos::PoolScript()));
+    BOOST_CHECK(!pos::IsPoolScript(pos::PotScript()));
+    BOOST_CHECK(!pos::IsRewardPayee(pos::PoolScript()));
+    BOOST_CHECK(pos::PoolScript().IsUnspendable());
+    for (const uint32_t count : {0U, 1U, 100U, 0xFFFFFFFFU}) BOOST_CHECK(pos::ParsePoolSharesMarker(pos::PoolSharesMarker(count)) == count);
+    BOOST_CHECK(!pos::ParsePoolSharesMarker(pos::PoolScript()));
+    BOOST_CHECK(!pos::ParsePoolSharesMarker(dest));
+}
+
+BOOST_AUTO_TEST_CASE(fee_split_pool_distribution)
+{
+    const auto member{[](uint8_t b, int64_t weight, bool excluded = false, bool payee = true) {
+        return pos::PoolMember{.pubkey = uint256{b}, .weight = weight, .excluded = excluded, .payee = payee ? std::optional{Wpkh(b)} : std::nullopt};
+    }};
+    // By stake.
+    {
+        const auto paid{pos::DistributePool(600, {member(1, 1), member(2, 2), member(3, 3)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 3U);
+        BOOST_CHECK(paid.shares[0] == CTxOut(100, Wpkh(1)));
+        BOOST_CHECK(paid.shares[1] == CTxOut(200, Wpkh(2)));
+        BOOST_CHECK(paid.shares[2] == CTxOut(300, Wpkh(3)));
+        BOOST_CHECK_EQUAL(paid.remainder, 0);
+        BOOST_CHECK_EQUAL(paid.to_reserve, 0);
+    }
+    // Jailed or banned: no share; the others share it all.
+    {
+        const auto paid{pos::DistributePool(600, {member(1, 1), member(2, 2, /*excluded=*/true), member(3, 3)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 2U);
+        BOOST_CHECK(paid.shares[0] == CTxOut(150, Wpkh(1)));
+        BOOST_CHECK(paid.shares[1] == CTxOut(450, Wpkh(3)));
+        BOOST_CHECK_EQUAL(paid.remainder, 0);
+    }
+    // Rounding down; the remainder carried.
+    {
+        const auto paid{pos::DistributePool(10, {member(1, 1), member(2, 1), member(3, 1)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 3U);
+        for (const CTxOut& share : paid.shares) BOOST_CHECK_EQUAL(share.nValue, 3);
+        BOOST_CHECK_EQUAL(paid.remainder, 1);
+    }
+    // A share of 0 is not paid (it stays in the remainder).
+    {
+        const auto paid{pos::DistributePool(5, {member(1, 1), member(2, 1000)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 1U);
+        BOOST_CHECK(paid.shares[0] == CTxOut(4, Wpkh(2)));
+        BOOST_CHECK_EQUAL(paid.remainder, 1);
+    }
+    // Without a payee (a genesis validator that never bonded): to the reserve.
+    {
+        const auto paid{pos::DistributePool(90, {member(1, 1, false, /*payee=*/false), member(2, 2)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 1U);
+        BOOST_CHECK(paid.shares[0] == CTxOut(60, Wpkh(2)));
+        BOOST_CHECK_EQUAL(paid.to_reserve, 30);
+        BOOST_CHECK_EQUAL(paid.remainder, 0);
+    }
+    // Nobody to share it: all carried.
+    BOOST_CHECK_EQUAL(pos::DistributePool(77, {member(1, 5, /*excluded=*/true)}).remainder, 77);
+    BOOST_CHECK_EQUAL(pos::DistributePool(77, {}).remainder, 77);
+    BOOST_CHECK(pos::DistributePool(0, {member(1, 1)}).shares.empty());
+    // Large stakes and pools: exact (256-bit products).
+    {
+        const auto paid{pos::DistributePool(MAX_MONEY, {member(1, MAX_MONEY / 2), member(2, MAX_MONEY / 2)})};
+        BOOST_REQUIRE_EQUAL(paid.shares.size(), 2U);
+        BOOST_CHECK_EQUAL(paid.shares[0].nValue + paid.shares[1].nValue + paid.remainder, MAX_MONEY);
+    }
+
+    // Wallets tell the shares by their marker: after the pot, the rewards; before the refunds.
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vout = {CTxOut{5, Wpkh(1)}, CTxOut{7, Wpkh(1)}, CTxOut{0, pos::PoolSharesMarker(2)}, CTxOut{3, Wpkh(2)}, CTxOut{4, Wpkh(1)}, CTxOut{9, Wpkh(3)}};
+    CBlock block;
+    block.vtx.push_back(MakeTransactionRef(coinbase));
+    const auto roles{pos::CoinbaseRoles(block, {})};
+    const std::vector<pos::CoinbaseRole> expected{pos::CoinbaseRole::OTHER, pos::CoinbaseRole::ANCHOR, pos::CoinbaseRole::OTHER,
+                                                  pos::CoinbaseRole::VALIDATOR, pos::CoinbaseRole::VALIDATOR, pos::CoinbaseRole::OTHER};
+    BOOST_CHECK(roles == expected);
+}
+
+// From fee_split_height: the producer keeps nothing; the bidder's share of ordinary fees and all the
+// fees of peg transactions go to the pot, the validators' share to the pool, shared at the end of the
+// epoch (genesis validators, which have no bond's owner: to the reserve; the rounding carried).
+BOOST_FIXTURE_TEST_CASE(fee_split_blocks_of_stake, FeeSplitSetup)
+{
+    COutPoint coin;
+    CTxOut spent{Fund(COIN, coin)};
+    // A mainchain of 90-second blocks: b = 1/3.
+    Spaced(90, 12);
+    const int first{NextEpochWithBmm()};
+    const int64_t epoch{pos::EpochOf(base_slot + first, Pos())};
+    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return Hooks().FeeSplitSpacing(*Hooks().FeeSplitMainHeight(true, base_slot + first + 2, -1))), 90);
+    const CMutableTransaction plain{Pay(coin, spent, {})};
+    Accept(plain);
+    const CBlock block{PosBlock(first + 2)};
+    BOOST_REQUIRE_EQUAL(block.vtx.size(), 2U);
+    const CTransaction& coinbase{*block.vtx[0]};
+    BOOST_CHECK_EQUAL(coinbase.vout[0].nValue, 0);
+    BOOST_CHECK_EQUAL(OutputsOf(coinbase, pos::IsPotScript), TX_FEE / 3);
+    BOOST_CHECK_EQUAL(OutputsOf(coinbase, pos::IsPoolScript), TX_FEE - TX_FEE / 3);
+    // The producer may keep nothing, and the split is exact.
+    {
+        CBlock greedy{block};
+        SetCoinbase(greedy, [](CMutableTransaction& cb) { cb.vout[0].nValue += 1; for (auto& out : cb.vout) if (pos::IsPoolScript(out.scriptPubKey)) out.nValue -= 1; });
+        Resign(greedy);
+        BOOST_CHECK_EQUAL(Check(greedy), "bad-pos-producer-share");
+        CBlock skewed{block};
+        SetCoinbase(skewed, [](CMutableTransaction& cb) {
+            for (auto& out : cb.vout) {
+                if (pos::IsPoolScript(out.scriptPubKey)) out.nValue -= 1;
+                if (pos::IsPotScript(out.scriptPubKey)) out.nValue += 1;
+            }
+        });
+        Resign(skewed);
+        BOOST_CHECK_EQUAL(Check(skewed), "bad-pos-fee-split");
+        CBlock modest{block};
+        SetCoinbase(modest, [](CMutableTransaction& cb) { for (auto& out : cb.vout) if (pos::IsPoolScript(out.scriptPubKey)) out.nValue -= 1; });
+        Resign(modest);
+        BOOST_CHECK_EQUAL(Check(modest), "bad-pos-fee-split");
+        CBlock two{block};
+        SetCoinbase(two, [](CMutableTransaction& cb) { cb.vout.emplace_back(0, pos::PoolScript()); });
+        Resign(two);
+        BOOST_CHECK_EQUAL(Check(two), "bad-pos-pool-multiple");
+        BOOST_CHECK(Hooks().RecordIndependent("bad-pos-pool-multiple"));
+        BOOST_CHECK(!Hooks().RecordIndependent("bad-pos-fee-split"));
+    }
+    Take(block);
+    BOOST_CHECK_EQUAL(PoolOf(epoch), TX_FEE - TX_FEE / 3);
+    BOOST_CHECK_EQUAL(Fast().pot_accrued, TX_FEE / 3);
+
+    // A withdrawal: its whole fee to the pot.
+    const CMutableTransaction withdrawal{Pay(coin, spent, {CTxOut{COIN / 4, sidechain::WithdrawalScript(1000, key.GetPubKey().GetID(), script)}})};
+    Accept(withdrawal);
+    const CBlock peg{PosBlock(first + 3)};
+    BOOST_REQUIRE_EQUAL(peg.vtx.size(), 2U);
+    BOOST_CHECK_EQUAL(OutputsOf(*peg.vtx[0], pos::IsPotScript), TX_FEE);
+    BOOST_CHECK_EQUAL(OutputsOf(*peg.vtx[0], pos::IsPoolScript), 0);
+    Take(peg);
+    BOOST_CHECK_EQUAL(PoolOf(epoch), TX_FEE - TX_FEE / 3);
+    BOOST_CHECK_EQUAL(Fast().pot_accrued, TX_FEE / 3 + TX_FEE);
+
+    // An anchor in the epoch pays the pot, not the pool (the epoch is not over).
+    const pos::StakeState before{Stake()};
+    Take(PosBlock(first + 4, Anchor(Ticket(Tip()->GetBlockHash(), script))));
+    BOOST_CHECK_EQUAL(PoolOf(epoch), TX_FEE - TX_FEE / 3);
+    BOOST_CHECK_EQUAL(Fast().pot_paid, TX_FEE / 3 + TX_FEE);
+    // The first anchor after the epoch: the pool shared by stake (1, 1, 1: 2222 each, to the reserve;
+    // the satoshi left to the next epoch's pool).
+    const int next{first + static_cast<int>(Pos().slots_per_epoch) + 1};
+    // (A mainchain block after the next epoch starts: its seed known.)
+    Mock(pos::SlotTime(base_slot + next - 1, Pos()) + 1);
+    Main();
+    Take(PosBlock(next - 1));
+    Mock(pos::SlotTime(base_slot + next, Pos()) + 1);
+    Take(PosBlock(next, Anchor(Ticket(Tip()->GetBlockHash(), script))));
+    const CAmount pool{TX_FEE - TX_FEE / 3};
+    BOOST_CHECK_EQUAL(PoolOf(epoch), 0);
+    BOOST_CHECK_EQUAL(PoolOf(epoch + 1), pool % 3);
+    // (The reserve paid out its share with each pot meanwhile: none was there before.)
+    BOOST_CHECK_EQUAL(before.pot_reserve, 0);
+    BOOST_CHECK_EQUAL(Stake().pot_reserve, pool - pool % 3);
+}
+
+// Before fee_split_height the old rule holds exactly; from it, the new one.
+BOOST_FIXTURE_TEST_CASE(fee_split_activation, FeeSplitLaterSetup)
+{
+    COutPoint coin;
+    CTxOut spent{Fund(COIN, coin)};
+    StartPos();
+    BOOST_REQUIRE_EQUAL(Tip()->nHeight, 2);
+    Accept(Pay(coin, spent, {}));
+    const CBlock old_rule{PosBlock(1)};
+    BOOST_CHECK_EQUAL(old_rule.vtx[0]->vout[0].nValue, TX_FEE / 2);
+    BOOST_CHECK_EQUAL(OutputsOf(*old_rule.vtx[0], pos::IsPotScript), TX_FEE / 2);
+    BOOST_CHECK_EQUAL(OutputsOf(*old_rule.vtx[0], pos::IsPoolScript), 0);
+    // (A pool output before the height is only an output that burns its coins.)
+    {
+        CBlock burn{old_rule};
+        SetCoinbase(burn, [](CMutableTransaction& cb) { cb.vout[0].nValue -= 1; cb.vout.emplace_back(1, pos::PoolScript()); cb.vout.emplace_back(0, pos::PoolScript()); });
+        Resign(burn);
+        BOOST_CHECK_EQUAL(Check(burn), "");
+    }
+    Take(old_rule);
+    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return pos::PoolTotal(Chain().SideState().View())), 0);
+    Accept(Pay(coin, spent, {}));
+    // (Slot 2 starts an epoch: a mainchain block after it, for its seed.)
+    Mock(pos::SlotTime(base_slot + 2, Pos()) + 1);
+    Main();
+    const CBlock new_rule{PosBlock(2)};
+    BOOST_CHECK_EQUAL(new_rule.vtx[0]->vout[0].nValue, 0);
+    // (S of a record that starts as the test does: 60 or less, 50/50.)
+    BOOST_CHECK_EQUAL(OutputsOf(*new_rule.vtx[0], pos::IsPotScript), TX_FEE / 2);
+    BOOST_CHECK_EQUAL(OutputsOf(*new_rule.vtx[0], pos::IsPoolScript), TX_FEE / 2);
+    {
+        CBlock old_way{new_rule};
+        SetCoinbase(old_way, [](CMutableTransaction& cb) { cb.vout[0].nValue = TX_FEE / 2; std::erase_if(cb.vout, [](const CTxOut& out) { return pos::IsPoolScript(out.scriptPubKey); }); });
+        Resign(old_way);
+        BOOST_CHECK_EQUAL(Check(old_way), "bad-pos-producer-share");
+    }
+    Take(new_rule);
+    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return pos::PoolTotal(Chain().SideState().View())), TX_FEE / 2);
+}
+
+// A slow mainchain (S = 600: the floor, 10 %), then a fast one (S = 30: 50 %), for blocks of stake and BMM
+// blocks; a BMM block's pool output is checked too (its miner keeps the bidder's share and the peg fees).
+BOOST_FIXTURE_TEST_CASE(fee_split_spacing, FeeSplitSetup)
+{
+    COutPoint coin;
+    CTxOut spent{Fund(COIN, coin)};
+    Spaced(600, 12);
+    int first{NextEpochWithBmm()};
+    Accept(Pay(coin, spent, {}));
+    CBlock block{PosBlock(first + 2)};
+    BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPotScript), TX_FEE / 10);
+    BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPoolScript), TX_FEE - TX_FEE / 10);
+    Take(block);
+
+    // A BMM block made now takes the mainchain's tip: S of the slow blocks (with the one after the epoch
+    // started), the floor. Its pool output is checked against its fees.
+    CMutableTransaction plain;
+    plain.vout.emplace_back(COIN, script);
+    std::vector<CTransactionRef> vtx{MakeTransactionRef(CMutableTransaction{}), MakeTransactionRef(plain)};
+    CBlock bmm;
+    bmm.vtx = vtx;
+    std::vector<CTxOut> outputs;
+    const CAmount taken{Hooks().MergeMinedFeeOutputs(bmm, Tip()->nHeight + 1, Record().Height(), {TX_FEE}, outputs)};
+    BOOST_CHECK_EQUAL(taken, TX_FEE - TX_FEE / 10);
+    BOOST_REQUIRE_EQUAL(outputs.size(), 1U);
+    BOOST_CHECK(outputs[0] == CTxOut(TX_FEE - TX_FEE / 10, pos::PoolScript()));
+    // (Before the height: nothing.)
+    outputs.clear();
+    BOOST_CHECK_EQUAL(Hooks().MergeMinedFeeOutputs(bmm, -1, Record().Height(), {TX_FEE}, outputs), 0);
+    BOOST_CHECK(outputs.empty());
+
+    // A fast mainchain: 50/50 again once the median moves.
+    Spaced(30, 12);
+    first = NextEpochWithBmm();
+    Accept(Pay(coin, spent, {}));
+    block = PosBlock(first + 2);
+    BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPotScript), TX_FEE / 2);
+    BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPoolScript), TX_FEE / 2);
+    Take(block);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

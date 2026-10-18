@@ -375,7 +375,7 @@ public:
     //! FastBlocks: what each output of a block's coinbase pays (pos::CoinbaseRole, not consensus): the
     //! producer's share of a block of stake, the pot paid to an anchor's payee, a reward for a proof.
     //! Nothing if the block is not known, or on a chain without blocks of stake.
-    enum class CoinbaseRole : uint8_t { OTHER, STAKED, ANCHOR, REPORTER };
+    enum class CoinbaseRole : uint8_t { OTHER, STAKED, ANCHOR, REPORTER, VALIDATOR };
     virtual std::vector<CoinbaseRole> getCoinbaseRoles(const uint256& block_hash) { return {}; }
 
     //! Check if shutdown requested.

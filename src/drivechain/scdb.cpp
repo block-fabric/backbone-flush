@@ -307,7 +307,7 @@ bool SidechainDB::ConnectBlock(const CBlock& block, int height, const Consensus:
             return false;
         }
         sidechain::State state{side->store};
-        if (!state.ConnectBlock(block, height, side->params, side->mainchain, side->minted, reject_reason)) {
+        if (!state.ConnectBlock(block, height, side->params, side->mainchain, side->minted, reject_reason, side->fees)) {
             side->failed = true;
             return false;
         }

@@ -2,11 +2,27 @@
 // without the node: the kind and the finality of a block, the state of a validator, the share of a stake, the
 // income of the wallet, the slots this node leads next, the checks of the forms. Pure functions, tested in
 // chain/fastblocks.test.ts.
+import { formatCount } from '../../lib/format';
 import { t, tn } from '../../lib/i18n.svelte';
 import type { TxRecord } from '../../lib/wallet';
 import { coinsToSats } from '../../lib/units';
 
 // --- What the node says ---
+
+/** The fee split (getposinfo, getstakinginfo: feesplit; doc/fastblocks.md, "Fees, the pot and the validator pool"). */
+export interface FeeSplit {
+  active: boolean;
+  activationheight: number;
+  mainheight: number;
+  spacing: number;
+  bidderbps: number;
+  validatorsbps: number;
+  bmmmainheight: number;
+  bmmspacing: number;
+  bmmbidderbps: number;
+  pool: number;
+  poolepochs: { epoch: number; amount: number }[];
+}
 
 export interface PosInfo {
   active: boolean;
@@ -14,7 +30,7 @@ export interface PosInfo {
   slot: number;
   epoch: number;
   leader?: string;
-  validators: { pubkey: string; stake: number }[];
+  validators: { pubkey: string; stake: number; poolshare?: number }[];
   anchors: number;
   lastanchormainheight: number;
   lastanchored?: string;
@@ -29,6 +45,7 @@ export interface PosInfo {
   tickets: number;
   evidence: number;
   producer?: { keys: string[]; produced: number; acknowledgements: number; failed: number; lastslot: number; error: string };
+  feesplit?: FeeSplit;
 }
 
 export interface Bond {
@@ -54,9 +71,11 @@ export interface StakingInfo {
   enabled: boolean;
   producererror: string;
   payout?: string;
-  keys: { pubkey: string; inset: boolean; stake: number; bond?: Bond }[];
+  keys: { pubkey: string; inset: boolean; stake: number; poolshare?: number; bond?: Bond }[];
   stake: number;
   totalstake: number;
+  poolshare?: number;
+  feesplit?: FeeSplit;
   produced: number;
   blocksmade: number;
   blocksmadesince?: number;
@@ -305,13 +324,36 @@ export interface Income {
   staked: bigint;
   bmm: bigint;
   slashing: bigint;
+  validator: bigint;
   blocks: number;
-  today: { staked: bigint; bmm: bigint; slashing: bigint; blocks: number };
+  today: { staked: bigint; bmm: bigint; slashing: bigint; validator: bigint; blocks: number };
+}
+
+/** All of an income's parts (today's with `today`). */
+export function incomeTotal(income: Income, today = false): bigint {
+  const i = today ? income.today : income;
+  return i.staked + i.bmm + i.slashing + i.validator;
+}
+
+/** Basis points as a percentage: 5000 is "50 %", 3333 "33.33 %". */
+export function bpsText(bps: number): string {
+  const whole = bps % 100 === 0;
+  return `${whole ? String(bps / 100) : (bps / 100).toFixed(2)} %`;
+}
+
+/**
+ * The split of ordinary fees between the validators and the BMM bidder, as the next block of stake takes it
+ * ("Fee split now: validators 90 % / BMM 10 %"); before the height it activates at, when it does.
+ */
+export function feeSplitText(split: FeeSplit | undefined): string {
+  if (!split) return '';
+  const parts = t('validators %1 / BMM %2', bpsText(split.validatorsbps), bpsText(split.bidderbps));
+  return split.active ? t('Fee split now: %1', parts) : t('Fee split from block %1: %2', formatCount(split.activationheight), parts);
 }
 
 /** The staking income of the wallet: its coinbase outputs by role (chain/roles.ts), today (from midnight) and in all. */
 export function incomeOf(records: readonly TxRecord[], midnight: number): Income {
-  const income: Income = { staked: 0n, bmm: 0n, slashing: 0n, blocks: 0, today: { staked: 0n, bmm: 0n, slashing: 0n, blocks: 0 } };
+  const income: Income = { staked: 0n, bmm: 0n, slashing: 0n, validator: 0n, blocks: 0, today: { staked: 0n, bmm: 0n, slashing: 0n, validator: 0n, blocks: 0 } };
   for (const r of records) {
     if (r.type !== 'mined' || r.status === 'conflicted' || r.status === 'notaccepted') continue;
     const today = r.time >= midnight;
@@ -328,6 +370,9 @@ export function incomeOf(records: readonly TxRecord[], midnight: number): Income
     } else if (r.role === 'slashing') {
       income.slashing += r.amount;
       if (today) income.today.slashing += r.amount;
+    } else if (r.role === 'validator') {
+      income.validator += r.amount;
+      if (today) income.today.validator += r.amount;
     }
   }
   return income;
@@ -433,21 +478,4 @@ export function dailyEstimate(stake: bigint, otherStake: bigint, slotSeconds: nu
   const blocksPerDay = 86400 / slotSeconds;
   const share = Number((stake * 1_000_000n) / total) / 1_000_000;
   return BigInt(Math.round(share * blocksPerDay * avgFeeSats * producerShare));
-}
-
-/** How the fees of a block of stake are shared (Staking, Overview): percentages, and who gets the rest. */
-export interface FeeSplit {
-  /** The producer's share of the fees, in percent. */
-  producer: number;
-  /** The rest, in percent, and where it goes. */
-  rest: number;
-  restTo: 'pot' | 'validators';
-}
-/**
- * The fee split of the chain's rules as getposinfo says it. Before the fee split of the validators (a node that does not
- * say it): half to the producer of the block, half to the fee pot that BMM bidders win.
- */
-export function feeSplitOf(pos: PosInfo): FeeSplit {
-  void pos;
-  return { producer: 50, rest: 50, restTo: 'pot' };
 }

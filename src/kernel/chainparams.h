@@ -140,6 +140,8 @@ public:
     struct DeploymentOptions {
         std::unordered_map<Consensus::DeploymentPos, VersionBitsParameters> version_bits_parameters{};
         std::unordered_map<Consensus::BuriedDeployment, int> activation_heights{};
+        //! FastBlocks: Consensus::PosParams::fee_split_height (-testactivationheight=feesplit@<height>; regtest only).
+        std::optional<int> fee_split_height{};
     };
 
     /**

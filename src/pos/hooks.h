@@ -104,6 +104,12 @@ struct FastState {
 FastState GetFastState(const sidechain::StoreView& view);
 /** The pot accrued as of the block at `height` on the chain of `view`, at least what was paid. */
 int64_t PotAccruedAt(const sidechain::StoreView& view, int32_t height);
+/**
+ * The validator pool (fee split, pos/feesplit.h): the validators' share of fees not paid yet, by the
+ * epoch whose validators it is to be shared among (table 0x5f), and their sum.
+ */
+std::vector<std::pair<int64_t, int64_t>> PoolEntries(const sidechain::StoreView& view);
+int64_t PoolTotal(const sidechain::StoreView& view);
 
 /**
  * FastBlocks on the template's hooks (sidechain/hooks.h): PoS blocks signed by the leader of their
@@ -271,7 +277,7 @@ public:
     bool GetPegStep(const CBlock& block, const sidechain::Mainchain& mainchain, std::optional<sidechain::PegStep>& step, std::string& reject_reason) const override;
     bool RefundsOnlyInPegSteps() const override { return true; }
     bool BeforePegStep(sidechain::State& state, const CBlock& block, int height, const sidechain::PegStep& step, const Consensus::SidechainParams& params,
-                       std::vector<CTxOut>& owed_tx, std::string& reject_reason) const override;
+                       std::vector<CTxOut>& owed_tx, std::string& reject_reason) const override EXCLUSIVE_LOCKS_REQUIRED(!m_sets_mutex);
     bool ApplyTx(sidechain::State& state, const CTransaction& tx, int height, bool peg_step, std::vector<CTxOut>& payouts, std::string& reject_reason) const override;
     //! Bonds and unbonds.
     bool HasTxRules(const CTransaction& tx) const override;
@@ -279,6 +285,26 @@ public:
     std::optional<std::vector<std::vector<unsigned char>>> TxRuleKeys(const CTransaction& tx) const override;
     bool AfterBlock(sidechain::State& state, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step, CAmount minted,
                     const Consensus::SidechainParams& params, std::string& reject_reason) const override EXCLUSIVE_LOCKS_REQUIRED(!m_sets_mutex, !m_acks_mutex);
+
+    /**
+     * The fee split (from fee_split_height): the validators' share of the ordinary fees in the pool
+     * output, and for a block of stake the bidder's share and the fees of peg transactions in the pot
+     * (bad-pos-fee-split; S from the record: MedianSpacingAt at FeeSplitMainHeight).
+     */
+    bool CheckFees(const sidechain::State& state, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step, const std::vector<CAmount>& fees,
+                   std::string& reject_reason) const override;
+    /** The validators' share of a merged mined block's ordinary fees, to the pool output. */
+    CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const override;
+    /** Whether the block at `height` takes the fee split (PosParams::fee_split_height). */
+    bool FeeSplitActive(int height) const { return height >= m_params.fee_split_height; }
+    /**
+     * The mainchain height whose S a block's fee split takes: for a block of stake of `slot`, the block
+     * that seeds its epoch (SeedHeight; none if not on record yet), for a merged mined block the
+     * block before its commitment (`bmm_main_height`, PegStep::main_height).
+     */
+    std::optional<int> FeeSplitMainHeight(bool pos_block, int64_t slot, int bmm_main_height) const;
+    /** S at a mainchain height, from the record (MedianSpacingAt from main_activation_height). */
+    int64_t FeeSplitSpacing(int main_height) const;
 
     /** The proofs this node knows that the chain has not punished, in a BMM block's coinbase (MAX_MINED_EVIDENCE, one per validator). */
     std::vector<CTxOut> MergeMinedOutputs(const sidechain::StoreView& view, const CBlockIndex& prev, int64_t time) const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_sets_mutex);

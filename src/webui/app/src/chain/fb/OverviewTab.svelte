@@ -11,7 +11,7 @@
   import { go } from '../../lib/nav.svelte';
   import { wallets } from '../../lib/state.svelte';
   import { coinsToSats } from '../../lib/units';
-  import { feeSplitOf, shortKey, type Income } from './model';
+  import { feeSplitText, incomeTotal, shortKey, type Income } from './model';
   import { fb } from './store.svelte';
 
   let { income }: { income: Income | null } = $props();
@@ -21,8 +21,10 @@
   const leader = $derived(pos?.leader);
   const walletBonded = $derived((fb.bonds ?? []).reduce((n, b) => n + coinsToSats(b.bonded), 0n));
   const walletUnbonding = $derived((fb.bonds ?? []).reduce((n, b) => n + coinsToSats(b.unbonding), 0n));
-  const split = $derived(pos ? feeSplitOf(pos) : null);
-  const todayIncome = $derived(income ? income.today.staked + income.today.bmm + income.today.slashing : 0n);
+  // The fee split (doc/fastblocks.md, "Fees, the pot and the validator pool"): ordinary fees between the validators (the
+  // pool, shared by stake at the end of each epoch) and the BMM bidder, by the mainchain's pace.
+  const split = $derived(pos?.feesplit);
+  const todayIncome = $derived(income ? incomeTotal(income, true) : 0n);
 
   const finality = $derived(fb.finality);
   const finalityTotal = $derived(finality ? coinsToSats(finality.soft) + coinsToSats(finality.anchored) + coinsToSats(finality.final) : 0n);
@@ -40,17 +42,27 @@
     <strong class="num" id="fb-your-stake">{#if fb.bonds}<Amount sats={walletBonded} />{:else}–{/if}</strong>
     <span class="faint">{#if wallets.current === null}{t('no wallet open')}{:else if walletUnbonding > 0n}<Amount sats={walletUnbonding} /> {t('unbonding')}{:else}{tn('%n bond(s) of this wallet', fb.bonds?.length ?? 0)}{/if}</span>
   </div>
-  <div class="panel side-stat">
-    <span class="muted" title={t("How the fees of a block of stake are shared: the producer's share, and the rest (the fee pot, paid to BMM bidders, or to the validators)")}>Fee split</span>
-    <strong class="num" id="fb-fee-split">{split ? t('%1 % · %2 %', split.producer, split.rest) : '–'}</strong>
-    <span class="faint">{split ? (split.restTo === 'pot' ? t('the producer · the fee pot (BMM bidders)') : t('the producer · all validators, by stake')) : ''}</span>
-  </div>
+  {#if split}
+    <div class="panel side-stat" id="fb-fee-split">
+      <span class="muted" title={t("How ordinary fees are shared, as the next block of stake takes them: the validators (their pool, by stake, each epoch) and the BMM bidder")}>Fee split</span>
+      <strong class="num">{feeSplitText(split)}</strong>
+      <span class="faint">{t('mainchain blocks every %1 s (the median of the last 11)', formatCount(split.spacing))}</span>
+    </div>
+  {/if}
   <div class="panel side-stat">
     <span class="muted">Rewards today</span>
     <strong class="num">{#if income}<Amount sats={todayIncome} />{:else}–{/if}</strong>
     <span class="faint">{income ? tn('from %n block(s) of stake today', income.today.blocks) : t('no wallet open')}</span>
   </div>
 </section>
+
+{#if split && (split.pool > 0 || (fb.staking?.validator && (fb.staking.poolshare ?? 0) > 0))}
+  <p class="side-note" role="status">
+    {#if split.pool > 0}<span id="fb-pool">{t('Validator pool:')} <Amount sats={coinsToSats(split.pool)} /> {t('paid to the validators by stake at the first BMM commitment after each epoch')}</span>{/if}
+    {#if fb.staking?.validator && (fb.staking.poolshare ?? 0) > 0}<span id="fb-pool-share">{t("This node's share of this epoch's pool so far:")} <Amount sats={coinsToSats(fb.staking.poolshare ?? 0)} /></span>{/if}
+    <span class="muted">{t('The fees of withdrawals and refunds go to the BMM bidder whole.')}</span>
+  </p>
+{/if}
 
 <div class="row fb-overview-actions">
   <button type="button" class="btn primary" onclick={() => go('staking', 'bonds')}><Icon name="stake" size={15} /> Bond coins</button>
@@ -74,7 +86,8 @@
             <tr><td title={t("The producer's share of the fees of the blocks of stake made, paid to this wallet")}>Staked</td><td class="end"><Amount sats={income.today.staked} /></td><td class="end"><Amount sats={income.staked} /></td></tr>
             <tr><td title={t('The fee pot (and a share of the penalties) paid to this wallet for BMM: a BMM commitment it bid for, or a merged mined block')}>BMM rewards</td><td class="end"><Amount sats={income.today.bmm} /></td><td class="end"><Amount sats={income.bmm} /></td></tr>
             <tr><td title={t("The reporter's share of the penalty of a validator that signed two blocks for a slot, for proofs this wallet's blocks carried")}>Slashing rewards</td><td class="end"><Amount sats={income.today.slashing} /></td><td class="end"><Amount sats={income.slashing} /></td></tr>
-            <tr class="total"><td>Total</td><td class="end"><Amount sats={income.today.staked + income.today.bmm + income.today.slashing} /></td><td class="end"><Amount sats={income.staked + income.bmm + income.slashing} /></td></tr>
+            <tr><td title={t("The shares by stake of the validator pool (the validators' part of the fees) paid to this wallet as a bond's owner, at the end of each epoch")}>Validator shares</td><td class="end"><Amount sats={income.today.validator} /></td><td class="end"><Amount sats={income.validator} /></td></tr>
+            <tr class="total"><td>Total</td><td class="end"><Amount sats={incomeTotal(income, true)} /></td><td class="end"><Amount sats={incomeTotal(income)} /></td></tr>
           </tbody>
         </table>
       </div>

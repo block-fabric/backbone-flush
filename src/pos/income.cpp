@@ -5,6 +5,7 @@
 #include <pos/income.h>
 
 #include <pos/evidence.h>
+#include <pos/feesplit.h>
 #include <pos/header.h>
 #include <primitives/block.h>
 
@@ -63,19 +64,30 @@ std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<C
     if (!IsAnchorBlock(block)) return roles;
     // A payout: after the first output, with a value, to a script that can be spent.
     const auto payout{[&](size_t i) { return i > 0 && outs[i].nValue > 0 && !outs[i].scriptPubKey.IsUnspendable(); }};
-    // The rewards: the last payouts to each reporter's script, as many as it is owed.
+    // The validators' shares of the pool: the payouts its marker counts, after it (fee split).
+    size_t marker{outs.size()};
+    for (size_t i{1}; i < outs.size(); ++i) {
+        const auto count{outs[i].nValue == 0 ? ParsePoolSharesMarker(outs[i].scriptPubKey) : std::nullopt};
+        if (!count) continue;
+        marker = i;
+        for (size_t j{i + 1}; j < outs.size() && j <= i + *count; ++j) {
+            if (payout(j)) roles[j] = CoinbaseRole::VALIDATOR;
+        }
+        break;
+    }
+    // The rewards: the last payouts to each reporter's script before the shares, as many as it is owed.
     std::map<CScript, size_t> owed;
     for (const CScript& script : reporters) ++owed[script];
-    for (size_t i{outs.size()}; i-- > 1;) {
+    for (size_t i{marker}; i-- > 1;) {
         if (!payout(i)) continue;
         const auto found{owed.find(outs[i].scriptPubKey)};
         if (found == owed.end() || found->second == 0) continue;
         --found->second;
         roles[i] = CoinbaseRole::REPORTER;
     }
-    // The pot: the last other payout to the payee before the rewards (it comes before them).
-    size_t end{outs.size()};
-    for (size_t i{1}; i < outs.size(); ++i) {
+    // The pot: the last other payout to the payee before the rewards and the shares (it comes before them).
+    size_t end{marker};
+    for (size_t i{1}; i < marker; ++i) {
         if (roles[i] == CoinbaseRole::REPORTER) {
             end = i;
             break;

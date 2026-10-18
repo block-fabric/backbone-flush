@@ -4,6 +4,7 @@
 
 #include <pos/hooks.h>
 
+#include <addresstype.h>
 #include <arith_uint256.h>
 #include <common/args.h>
 #include <chain.h>
@@ -13,6 +14,7 @@
 #include <net.h>
 #include <net_processing.h>
 #include <node/context.h>
+#include <pos/feesplit.h>
 #include <pos/finality.h>
 #include <pos/forkchoice.h>
 #include <pos/producer.h>
@@ -45,6 +47,18 @@ const sidechain::Table<uint32_t, int64_t> POT_ACCRUED{0x56};
 //! not the last few: a mainchain reorg may reach the seed of any, and a node that takes the chain in
 //! afresh reads the record as it is (review 7). One entry an epoch with blocks of stake.
 const sidechain::Table<uint64_t, uint256> EPOCH_SEEDS{0x5e};
+//! The validator pool (fee split): the validators' share of fees, by the epoch whose set it is shared
+//! among, erased once paid (the remainder of the rounding to the next epoch's).
+const sidechain::Table<uint64_t, int64_t> POOL{0x5f};
+//! Epochs whose pool a peg step pays, at most (the rest at the next ones).
+constexpr size_t MAX_POOL_EPOCHS_PER_STEP{16};
+
+void AddToPool(sidechain::StoreOverlay& out, int64_t epoch, int64_t amount)
+{
+    if (amount <= 0) return;
+    const uint64_t key{static_cast<uint64_t>(std::max<int64_t>(epoch, 0))};
+    POOL.Put(out, key, POOL.Get(out, key).value_or(0) + amount);
+}
 
 FastBlocksHooks* g_installed{nullptr};
 
@@ -83,6 +97,23 @@ int64_t PotAccruedAt(const sidechain::StoreView& view, int32_t height)
         return true;
     });
     return accrued;
+}
+
+std::vector<std::pair<int64_t, int64_t>> PoolEntries(const sidechain::StoreView& view)
+{
+    std::vector<std::pair<int64_t, int64_t>> entries;
+    POOL.ForEach(view, [&](const uint64_t& epoch, const int64_t& amount) {
+        entries.emplace_back(static_cast<int64_t>(epoch), amount);
+        return true;
+    });
+    return entries;
+}
+
+int64_t PoolTotal(const sidechain::StoreView& view)
+{
+    int64_t total{0};
+    for (const auto& [epoch, amount] : PoolEntries(view)) total += amount;
+    return total;
 }
 
 FastBlocksHooks::FastBlocksHooks(const CChainParams& params)
@@ -436,7 +467,7 @@ bool FastBlocksHooks::RecordIndependent(const std::string& reject_reason) const
     // at an anchor's slot, which the record's median time may set), a commitment, or the mainchain's
     // times.
     static const std::set<std::string> independent{
-        "bad-pos-sections", "bad-pos-producer-share", "bad-pos-pot-not-pos", "bad-pos-pot-multiple", "bad-pos-ack-nonce", "bad-pos-ticket-version",
+        "bad-pos-sections", "bad-pos-producer-share", "bad-pos-pot-not-pos", "bad-pos-pot-multiple", "bad-pos-pool-multiple", "bad-pos-ack-nonce", "bad-pos-ticket-version",
         "bad-pos-ticket-payee", "bad-pos-ack-anchored", "bad-pos-ack-chain", "bad-pos-unanchored",
         "bad-pos-evidence-not-bmm", "bad-pos-evidence-count", "bad-pos-evidence-output", "bad-pos-evidence-kind", "bad-pos-evidence-slot",
         "bad-pos-evidence-same", "bad-pos-evidence-late", "bad-pos-evidence-known", "bad-pos-evidence-banned",
@@ -801,8 +832,43 @@ bool FastBlocksHooks::BeforePegStep(sidechain::State& state, const CBlock& block
         anchor_slot = std::max(anchor_slot, SlotOf(main->time, m_params));
         set_epoch = std::max(set_epoch, EpochOf(SlotOf(main->time, m_params), m_params));
     }
+    // The validator pool of the epochs that are over (before the earliest epoch of the anchor), with
+    // their sets read before the staking peg actions, which may prune them (fee split).
+    std::vector<std::pair<int64_t, std::shared_ptr<const ValidatorSet>>> pool_sets;
+    if (FeeSplitActive(height)) {
+        LOCK(::cs_main);
+        const CBlockIndex* prev{chainman->m_blockman.LookupBlockIndex(block.hashPrevBlock)};
+        for (const auto& [epoch, amount] : PoolEntries(state.View())) {
+            if (epoch >= EpochOf(earliest, m_params) || pool_sets.size() >= MAX_POOL_EPOCHS_PER_STEP) break;
+            pool_sets.emplace_back(epoch, prev ? SetFor(*prev, epoch, &state.View()) : nullptr);
+        }
+    }
     std::vector<CTxOut> staking_owed;
     const auto staked{m_staking.PegStep(out, block.GetHash(), fast.anchors, anchor_slot, EpochOf(earliest, m_params), set_epoch, staking_owed)};
+    // Each epoch's pool shared by stake among the validators of its set not jailed or banned now, to
+    // their bond owners (P2WPKH of the owner key hash); a genesis validator without a bond's share to
+    // the reserve; what rounding leaves, or a pool no validator can take, carried to the next epoch.
+    std::vector<CTxOut> pool_shares;
+    for (const auto& [epoch, set] : pool_sets) {
+        const int64_t amount{POOL.Get(out, static_cast<uint64_t>(epoch)).value_or(0)};
+        POOL.Erase(out, static_cast<uint64_t>(epoch));
+        std::vector<PoolMember> members;
+        if (set) {
+            for (const Consensus::PosValidator& validator : set->Validators()) {
+                const auto record{GetValidator(out, validator.pubkey)};
+                PoolMember member{.pubkey = validator.pubkey, .weight = validator.stake, .excluded = false, .payee = std::nullopt};
+                member.excluded = !record || record->tombstoned || record->jailed_until_epoch > set_epoch;
+                if (record && !record->owner.IsNull()) member.payee = GetScriptForDestination(WitnessV0KeyHash{record->owner});
+                members.push_back(std::move(member));
+            }
+        }
+        const PoolDistribution paid{DistributePool(amount, members)};
+        pool_shares.insert(pool_shares.end(), paid.shares.begin(), paid.shares.end());
+        m_staking.ToReserve(out, paid.to_reserve);
+        // (To the pool of the anchor's earliest epoch, the next one not over: an old epoch's remainder
+        // does not walk an epoch an anchor, behind the others.)
+        AddToPool(out, std::max(epoch + 1, EpochOf(earliest, m_params)), paid.remainder);
+    }
     const int64_t paid_out{pay + staked.release};
     // A BMM block's first coinbase output takes the pot only if it is an address (IsRewardPayee): a
     // payout, when the queue is behind, is owed at later peg steps, and a script no block can carry
@@ -814,6 +880,11 @@ bool FastBlocksHooks::BeforePegStep(sidechain::State& state, const CBlock& block
         owed_tx.emplace_back(paid_out, payee);
     }
     owed_tx.insert(owed_tx.end(), staking_owed.begin(), staking_owed.end());
+    // The shares of the pool last, after a marker that counts them (for wallets: CoinbaseRoles).
+    if (!pool_shares.empty()) {
+        owed_tx.emplace_back(0, PoolSharesMarker(static_cast<uint32_t>(pool_shares.size())));
+        owed_tx.insert(owed_tx.end(), pool_shares.begin(), pool_shares.end());
+    }
     return true;
 }
 
@@ -870,19 +941,32 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
         // carries a proof would otherwise choose the leaders of the slots to come.
         if (const auto record{GetValidator(state.View(), leader.pubkey)}; record && record->tombstoned) return Fail(reject_reason, "bad-pos-leader-banned");
 
-        // The fee split: what the producer keeps (all of the coinbase but the payouts and the pot) is at
-        // most producer_share_bps of it and the pot together. Fees it leaves unclaimed are lost.
-        CAmount total{0}, pot{0};
+        CAmount total{0}, pot{0}, pool{0};
+        int pools{0};
         for (const CTxOut& txout : coinbase.vout) {
             total += txout.nValue;
             if (IsPotScript(txout.scriptPubKey)) pot += txout.nValue;
+            if (IsPoolScript(txout.scriptPubKey)) {
+                pool += txout.nValue;
+                ++pools;
+            }
         }
-        // (Not negative: the payouts and the pot are outputs of the coinbase, which has no negative ones.)
-        const CAmount take{total - minted - pot};
-        arith_uint256 kept{static_cast<uint64_t>(take)}, share{static_cast<uint64_t>(take + pot)};
-        kept *= arith_uint256{10000};
-        share *= arith_uint256{static_cast<uint64_t>(m_params.producer_share_bps)};
-        if (kept > share) return Fail(reject_reason, "bad-pos-producer-share");
+        if (FeeSplitActive(height)) {
+            // The fee split (pos/feesplit.h): the producer keeps nothing; the fees are the pot's (the
+            // bidder's) and the validator pool's, as CheckFees checks against the fees. One pool output.
+            if (pools > 1) return Fail(reject_reason, "bad-pos-pool-multiple");
+            if (total - minted - pot - pool != 0) return Fail(reject_reason, "bad-pos-producer-share");
+            AddToPool(out, EpochOf(slot, m_params), pool);
+        } else {
+            // Before it: what the producer keeps (all of the coinbase but the payouts and the pot) is at
+            // most producer_share_bps of it and the pot together. Fees it leaves unclaimed are lost.
+            // (Not negative: the payouts and the pot are outputs of the coinbase, which has no negative ones.)
+            const CAmount take{total - minted - pot};
+            arith_uint256 kept{static_cast<uint64_t>(take)}, share{static_cast<uint64_t>(take + pot)};
+            kept *= arith_uint256{10000};
+            share *= arith_uint256{static_cast<uint64_t>(m_params.producer_share_bps)};
+            if (kept > share) return Fail(reject_reason, "bad-pos-producer-share");
+        }
         if (pot > 0) {
             fast.pot_accrued += pot;
             POT_ACCRUED.Put(out, static_cast<uint32_t>(height), fast.pot_accrued);
@@ -972,6 +1056,18 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
             const auto main{step && chainman->m_mainchain ? chainman->m_mainchain->GetBlock(step->main_height) : std::nullopt};
             if (pos_active && (!main || !Stalled(fast, main->time, pos_active))) return Fail(reject_reason, "bad-pos-bmm-not-stalled");
         }
+        // The fee split: the validators' share of its fees in one pool output (CheckFees checks the amount).
+        if (FeeSplitActive(height)) {
+            CAmount pool{0};
+            int pools{0};
+            for (const CTxOut& txout : coinbase.vout) {
+                if (!IsPoolScript(txout.scriptPubKey)) continue;
+                pool += txout.nValue;
+                ++pools;
+            }
+            if (pools > 1) return Fail(reject_reason, "bad-pos-pool-multiple");
+            AddToPool(out, EpochOf(slot, m_params), pool);
+        }
         // Proofs in its coinbase, as in a block of stake: punished, and its payee (the coinbase's first
         // output, which the pot is paid to) paid for them at the next peg step.
         for (const CTxOut& txout : coinbase.vout) {
@@ -988,6 +1084,51 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
     }
     FAST_STATE.Put(out, fast);
     return true;
+}
+
+std::optional<int> FastBlocksHooks::FeeSplitMainHeight(bool pos_block, int64_t slot, int bmm_main_height) const
+{
+    if (!pos_block) return bmm_main_height;
+    const ChainstateManager* chainman{Chainman()};
+    if (!chainman || !chainman->m_mainchain) return std::nullopt;
+    return SeedHeight(EpochOf(slot, m_params), m_params, *chainman->m_mainchain);
+}
+
+int64_t FastBlocksHooks::FeeSplitSpacing(int main_height) const
+{
+    const ChainstateManager* chainman{Chainman()};
+    if (!chainman || !chainman->m_mainchain) return FEE_SPLIT_TARGET_SPACING;
+    return MedianSpacingAt(*chainman->m_mainchain, main_height, m_params.main_activation_height);
+}
+
+bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step,
+                                const std::vector<CAmount>& fees, std::string& reject_reason) const
+{
+    if (!FeeSplitActive(height)) return true;
+    const bool pos_block{IsPosHeader(block)};
+    // (Every merged mined block takes the peg actions; a block of stake's seed is known: AfterBlock read its leader.)
+    if (!pos_block && !step) return Fail(reject_reason, "bad-pos-context");
+    const auto main_height{FeeSplitMainHeight(pos_block, SlotOf(block.nTime, m_params), step ? step->main_height : -1)};
+    if (!main_height) return Fail(reject_reason, "pos-seed-unknown");
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/false, FeeSplitSpacing(*main_height))};
+    CAmount pot{0}, pool{0};
+    for (const CTxOut& txout : block.vtx.at(0)->vout) {
+        if (IsPotScript(txout.scriptPubKey)) pot += txout.nValue;
+        if (IsPoolScript(txout.scriptPubKey)) pool += txout.nValue;
+    }
+    // The validators' share to the pool, exactly; for a block of stake the bidder's to the pot (its
+    // producer keeps nothing: AfterBlock). A merged miner keeps the bidder's share itself (bad-cb-amount).
+    if (pool != split.validators) return Fail(reject_reason, "bad-pos-fee-split");
+    if (pos_block && pot != split.Bidder()) return Fail(reject_reason, "bad-pos-fee-split");
+    return true;
+}
+
+CAmount FastBlocksHooks::MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const
+{
+    if (!FeeSplitActive(height)) return 0;
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/true, FeeSplitSpacing(main_height))};
+    if (split.validators > 0) outputs.emplace_back(split.validators, PoolScript());
+    return split.validators;
 }
 
 void FastBlocksHooks::ForgetKnownSets() const

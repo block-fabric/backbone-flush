@@ -24,9 +24,11 @@ namespace pos {
  *    that takes the peg actions (an acknowledgement, or a merged mined block);
  *  - REPORTER: the reward for a proof that a leader signed two blocks for a slot, paid at the peg step
  *    after the block that carried the proof, to that block's first output's script;
+ *  - VALIDATOR: a validator's share of the validator pool (fee split), paid at the first anchor after
+ *    its epoch to its bond's owner: the payouts the zero-value marker (PoolSharesMarker) counts;
  *  - OTHER: the rest (a merged mined block's first output, deposits, refunds, unbonds, data).
  */
-enum class CoinbaseRole : uint8_t { OTHER, PRODUCER, ANCHOR, REPORTER };
+enum class CoinbaseRole : uint8_t { OTHER, PRODUCER, ANCHOR, REPORTER, VALIDATOR };
 
 /** Whether a block takes the peg actions as an anchor: a merged mined block, or a block of stake with an acknowledgement. */
 bool IsAnchorBlock(const CBlock& block);
@@ -47,8 +49,9 @@ std::vector<CScript> ReporterScripts(const CBlock& block, const std::optional<ui
  *                   anchor before it, that one included (ReporterScripts of each): the peg step pays them
  *
  * The peg step pays, after the first output, what the mainchain gave rise to (deposits, bundle outcomes),
- * then the pot to the payee, the unbonds due, the rewards and the refunds, in this order. So the last
- * outputs to a reporter's script are its rewards, and the last other one to the payee is the pot. (Not
+ * then the pot to the payee, the unbonds due, the rewards, the validators' shares of the pool (after their
+ * marker) and the refunds, in this order. So the last outputs to a reporter's script before the marker
+ * are its rewards, and the last other one to the payee before them is the pot. (Not
  * exact when the payouts of a block passed the cap of a block and some waited for the next, nor for a
  * refund to the same script in the same block.)
  */
