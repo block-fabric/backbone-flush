@@ -6,6 +6,7 @@
 #define BITCOIN_POS_HOOKS_H
 
 #include <pos/evidence.h>
+#include <pos/feesplit.h>
 #include <pos/finality.h>
 #include <pos/header.h>
 #include <pos/schedule.h>
@@ -297,6 +298,8 @@ public:
     CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const override;
     /** Whether the block at `height` takes the fee split (PosParams::fee_split_height). */
     bool FeeSplitActive(int height) const { return height >= m_params.fee_split_height; }
+    /** The curve of the bidder's share the block at `height` takes (the second from PosParams::fee_curve2_height). */
+    FeeCurve FeeCurveAt(int height) const { return height >= m_params.fee_curve2_height ? FeeCurve::LINEAR : FeeCurve::FIRST; }
     /**
      * The mainchain height whose S a block's fee split takes: for a block of stake of `slot`, the block
      * that seeds its epoch (SeedHeight; none if not on record yet), for a merged mined block the

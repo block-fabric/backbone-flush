@@ -43,7 +43,9 @@ set once slot 5 activates on the test network reset on 17/Oct/2026).
 | `stall_seconds` | 1800 | 600 | 30 |
 | Producer share (before the fee split) | 50 % | 50 % | 50 % |
 | Fee split from height (`fee_split_height`) | 0 (from the first block) | `TESTNET_FEE_SPLIT_HEIGHT` / `SIGNET_FEE_SPLIT_HEIGHT` (`src/kernel/testnet_activation.h`; never until set) | never, unless `-testactivationheight=feesplit@<height>` |
-| Bidder's share of ordinary fees | max(10 %, 50 % × min(1, 60 s / S)) | same | same |
+| Bidder's share of ordinary fees, curve 1 (below `fee_curve2_height`) | max(10 %, 50 % × min(1, 60 s / S)) | same | same |
+| Fee curve 2 from height (`fee_curve2_height`) | 0 (from the first block) | `TESTNET_FEE_CURVE2_HEIGHT` / `SIGNET_FEE_CURVE2_HEIGHT` (`src/kernel/testnet_activation.h`; never until set) | never, unless `-testactivationheight=feecurve2@<height>` |
+| Bidder's share of ordinary fees, curve 2 | clamp(50 % − 5 % × (S − 60 s) / 60 s, 20 %, 50 %) | same | same |
 | Anchors that make a block final (wallets) | 6 | 3 | 1 |
 | Minimum stake | 1 CHN | 0.01 | 0.0001 |
 | Unbonding (anchors) | 2880 (two days) | 120 | 20 |
@@ -978,7 +980,7 @@ last acknowledged one that it has neither a ticket nor a block of.
 
 | RPC | |
 |---|---|
-| `getposinfo` | The validators of the current epoch (with `poolshare`, each one's share by stake of the epoch's pool so far), slot and leader, anchors, the pot and its reserve, staking's totals, `feesplit` (active, `activationheight`, the seed's `mainheight`, `spacing` S, `bidderbps` / `validatorsbps`; the same for a BMM block made now, `bmm*`; the `pool` and `poolepochs`), the producer |
+| `getposinfo` | The validators of the current epoch (with `poolshare`, each one's share by stake of the epoch's pool so far), slot and leader, anchors, the pot and its reserve, staking's totals, `feesplit` (active, `activationheight`, `curve` (1, or 2 from `curve2height`, `fee_curve2_height`) the next block takes, the seed's `mainheight`, `spacing` S, `bidderbps` / `validatorsbps`; the same for a BMM block made now, `bmm*`; the `pool` and `poolepochs`), the producer |
 | `getvalidators [epoch]` | The set of an epoch as the active chain fixes it (`known`, `seedknown`), the slots each one leads, and whether the active chain banned or jailed it since (`banned`, `jaileduntilepoch`) |
 | `getvalidator <pubkey>` | One validator: stake, slots, next slot, offences known, its bond (owner, bonded, unbonds and when they are paid, jail, ban) |
 | `signbondpop <owner> [pubkey]` | The proof of possession for a bond owned by `owner`, by a key of this node's producer |
@@ -1110,7 +1112,15 @@ out of circulation into the state. A BMM block's merged miner keeps its fees.
 - the other (*ordinary*) fees F are split: the bidder takes B = max(⌊F / 10⌋, min(⌊F / 2⌋, ⌊30 F / S⌋))
   -- b = max(10 %, 50 % × min(1, 60 s / S)), rounded down to the satoshi -- and the validators the
   rest, F − B (so the odd satoshi of a 50/50 split is theirs). At S ≤ 60 s exactly 50/50; the floor of
-  10 % is reached at S = 300 s; S = 90 s gives a third, 120 s a quarter. The split is of the block's
+  10 % is reached at S = 300 s; S = 90 s gives a third, 120 s a quarter. That is **curve 1**, below
+  `fee_curve2_height`. From it, **curve 2** (the fee curve of 2026-10-18 (2)): the bidder's share falls
+  linearly, 5 points a minute of S above 60 s, to a floor of 20 % at 420 s. In basis points, rounded
+  down: bps = 5000 for S ≤ 60, 2000 for S ≥ 420, otherwise 5000 − ⌈500 (S − 60) / 60⌉ (= ⌊5000 −
+  500 (S − 60) / 60⌋); B = ⌊F × bps / 10000⌋ (computed as ⌊F / 10000⌋ × bps + ⌊(F mod 10000) × bps /
+  10000⌋: no overflow), the validators F − B. So 60 s 50/50, 90 s 47.5/52.5, 120 s 45/55, 180 s
+  40/60, 240 s 35/65, 300 s 30/70, 360 s 25/75, 420 s and more 20/80; 61 s gives 4991 bps (4991.67
+  rounded down). A block takes the curve of its own height (`FastBlocksHooks::FeeCurveAt`), PoS or
+  BMM; S, the peg fees, the pool and its shares are the same under both. The split is of the block's
   ordinary fees together, not transaction by transaction;
 - **S** is the median spacing of the last 11 mainchain blocks, from the record every node keeps: the
   spacings of the median times (`MainBlock::time`, what the record has) of the blocks from
@@ -1481,6 +1491,27 @@ Choices made in building it:
   node of the network needs the same); regtest: never, unless `-testactivationheight=feesplit@<height>`
   (so the tests of the old rule run unchanged). Before it the old rule holds exactly; a pool output there
   only burns its coins.
+
+### The fee curve of 2026-10-18 (2)
+
+The user's decision, later the same day: a gentler curve. The bidder's share b(S) = clamp(50 % − 5 % ×
+(S − 60 s) / 60 s, 20 %, 50 %): linear, 50/50 up to 60 s, 45/55 at 120 s, 40/60 at 180 s, 35/65 at 240 s,
+30/70 at 300 s, 25/75 at 360 s, the floor 20/80 from 420 s; continuous in between (90 s: 47.5 %). The
+first curve fell to its 10 % floor at 300 s, which left a BMM bidder little on a slow mainchain. Exact
+integers: the basis points rounded down (5000 − ⌈500 (S − 60) / 60⌉), B = ⌊F × bps / 10000⌋.
+Everything else is unchanged (S, the peg fees to the bidder whole, the pool by stake, BMM blocks).
+
+- Activation: `PosParams::fee_curve2_height`, a height of FastBlocks; below it curve 1 holds exactly.
+  Main 0. Test network and signet: `TESTNET_FEE_CURVE2_HEIGHT` / `SIGNET_FEE_CURVE2_HEIGHT` in
+  `src/kernel/testnet_activation.h`, placeholders (`INT_MAX`) the coordinator sets as for the fee split
+  (a little ahead of the tip, every node the same, before the upgraded nodes start). Regtest: never,
+  unless `-testactivationheight=feecurve2@<height>`.
+- `getposinfo` / `getstakinginfo` `feesplit` say the curve the next block takes (`curve`, `curve2height`)
+  and give `bidderbps` / `bmmbidderbps` by it.
+- Tests: `fastblocks_tests` `fee_curve2_math` (S = 30 … 3600, rounding, overflow, every S from −10 to
+  1000 against the formula), `fee_curve2_activation` (blocks of stake and BMM blocks on both sides of the
+  height, the other curve's split refused); `feature_fastblocks_feesplit.py` before and after the height
+  at 60 s, 120 s and 600 s spacings.
 
 ## The decisions of 2026-10-16
 

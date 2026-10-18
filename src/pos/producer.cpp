@@ -337,7 +337,7 @@ std::optional<CBlock> Producer::Build(int64_t slot, const std::optional<AnchorAc
             error = "the mainchain block that seeds the epoch is not on record yet";
             return std::nullopt;
         }
-        const FeeSplit split{SplitFees(block.vtx, block_template->vTxFees, /*fees_without_coinbase=*/true, m_hooks.FeeSplitSpacing(*main_height))};
+        const FeeSplit split{SplitFees(block.vtx, block_template->vTxFees, /*fees_without_coinbase=*/true, m_hooks.FeeSplitSpacing(*main_height), m_hooks.FeeCurveAt(height))};
         coinbase.vout[0].nValue = 0;
         if (split.Bidder() > 0) coinbase.vout.emplace_back(split.Bidder(), PotScript());
         if (split.validators > 0) coinbase.vout.emplace_back(split.validators, PoolScript());

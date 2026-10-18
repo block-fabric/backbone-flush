@@ -37,4 +37,14 @@ inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{0};
  */
 inline constexpr int TESTNET_DEX_HEIGHT{std::numeric_limits<int>::max()};
 
+/**
+ * The second fee curve (Consensus::PosParams::fee_curve2_height, pos/feesplit.h FeeCurve::LINEAR: "the
+ * fee curve of 2026-10-18 (2)") on the test network: Layers' test network runs since 2026-10-18 with the
+ * first curve from genesis, so the first block of the second is a placeholder (INT_MAX: never) until the
+ * coordinator sets it with TESTNET_DEX_HEIGHT (a little ahead of the tip, every node the same, before the
+ * upgraded nodes start). Signet, not launched, has it from its first block, as the main network.
+ */
+inline constexpr int TESTNET_FEE_CURVE2_HEIGHT{std::numeric_limits<int>::max()};
+inline constexpr int SIGNET_FEE_CURVE2_HEIGHT{0};
+
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

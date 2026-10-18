@@ -110,7 +110,11 @@ template's state transition. Where they meet:
   activation height).
 - **Fees.** An asset transaction is an ordinary transaction for the fees: FastBlocks' fee split applies to it
   as to any other, from Layers' first block on every network (`fee_split_height` 0: a new chain, no height
-  to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). The BMM bidder
+  to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). FastBlocks' second fee curve (`fee_curve2_height`, the bidder's
+  share 50 % down to 20 %, linear) holds from the first block on the main network and signet; Layers' test
+  network, running since before it with the first curve, takes it from `TESTNET_FEE_CURVE2_HEIGHT`
+  (`src/kernel/testnet_activation.h`, `INT_MAX` until the coordinator sets it with `TESTNET_DEX_HEIGHT`);
+  regtest `-testactivationheight=feecurve2@<height>`. The BMM bidder
   gets the fees of peg transactions whole and a share of ordinary fees by the mainchain's pace; the rest goes
   to the validator pool, paid to every validator by stake each epoch (doc/fastblocks.md, "Fees, the pot and
   the validator pool").
