@@ -31,10 +31,9 @@ main, 111/196 elsewhere).
 
 The test network's `main_activation_height` (and with it
 `pos.main_activation_height`, which FastBlocks' leader seed and first record use) is
-`TESTNET_MAIN_ACTIVATION_HEIGHT` in `src/kernel/testnet_activation.h`: 0 until slot 7
-activates on the Chains test network; then set it to `chains-cli -testnet
-getsidechain 7`'s `activationheight`, rebuild, and start the nodes of the test
-network only then. The main network refuses to start until its height is named.
+`TESTNET_MAIN_ACTIVATION_HEIGHT` in `src/kernel/testnet_activation.h`: 4997, the Chains
+testnet block that activated slot 7 (`chains-cli -testnet getsidechain 7`'s
+`activationheight`). The main network refuses to start until its height is named.
 
 ## What is FastBlocks'
 
