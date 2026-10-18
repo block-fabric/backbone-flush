@@ -168,9 +168,11 @@ using FeeFn = std::function<std::optional<CAmount>(const std::string& wallet, in
  * again). One is made only when the user accepted the question of both steps and the first ran; it is bound to the wallet,
  * the method and the parameters of the second step exactly as shown (canonical, compared as JSON), to the transaction of
  * the first step (still in the wallet, not replaced, when the second comes), to the network fee the question said at most
- * (the wallet's fee for it then must not be more) and to a time (EXPIRY). It is taken by the call that matches it, once:
- * given back only when that call failed without making a transaction. The page never sees nor names one: it can neither
- * make, nor widen, nor reuse it.
+ * (the wallet's fee for it then must not be more) and to a time (EXPIRY). It is taken by the call that matches it, one
+ * at a time; given back when that call failed without making a transaction. Once the second step made its transaction it
+ * does one thing more only: the same call again if that transaction left the mempool without being in a block (stale,
+ * evicted: what the pages resend), and nothing once it is in a block or while it waits in the mempool; one registration,
+ * however often the page asks. The page never sees nor names one: it can neither make, nor widen, nor reuse it.
  */
 class Authorizations
 {
@@ -186,6 +188,8 @@ public:
         CAmount fee_cap{0};
         int64_t vsize{0};
         std::chrono::steady_clock::time_point expires;
+        //! The transaction the second step made, once it ran: sent again only if it left the mempool without a block.
+        std::string reveal_txid{};
     };
     //! How long one lasts: an hour (a reservation is deep enough in a few blocks).
     static constexpr std::chrono::seconds EXPIRY{3600};

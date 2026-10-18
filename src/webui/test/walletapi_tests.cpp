@@ -1143,6 +1143,77 @@ BOOST_AUTO_TEST_CASE(two_steps_in_one_question)
     BOOST_CHECK_EQUAL(confirmed.authorizations().Size(), 0U);
 }
 
+BOOST_AUTO_TEST_CASE(second_step_sent_again_only_when_dropped)
+{
+    // The second step's transaction left the mempool without a block (stale, evicted): the same call again runs without
+    // a question (what the pages resend); while it waits in the mempool, or once it is in a block, nothing: one
+    // registration, however often the page asks.
+    if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
+    loader->registerRpcs();
+    webui::confirm::ConfirmedRpc confirmed{[this]() -> interfaces::Node& { return *node; },
+                                           [this](const webui::Window::ConfirmDialog& dialog) { return Ask(dialog); },
+                                           [this](const std::string& wallet, webui::Window::ConfirmDialog dialog, bool always, bool fee_unknown, const std::function<UniValue()>& run) {
+                                               return api->WithKeys(wallet, std::move(dialog), always, fee_unknown, run);
+                                           },
+                                           [](const std::string&, int64_t vsize) { return std::optional<CAmount>{vsize}; }};
+    using webui::confirm::Method;
+    webui::confirm::Reveal reveal;
+    reveal.method = "sendtoaddress";
+    reveal.title = "Pay twice";
+    reveal.accept = "Pay";
+    reveal.matches = [](const UniValue&, const UniValue&) { return true; };
+    std::map<std::string, Method> methods;
+    methods.emplace("sendtoaddress", Method{Method::Kind::SPEND, webui::Bridge::Thread::LONG, webui::confirm::Generic("Pay", "Pay", "Pays.", {"address"}, {"amount"}), true, 2, false, reveal});
+    confirmed.SetMethodsForTest(methods);
+
+    Call("wallets.create", Obj({{"name", "r"}}));
+    const std::string a{Call("wallet.newAddress", Obj({{"wallet", "r"}})).get_str()};
+    const std::string b{Call("wallet.newAddress", Obj({{"wallet", "r"}})).get_str()};
+    Mine(1, GetScriptForDestination(DecodeDestination(a)));
+    Mine(1, GetScriptForDestination(DecodeDestination(a)));
+    Mine(100, CScript{} << OP_TRUE);
+    const auto call{[&](const UniValue& params) {
+        try {
+            return std::make_pair(0, confirmed.Call(params));
+        } catch (const webui::HostError& e) {
+            return std::make_pair(e.code, UniValue{});
+        }
+    }};
+    const UniValue second{Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{"2"}})}, {"authorizedOnly", true}})};
+    asked.clear();
+    Answer(true);
+    const auto [paid, commit]{call(Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{a}, UniValue{"1"}})}, {"then", Obj({{"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{"2"}})}})}}))};
+    BOOST_REQUIRE_EQUAL(paid, 0);
+    const auto [ok, first]{call(second)};
+    BOOST_REQUIRE_EQUAL(ok, 0);
+    const Txid txid{Txid::FromHex(first.get_str()).value()};
+    // In the mempool: not again.
+    BOOST_CHECK_EQUAL(call(second).first, webui::BRIDGE_AUTH_NEEDED);
+    // Dropped from it: sent again, without a question.
+    const CTransactionRef tx{m_node.mempool->get(txid)};
+    BOOST_REQUIRE(tx);
+    {
+        LOCK2(cs_main, m_node.mempool->cs);
+        m_node.mempool->removeRecursive(*tx, MemPoolRemovalReason::EXPIRY);
+    }
+    Sync();
+    const auto [again, resent]{call(second)};
+    BOOST_REQUIRE_EQUAL(again, 0);
+    BOOST_CHECK(resent.get_str() != first.get_str());
+    BOOST_CHECK_EQUAL(asked.size(), 1U);
+    // In a block: used up.
+    const CTransactionRef mined{m_node.mempool->get(Txid::FromHex(resent.get_str()).value())};
+    BOOST_REQUIRE(mined);
+    // With the first step's transaction, whose change it may spend.
+    const CTransactionRef parent{m_node.mempool->get(Txid::FromHex(commit.get_str()).value())};
+    BOOST_REQUIRE(parent);
+    CreateAndProcessBlock({CMutableTransaction{*parent}, CMutableTransaction{*mined}}, CScript{} << OP_TRUE);
+    Sync();
+    BOOST_CHECK_EQUAL(call(second).first, webui::BRIDGE_AUTH_NEEDED);
+    BOOST_CHECK_EQUAL(confirmed.authorizations().Size(), 0U);
+    BOOST_CHECK_EQUAL(asked.size(), 1U);
+}
+
 BOOST_AUTO_TEST_CASE(dust)
 {
     // L4: the send form refuses dust as chains-qt does (GUIUtil::isDust), before the wallet does.

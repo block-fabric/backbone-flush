@@ -827,6 +827,23 @@ std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const s
         LogInfo("webui: the authorization of %s is dropped: its first step %s is not in the wallet any more", name, entry->commit_txid);
         return std::nullopt;
     }
+    // Sent already: again only if its transaction left the mempool without a block (what the page resends then); in a
+    // block, the authorization is used up; still waiting in the mempool, nothing to do.
+    if (!entry->reveal_txid.empty()) {
+        UniValue reveal{UniValue::VARR};
+        reveal.push_back(entry->reveal_txid);
+        if (confirm::Call{node, wallet, "getmempoolentry", reveal}.Read("getmempoolentry", reveal).isObject()) {
+            m_authorizations.GiveBack(std::move(*entry), now);
+            return std::nullopt;
+        }
+        const UniValue sent{confirm::Call{node, wallet, "gettransaction", reveal}.Read("gettransaction", reveal, true)};
+        const UniValue& sent_depth{sent.isObject() ? sent.find_value("confirmations") : NullUniValue};
+        if (!sent_depth.isNum() || sent_depth.getInt<int64_t>() != 0) {
+            LogInfo("webui: the authorization of %s is used up: its transaction %s is in a block, or gone", name, entry->reveal_txid);
+            return std::nullopt;
+        }
+        LogInfo("webui: %s is sent again as accepted: %s left the mempool without a block", name, entry->reveal_txid);
+    }
     // At most the fee the user was shown, at the wallet's fee rate now.
     const std::optional<CAmount> fee{m_fee ? m_fee(wallet, entry->vsize) : std::nullopt};
     if (!fee || *fee > entry->fee_cap) {
@@ -849,6 +866,11 @@ std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const s
     try {
         UniValue result{m_keys(wallet, *dialog, /*always=*/false, /*fee_unknown=*/false, [&] { return RunRpc(node, name, params, wallet); })};
         LogInfo("webui: %s ran as accepted with its first step %s", name, entry->commit_txid);
+        // Kept for a send again of this very call, should its transaction leave the mempool without a block.
+        if (const std::string txid{TxidOf(result)}; !txid.empty()) {
+            entry->reveal_txid = txid;
+            m_authorizations.GiveBack(std::move(*entry), now);
+        }
         return result;
     } catch (...) {
         // Nothing was made: the authorization stays, for the call again.
