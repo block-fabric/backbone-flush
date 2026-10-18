@@ -115,8 +115,10 @@
     const probe = (async () => {
       while (probing) {
         const t0 = performance.now();
-        await host('window.state');
+        // A call on the UI thread of the host: a frozen window would never answer it (said, not waited for forever).
+        const answered = await Promise.race([host('window.state').then(() => true), sleep(20000).then(() => false)]);
         maxHost = Math.max(maxHost, performance.now() - t0);
+        if (!answered) await log('the UI thread of the host did not answer window.state in 20 s');
         await sleep(100);
       }
     })();
@@ -157,7 +159,7 @@
     const again = (await host('test.confirmed', {})).slice(asked0);
     await check('one question in all for both steps: the registration was not asked again', again.length === 1 && !again.some((q) => q.title === 'Register an asset'), JSON.stringify(again.map((q) => q.title)));
     probing = false;
-    await probe;
+    await Promise.race([probe, sleep(25000)]);
     clearInterval(ticker);
     await check('the page and the host stayed responsive throughout (no frozen window)', maxGap < 1000 && maxHost < 1000, `page ${Math.round(maxGap)} ms, host ${Math.round(maxHost)} ms`);
     // Done: said in the top bar (and a toast), its card registered.
