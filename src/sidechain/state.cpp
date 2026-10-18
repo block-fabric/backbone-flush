@@ -68,6 +68,21 @@ struct QueueEnds {
 const Cell<QueueEnds> QUEUE_ENDS{'Q', {}};
 const Cell<QueueEnds> TX_QUEUE_ENDS{'R', {}};
 
+/**
+ * Layers: where the payouts of the assets (pools and auctions) are in the queue of TX_QUEUE, which they share
+ * with what a sidechain's own peg actions owe (ChainHooks::BeforePegStep: FastBlocks' unbonds and rewards): one
+ * range of positions per block that queued some, oldest first, those paid gone. So that the bound of the assets'
+ * payouts (bitassets::MAX_TX_PAYOUTS_PER_BLOCK) counts their own alone (AssetPayoutsQueued), whatever the peg
+ * actions owe. In the store, so the journal undoes it with the block; none (no entry) while none waits.
+ */
+struct AssetRange {
+    uint64_t begin{0};
+    uint64_t end{0};
+    SERIALIZE_METHODS(AssetRange, obj) { READWRITE(obj.begin, obj.end); }
+    friend bool operator==(const AssetRange&, const AssetRange&) = default;
+};
+const Cell<std::vector<AssetRange>> ASSET_RANGES{'a', {}};
+
 struct BundleCell {
     std::optional<PendingBundle> bundle;
     template <typename Stream>
@@ -182,6 +197,15 @@ uint64_t State::TxQueueLength() const
 {
     const QueueEnds ends{TX_QUEUE_ENDS.Get(*m_view)};
     return ends.tail - ends.head;
+}
+uint64_t State::AssetPayoutsQueued() const
+{
+    const uint64_t head{TX_QUEUE_ENDS.Get(*m_view).head};
+    uint64_t queued{0};
+    for (const AssetRange& range : ASSET_RANGES.Get(*m_view)) {
+        if (range.end > head) queued += range.end - std::max(range.begin, head);
+    }
+    return queued;
 }
 
 void State::ForEachWithdrawal(const std::function<bool(const Withdrawal&)>& fn) const
@@ -481,7 +505,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     bitassets::State assets{Writable()};
     // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
     // never outgrows what the next block with the peg actions is sure to pay.
-    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, TxQueueLength())) return false;
+    if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued())) return false;
     // CHN freed by retiring an asset go to mainchain miners: a withdrawal of 1 satoshi, burned on the
     // mainchain (a bundle has to pay something), whose fee is the rest, however few (1 satoshi
     // included). Nobody can take it back.
@@ -533,7 +557,7 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
     // Refunds wait with the deposits, apart from what pools and auctions pay out.
     payouts.insert(payouts.end(), refunds.begin(), refunds.end());
     peg_owed.insert(peg_owed.end(), tx_payouts.begin(), tx_payouts.end());
-    payouts = TakePayouts(std::move(payouts), std::move(peg_owed), step ? MAX_PAYOUTS_PER_BLOCK : 0);
+    payouts = TakePayouts(std::move(payouts), std::move(peg_owed), step ? MAX_PAYOUTS_PER_BLOCK : 0, tx_payouts.size());
     const std::vector<CTxOut>& coinbase{block.vtx[0]->vout};
     if (coinbase.size() < 1 + payouts.size()) {
         reject_reason = "bad-sc-payouts-missing";
@@ -612,8 +636,9 @@ bool RecordIndependent(const std::string& reject_reason)
 // (but what a sidechain's own peg actions owe, which goes ahead of it: ChainHooks::BeforePegStep).
 static_assert(bitassets::MAX_TX_PAYOUTS_PER_BLOCK <= MAX_PAYOUTS_PER_BLOCK - MAX_PAYOUTS_PER_BLOCK / 2);
 
-std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts)
+std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts, size_t owed_tx_assets)
 {
+    Assume(owed_tx_assets <= owed_tx.size());
     StoreOverlay& out{Writable()};
     // Each queue: what is owed goes at its end; what is paid comes from its front.
     const auto push{[&](const Table<uint64_t, CTxOut>& table, const Cell<QueueEnds>& cell, const std::vector<CTxOut>& owed_now) {
@@ -634,6 +659,13 @@ std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTx
     }};
     const uint64_t queued{push(QUEUE, QUEUE_ENDS, owed)};
     const uint64_t queued_tx{push(TX_QUEUE, TX_QUEUE_ENDS, owed_tx)};
+    // The assets' payouts are the last owed_tx_assets of owed_tx (ConnectBlock): where they now are in the queue.
+    std::vector<AssetRange> ranges{ASSET_RANGES.Get(*m_view)};
+    const bool had_ranges{!ranges.empty()};
+    if (owed_tx_assets > 0) {
+        const uint64_t tail{TX_QUEUE_ENDS.Get(*m_view).tail};
+        ranges.push_back({tail - owed_tx_assets, tail});
+    }
     // Half each; what one queue leaves of its half, the other may take.
     const uint64_t half{max_payouts / 2};
     uint64_t count{std::min<uint64_t>(queued, half)};
@@ -645,6 +677,16 @@ std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTx
     std::vector<CTxOut> paid;
     take(QUEUE, QUEUE_ENDS, count, paid);
     take(TX_QUEUE, TX_QUEUE_ENDS, count_tx, paid);
+    // Those paid are gone; an empty queue starts again at 0, and so do the ranges.
+    if (had_ranges || !ranges.empty()) {
+        const QueueEnds ends{TX_QUEUE_ENDS.Get(*m_view)};
+        if (ends.head == ends.tail) {
+            ranges.clear();
+        } else {
+            std::erase_if(ranges, [&](const AssetRange& range) { return range.end <= ends.head; });
+        }
+        ASSET_RANGES.Put(out, ranges);
+    }
     return paid;
 }
 

@@ -1117,18 +1117,49 @@ BOOST_AUTO_TEST_CASE(assembly_fills_the_refund_and_payout_bounds)
     options.coinbase_output_script = CScript() << OP_TRUE;
     options.test_block_validity = true;
 
-    // The template's block: the two transactions of 50 refunds, not the third; MAX_TX_PAYOUTS_PER_BLOCK
-    // swaps. The coinbase pays the refunds, then the swaps; and the block is valid.
     const auto assembled{[&](node::SidechainAssembly assembly = {}) {
         CBlock block{node::BlockAssembler{Chain(), m_node.mempool.get(), options, std::move(assembly)}.CreateNewBlock()->block};
         block.hashMerkleRoot = BlockMerkleRoot(block);
         return block;
     }};
+    const auto no_peg{[] {
+        node::SidechainAssembly assembly;
+        assembly.peg = node::SidechainAssembly::Peg::NONE;
+        assembly.tx_filter = [](const CTransaction& tx) { return !HasRefund(tx); };
+        return assembly;
+    }};
+
+    // Layers: a block holds 400,000 weight units of transactions (FastBlocks' blocks), fewer swaps than the bound of
+    // their payouts. So first a block without the peg actions (a block of stake), mined: as many swaps as fit, no
+    // refund (its filter), nothing paid: their payouts wait. The bound counts them with the next block's own.
+    size_t waiting{0};
+    {
+        InstallHooks installed{std::make_unique<NoPegHooks>()};
+        CBlock block{assembled(no_peg())};
+        BOOST_CHECK_EQUAL(count(block, HasRefund), 0U);
+        waiting = count(block, is_swap);
+        BOOST_REQUIRE_GT(waiting, 0U);
+        BOOST_REQUIRE_LT(waiting, bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        const std::vector<CTxOut>& outs{block.vtx[0]->vout};
+        BOOST_CHECK(std::all_of(outs.begin() + 1, outs.end(), [](const CTxOut& out) { return out.nValue == 0 && out.scriptPubKey.IsUnspendable(); }));
+        while (!CheckProofOfWork(block.GetHash(), block.nBits, Chainman().GetConsensus())) ++block.nNonce;
+        Submit(block);
+        BOOST_REQUIRE(Tip()->GetBlockHash() == block.GetHash());
+        BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return Chain().SideState().AssetPayoutsQueued()), waiting);
+        // Another such block takes no more swaps than the bound leaves (fewer than are left, and than fit).
+        const CBlock again{assembled(no_peg())};
+        BOOST_CHECK_EQUAL(waiting + count(again, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        check_valid(again);
+    }
+
+    // The template's block: the two transactions of 50 refunds, not the third; swaps up to MAX_TX_PAYOUTS_PER_BLOCK
+    // with those whose payouts wait. The coinbase pays the refunds, then the swaps' (those that waited first); and the
+    // block is valid.
     {
         const CBlock block{assembled()};
         BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
         BOOST_CHECK(InBlock(block, refund_txs[0]) && InBlock(block, refund_txs[1]) && !InBlock(block, refund_txs[2]));
-        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        BOOST_CHECK_EQUAL(waiting + count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
         const std::vector<CTxOut>& paid{block.vtx[0]->vout};
         BOOST_REQUIRE_GE(paid.size(), 1 + sidechain::MAX_REFUNDS_PER_BLOCK + bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
         for (size_t i{1}; i <= sidechain::MAX_REFUNDS_PER_BLOCK; ++i) BOOST_CHECK(paid[i] == (CTxOut{Params().min_withdrawal + MAIN_FEE, refund_script}));
@@ -1137,35 +1168,25 @@ BOOST_AUTO_TEST_CASE(assembly_fills_the_refund_and_payout_bounds)
         }
         check_valid(block);
     }
-    // Peg actions of the sidechain's own that owe outputs: the same transactions, and what they owe paid first.
+    // Peg actions of the sidechain's own that owe outputs: the same transactions, and what they owe paid first; it takes
+    // none of the assets' room (what waits of the assets' is counted apart from it).
     {
         InstallHooks installed{std::make_unique<PegOwedHooks>(7)};
         const CBlock block{assembled()};
         BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
-        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+        BOOST_CHECK_EQUAL(waiting + count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
         const std::vector<CTxOut>& paid{block.vtx[0]->vout};
         BOOST_REQUIRE_GE(paid.size(), 1 + sidechain::MAX_REFUNDS_PER_BLOCK + 7 + bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
-        for (size_t i{0}; i < 7; ++i) BOOST_CHECK(paid[1 + sidechain::MAX_REFUNDS_PER_BLOCK + i] == (CTxOut{static_cast<CAmount>(7 + i), CScript() << OP_2}));
-        check_valid(block);
-    }
-    // No peg actions, and a filter that keeps the refunds out: the swaps up to the bound, nothing paid.
-    {
-        InstallHooks installed{std::make_unique<NoPegHooks>()};
-        node::SidechainAssembly assembly;
-        assembly.peg = node::SidechainAssembly::Peg::NONE;
-        assembly.tx_filter = [](const CTransaction& tx) { return !HasRefund(tx); };
-        const CBlock block{assembled(assembly)};
-        BOOST_CHECK_EQUAL(count(block, HasRefund), 0U);
-        BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
-        const std::vector<CTxOut>& outs{block.vtx[0]->vout};
-        BOOST_CHECK(std::all_of(outs.begin() + 1, outs.end(), [](const CTxOut& out) { return out.nValue == 0 && out.scriptPubKey.IsUnspendable(); }));
+        // (The payouts that waited go first: the queue pays the oldest first.)
+        for (size_t i{0}; i < 7; ++i) BOOST_CHECK(paid[1 + sidechain::MAX_REFUNDS_PER_BLOCK + waiting + i] == (CTxOut{static_cast<CAmount>(7 + i), CScript() << OP_2}));
         check_valid(block);
     }
 
     // Mined: the rest goes in the next block.
     const CBlock block{Mine()};
     BOOST_CHECK_EQUAL(count(block, HasRefund), 2U);
-    BOOST_CHECK_EQUAL(count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+    BOOST_CHECK_EQUAL(waiting + count(block, is_swap), bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
+    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return Chain().SideState().AssetPayoutsQueued()), 0U);
     const CBlock next{Mine()};
     BOOST_CHECK(InBlock(next, refund_txs[2]));
     BOOST_CHECK_EQUAL(count(next, is_swap), swaps - bitassets::MAX_TX_PAYOUTS_PER_BLOCK);

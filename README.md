@@ -1,22 +1,27 @@
-# BitAssets
+# Layers
 
-BitAssets is a sidechain of Chains on which anyone can create assets (shares, points, tickets,
-stablecoins) and trade them: in pools, an automated market maker, and by Dutch auction.
+Layers is a sidechain of Chains: **assets on a fast chain**. Anyone can create assets (shares, points,
+tickets, stablecoins) and trade them, in pools (an automated market maker) and by Dutch auction, on a
+chain with a block every 15 seconds: blocks of stake signed by validators who stake CHN, anchored by the
+Chains mainchain through blind merged mining (BMM), with merged mined blocks as the fallback.
 
 | | |
 |---|---|
-| Slot on the mainchain | 4 |
+| Slot on the mainchain | 7 |
 | Coin | CHN, deposited from [Chains](https://github.com/block-fabric/chains) and withdrawn back to it |
-| Addresses | `ba1…` (`tba1…` on the test networks) |
-| P2P port | 9355 (testnet 19355, signet 39355, regtest 29355) |
-| RPC port | 9354 (testnet 19354, signet 39354, regtest 29354) |
+| Addresses | `ly1…` (`tly1…` on the test networks) |
+| P2P port | 9255 (testnet 19255, signet 39255, regtest 29255) |
+| RPC port | 9254 (testnet 19254, signet 39254, regtest 29254) |
 
-BitAssets is the [sidechain template](doc/sidechain.md) of Chains with assets added. A BitAssets node needs a
-Chains node (`chainsd` or `chains-app`) to follow, reached over its RPC interface.
+Layers is [FastBlocks](doc/fastblocks.md) (the blocks of stake, staking, finality) with every feature
+of [BitAssets](doc/bitassets.md) (the assets, the pools, the auctions), both made from the
+[sidechain template](doc/sidechain.md) of Chains: what comes from which, and how they work together, is
+in [doc/layers.md](doc/layers.md). A Layers node needs a Chains node (`chainsd` or `chains-app`) to
+follow, reached over its RPC interface.
 
-Its GUI is `bitassets-app`: the node and its wallet with an HTML interface in a native web view
-(WebKitGTK on Linux, WebView2 on Windows), with pages for the assets, issuing, the pools, the
-auctions and the asset explorer ([doc/webui.md](doc/webui.md)). There is no Qt GUI.
+Its GUI is `layers-app`: the node and its wallet with an HTML interface in a native web view
+(WebKitGTK on Linux, WebView2 on Windows), with the Staking section and the pages of the assets
+([doc/webui.md](doc/webui.md)). There is no Qt GUI.
 
 ## Installing
 
@@ -29,8 +34,8 @@ On Debian or Ubuntu (24.04):
 ```sh
 sudo apt install build-essential cmake pkgconf python3 libevent-dev libboost-dev \
     libsqlite3-dev libzmq3-dev libgtk-3-dev libwebkit2gtk-4.1-dev nodejs npm
-git clone https://github.com/block-fabric/bitassets-app.git
-cd bitassets-app
+git clone https://github.com/block-fabric/layers-app.git
+cd layers-app
 cmake -B build
 cmake --build build -j$(nproc)
 ```
@@ -43,10 +48,10 @@ The programs, in `build/bin`:
 
 | Program | What it is |
 |---|---|
-| `bitassets-app` | the wallet, with its window |
-| `bitassetsd` | the node, without a window |
-| `bitassets-cli` | commands for a running node or wallet |
-| `bitassets-wallet`, `bitassets-tx`, `bitassets-util` | tools that work without a node |
+| `layers-app` | the wallet, with its window |
+| `layersd` | the node, without a window |
+| `layers-cli` | commands for a running node or wallet |
+| `layers-wallet`, `layers-tx`, `layers-util` | tools that work without a node |
 
 Tests: `ctest --test-dir build` (unit tests) and `build/test/functional/test_runner.py`. The
 sidechain tests need a built Chains tree next to this one (`../chains`), or `MAINCHAIN_BIN_DIR`
@@ -56,15 +61,15 @@ set to the folder of its programs.
 
 First a Chains node, with RPC on (`server=1` in `chains.conf`, or `-server`), on the same network.
 
-The simplest is to let the Chains wallet run BitAssets: in its **Sidechain Nodes** window, select
-BitAssets, press **Locate programs…** and choose the folder with `bitassetsd` and `bitassets-app`, then **Start node**
+The simplest is to let the Chains wallet run Layers: in its **Sidechain Nodes** window, select
+Layers, press **Locate programs…** and choose the folder with `layersd` and `layers-app`, then **Start node**
 or **Open wallet**.
 
 By hand, on the same computer as the Chains node:
 
 ```sh
-bitassets-app                # the main network
-bitassets-app -testnet       # the test network
+layers-app                # the main network
+layers-app -testnet       # the test network
 ```
 
 It finds the Chains node by itself: RPC on 127.0.0.1 at the port of the network, and the cookie
@@ -83,9 +88,9 @@ anything else:
 The slot is fixed on the main and test networks; `-sidechainslot=<n>` is for regtest only, where
 it makes the chain a sidechain in slot `n` (see [doc/sidechain.md](doc/sidechain.md)).
 
-Data and the configuration file `bitassets.conf` are in `~/.bitassets`; the test network has a subfolder
+Data and the configuration file `layers.conf` are in `~/.layers`; the test network has a subfolder
 `testnet`. The networks have no DNS seeds: give the node a peer with `addnode`. A sample
-`~/.bitassets/bitassets.conf`:
+`~/.layers/layers.conf`:
 
 ```ini
 server=1
@@ -95,11 +100,11 @@ fallbackfee=0.0002
 # testnet=1
 
 [main]
-addnode=<peer>:9355
+addnode=<peer>:9255
 mainchainrpcwallet=<wallet of the Chains node>
 
 [test]
-addnode=<peer>:19355
+addnode=<peer>:19255
 mainchainrpcwallet=<wallet of the Chains node>
 ```
 
@@ -108,16 +113,16 @@ options are read only from the `[test]` section.
 
 ## Coins in and out
 
-- **Deposit.** In BitAssets, get a deposit address (`getdepositaddress`, or the **Mainchain** page):
-  `s4_<address>_<checksum>`. In Chains, send to it from the **Sidechains** page, or
-  `chains-cli createsidechaindeposit 4 <deposit address> <amount>`. The coins appear with the
-  next BitAssets block.
+- **Deposit.** In Layers, get a deposit address (`getdepositaddress`, or the **Mainchain** page):
+  `s7_<address>_<checksum>`. In Chains, send to it from the **Sidechains** page, or
+  `chains-cli createsidechaindeposit 7 <deposit address> <amount>`. The coins appear with the
+  next Layers block.
 - **Withdraw.** `createwithdrawal <Chains address> <amount> ( <fee for Chains miners> )`, or the
   **Mainchain** page. Withdrawals are paid in bundles that Chains miners vote on (about three
   months on the main network, 600 blocks on the test network). A withdrawal not in the bundle
   being voted on can be taken back: `refundwithdrawal <txid> <vout>`.
-- **Merged mining.** BitAssets blocks are mined by Chains miners, for a fee in CHN paid by the Chains
-  wallet. `setbmm true <BitAssets address>` has the node ask for a block whenever the fees waiting pay
+- **Merged mining.** Layers BMM blocks are mined by Chains miners, for a fee in CHN paid by the Chains
+  wallet. `setbmm true <Layers address>` has the node ask for a block whenever the fees waiting pay
   for one; it offers the miners 99% and keeps 1% at the address. `requestbmmblock <address>
   <amount>` asks for one block now, for a fee of your choice (for a deposit on a quiet chain).
   `getbmminfo` shows how it goes.
@@ -139,10 +144,10 @@ How assets work: [doc/bitassets.md](doc/bitassets.md).
 
 ## Commands
 
-BitAssets, on the node: `getbitassetsinfo`, `listassets`, `getasset`, `getassethistory`, `listpools`,
+Assets, on the node: `getbitassetsinfo`, `listassets`, `getasset`, `getassethistory`, `listpools`,
 `getpool`, `quoteswap`, `listauctions`, `getauction`, `quotebid`.
 
-BitAssets, in the wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `mintasset`,
+Assets, in the wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `mintasset`,
 `fixassetsupply`, `updateasset`, `transferassetcontrol`, `sendasset`, `burnasset`, `releaseasset`,
 `listmyassets`, `listassetactivity`, `addliquidity`, `removeliquidity`, `swapasset`, `createauction`,
 `bidauction`, `collectauction`.
@@ -151,18 +156,32 @@ Sidechain, on the node: `getmainchaininfo`, `syncmainchain`, `setbmm`, `getbmmin
 
 Sidechain, in the wallet: `getdepositaddress`, `createwithdrawal`, `refundwithdrawal`.
 
+Staking, on the node: `getposinfo`, `getstakinginfo`, `getvalidators`, `getvalidator`, `getleaderschedule`,
+`getanchorinfo`, `listevidence`, `submitevidence`, `setstaking`, `signbondpop`, `checkpegbalance`.
+
+Staking, in the wallet: `createbond`, `createunbond`, `listbonds`.
+
+## Staking
+
+A validator runs its node with `-validatorkeyfile=<file>` and bonds CHN to its key (`createbond`, or the
+**Bonds** tab of Staking); once enough stake is bonded, blocks of stake start, a slot every 15 seconds,
+each led by a validator picked by stake. Fees of a block of stake are shared between its producer and the
+fee pot, which BMM bidders win. Coins are *soft* in blocks of stake, *BMM-confirmed* once a mainchain
+commitment covers them, and *final* after enough of them. See [doc/fastblocks.md](doc/fastblocks.md).
+
 ## Wallet
 
-`bitassets-app`: the pages of the wallet (Overview, Send, which sends an asset as well as CHN, Receive,
-Transactions, Wallets), **Peg** and **Merged mining** (deposits, withdrawals, merged mining), and the pages of
+`layers-app`: the pages of the wallet (Overview, Send, which sends an asset as well as CHN, Receive,
+Transactions, Wallets), **Peg** and **Merged mining** (deposits, withdrawals, merged mining), **Staking** (one section: Overview,
+Validator, Bonds, Network), and the pages of
 the assets: **Assets** (every asset, its supply, markets, auctions and history), **My assets** (what the
 wallet holds and controls: mint, change the data, give control, fix the supply, burn; the assets being
-issued; pool shares; auctions to collect; activity), **Issue** (a wizard), **Trade** (swaps, pools,
+issued; pool shares; auctions to collect; activity), **Register new asset** (a wizard), **Trade** (swaps, pools,
 liquidity) and **Auctions**. See [doc/webui.md](doc/webui.md).
 
 ## Credits
 
-BitAssets is inspired by **BitAssets by LayerTwo Labs** (plain-bitassets). It is built on the sidechain template of Chains, which is based on
+Layers joins FastBlocks and BitAssets, both of Chains. BitAssets is inspired by **BitAssets by LayerTwo Labs** (plain-bitassets); FastBlocks' fee pot by sol-drivechain (no code of it used). Both are built on the sidechain template of Chains, which is based on
 [Bitcoin Core](https://github.com/bitcoin/bitcoin) v32; its README is in
 [doc/README-bitcoin-core.md](doc/README-bitcoin-core.md).
 
