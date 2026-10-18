@@ -15,6 +15,7 @@
 #include <util/chaintype.h>
 #include <util/moneystr.h>
 #include <util/strencodings.h>
+#include <logging.h>
 #include <webui/rpcpolicy.h>
 
 #include <algorithm>
@@ -521,6 +522,38 @@ UniValue RunRpc(interfaces::Node& node, const std::string& method, const UniValu
 }
 } // namespace
 
+void Authorizations::Add(Entry entry)
+{
+    std::lock_guard lock{m_mutex};
+    // One for the same second step: the newer replaces it.
+    std::erase_if(m_entries, [&](const Entry& e) { return e.wallet == entry.wallet && e.method == entry.method && e.params == entry.params; });
+    m_entries.push_back(std::move(entry));
+    if (m_entries.size() > MAX) m_entries.erase(m_entries.begin(), m_entries.begin() + (m_entries.size() - MAX));
+}
+
+std::optional<Authorizations::Entry> Authorizations::Take(const std::string& wallet, const std::string& method, const std::string& params, std::chrono::steady_clock::time_point now)
+{
+    std::lock_guard lock{m_mutex};
+    std::erase_if(m_entries, [&](const Entry& e) { return e.expires <= now; });
+    const auto it{std::ranges::find_if(m_entries, [&](const Entry& e) { return e.wallet == wallet && e.method == method && e.params == params; })};
+    if (it == m_entries.end()) return std::nullopt;
+    Entry out{std::move(*it)};
+    m_entries.erase(it);
+    return out;
+}
+
+void Authorizations::GiveBack(Entry entry, std::chrono::steady_clock::time_point now)
+{
+    if (entry.expires <= now) return;
+    Add(std::move(entry));
+}
+
+size_t Authorizations::Size() const
+{
+    std::lock_guard lock{m_mutex};
+    return m_entries.size();
+}
+
 const std::map<std::string, Method>& Methods()
 {
     static const std::map<std::string, Method> methods{KitMethods()};
@@ -567,8 +600,12 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
         calls.emplace_back(params.find_value("method").get_str(), params.find_value("params").isNull() ? UniValue{UniValue::VARR} : params.find_value("params"));
     }
     const std::string name{calls.front().first};
+    const UniValue& then{params.find_value("then")};
+    const bool only{params.find_value("authorizedOnly").isTrue()};
+    if (batch && (!then.isNull() || only)) throw HostError(BRIDGE_INVALID_REQUEST, "calls: one at a time with then or authorizedOnly");
+    if (!then.isNull() && only) throw HostError(BRIDGE_INVALID_REQUEST, "then or authorizedOnly, not both");
     // Reads with the keys of several methods may go together (what a locked wallet holds: its assets and their history).
-    const auto keyed_read{[](const std::string& m) { return !Methods().contains(m) && KeyedWalletRpc(m); }};
+    const auto keyed_read{[this](const std::string& m) { return !AllMethods().contains(m) && KeyedWalletRpc(m); }};
     std::string names{name};
     for (const auto& [m, p] : calls) {
         if (m != name && !(keyed_read(m) && keyed_read(name))) throw HostError(BRIDGE_INVALID_REQUEST, "calls: all of one method, or reads with the keys");
@@ -576,7 +613,7 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
         if (!p.isArray() && !p.isObject()) throw HostError(BRIDGE_INVALID_REQUEST, "params: an array or an object");
     }
     Method method;
-    if (const auto it{Methods().find(name)}; it != Methods().end()) {
+    if (const auto it{AllMethods().find(name)}; it != AllMethods().end()) {
         method = it->second;
     } else if (KeyedWalletRpc(name)) {
         method = {Method::Kind::KEYS, Bridge::Thread::LONG, Keys, false, 0, /*batch=*/true};
@@ -597,6 +634,13 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
             if (i >= p.size() || p[i].isNull()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: parameter %u is missing", name, i + 1));
         }
     }
+    // A first step with its second, in one question.
+    if (!then.isNull()) return TwoSteps(node, wallet, name, method, calls.front().second, then);
+    // A second step the user accepted with its first: without a question, when it is exactly that one.
+    if (method.kind == Method::Kind::SPEND && !batch) {
+        if (auto done{Authorized(node, wallet, name, method, calls.front().second, only)}) return std::move(*done);
+    }
+    if (only) throw HostError(BRIDGE_AUTH_NEEDED, strprintf("%s needs your confirmation", name));
     // The question: each call described by the host. For several, the rows of the wallet once, then every row of every call,
     // none left out; more than a dialog shows is refused, never cut.
     std::optional<Window::ConfirmDialog> dialog;
@@ -650,6 +694,149 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
     if (!m_keys) throw HostError(-18, "Wallets are disabled in this node (-disablewallet).");
     if (!dialog) dialog = Keys(confirm::Call{node, wallet, name, calls.front().second});
     return m_keys(wallet, *dialog, method.kind == Method::Kind::SPEND, method.fee_unknown, run);
+}
+
+namespace {
+//! Whether the wallet's keys are locked (getwalletinfo: unlocked_until 0); unknown is not locked (the call will say).
+bool WalletLocked(interfaces::Node& node, const std::string& wallet)
+{
+    const UniValue info{confirm::Call{node, wallet, "getwalletinfo", UniValue{UniValue::VARR}}.Read("getwalletinfo", UniValue{UniValue::VARR}, true)};
+    const UniValue& until{info.isObject() ? info.find_value("unlocked_until") : NullUniValue};
+    return until.isNum() && until.getInt<int64_t>() == 0;
+}
+
+//! The rows of a describer's question without those of the wallet (said once, above).
+void AppendRows(std::vector<dialog::Row>& rows, std::vector<dialog::Row> more, const std::vector<dialog::Row>& wallet_rows)
+{
+    for (size_t i{0}; i < more.size(); ++i) {
+        if (i < wallet_rows.size() && more[i].label == wallet_rows[i].label && more[i].value == wallet_rows[i].value) continue;
+        rows.push_back(std::move(more[i]));
+    }
+}
+
+//! The transaction of a result: the result itself (a txid), or its "txid".
+std::string TxidOf(const UniValue& result)
+{
+    const UniValue& txid{result.isObject() ? result.find_value("txid") : result};
+    return txid.isStr() && txid.get_str().size() == 64 && IsHex(txid.get_str()) ? txid.get_str() : std::string{};
+}
+} // namespace
+
+UniValue ConfirmedRpc::TwoSteps(interfaces::Node& node, const std::string& wallet, const std::string& name, const Method& method, UniValue params, const UniValue& then)
+{
+    if (!method.reveal || method.kind != Method::Kind::SPEND) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s has no second step", name));
+    const Reveal& reveal{*method.reveal};
+    if (!then.isObject() || !then.find_value("method").isStr() || then.find_value("method").get_str() != reveal.method) {
+        throw HostError(BRIDGE_INVALID_REQUEST, strprintf("then: {method: \"%s\", params}", reveal.method));
+    }
+    const auto it{AllMethods().find(reveal.method)};
+    if (it == AllMethods().end() || it->second.kind != Method::Kind::SPEND) throw HostError(BRIDGE_METHOD_NOT_FOUND, strprintf("%s is not a method the pages call through the host", reveal.method));
+    const Method& second{it->second};
+    const UniValue& raw{then.find_value("params")};
+    if (!raw.isNull() && !raw.isArray() && !raw.isObject()) throw HostError(BRIDGE_INVALID_REQUEST, "then.params: an array or an object");
+    UniValue second_params{CanonicalParams(node, reveal.method, raw.isNull() ? UniValue{UniValue::VARR} : raw)};
+    for (size_t i{0}; i < second.required; ++i) {
+        if (i >= second_params.size() || second_params[i].isNull()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: parameter %u is missing", reveal.method, i + 1));
+    }
+    if (!reveal.matches || !reveal.matches(params, second_params)) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s is not the second step of this %s", reveal.method, name));
+    if (!m_keys) throw HostError(-18, "Wallets are disabled in this node (-disablewallet).");
+
+    confirm::Call first_call{node, wallet, name, params};
+    confirm::Call second_call{node, wallet, reveal.method, second_params};
+    if (m_fee) {
+        first_call.fee_for = [&](int64_t vsize) { return m_fee(wallet, vsize); };
+        second_call.fee_for = first_call.fee_for;
+    }
+    auto first_dialog{method.describe(first_call)};
+    auto second_dialog{second.describe(second_call)};
+    if (!first_dialog || !second_dialog) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: nothing to confirm", name));
+
+    // One question for both: the wallet, each step with all it does, the fees (about, and the most the second may pay).
+    const auto wallet_rows{WalletRows(wallet)};
+    Window::ConfirmDialog dialog;
+    dialog.title = reveal.title;
+    dialog.accept = reveal.accept;
+    dialog.kind = "two:" + name;
+    dialog.level = std::max(first_dialog->level, second_dialog->level);
+    dialog.rows = wallet_rows;
+    dialog.rows.push_back(Heading("Step 1 of 2", reveal.first_label));
+    AppendRows(dialog.rows, std::move(first_dialog->rows), wallet_rows);
+    dialog.rows.push_back(Heading("Step 2 of 2", reveal.second_label + " (by itself)"));
+    AppendRows(dialog.rows, std::move(second_dialog->rows), wallet_rows);
+    const int64_t second_vsize{reveal.second_vsize ? std::max<int64_t>(1, reveal.second_vsize(second_params)) : 300};
+    const std::optional<CAmount> first_fee{m_fee ? m_fee(wallet, reveal.first_vsize) : std::nullopt};
+    const std::optional<CAmount> second_fee{m_fee ? m_fee(wallet, second_vsize) : std::nullopt};
+    const std::optional<CAmount> cap{second_fee ? std::optional<CAmount>{*second_fee * FEE_CAP_FACTOR} : std::nullopt};
+    dialog.rows.push_back(Heading("Network fees"));
+    dialog.rows.push_back(first_fee ? Amount("Step 1, about", *first_fee) : Text("Step 1", "set by the wallet"));
+    if (second_fee) {
+        dialog.rows.push_back(Amount("Step 2, about", *second_fee));
+        dialog.rows.push_back(Amount("Step 2, at most", *cap));
+        if (first_fee) dialog.rows.push_back(Total("Fees, about", *first_fee + *second_fee));
+    } else {
+        dialog.rows.push_back(Text("Step 2", "set by the wallet: the app asks again for it"));
+    }
+    const bool locked{WalletLocked(node, wallet)};
+    if (locked) dialog.rows.push_back(Note("The wallet is locked: step 2 asks for its passphrase again, to sign it."));
+    const std::string when{reveal.when ? reveal.when(first_call) : std::string{"once the first is deep enough"}};
+    dialog.message = strprintf("%s\n\nStep 2 is sent by the app without asking again, %s: exactly as shown, from this wallet, within an hour, "
+                               "and for a network fee of at most the one shown. Anything else, and the app asks again.\n\nAccept only if you asked for it.",
+                               reveal.what, when);
+
+    const UniValue result{m_keys(wallet, dialog, /*always=*/true, /*fee_unknown=*/false, [&] { return RunRpc(node, name, params, wallet); })};
+    const std::string txid{TxidOf(result)};
+    if (txid.empty() || !cap) return result;
+    m_authorizations.Add({wallet, reveal.method, second_params.write(), txid, *cap, second_vsize, m_now() + Authorizations::EXPIRY});
+    LogInfo("webui: %s accepted with its second step (%s), which runs without a question once, within %d s", name, reveal.method, Authorizations::EXPIRY.count());
+    if (!result.isObject()) return result;
+    UniValue out{result};
+    out.pushKV("authorized", static_cast<int64_t>(Authorizations::EXPIRY.count()));
+    return out;
+}
+
+std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const std::string& wallet, const std::string& name, const Method& method, const UniValue& params, bool only)
+{
+    const auto now{m_now()};
+    auto entry{m_authorizations.Take(wallet, name, params.write(), now)};
+    if (!entry) return std::nullopt;
+    // The first step's transaction still in this wallet, neither replaced nor abandoned: else it is asked again (and the
+    // authorization goes: it was for that transaction).
+    UniValue args{UniValue::VARR};
+    args.push_back(entry->commit_txid);
+    const UniValue tx{confirm::Call{node, wallet, "gettransaction", args}.Read("gettransaction", args, true)};
+    const UniValue& depth{tx.isObject() ? tx.find_value("confirmations") : NullUniValue};
+    if (!depth.isNum() || depth.getInt<int64_t>() < 0 || tx.find_value("abandoned").isTrue()) {
+        LogInfo("webui: the authorization of %s is dropped: its first step %s is not in the wallet any more", name, entry->commit_txid);
+        return std::nullopt;
+    }
+    // At most the fee the user was shown, at the wallet's fee rate now.
+    const std::optional<CAmount> fee{m_fee ? m_fee(wallet, entry->vsize) : std::nullopt};
+    if (!fee || *fee > entry->fee_cap) {
+        LogInfo("webui: %s is asked again: its network fee would be more than the most the user accepted", name);
+        m_authorizations.GiveBack(std::move(*entry), now);
+        return std::nullopt;
+    }
+    if (!m_keys) throw HostError(-18, "Wallets are disabled in this node (-disablewallet).");
+    // A locked wallet needs its passphrase: asked (the question of this call, saying it was accepted), unless the page
+    // asked for no question.
+    if (only && WalletLocked(node, wallet)) {
+        m_authorizations.GiveBack(std::move(*entry), now);
+        throw HostError(BRIDGE_AUTH_NEEDED, strprintf("%s needs the passphrase of the wallet", name));
+    }
+    confirm::Call call{node, wallet, name, params};
+    if (m_fee) call.fee_for = [&](int64_t vsize) { return m_fee(wallet, vsize); };
+    auto dialog{method.describe(call)};
+    if (!dialog) dialog = Keys(call);
+    dialog->message = "You accepted this with its first step. The wallet is locked: its passphrase signs it.\n\n" + dialog->message;
+    try {
+        UniValue result{m_keys(wallet, *dialog, /*always=*/false, /*fee_unknown=*/false, [&] { return RunRpc(node, name, params, wallet); })};
+        LogInfo("webui: %s ran as accepted with its first step %s", name, entry->commit_txid);
+        return result;
+    } catch (...) {
+        // Nothing was made: the authorization stays, for the call again.
+        m_authorizations.GiveBack(std::move(*entry), now);
+        throw;
+    }
 }
 
 } // namespace webui::confirm
