@@ -35,7 +35,7 @@ inline constexpr int SIGNET_FEE_SPLIT_HEIGHT{0};
  * nodes upgrade; set it a little ahead of the tip then (every node upgraded before the tip gets there).
  * The main network and signet have them from their first block (0).
  */
-inline constexpr int TESTNET_DEX_HEIGHT{std::numeric_limits<int>::max()};
+inline constexpr int TESTNET_DEX_HEIGHT{1374};
 
 /**
  * The second fee curve (Consensus::PosParams::fee_curve2_height, pos/feesplit.h FeeCurve::LINEAR: "the
@@ -44,7 +44,7 @@ inline constexpr int TESTNET_DEX_HEIGHT{std::numeric_limits<int>::max()};
  * coordinator sets it with TESTNET_DEX_HEIGHT (a little ahead of the tip, every node the same, before the
  * upgraded nodes start). Signet, not launched, has it from its first block, as the main network.
  */
-inline constexpr int TESTNET_FEE_CURVE2_HEIGHT{std::numeric_limits<int>::max()};
+inline constexpr int TESTNET_FEE_CURVE2_HEIGHT{1374};
 inline constexpr int SIGNET_FEE_CURVE2_HEIGHT{0};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H
