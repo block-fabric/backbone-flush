@@ -1342,13 +1342,15 @@ bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reas
     return true;
 }
 
-bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released, int reveal_depth)
+bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released, int reveal_depth, size_t queued)
 {
     const auto plan{MakePlan(tx, height, reject_reason, reveal_depth)};
     if (!plan) return false;
     // Room for payouts is bounded: what a block pays, the coinbase creates, and every node keeps what
-    // waits. The miner leaves the transaction for a later block.
-    if (!plan->payouts.empty() && payouts.size() + plan->payouts.size() > MAX_TX_PAYOUTS_PER_BLOCK) {
+    // waits. The miner leaves the transaction for a later block. Layers: with what still waits from
+    // blocks that paid none (blocks of stake take no peg actions), so that what waits is never more
+    // than the next block with the peg actions is sure to pay (sidechain::State::TakePayouts).
+    if (!plan->payouts.empty() && queued + payouts.size() + plan->payouts.size() > MAX_TX_PAYOUTS_PER_BLOCK) {
         reject_reason = "bad-ba-block-payouts-full";
         return false;
     }
@@ -1388,6 +1390,23 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     if (plan->auction) SetAuction(plan->auction->first, plan->auction->second);
     payouts.insert(payouts.end(), plan->payouts.begin(), plan->payouts.end());
     return true;
+}
+
+CAmount State::HeldChn() const
+{
+    CAmount held{0};
+    ForEachPool([&](const uint256&, const Pool& pool) {
+        if (pool.asset0 == CHN) held += static_cast<CAmount>(pool.reserve0);
+        if (pool.asset1 == CHN) held += static_cast<CAmount>(pool.reserve1);
+        return true;
+    });
+    ForEachAuction([&](const Txid&, const Auction& auction) {
+        if (auction.closed) return true;
+        if (auction.base == CHN) held += static_cast<CAmount>(auction.remaining);
+        if (auction.quote == CHN) held += static_cast<CAmount>(auction.proceeds);
+        return true;
+    });
+    return held;
 }
 
 } // namespace bitassets

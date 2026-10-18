@@ -233,6 +233,8 @@ public:
     /** Payouts owed and not paid yet, oldest first: from the mainchain, and from transactions. */
     std::vector<CTxOut> Queue() const;
     std::vector<CTxOut> TxQueue() const;
+    /** How many payouts of transactions wait (TxQueue), read in one look. */
+    uint64_t TxQueueLength() const;
     /**
      * Take in the withdrawals and the refund requests of a transaction that is not a coinbase.
      * All or nothing: a transaction that breaks a rule changes nothing.

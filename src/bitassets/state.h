@@ -704,8 +704,11 @@ public:
      * or would take `payouts` (those of the block's transactions) beyond MAX_TX_PAYOUTS_PER_BLOCK,
      * changes nothing.
      * @param[out] released  CHN freed by retiring an asset (ReleaseAsset), for mainchain miners
+     * @param[in]  queued    Layers: payouts of transactions still waiting for a block with the peg actions
+     *                       (blocks of stake pay none), counted with `payouts` against MAX_TX_PAYOUTS_PER_BLOCK
      */
-    [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released = nullptr, int reveal_depth = 0);
+    [[nodiscard]] bool ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& payouts, std::string& reject_reason, CAmount* released = nullptr, int reveal_depth = 0,
+                               size_t queued = 0);
     /** Whether an asset is dead and can be retired; if not, why (`why`). */
     bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
     /**
@@ -742,6 +745,12 @@ public:
     std::vector<std::pair<uint256, Pool>> PoolsOf(const AssetId& asset) const;
     /** How many pools and auctions there are (read whole: for information). */
     size_t PoolCount() const;
+    /**
+     * Layers: the CHN the pools and the auctions not collected hold (put in by markers, which burned them
+     * out of the coins; paid out again by coinbases): a part of the coins the chain holds against the
+     * mainchain's escrow (getsidechainstate's pegbalance). Read whole: for information.
+     */
+    CAmount HeldChn() const;
 
 private:
     struct Plan;

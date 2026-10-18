@@ -998,7 +998,8 @@ std::vector<RPCResult> PegBalanceFields()
             {RPCResult::Type::STR_AMOUNT, "unbonding", "Coins unbonded, not paid yet"},
             {RPCResult::Type::STR_AMOUNT, "reserve", "Penalties not paid out yet (with the pot, at anchors)"},
             {RPCResult::Type::STR_AMOUNT, "rewards", "Rewards for proofs, owed to the blocks that carried them"},
-            {RPCResult::Type::STR_AMOUNT, "payouts", "Payouts owed and not paid yet (deposits, refunds, the pot, unbonds, rewards)"},
+            {RPCResult::Type::STR_AMOUNT, "payouts", "Payouts owed and not paid yet (deposits, refunds, the pot, unbonds, rewards, what pools and auctions pay)"},
+            {RPCResult::Type::STR_AMOUNT, "assets", "Layers: CHN the pools and the auctions not collected hold"},
             {RPCResult::Type::STR_AMOUNT, "total", "Their sum: the escrow after the block mainheight, less fees left unclaimed and coins burned"},
         }},
     };
@@ -1007,7 +1008,7 @@ std::vector<RPCResult> PegBalanceFields()
 void PushPegBalance(ChainstateManager& chainman, UniValue& result)
 {
     if (!pos::InstalledHooks()) return;
-    CAmount utxos{0}, withdrawals{0}, pot{0}, payouts{0};
+    CAmount utxos{0}, withdrawals{0}, pot{0}, payouts{0}, assets{0};
     pos::StakeState stake;
     int main_height;
     uint256 tip;
@@ -1031,6 +1032,7 @@ void PushPegBalance(ChainstateManager& chainman, UniValue& result)
         pot = fast.pot_accrued - fast.pot_paid;
         stake = pos::GetStakeState(chainstate.SideState().View());
         main_height = side.MainHeight();
+        assets = side.BitAssets().HeldChn();
     }
     UniValue balance(UniValue::VOBJ);
     balance.pushKV("bestblock", tip.GetHex());
@@ -1043,7 +1045,8 @@ void PushPegBalance(ChainstateManager& chainman, UniValue& result)
     balance.pushKV("reserve", ValueFromAmount(stake.pot_reserve));
     balance.pushKV("rewards", ValueFromAmount(stake.rewards_owed));
     balance.pushKV("payouts", ValueFromAmount(payouts));
-    balance.pushKV("total", ValueFromAmount(utxos + withdrawals + pot + stake.bonded + stake.unbonding + stake.pot_reserve + stake.rewards_owed + payouts));
+    balance.pushKV("assets", ValueFromAmount(assets));
+    balance.pushKV("total", ValueFromAmount(utxos + withdrawals + pot + stake.bonded + stake.unbonding + stake.pot_reserve + stake.rewards_owed + payouts + assets));
     result.pushKV("pegbalance", std::move(balance));
 }
 

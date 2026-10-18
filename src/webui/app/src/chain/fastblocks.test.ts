@@ -479,10 +479,10 @@ describe('the pages of FastBlocks', () => {
       expect(handleShortcut(new KeyboardEvent('keydown', { key, altKey: true }))).toBe(true);
       expect(nav.page).toBe(page);
     }
-    expect(CHAIN.name).toBe('FastBlocks');
-    expect(CHAIN.uriScheme).toBe('fastblocks');
-    expect(CHAIN.networks.test.p2p).toBe(19155);
-    expect(CHAIN.networks.main.hrp).toBe('fbl');
+    expect(CHAIN.name).toBe('Layers');
+    expect(CHAIN.uriScheme).toBe('layers');
+    expect(CHAIN.networks.test.p2p).toBe(19255);
+    expect(CHAIN.networks.main.hrp).toBe('ly');
   });
 
   it("Staking, This node: its state, keys, next slots, income and coins by finality; stopping asks the desktop", async () => {
