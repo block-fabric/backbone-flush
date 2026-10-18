@@ -763,17 +763,19 @@ UniValue DecimalToJSON(double price)
 
 int NextHeight(ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return chainman.ActiveChain().Height() + 1; }
 
-/** An oracle an argument names: its name, or its id (64 hex digits). */
+/** An oracle an argument names: its id, or its key (64 hex digits each; a name is a label others may share). */
 uint256 ParseOracle(const UniValue& value, const bitassets::State& state)
 {
     const std::string text{value.get_str()};
     if (text.size() == 64 && IsHex(text)) {
         const auto id{uint256::FromHex(text)};
         if (id && state.GetOracle(*id)) return *id;
+        const std::vector<unsigned char> bytes{ParseHex(text)};
+        uint256 key;
+        std::copy(bytes.begin(), bytes.end(), key.begin());
+        if (const uint256 by_key{bitassets::dex::OracleId(key)}; state.GetOracle(by_key)) return by_key;
     }
-    const uint256 id{bitassets::dex::OracleId(text)};
-    if (!state.GetOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered", text));
-    return id;
+    throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered (name it by its id or its key)", text));
 }
 
 /** An event an argument names: its id (64 hex digits), or the text it is the id of. */
@@ -803,9 +805,9 @@ UniValue OracleToJSON(const uint256& id, const bitassets::OracleRecord& oracle)
 }
 
 const std::vector<RPCResult> ORACLE_RESULTS{
-    {RPCResult::Type::STR_HEX, "oracle", "Its id (the hash of its name)"},
-    {RPCResult::Type::STR, "name", "Its name"},
-    {RPCResult::Type::STR_HEX, "pubkey", "The x-only key it signs with (BIP340)"},
+    {RPCResult::Type::STR_HEX, "oracle", "Its id (the tagged hash of its key)"},
+    {RPCResult::Type::STR, "name", "Its name: a label, which others may share"},
+    {RPCResult::Type::STR_HEX, "pubkey", "The x-only key it signs with (BIP340): its identity"},
     {RPCResult::Type::STR_HEX, "registration", "The transaction that registered it"},
     {RPCResult::Type::NUM, "height", "The block that registered it"},
     {RPCResult::Type::NUM, "attestations", "How many events it attested"},
@@ -1065,7 +1067,7 @@ RPCMethod getoraclevalue()
         "getoraclevalue",
         "What an oracle attested for an event, if it did.",
         {
-            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its id, or its key"},
             {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description (any text, whose tagged hash is its id), or its id (64 hex digits)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",

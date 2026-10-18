@@ -429,13 +429,18 @@ struct Route {
     friend bool operator==(const Route&, const Route&) = default;
 };
 
-/** Register an oracle under a name, with the key it signs with; the marker burns ORACLE_REGISTRATION_FEE, which goes to mainchain miners. */
+/**
+ * Register an oracle: its key, which is its identity (dex::OracleId), and a name that labels it (not
+ * unique). `proof` is the key's signature (BIP340) over dex::RegistrationHash: nobody registers a key
+ * that is not theirs. The marker burns ORACLE_REGISTRATION_FEE, which goes to mainchain miners.
+ */
 struct RegisterOracle {
     static constexpr uint8_t KIND{14};
     std::string name;
     //! An x-only secp256k1 public key (BIP340).
     uint256 pubkey;
-    SERIALIZE_METHODS(RegisterOracle, obj) { READWRITE(obj.name, obj.pubkey); }
+    std::array<unsigned char, 64> proof{};
+    SERIALIZE_METHODS(RegisterOracle, obj) { READWRITE(obj.name, obj.pubkey, obj.proof); }
     friend bool operator==(const RegisterOracle&, const RegisterOracle&) = default;
 };
 

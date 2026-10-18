@@ -207,15 +207,21 @@ the window from the time of a block (or the last seconds) to the tip's time, fro
 observation at or before the start (extended with the reserves it left) to the last one; a window
 that starts before the oldest observation kept is refused.
 
-**Oracles.** `registeroracle name (pubkey)` (marker kind 14) registers an oracle under a name
-(1–64 printable characters; its id the tagged hash of the name) with an x-only key; the marker
-burns `ORACLE_REGISTRATION_FEE` (0.1 CHN), which goes to mainchain miners as the fee of a
-withdrawal (as the CHN freed by retiring an asset): a cost against spam, in the peg balance's
-`withdrawals`. `publishoracle oracle event value (height) (signature)` (kind 15) publishes an
-attestation: the event's id is the tagged hash of its description; the oracle's key signs (BIP340)
-`SHA256(ser("Layers oracle attestation") ‖ oracle id ‖ event id ‖ value (int64 LE) ‖ height (int32
-LE))`; valid in a block at `height` or later, once per (oracle, event) (`bad-ba-attested`). The
-wallet signs with its key of the oracle, or takes an outside signature. `listoracles`,
+**Oracles.** An oracle *is* its key: `registeroracle name (pubkey) (proof)` (marker kind 14)
+registers an x-only key, whose id is the tagged hash of the key (`dex::OracleId`), once; the name
+is a label, which other oracles may share (so nobody can squat or front-run an oracle by its name:
+one who copies a registration from the mempool with another key makes another oracle). The
+registration carries the key's proof of possession, a BIP340 signature over `SHA256(ser("Layers
+oracle registration") ‖ the chain's first block ‖ ser(name) ‖ key)` (`dex::RegistrationHash`;
+`bad-ba-oracle-proof` otherwise): nobody registers a key that is not theirs, nor reuses a proof on
+another chain or under another name. The marker burns `ORACLE_REGISTRATION_FEE` (0.1 CHN), which
+goes to mainchain miners as the fee of a withdrawal (as the CHN freed by retiring an asset): a cost
+against spam, in the peg balance's `withdrawals`. `publishoracle oracle event value (height)
+(signature)` (kind 15) publishes an attestation: the event's id is the tagged hash of its
+description; the oracle's key signs (BIP340) `SHA256(ser("Layers oracle attestation") ‖ oracle id ‖
+event id ‖ value (int64 LE) ‖ height (int32 LE))`; valid in a block at `height` or later, once per
+(oracle, event) (`bad-ba-attested`). The wallet signs with its key of the oracle, or takes outside
+signatures (the proof and the attestations). RPCs name an oracle by its id or its key. `listoracles`,
 `getoraclevalue oracle event`.
 
 **Oracle contracts.** `createoraclecontract oracle event asset amount outcomes refund_address

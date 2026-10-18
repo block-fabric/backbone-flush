@@ -9,6 +9,7 @@
 #include <bitassets/dex.h>
 
 #include <arith_uint256.h>
+#include <chainparams.h>
 
 #include <crypto/hmac_sha256.h>
 #include <crypto/sha256.h>
@@ -1470,8 +1471,10 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
         return true;
     }
     if (const auto* reg{std::get_if<RegisterOracle>(&op)}) {
-        const uint256 id{dex::OracleId(reg->name)};
+        // The key is the oracle: registered once, by whoever holds it (its proof, bound to this chain).
+        const uint256 id{dex::OracleId(reg->pubkey)};
         if (GetOracle(id)) return invalid("bad-ba-oracle-taken");
+        if (!dex::CheckRegistration(reg->name, reg->pubkey, Params().GetConsensus().hashGenesisBlock, reg->proof)) return invalid("bad-ba-oracle-proof");
         // The fee goes to mainchain miners, as CHN freed by retiring an asset do.
         chn_taken += ORACLE_REGISTRATION_FEE;
         plan.released += ORACLE_REGISTRATION_FEE;

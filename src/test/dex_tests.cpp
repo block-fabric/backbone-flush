@@ -9,6 +9,7 @@
 #include <arith_uint256.h>
 #include <bitassets/dex.h>
 #include <bitassets/state.h>
+#include <chainparams.h>
 #include <consensus/params.h>
 #include <key.h>
 #include <primitives/transaction.h>
@@ -246,8 +247,7 @@ BOOST_AUTO_TEST_CASE(oracle_signatures)
     const XOnlyPubKey xonly{key.GetPubKey()};
     uint256 pubkey;
     std::copy(xonly.begin(), xonly.end(), pubkey.begin());
-    const uint256 oracle{dex::OracleId("prices")}, event{dex::EventId("BTCUSD 2026-12-31")};
-    BOOST_CHECK(oracle != dex::OracleId("prices "));
+    const uint256 oracle{dex::OracleId(pubkey)}, event{dex::EventId("BTCUSD 2026-12-31")};
     BOOST_CHECK(event != dex::EventId("BTCUSD 2027-01-01"));
     std::array<unsigned char, 64> sig;
     BOOST_REQUIRE(key.SignSchnorr(dex::AttestationHash(oracle, event, 123456, 500), sig, nullptr, uint256{}));
@@ -256,7 +256,7 @@ BOOST_AUTO_TEST_CASE(oracle_signatures)
     BOOST_CHECK(!dex::CheckAttestation(pubkey, oracle, event, 123457, 500, sig));
     BOOST_CHECK(!dex::CheckAttestation(pubkey, oracle, event, 123456, 501, sig));
     BOOST_CHECK(!dex::CheckAttestation(pubkey, oracle, dex::EventId("other"), 123456, 500, sig));
-    BOOST_CHECK(!dex::CheckAttestation(pubkey, dex::OracleId("other"), event, 123456, 500, sig));
+    BOOST_CHECK(!dex::CheckAttestation(pubkey, dex::OracleId(uint256::ONE), event, 123456, 500, sig));
     CKey other;
     other.MakeNewKey(true);
     const XOnlyPubKey other_xonly{other.GetPubKey()};
@@ -513,10 +513,33 @@ BOOST_AUTO_TEST_CASE(dex_oracles_and_contracts)
     uint256 pubkey;
     std::copy(xonly.begin(), xonly.end(), pubkey.begin());
     std::string reason;
+    const uint256 genesis{Params().GetConsensus().hashGenesisBlock};
+    // The proof of possession: the key's signature over the registration (the chain's first block, the name, the key).
+    const auto proof_by{[&](const CKey& signer, const std::string& name, const uint256& registered) {
+        std::array<unsigned char, 64> proof;
+        BOOST_REQUIRE(signer.SignSchnorr(dex::RegistrationHash(name, registered, genesis), proof, nullptr, uint256{}));
+        return proof;
+    }};
+    const auto proof{proof_by(key, "prices", pubkey)};
+    BOOST_CHECK(dex::CheckRegistration("prices", pubkey, genesis, proof));
+    BOOST_CHECK(!dex::CheckRegistration("prices2", pubkey, genesis, proof));
+    BOOST_CHECK(!dex::CheckRegistration("prices", pubkey, uint256::ONE, proof));
     // Registering costs its fee, burned by the marker (to mainchain miners: a withdrawal).
-    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"prices", pubkey}, {}, ORACLE_REGISTRATION_FEE - 1), reason));
+    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"prices", pubkey, proof}, {}, ORACLE_REGISTRATION_FEE - 1), reason));
     BOOST_CHECK_EQUAL(reason, "bad-ba-marker-value");
-    const CTransaction reg{MakeTx({}, RegisterOracle{"prices", pubkey}, {}, ORACLE_REGISTRATION_FEE)};
+    // Nobody registers a key that is not theirs: with a proof by another key, or one made for another name.
+    CKey squatter;
+    squatter.MakeNewKey(true);
+    const XOnlyPubKey squatter_xonly{squatter.GetPubKey()};
+    uint256 squatter_pubkey;
+    std::copy(squatter_xonly.begin(), squatter_xonly.end(), squatter_pubkey.begin());
+    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"prices", pubkey, proof_by(squatter, "prices", pubkey)}, {}, ORACLE_REGISTRATION_FEE), reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-oracle-proof");
+    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"other name", pubkey, proof}, {}, ORACLE_REGISTRATION_FEE), reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-oracle-proof");
+    // A squatter who registers the same name first, with its own key, takes nothing: names are labels, the key is the oracle.
+    chain.Require(MakeTx({}, RegisterOracle{"prices", squatter_pubkey, proof_by(squatter, "prices", squatter_pubkey)}, {}, ORACLE_REGISTRATION_FEE));
+    const CTransaction reg{MakeTx({}, RegisterOracle{"prices", pubkey, proof}, {}, ORACLE_REGISTRATION_FEE)};
     chain.Require(reg);
     bool fee_withdrawal{false};
     chain.state.ForEachWithdrawal([&](const sidechain::Withdrawal& w) {
@@ -524,11 +547,17 @@ BOOST_AUTO_TEST_CASE(dex_oracles_and_contracts)
         return true;
     });
     BOOST_CHECK(fee_withdrawal);
-    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"prices", pubkey}, {}, ORACLE_REGISTRATION_FEE), reason));
+    BOOST_CHECK(!chain.Apply(MakeTx({}, RegisterOracle{"prices", pubkey, proof}, {}, ORACLE_REGISTRATION_FEE), reason));
     BOOST_CHECK_EQUAL(reason, "bad-ba-oracle-taken");
     chain.EndBlock();
-    const uint256 oracle{dex::OracleId("prices")};
+    const uint256 oracle{dex::OracleId(pubkey)};
     BOOST_CHECK_EQUAL(chain.Assets().GetOracle(oracle)->name, "prices");
+    BOOST_CHECK(chain.Assets().GetOracle(oracle)->pubkey == pubkey);
+    // The squatter's attestation is its own oracle's, never the honest one's.
+    std::array<unsigned char, 64> squatter_sig;
+    BOOST_REQUIRE(squatter.SignSchnorr(dex::AttestationHash(oracle, dex::EventId("BTCUSD"), 1, chain.height), squatter_sig, nullptr, uint256{}));
+    BOOST_CHECK(!chain.Apply(MakeTx({}, Attest{oracle, dex::EventId("BTCUSD"), 1, chain.height, squatter_sig}, {}), reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-attestation-sig");
 
     // Two contracts on one event: CHN, and an asset; outcomes below and at or above 100.
     const AssetId GOLD{HashName("GOLD")};

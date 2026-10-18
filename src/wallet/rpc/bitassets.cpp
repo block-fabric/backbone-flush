@@ -354,17 +354,27 @@ std::string LabelOfAsset(CWallet& wallet, const AssetId& asset)
 }
 
 
-/** An oracle an argument names: its name, or its id (64 hex digits). */
+/** An x-only key as hex, as written (not reversed as a hash is). */
+std::optional<uint256> ParseXOnlyHex(const std::string& text)
+{
+    if (text.size() != 64 || !IsHex(text)) return std::nullopt;
+    const std::vector<unsigned char> bytes{ParseHex(text)};
+    uint256 key;
+    std::copy(bytes.begin(), bytes.end(), key.begin());
+    return key;
+}
+
+/** An oracle an argument names: its id, or its key (64 hex digits each; names are labels, which others may share). */
 uint256 ParseOracleArg(CWallet& wallet, const UniValue& value)
 {
     const std::string text{value.get_str()};
     if (text.size() == 64 && IsHex(text)) {
         const auto id{uint256::FromHex(text)};
         if (id && wallet.chain().getBitAssetsOracle(*id)) return *id;
+        const uint256 by_key{bitassets::dex::OracleId(*ParseXOnlyHex(text))};
+        if (wallet.chain().getBitAssetsOracle(by_key)) return by_key;
     }
-    const uint256 id{bitassets::dex::OracleId(text)};
-    if (!wallet.chain().getBitAssetsOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered", text));
-    return id;
+    throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No oracle %s is registered (name it by its id or its key)", text));
 }
 
 /** An event an argument names: its id (64 hex digits), or the text it is the id of. */
@@ -1024,8 +1034,9 @@ RPCMethod registeroracle()
         "Layers' DEX: register an oracle under a name, with the key it signs its attestations with. Registering costs " + FormatMoney(bitassets::ORACLE_REGISTRATION_FEE) +
             " CHN, paid to mainchain miners." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"name", RPCArg::Type::STR, RPCArg::Optional::NO, "Its name (1 to 64 printable characters)"},
-            {"pubkey", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The x-only key (BIP340) it signs with; a new key of this wallet if not given (publishoracle then signs with it)"},
+            {"name", RPCArg::Type::STR, RPCArg::Optional::NO, "Its name (1 to 64 printable characters): a label, which other oracles may share"},
+            {"pubkey", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The x-only key (BIP340) it signs with, which is its identity; a new key of this wallet if not given (publishoracle then signs with it)"},
+            {"proof", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "The key's signature (64 bytes) over the registration (the tagged hash of the chain's first block, the name and the key), if this wallet does not have the key"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -1041,14 +1052,11 @@ RPCMethod registeroracle()
     if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
     const std::string name{request.params[0].get_str()};
     if (!bitassets::dex::IsOracleName(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A name is 1 to 64 printable characters, no space at either end");
-    const uint256 id{bitassets::dex::OracleId(name)};
-    if (pwallet->chain().getBitAssetsOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An oracle of this name is registered");
     uint256 pubkey;
     if (!request.params[1].isNull()) {
-        pubkey = ParseHashV(request.params[1], "pubkey");
-        // Hex as written, not reversed as a hash is.
-        const std::vector<unsigned char> bytes{ParseHex(request.params[1].get_str())};
-        std::copy(bytes.begin(), bytes.end(), pubkey.begin());
+        const auto parsed{ParseXOnlyHex(request.params[1].get_str())};
+        if (!parsed) throw JSONRPCError(RPC_INVALID_PARAMETER, "A key is 64 hex digits");
+        pubkey = *parsed;
     } else {
         const CTxDestination dest{NewDestination(*pwallet, "oracle:" + name)};
         const CScript script{GetScriptForDestination(dest)};
@@ -1059,7 +1067,22 @@ RPCMethod registeroracle()
         std::copy(xonly.begin(), xonly.end(), pubkey.begin());
     }
     if (!XOnlyPubKey{pubkey}.IsFullyValid()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a valid x-only public key");
-    const CTransactionRef tx{Send(*pwallet, bitassets::RegisterOracle{name, pubkey}, {}, {}, bitassets::ORACLE_REGISTRATION_FEE)};
+    const uint256 id{bitassets::dex::OracleId(pubkey)};
+    if (pwallet->chain().getBitAssetsOracle(id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An oracle of this key is registered");
+    // The proof that the key is the registrant's: by the wallet's key, or given.
+    const uint256 genesis{pwallet->chain().getBlockHash(0)};
+    std::array<unsigned char, 64> proof{};
+    if (!request.params[2].isNull()) {
+        const std::vector<unsigned char> bytes{ParseHex(request.params[2].get_str())};
+        if (bytes.size() != 64) throw JSONRPCError(RPC_INVALID_PARAMETER, "A signature is 64 bytes");
+        std::copy(bytes.begin(), bytes.end(), proof.begin());
+    } else {
+        const auto key{KeyOfXOnly(*pwallet, pubkey)};
+        if (!key) throw JSONRPCError(RPC_WALLET_ERROR, "This wallet does not have the key: give its proof (signature over the registration)");
+        if (!key->SignSchnorr(bitassets::dex::RegistrationHash(name, pubkey, genesis), proof, /*merkle_root=*/nullptr, GetRandHash())) throw JSONRPCError(RPC_WALLET_ERROR, "Cannot sign");
+    }
+    if (!bitassets::dex::CheckRegistration(name, pubkey, genesis, proof)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The proof is not the key's signature over this registration");
+    const CTransactionRef tx{Send(*pwallet, bitassets::RegisterOracle{name, pubkey, proof}, {}, {}, bitassets::ORACLE_REGISTRATION_FEE)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("oracle", id.GetHex());
@@ -1076,7 +1099,7 @@ RPCMethod publishoracle()
         "Layers' DEX: publish an oracle's attestation of an event: its value, signed (BIP340) over the tagged hash of (oracle, event, value, height). "
         "Signed by this wallet's key of the oracle, or given signed. Once per event." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its id, or its key"},
             {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description (any text), or its id (64 hex digits)"},
             {"value", RPCArg::Type::NUM, RPCArg::Optional::NO, "The value (a signed 64-bit integer)"},
             {"height", RPCArg::Type::NUM, RPCArg::DefaultHint{"the next block"}, "The height signed for: the attestation is valid in a block at it or later"},
@@ -1132,7 +1155,7 @@ RPCMethod createoraclecontract()
         "gets it all (none: the refund address). With no attestation in a block up to the expiry, the refund address gets it after. Anyone settles it "
         "(settleoraclecontract). The oracle can lie, but can pay none but the addresses named here." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its name, or its id"},
+            {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its id, or its key"},
             {"event", RPCArg::Type::STR, RPCArg::Optional::NO, "The event: its description, or its id"},
             {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, "What it locks. " + std::string{bitassets::ASSET_ARG_HELP}},
             {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},

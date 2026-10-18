@@ -10,8 +10,10 @@
     uniform price; an order whose min_out the batch misses is refunded (its fee paid), the other fills;
   - the TWAP of a pool over windows: constant price after the last change, and a reorganisation that
     takes a trade back takes the accumulators back with it;
-  - oracles: one with the wallet's key, one with an outside key (the signature made here, over the
-    documented message); contracts in CHN and in an asset, settled to either outcome, and one refunded
+  - oracles: the key is the oracle (names are labels): one with the wallet's key, one with an outside
+    key (its proof of possession and attestation signed here, over the documented messages); a
+    squatter of the same name with another key changes nothing for the honest one; nobody registers
+    another's key without its proof; contracts in CHN and in an asset, settled to either outcome, and one refunded
     after its expiry;
   - batch clearing in a block of stake: two opposing orders, one block, the uniform price;
   - the peg balance throughout (the oracles' fee is a withdrawal, the contracts' CHN in "assets");
@@ -44,6 +46,11 @@ def uniform(r_x, r_y, pay_x, pay_y):
     num = r_y * 1000 + sum(pay_y) * 997
     den = r_x * 1000 + sum(pay_x) * 997
     return [a * 997 * num // (den * 1000) for a in pay_x], [b * 997 * den // (num * 1000) for b in pay_y]
+
+
+def registration_hash(genesis_hex, name, pubkey_hex):
+    """What an oracle's key signs to register (its proof of possession): SHA256 of the serialized tag, the chain's first block, the name, the key."""
+    return hashlib.sha256(ser_string(b"Layers oracle registration") + bytes.fromhex(genesis_hex)[::-1] + ser_string(name.encode()) + bytes.fromhex(pubkey_hex)).digest()
 
 
 def attestation_hash(oracle_hex, event_hex, value, height):
@@ -228,24 +235,35 @@ class LayersDexTest(LayersTest):
         assert_equal(n1.getpooltwap(pool, DEX_HEIGHT), after)
 
         self.log.info("Oracles: registered (a fee to mainchain miners), attested by the wallet's key and by an outside one")
-        n0.registeroracle("prices")
+        prices = n0.registeroracle("prices")["oracle"]
         outside_key = bytes([0x22] * 32)
         outside_pub = compute_xonly_pubkey(outside_key)[0].hex()
-        n0.registeroracle("outside", outside_pub)
+        genesis = n0.getblockhash(0)
+        # Another's key, without its proof, or with a proof for another name: refused.
+        assert_raises_rpc_error(-4, "does not have the key", n1.registeroracle, "outside", outside_pub)
+        bad_proof = sign_schnorr(outside_key, registration_hash(genesis, "other", outside_pub))
+        assert_raises_rpc_error(-8, "not the key's", n1.registeroracle, "outside", outside_pub, bad_proof.hex())
+        proof = sign_schnorr(outside_key, registration_hash(genesis, "outside", outside_pub))
+        outside = n0.registeroracle("outside", outside_pub, proof.hex())["oracle"]
+        # A squatter of the name "prices" with its own key: another oracle, the honest one untouched.
+        squatter = n1.registeroracle("prices")["oracle"]
+        assert squatter != prices
         self.bmm()
-        oracles = {o["name"]: o for o in n1.listoracles()}
-        assert_equal(sorted(oracles), ["outside", "prices"])
-        assert_equal(oracles["outside"]["pubkey"], outside_pub)
-        assert_raises_rpc_error(-8, "is registered", n0.registeroracle, "prices")
+        oracles = {o["oracle"]: o for o in n1.listoracles()}
+        assert_equal(sorted(o["name"] for o in oracles.values()), ["outside", "prices", "prices"])
+        assert_equal(oracles[outside]["pubkey"], outside_pub)
+        assert_raises_rpc_error(-8, "is registered", n0.registeroracle, "outside", outside_pub, proof.hex())
+        # By its key as well as by its id.
+        assert_equal(n1.getoraclevalue(outside_pub, "E2")["oracle"], outside)
         assert_peg_balance(main, self.nodes)
         height = n0.getblockcount()
         to_low, to_high, refund = n1.getnewaddress(), n2.getnewaddress(), n0.getnewaddress()
         outcomes = [{"min": INT64_MIN, "max": 99, "address": to_low}, {"min": 100, "max": INT64_MAX, "address": to_high}]
-        c_chn = n0.createoraclecontract("prices", "E1", "CHN", 1, outcomes, refund, height + 100)["txid"]
-        c_gold = n0.createoraclecontract("prices", "E1", "GOLD", 20, outcomes, refund, height + 100)["txid"]
+        c_chn = n0.createoraclecontract(prices, "E1", "CHN", 1, outcomes, refund, height + 100)["txid"]
+        c_gold = n0.createoraclecontract(prices, "E1", "GOLD", 20, outcomes, refund, height + 100)["txid"]
         self.bmm()
-        c_outside = n0.createoraclecontract("outside", "E2", "CHN", "0.5", outcomes, refund, height + 100)["txid"]
-        c_expiring = n0.createoraclecontract("prices", "E3", "CHN", "0.5", outcomes, refund, height + 3)["txid"]
+        c_outside = n0.createoraclecontract(outside, "E2", "CHN", "0.5", outcomes, refund, height + 100)["txid"]
+        c_expiring = n0.createoraclecontract(prices, "E3", "CHN", "0.5", outcomes, refund, height + 3)["txid"]
         self.bmm()
         assert_equal(n2.getoraclecontract(c_chn)["status"], "pending")
         assert_raises_rpc_error(-8, "waits", n2.settleoraclecontract, c_chn)
@@ -253,17 +271,21 @@ class LayersDexTest(LayersTest):
         pools_chn = sum(p["reserve_a"] if p["asset_a"] == "CHN" else p["reserve_b"] if p["asset_b"] == "CHN" else 0 for p in n0.listpools())
         assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2)
 
-        n0.publishoracle("prices", "E1", 150)
-        event = n0.getoraclevalue("outside", "E2")["event"]
-        oracle = oracles["outside"]["oracle"]
+        n0.publishoracle(prices, "E1", 150)
+        # The squatter's key cannot attest for the honest oracle; its own attestation is its own oracle's.
+        assert_raises_rpc_error(-4, "does not have the oracle's key", n1.publishoracle, prices, "E1", 1)
+        n1.publishoracle(squatter, "E1", 1)
+        event = n0.getoraclevalue(outside, "E2")["event"]
+        oracle = outside
         signed_at = n0.getblockcount() + 1
         signature = sign_schnorr(outside_key, attestation_hash(oracle, event, 50, signed_at))
-        n0.publishoracle("outside", "E2", 50, signed_at, signature.hex())
+        n0.publishoracle(outside, "E2", 50, signed_at, signature.hex())
         # A signature over another value is refused.
-        assert_raises_rpc_error(-8, "not the oracle's", n0.publishoracle, "outside", "E9", 50, signed_at, signature.hex())
+        assert_raises_rpc_error(-8, "not the oracle's", n0.publishoracle, outside, "E9", 50, signed_at, signature.hex())
         self.bmm()
-        assert_equal(n1.getoraclevalue("prices", "E1")["value"], 150)
-        assert_equal(n1.getoraclevalue("outside", "E2")["value"], 50)
+        assert_equal(n1.getoraclevalue(prices, "E1")["value"], 150)
+        assert_equal(n1.getoraclevalue(squatter, "E1")["value"], 1)
+        assert_equal(n1.getoraclevalue(outside, "E2")["value"], 50)
         assert_equal(n1.getoraclecontract(c_chn)["status"], "settleable")
         assert_equal(n1.getoraclecontract(c_chn)["winner"], to_high)
 
