@@ -48,6 +48,8 @@
 #include <script/signingprovider.h>
 #include <sidechain/mainchain.h>
 #include <sidechain/state.h>
+#include <algorithm>
+#include <limits>
 #include <test/util/net.h>
 #include <test/util/setup_common.h>
 #include <txmempool.h>
@@ -112,13 +114,16 @@ struct InstallFastBlocks {
     std::unique_ptr<const CChainParams> params;
     std::optional<int64_t> seed_lookahead;
     std::optional<int> fee_split_height;
-    explicit InstallFastBlocks(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt)
-        : seed_lookahead{lookahead}, fee_split_height{fee_split}
+    std::optional<int> fee_curve2_height;
+    explicit InstallFastBlocks(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt,
+                               std::optional<int> fee_curve2 = std::nullopt)
+        : seed_lookahead{lookahead}, fee_split_height{fee_split}, fee_curve2_height{fee_curve2}
     {
         CChainParams::RegTestOptions options;
         options.sidechain_slot = 5;
         options.pos_seed_lookahead = lookahead;
         options.dep_opts.fee_split_height = fee_split;
+        options.dep_opts.fee_curve2_height = fee_curve2;
         if (with_validators) {
             ECC_Context ecc;
             for (const CKey& key : keys) {
@@ -144,6 +149,7 @@ std::vector<const char*> SetupArgs(InstallFastBlocks& installed)
     if (!installed.validators.empty()) installed.args.push_back("-posvalidators=" + installed.validators);
     if (installed.seed_lookahead) installed.args.push_back(strprintf("-posseedlookahead=%d", *installed.seed_lookahead));
     if (installed.fee_split_height) installed.args.push_back(strprintf("-testactivationheight=feesplit@%d", *installed.fee_split_height));
+    if (installed.fee_curve2_height) installed.args.push_back(strprintf("-testactivationheight=feecurve2@%d", *installed.fee_curve2_height));
     std::vector<const char*> args;
     for (const std::string& arg : installed.args) args.push_back(arg.c_str());
     return args;
@@ -164,8 +170,9 @@ struct FastBlocksSetup : public InstallFastBlocks, public TestingSetup {
     std::unique_ptr<pos::Producer> producer;
     int64_t base_slot{0};
 
-    explicit FastBlocksSetup(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt)
-        : InstallFastBlocks{with_validators, lookahead, fee_split}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
+    explicit FastBlocksSetup(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt,
+                             std::optional<int> fee_curve2 = std::nullopt)
+        : InstallFastBlocks{with_validators, lookahead, fee_split, fee_curve2}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
     {
         Hooks().Attach(m_node.chainman.get());
         Mock(START_TIME);
@@ -581,7 +588,8 @@ struct SeedSetup : public FastBlocksSetup {
  * taken at its start (no lookahead), and a record of the mainchain whose spacing the test sets.
  */
 struct FeeSplitSetup : public FastBlocksSetup {
-    explicit FeeSplitSetup(int height = 0) : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0, height} {}
+    explicit FeeSplitSetup(int height = 0, std::optional<int> curve2_height = std::nullopt)
+        : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0, height, curve2_height} {}
     /** `count` mainchain blocks `spacing` seconds apart, from now on. */
     void Spaced(int64_t spacing, int count)
     {
@@ -625,6 +633,12 @@ struct FeeSplitSetup : public FastBlocksSetup {
 /** The fee split from the chain's fourth block on. */
 struct FeeSplitLaterSetup : public FeeSplitSetup {
     FeeSplitLaterSetup() : FeeSplitSetup{/*height=*/4} {}
+};
+
+/** The fee split from the first block, the second fee curve from the chain's block FEE_CURVE2_TEST_HEIGHT on. */
+constexpr int FEE_CURVE2_TEST_HEIGHT{6};
+struct FeeCurve2LaterSetup : public FeeSplitSetup {
+    FeeCurve2LaterSetup() : FeeSplitSetup{/*height=*/0, /*curve2_height=*/FEE_CURVE2_TEST_HEIGHT} {}
 };
 
 /** Wait (real time) until `done`, at most `seconds`; whether it came. */
@@ -6561,6 +6575,68 @@ BOOST_AUTO_TEST_CASE(fee_split_math)
     BOOST_CHECK_EQUAL(pos::MedianSpacingAt(record, -1, 0), 60);
 }
 
+// The second curve (pos/feesplit.h, "the fee curve of 2026-10-18 (2)"): b = clamp(50 % - 5 % · (S - 60) / 60, 20 %, 50 %),
+// the basis points rounded down, B = floor(F · bps / 10000).
+BOOST_AUTO_TEST_CASE(fee_curve2_math)
+{
+    using pos::FeeCurve;
+    const CAmount fee{10000};
+    const std::vector<std::tuple<int64_t, int64_t>> cases{
+        {30, 5000}, {60, 5000}, {90, 4750}, {120, 4500}, {180, 4000}, {240, 3500}, {300, 3000}, {360, 2500}, {420, 2000}, {600, 2000}, {3600, 2000}};
+    for (const auto& [spacing, bps] : cases) {
+        BOOST_CHECK_EQUAL(pos::BidderShareBps(spacing, FeeCurve::LINEAR), bps);
+        BOOST_CHECK_EQUAL(pos::BidderShare(fee, spacing, FeeCurve::LINEAR), bps);
+    }
+    // Between whole steps the basis points round down: 61 s is 4991.67, 4991; 419 s is 2008.33, 2008.
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(61, FeeCurve::LINEAR), 4991);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(66, FeeCurve::LINEAR), 4950);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(67, FeeCurve::LINEAR), 4941);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(419, FeeCurve::LINEAR), 2008);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(421, FeeCurve::LINEAR), 2000);
+    // B rounds down, the odd satoshis are the validators'.
+    BOOST_CHECK_EQUAL(pos::BidderShare(10001, 60, FeeCurve::LINEAR), 5000);
+    BOOST_CHECK_EQUAL(pos::BidderShare(10001, 90, FeeCurve::LINEAR), 4750);
+    BOOST_CHECK_EQUAL(pos::BidderShare(19999, 90, FeeCurve::LINEAR), 9499);
+    BOOST_CHECK_EQUAL(pos::BidderShare(7, 600, FeeCurve::LINEAR), 1);
+    BOOST_CHECK_EQUAL(pos::BidderShare(4, 600, FeeCurve::LINEAR), 0);
+    BOOST_CHECK_EQUAL(pos::BidderShare(19, 600, FeeCurve::LINEAR), 3);
+    BOOST_CHECK_EQUAL(pos::BidderShare(1, 30, FeeCurve::LINEAR), 0);
+    BOOST_CHECK_EQUAL(pos::BidderShare(0, 90, FeeCurve::LINEAR), 0);
+    BOOST_CHECK_EQUAL(pos::BidderShare(-5, 90, FeeCurve::LINEAR), 0);
+    // Spacings of 0 or below: 50/50; the largest: the floor.
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, 0, FeeCurve::LINEAR), 5000);
+    BOOST_CHECK_EQUAL(pos::BidderShare(fee, -5, FeeCurve::LINEAR), 5000);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(std::numeric_limits<int64_t>::max(), FeeCurve::LINEAR), 2000);
+    BOOST_CHECK_EQUAL(pos::BidderShareBps(std::numeric_limits<int64_t>::min(), FeeCurve::LINEAR), 5000);
+    // No overflow at the largest amounts (MAX_MONEY · 5000 does not fit in 64 bits).
+    BOOST_CHECK_EQUAL(pos::BidderShare(MAX_MONEY, 90, FeeCurve::LINEAR), MAX_MONEY / 10000 * 4750);
+    BOOST_CHECK_EQUAL(pos::BidderShare(MAX_MONEY, 1000000, FeeCurve::LINEAR), MAX_MONEY / 5);
+    BOOST_CHECK_EQUAL(pos::BidderShare(MAX_MONEY - 1, 61, FeeCurve::LINEAR), static_cast<CAmount>((static_cast<__int128>(MAX_MONEY - 1) * 4991) / 10000));
+    // Everywhere: bps = floor((5000 · 60 - 500 · (S - 60)) / 60) within [2000, 5000], never rising with S, and
+    // B = floor(F · bps / 10000) exactly; the first curve unchanged by default.
+    int64_t last{5000};
+    for (int64_t spacing{-10}; spacing <= 1000; ++spacing) {
+        const int64_t bps{pos::BidderShareBps(spacing, FeeCurve::LINEAR)};
+        const int64_t exact_num{5000 * 60 - 500 * (spacing - 60)};
+        const int64_t expected{std::clamp<int64_t>(exact_num >= 0 ? exact_num / 60 : -((-exact_num + 59) / 60), 2000, 5000)};
+        BOOST_CHECK_EQUAL(bps, expected);
+        BOOST_CHECK(bps <= last);
+        last = bps;
+        for (const CAmount f : {CAmount{1}, CAmount{9999}, CAmount{123456789}, MAX_MONEY}) {
+            BOOST_CHECK_EQUAL(pos::BidderShare(f, spacing, FeeCurve::LINEAR), static_cast<CAmount>(static_cast<__int128>(f) * bps / 10000));
+        }
+        BOOST_CHECK_EQUAL(pos::BidderShare(fee, spacing), pos::BidderShare(fee, spacing, FeeCurve::FIRST));
+        BOOST_CHECK_EQUAL(pos::BidderShareBps(spacing), pos::BidderShareBps(spacing, FeeCurve::FIRST));
+    }
+    // SplitFees takes the curve it is given.
+    CMutableTransaction plain;
+    plain.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    const std::vector<CTransactionRef> vtx{MakeTransactionRef(CMutableTransaction{}), MakeTransactionRef(plain)};
+    const std::vector<CAmount> fees{fee};
+    BOOST_CHECK_EQUAL(pos::SplitFees(vtx, fees, /*fees_without_coinbase=*/true, 600, FeeCurve::FIRST).validators, 9000);
+    BOOST_CHECK_EQUAL(pos::SplitFees(vtx, fees, /*fees_without_coinbase=*/true, 600, FeeCurve::LINEAR).validators, 8000);
+}
+
 BOOST_AUTO_TEST_CASE(fee_split_peg_transactions)
 {
     const CScript dest{Wpkh(0x01)};
@@ -6840,6 +6916,56 @@ BOOST_FIXTURE_TEST_CASE(fee_split_spacing, FeeSplitSetup)
     BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPotScript), TX_FEE / 2);
     BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPoolScript), TX_FEE / 2);
     Take(block);
+}
+
+// Before fee_curve2_height the first curve holds exactly (S = 600: 10 %), from it the second (20 %), for
+// blocks of stake and BMM blocks; a block of either side's split is refused on the other.
+BOOST_FIXTURE_TEST_CASE(fee_curve2_activation, FeeCurve2LaterSetup)
+{
+    COutPoint coin;
+    CTxOut spent{Fund(COIN, coin)};
+    Spaced(600, 12);
+    const int first{NextEpochWithBmm()};
+    BOOST_REQUIRE_LT(Tip()->nHeight + 1, FEE_CURVE2_TEST_HEIGHT);
+    BOOST_CHECK(Hooks().FeeCurveAt(FEE_CURVE2_TEST_HEIGHT - 1) == pos::FeeCurve::FIRST);
+    BOOST_CHECK(Hooks().FeeCurveAt(FEE_CURVE2_TEST_HEIGHT) == pos::FeeCurve::LINEAR);
+
+    // A BMM block: the curve of its height.
+    CMutableTransaction plain;
+    plain.vout.emplace_back(COIN, script);
+    CBlock bmm;
+    bmm.vtx = {MakeTransactionRef(CMutableTransaction{}), MakeTransactionRef(plain)};
+    std::vector<CTxOut> outputs;
+    BOOST_CHECK_EQUAL(Hooks().MergeMinedFeeOutputs(bmm, FEE_CURVE2_TEST_HEIGHT - 1, Record().Height(), {TX_FEE}, outputs), TX_FEE - TX_FEE / 10);
+    outputs.clear();
+    BOOST_CHECK_EQUAL(Hooks().MergeMinedFeeOutputs(bmm, FEE_CURVE2_TEST_HEIGHT, Record().Height(), {TX_FEE}, outputs), TX_FEE - TX_FEE / 5);
+
+    // Blocks of stake on both sides of the height.
+    bool before{false}, after{false};
+    for (int i{2}; !after; ++i) {
+        BOOST_REQUIRE_LT(i, 20);
+        Accept(Pay(coin, spent, {}));
+        const CBlock block{PosBlock(first + i)};
+        const int height{Tip()->nHeight + 1};
+        const bool curve2{height >= FEE_CURVE2_TEST_HEIGHT};
+        const CAmount bidder{curve2 ? TX_FEE / 5 : TX_FEE / 10};
+        BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPotScript), bidder);
+        BOOST_CHECK_EQUAL(OutputsOf(*block.vtx[0], pos::IsPoolScript), TX_FEE - bidder);
+        // The other curve's split: refused.
+        const CAmount other{curve2 ? TX_FEE / 10 : TX_FEE / 5};
+        CBlock wrong{block};
+        SetCoinbase(wrong, [&](CMutableTransaction& cb) {
+            for (auto& out : cb.vout) {
+                if (pos::IsPotScript(out.scriptPubKey)) out.nValue = other;
+                if (pos::IsPoolScript(out.scriptPubKey)) out.nValue = TX_FEE - other;
+            }
+        });
+        Resign(wrong);
+        BOOST_CHECK_EQUAL(Check(wrong), "bad-pos-fee-split");
+        (curve2 ? after : before) = true;
+        Take(block);
+    }
+    BOOST_CHECK(before);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

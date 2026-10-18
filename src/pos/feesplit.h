@@ -29,6 +29,11 @@ class Mainchain;
  *  - The ordinary fees F are split: the bidder takes B = max(floor(F / 10), min(floor(F / 2), floor(30 F / S)))
  *    -- b = max(10 %, 50 % · min(1, 60 s / S)) rounded down to the satoshi -- and the validators the rest,
  *    F - B (the odd satoshi of a 50/50 split is theirs), into the validator pool.
+ *    That is the first curve (FeeCurve::FIRST). From PosParams::fee_curve2_height on, the second one
+ *    (FeeCurve::LINEAR, "the fee curve of 2026-10-18 (2)"): the bidder's share falls linearly with S,
+ *    5 points a minute from 50 % at 60 s to the floor of 20 % at 420 s:
+ *        bps = 5000 for S <= 60, 2000 for S >= 420, else 5000 - ceil(500 (S - 60) / 60),
+ *    i.e. the exact share in basis points rounded down to an integer, and B = floor(F bps / 10000).
  *  - S is the median spacing of the last 11 mainchain blocks (MedianSpacingAt) at a mainchain height the
  *    block cannot choose: the epoch's seed block for a block of stake (SeedHeight), the block before
  *    the commitment for a BMM block (PegStep::main_height). Neither depends on acknowledgements.
@@ -49,6 +54,20 @@ inline constexpr int FEE_SPLIT_SPACINGS{11};
 //! The bidder's share of ordinary fees: at most 50 % (5000 bps), at least 10 % (1000 bps).
 inline constexpr int64_t FEE_SPLIT_MAX_BIDDER_BPS{5000};
 inline constexpr int64_t FEE_SPLIT_MIN_BIDDER_BPS{1000};
+//! The second curve: the bidder's share falls this many basis points for each FEE_SPLIT_TARGET_SPACING
+//! of S above FEE_SPLIT_TARGET_SPACING, down to FEE_CURVE2_MIN_BIDDER_BPS (reached at S = 420 s).
+inline constexpr int64_t FEE_CURVE2_STEP_BPS{500};
+inline constexpr int64_t FEE_CURVE2_MIN_BIDDER_BPS{2000};
+inline constexpr int64_t FEE_CURVE2_FLOOR_SPACING{FEE_SPLIT_TARGET_SPACING + (FEE_SPLIT_MAX_BIDDER_BPS - FEE_CURVE2_MIN_BIDDER_BPS) * FEE_SPLIT_TARGET_SPACING / FEE_CURVE2_STEP_BPS};
+static_assert(FEE_CURVE2_FLOOR_SPACING == 420);
+
+/** Which curve gives the bidder's share of ordinary fees (PosParams::fee_curve2_height). */
+enum class FeeCurve : int {
+    //! b = max(10 %, 50 % · min(1, 60 s / S)).
+    FIRST = 1,
+    //! b = clamp(50 % - 5 % · (S - 60 s) / 60 s, 20 %, 50 %) (from fee_curve2_height).
+    LINEAR = 2,
+};
 
 CScript PoolScript();
 bool IsPoolScript(const CScript& script);
@@ -72,10 +91,13 @@ int64_t MedianSpacing(std::vector<int64_t> spacings);
  */
 int64_t MedianSpacingAt(const sidechain::Mainchain& record, int height, int base);
 
-/** B for ordinary fees F at spacing S (see above). */
-CAmount BidderShare(CAmount fees, int64_t spacing);
-/** The bidder's share of ordinary fees at spacing S in basis points, rounded down (what RPCs show). */
-int64_t BidderShareBps(int64_t spacing);
+/** B for ordinary fees F at spacing S by a curve (see above). */
+CAmount BidderShare(CAmount fees, int64_t spacing, FeeCurve curve = FeeCurve::FIRST);
+/**
+ * The bidder's share of ordinary fees at spacing S in basis points, rounded down: what RPCs show for
+ * the first curve; for the second, what B is computed from.
+ */
+int64_t BidderShareBps(int64_t spacing, FeeCurve curve = FeeCurve::FIRST);
 
 struct FeeSplit {
     //! Fees of peg transactions (IsPegTx): the bidder's.
@@ -93,7 +115,7 @@ struct FeeSplit {
  * The split of a block's fees. `fees[i]` is the fee of `vtx[i]` (entry 0, the coinbase's, is not read;
  * `fees` may be one shorter than `vtx`, without it: then `fees[i - 1]` is that of `vtx[i]`).
  */
-FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing);
+FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve = FeeCurve::FIRST);
 
 /** A validator of the set of an epoch whose pool is paid. */
 struct PoolMember {

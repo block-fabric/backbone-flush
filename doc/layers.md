@@ -110,7 +110,11 @@ template's state transition. Where they meet:
   activation height).
 - **Fees.** An asset transaction is an ordinary transaction for the fees: FastBlocks' fee split applies to it
   as to any other, from Layers' first block on every network (`fee_split_height` 0: a new chain, no height
-  to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). The BMM bidder
+  to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). FastBlocks' second fee curve (`fee_curve2_height`, the bidder's
+  share 50 % down to 20 %, linear) holds from the first block on the main network and signet; Layers' test
+  network, running since before it with the first curve, takes it from `TESTNET_FEE_CURVE2_HEIGHT`
+  (`src/kernel/testnet_activation.h`, `INT_MAX` until the coordinator sets it with `TESTNET_DEX_HEIGHT`);
+  regtest `-testactivationheight=feecurve2@<height>`. The BMM bidder
   gets the fees of peg transactions whole and a share of ordinary fees by the mainchain's pace; the rest goes
   to the validator pool, paid to every validator by stake each epoch (doc/fastblocks.md, "Fees, the pot and
   the validator pool").
@@ -207,15 +211,21 @@ the window from the time of a block (or the last seconds) to the tip's time, fro
 observation at or before the start (extended with the reserves it left) to the last one; a window
 that starts before the oldest observation kept is refused.
 
-**Oracles.** `registeroracle name (pubkey)` (marker kind 14) registers an oracle under a name
-(1–64 printable characters; its id the tagged hash of the name) with an x-only key; the marker
-burns `ORACLE_REGISTRATION_FEE` (0.1 CHN), which goes to mainchain miners as the fee of a
-withdrawal (as the CHN freed by retiring an asset): a cost against spam, in the peg balance's
-`withdrawals`. `publishoracle oracle event value (height) (signature)` (kind 15) publishes an
-attestation: the event's id is the tagged hash of its description; the oracle's key signs (BIP340)
-`SHA256(ser("Layers oracle attestation") ‖ oracle id ‖ event id ‖ value (int64 LE) ‖ height (int32
-LE))`; valid in a block at `height` or later, once per (oracle, event) (`bad-ba-attested`). The
-wallet signs with its key of the oracle, or takes an outside signature. `listoracles`,
+**Oracles.** An oracle *is* its key: `registeroracle name (pubkey) (proof)` (marker kind 14)
+registers an x-only key, whose id is the tagged hash of the key (`dex::OracleId`), once; the name
+is a label, which other oracles may share (so nobody can squat or front-run an oracle by its name:
+one who copies a registration from the mempool with another key makes another oracle). The
+registration carries the key's proof of possession, a BIP340 signature over `SHA256(ser("Layers
+oracle registration") ‖ the chain's first block ‖ ser(name) ‖ key)` (`dex::RegistrationHash`;
+`bad-ba-oracle-proof` otherwise): nobody registers a key that is not theirs, nor reuses a proof on
+another chain or under another name. The marker burns `ORACLE_REGISTRATION_FEE` (0.1 CHN), which
+goes to mainchain miners as the fee of a withdrawal (as the CHN freed by retiring an asset): a cost
+against spam, in the peg balance's `withdrawals`. `publishoracle oracle event value (height)
+(signature)` (kind 15) publishes an attestation: the event's id is the tagged hash of its
+description; the oracle's key signs (BIP340) `SHA256(ser("Layers oracle attestation") ‖ oracle id ‖
+event id ‖ value (int64 LE) ‖ height (int32 LE))`; valid in a block at `height` or later, once per
+(oracle, event) (`bad-ba-attested`). The wallet signs with its key of the oracle, or takes outside
+signatures (the proof and the attestations). RPCs name an oracle by its id or its key. `listoracles`,
 `getoraclevalue oracle event`.
 
 **Oracle contracts.** `createoraclecontract oracle event asset amount outcomes refund_address

@@ -69,24 +69,35 @@ int64_t MedianSpacingAt(const sidechain::Mainchain& record, int height, int base
     return MedianSpacing(std::move(spacings));
 }
 
-CAmount BidderShare(CAmount fees, int64_t spacing)
+int64_t BidderShareBps(int64_t spacing, FeeCurve curve)
+{
+    if (spacing <= FEE_SPLIT_TARGET_SPACING) return FEE_SPLIT_MAX_BIDDER_BPS;
+    if (curve == FeeCurve::LINEAR) {
+        if (spacing >= FEE_CURVE2_FLOOR_SPACING) return FEE_CURVE2_MIN_BIDDER_BPS;
+        // 5000 - 500 (S - 60) / 60 rounded down: less the drop rounded up. (60 < S < 420: no overflow.)
+        const int64_t drop{FEE_CURVE2_STEP_BPS * (spacing - FEE_SPLIT_TARGET_SPACING)};
+        return FEE_SPLIT_MAX_BIDDER_BPS - (drop + FEE_SPLIT_TARGET_SPACING - 1) / FEE_SPLIT_TARGET_SPACING;
+    }
+    return std::max(FEE_SPLIT_MIN_BIDDER_BPS, FEE_SPLIT_MAX_BIDDER_BPS * FEE_SPLIT_TARGET_SPACING / spacing);
+}
+
+CAmount BidderShare(CAmount fees, int64_t spacing, FeeCurve curve)
 {
     if (fees <= 0) return 0;
     const CAmount half{fees / 2};
-    const CAmount floor_share{fees * FEE_SPLIT_MIN_BIDDER_BPS / 10000};
     if (spacing <= FEE_SPLIT_TARGET_SPACING) return half;
+    if (curve == FeeCurve::LINEAR) {
+        // floor(F · bps / 10000) without overflow (F · 5000 may not fit in 64 bits): F = q · 10000 + r.
+        const int64_t bps{BidderShareBps(spacing, curve)};
+        return fees / 10000 * bps + fees % 10000 * bps / 10000;
+    }
+    const CAmount floor_share{fees * FEE_SPLIT_MIN_BIDDER_BPS / 10000};
     // 50 % · 60 / S = 30 / S. (fees ≤ MAX_MONEY: 30 · fees fits.)
     const CAmount scaled{fees * (FEE_SPLIT_TARGET_SPACING * FEE_SPLIT_MAX_BIDDER_BPS / 10000) / spacing};
     return std::max(floor_share, std::min(half, scaled));
 }
 
-int64_t BidderShareBps(int64_t spacing)
-{
-    if (spacing <= FEE_SPLIT_TARGET_SPACING) return FEE_SPLIT_MAX_BIDDER_BPS;
-    return std::max(FEE_SPLIT_MIN_BIDDER_BPS, FEE_SPLIT_MAX_BIDDER_BPS * FEE_SPLIT_TARGET_SPACING / spacing);
-}
-
-FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing)
+FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve)
 {
     FeeSplit split;
     for (size_t i{1}; i < vtx.size(); ++i) {
@@ -94,7 +105,7 @@ FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount
         if (at >= fees.size()) break;
         (IsPegTx(*vtx[i]) ? split.peg : split.ordinary) += fees[at];
     }
-    split.bidder_ordinary = BidderShare(split.ordinary, spacing);
+    split.bidder_ordinary = BidderShare(split.ordinary, spacing, curve);
     split.validators = split.ordinary - split.bidder_ordinary;
     return split;
 }

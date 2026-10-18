@@ -35,8 +35,8 @@
  *    (UQ64.64, modulo 2^256). The time is the block's (nTime: the slot's time for a block of stake, the
  *    header's for a BMM block), never less than the last. Each such block leaves an observation, the
  *    last TWAP_OBSERVATIONS of each pool kept (a ring).
- *  - **Oracles.** An oracle is registered under a name with a key (the fee, ORACLE_REGISTRATION_FEE,
- *    goes to mainchain miners); it attests the value of an event once, signed (BIP340) over
+ *  - **Oracles.** An oracle is its key, registered with a proof of possession and a name that labels
+ *    it (the fee, ORACLE_REGISTRATION_FEE, goes to mainchain miners); it attests the value of an event once, signed (BIP340) over
  *    AttestationHash. Oracle contracts lock an amount and pay it to the outcome the attestation names.
  */
 namespace bitassets {
@@ -179,8 +179,12 @@ std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time);
 /** The average of a price between two cumulative readings `seconds` apart, as a decimal number of the other asset per unit. */
 double AveragePrice(const uint256& delta, uint32_t seconds);
 
-/** The id of an oracle, by its name. */
-uint256 OracleId(const std::string& name);
+/** The id of an oracle: the tagged hash of its key (its name is a label, which others may share). */
+uint256 OracleId(const uint256& pubkey);
+/** What an oracle's key signs (BIP340) to register: the tag, the chain's first block, the name, the key. */
+uint256 RegistrationHash(const std::string& name, const uint256& pubkey, const uint256& genesis);
+/** Whether `proof` is the key's signature over RegistrationHash. */
+bool CheckRegistration(const std::string& name, const uint256& pubkey, const uint256& genesis, const std::array<unsigned char, 64>& proof);
 /** The id of an event, by its description (any text). */
 uint256 EventId(const std::string& event);
 /** What an oracle signs (BIP340) to attest `value` for `event` from `height` on. */

@@ -1110,7 +1110,7 @@ bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, in
     if (!pos_block && !step) return Fail(reject_reason, "bad-pos-context");
     const auto main_height{FeeSplitMainHeight(pos_block, SlotOf(block.nTime, m_params), step ? step->main_height : -1)};
     if (!main_height) return Fail(reject_reason, "pos-seed-unknown");
-    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/false, FeeSplitSpacing(*main_height))};
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/false, FeeSplitSpacing(*main_height), FeeCurveAt(height))};
     CAmount pot{0}, pool{0};
     for (const CTxOut& txout : block.vtx.at(0)->vout) {
         if (IsPotScript(txout.scriptPubKey)) pot += txout.nValue;
@@ -1126,7 +1126,7 @@ bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, in
 CAmount FastBlocksHooks::MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const
 {
     if (!FeeSplitActive(height)) return 0;
-    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/true, FeeSplitSpacing(main_height))};
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/true, FeeSplitSpacing(main_height), FeeCurveAt(height))};
     if (split.validators > 0) outputs.emplace_back(split.validators, PoolScript());
     return split.validators;
 }

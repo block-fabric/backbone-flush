@@ -96,11 +96,24 @@ double AveragePrice(const uint256& delta, uint32_t seconds)
     return UintToArith256(delta).getdouble() / seconds / 18446744073709551616.0;
 }
 
-uint256 OracleId(const std::string& name)
+uint256 OracleId(const uint256& pubkey)
 {
     HashWriter writer{};
-    writer << std::string{"Layers oracle"} << name;
+    writer << std::string{"Layers oracle"} << pubkey;
     return writer.GetSHA256();
+}
+
+uint256 RegistrationHash(const std::string& name, const uint256& pubkey, const uint256& genesis)
+{
+    HashWriter writer{};
+    writer << std::string{"Layers oracle registration"} << genesis << name << pubkey;
+    return writer.GetSHA256();
+}
+
+bool CheckRegistration(const std::string& name, const uint256& pubkey, const uint256& genesis, const std::array<unsigned char, 64>& proof)
+{
+    const XOnlyPubKey key{pubkey};
+    return key.IsFullyValid() && key.VerifySchnorr(RegistrationHash(name, pubkey, genesis), proof);
 }
 
 uint256 EventId(const std::string& event)

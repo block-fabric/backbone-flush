@@ -135,9 +135,11 @@ std::vector<RPCResult> FeeSplitFields()
         {RPCResult::Type::OBJ, "feesplit", "The fee split (from fee_split_height): the BMM bidder's share of ordinary fees, the validators' (the pool)", {
             {RPCResult::Type::BOOL, "active", "Whether the next block takes it"},
             {RPCResult::Type::NUM, "activationheight", "fee_split_height: its first block"},
+            {RPCResult::Type::NUM, "curve", "The curve of the bidder's share the next block takes: 1, or 2 from fee_curve2_height"},
+            {RPCResult::Type::NUM, "curve2height", "fee_curve2_height: the first block of curve 2"},
             {RPCResult::Type::NUM, "mainheight", "The mainchain block whose spacing blocks of stake of the current epoch take (the epoch's seed block), -1 if not on record yet"},
             {RPCResult::Type::NUM, "spacing", "S: the median spacing of the last 11 mainchain blocks there, in seconds"},
-            {RPCResult::Type::NUM, "bidderbps", "The bidder's share of ordinary fees, in basis points: max(10 %, 50 % x min(1, 60 / S))"},
+            {RPCResult::Type::NUM, "bidderbps", "The bidder's share of ordinary fees, in basis points (rounded down): curve 1 max(10 %, 50 % x min(1, 60 / S)); curve 2 clamp(50 % - 5 % x (S - 60) / 60, 20 %, 50 %)"},
             {RPCResult::Type::NUM, "validatorsbps", "The validators' share (10000 less it)"},
             {RPCResult::Type::NUM, "bmmmainheight", "For a BMM block made now: the mainchain tip it follows"},
             {RPCResult::Type::NUM, "bmmspacing", "S there"},
@@ -174,13 +176,16 @@ UniValue FeeSplitToJSON(const pos::FastBlocksHooks& hooks, ChainstateManager& ch
     UniValue split(UniValue::VOBJ);
     split.pushKV("active", hooks.FeeSplitActive(next_height));
     split.pushKV("activationheight", params.fee_split_height);
+    const pos::FeeCurve curve{hooks.FeeCurveAt(next_height)};
+    split.pushKV("curve", static_cast<int>(curve));
+    split.pushKV("curve2height", params.fee_curve2_height);
     split.pushKV("mainheight", main_height.value_or(-1));
     split.pushKV("spacing", spacing);
-    split.pushKV("bidderbps", pos::BidderShareBps(spacing));
-    split.pushKV("validatorsbps", 10000 - pos::BidderShareBps(spacing));
+    split.pushKV("bidderbps", pos::BidderShareBps(spacing, curve));
+    split.pushKV("validatorsbps", 10000 - pos::BidderShareBps(spacing, curve));
     split.pushKV("bmmmainheight", main_tip);
     split.pushKV("bmmspacing", bmm_spacing);
-    split.pushKV("bmmbidderbps", pos::BidderShareBps(bmm_spacing));
+    split.pushKV("bmmbidderbps", pos::BidderShareBps(bmm_spacing, curve));
     CAmount total{0};
     UniValue epochs(UniValue::VARR);
     for (const auto& [epoch, amount] : pool) {

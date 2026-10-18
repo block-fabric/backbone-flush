@@ -58,6 +58,14 @@ struct PosParams {
      * unless -testactivationheight=feesplit@<height>.
      */
     int fee_split_height{0};
+    /**
+     * The first block (of this chain) whose bidder's share of ordinary fees takes the second curve
+     * (pos/feesplit.h, FeeCurve::LINEAR: 50 % at S <= 60 s, 5 points less a minute, 20 % from 420 s);
+     * below it, the first (FeeCurve::FIRST). Main 0; the test network and signet
+     * TESTNET_FEE_CURVE2_HEIGHT / SIGNET_FEE_CURVE2_HEIGHT (kernel/testnet_activation.h); regtest never,
+     * unless -testactivationheight=feecurve2@<height>.
+     */
+    int fee_curve2_height{0};
     //! A PoS block may be this far ahead of the node's clock, at most.
     int64_t max_future_seconds{2};
     //! Not consensus: wallets call a block final once this many anchors cover it.

@@ -251,6 +251,7 @@ public:
         consensus.sidechain.dex_height = 0; // Layers' DEX from the first block (a new network)
         // The fee split from the first block: the main network has not started (doc/fastblocks.md).
         consensus.pos.fee_split_height = 0;
+        consensus.pos.fee_curve2_height = 0;
         // A tenth of the mainchain's withdrawal_min_score (64800); proposals within a day.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -386,6 +387,7 @@ public:
         consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 7 activates on the test network (kernel/testnet_activation.h)
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
         consensus.pos.fee_split_height = TESTNET_FEE_SPLIT_HEIGHT; // Layers: 0, from the first block (kernel/testnet_activation.h)
+        consensus.pos.fee_curve2_height = TESTNET_FEE_CURVE2_HEIGHT; // a placeholder (kernel/testnet_activation.h): the test network runs since before it
         // A tenth of the testnet mainchain's withdrawal_min_score (300); proposals within an hour.
         consensus.sidechain.pending_min_score = 30;
         consensus.sidechain.unproposed_expiry_blocks = 60;
@@ -524,6 +526,7 @@ public:
         consensus.sidechain.bitassets_reveal_depth = 3;
         consensus.sidechain.dex_height = 0; // Layers' DEX from the first block
         consensus.pos.fee_split_height = SIGNET_FEE_SPLIT_HEIGHT; // kernel/testnet_activation.h
+        consensus.pos.fee_curve2_height = SIGNET_FEE_CURVE2_HEIGHT;
         // The Chains signet has the rules of its main network.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -643,6 +646,8 @@ public:
             // The fee split never, unless a test asks (-testactivationheight=feesplit@<height>): the
             // tests of the rules before it run unchanged.
             consensus.pos.fee_split_height = opts.dep_opts.fee_split_height.value_or(std::numeric_limits<int>::max());
+            // The second fee curve the same (-testactivationheight=feecurve2@<height>): the first until then.
+            consensus.pos.fee_curve2_height = opts.dep_opts.fee_curve2_height.value_or(std::numeric_limits<int>::max());
             consensus.sidechain.bundle_retry_delay = 5;
             consensus.sidechain.bitassets_reveal_depth = 2;
             // Layers' DEX never, unless a test asks (-testactivationheight=dex@<height>): the tests of the

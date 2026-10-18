@@ -19,7 +19,11 @@ on, and jumps for the mainchain's spacing:
   - the pool of an epoch is paid at the first anchor after it ends, to each validator's bond owner, by
     stake (floor), the remainder carried to the next epoch; the wallet calls it "validator" income;
   - a reorg across the distribution takes it back and pays it again; a restart keeps the pool;
-  - after every step, the coins of every node are the mainchain's escrow (pegbalance, the pool in it).
+  - after every step, the coins of every node are the mainchain's escrow (pegbalance, the pool in it);
+  - the fee curve of 2026-10-18 (2), from -testactivationheight=feecurve2@<height> (the nodes restarted
+    with a height ahead of the tip): before it the first curve (S = 60 and 600 above, 120 here), from it
+    b = clamp(50 % - 5 % x (S - 60) / 60, 20 %, 50 %), the basis points rounded down, at S = 120, 600
+    and 60, for blocks of stake and a merged mined block.
 """
 
 import os
@@ -52,8 +56,23 @@ def sats(value):
     return int(Decimal(value) * COIN)
 
 
-def bidder_share(fee, spacing):
-    """B = max(floor(F / 10), min(floor(F / 2), floor(30 F / S))); F / 2 for S <= 60."""
+INT_MAX = 2**31 - 1
+
+
+def bidder_bps2(spacing):
+    """The second curve's share in basis points, rounded down: 5000 - ceil(500 (S - 60) / 60) within [2000, 5000]."""
+    if spacing <= 60:
+        return 5000
+    if spacing >= 420:
+        return 2000
+    return 5000 - (500 * (spacing - 60) + 59) // 60
+
+
+def bidder_share(fee, spacing, curve=1):
+    """Curve 1: B = max(floor(F / 10), min(floor(F / 2), floor(30 F / S))); F / 2 for S <= 60.
+    Curve 2: B = floor(F bps / 10000)."""
+    if curve == 2:
+        return fee * bidder_bps2(spacing) // 10000
     if spacing <= 60:
         return fee // 2
     return max(fee // 10, min(fee // 2, 30 * fee // spacing))
@@ -76,6 +95,8 @@ class FastBlocksFeeSplitTest(SidechainTest):
         self.extra_args = [self.side_args] * self.num_nodes
         self.main_process = None
         self.rpc_timeout = 120
+        #: The first block of the second fee curve (none until the test restarts the nodes with it).
+        self.curve2_height = None
 
     def setup_network(self):
         self.start_mainchain()
@@ -208,13 +229,17 @@ class FastBlocksFeeSplitTest(SidechainTest):
         self.wait_until(lambda: all(n.getbestblockhash() == block["hash"] for n in self.nodes), timeout=60)
         return n0.getblock(block["hash"], 2)
 
+    def curve_at(self, height):
+        return 2 if self.curve2_height is not None and height >= self.curve2_height else 1
+
     def check_split(self, block, fee, peg_fee=0):
         """A block of stake's coinbase: nothing to the producer, the bidder's share and the peg fees in the
-        pot, the validators' share in the pool, by S of its epoch's seed block (worked out here)."""
+        pot, the validators' share in the pool, by S of its epoch's seed block (worked out here) and the
+        curve of its height."""
         assert_equal(block["kind"], "pos")
         epoch = block["slot"] // EPOCH
         spacing = self.main_spacing(self.seed_height(epoch))
-        bidder = bidder_share(fee, spacing)
+        bidder = bidder_share(fee, spacing, self.curve_at(block["height"]))
         assert_equal(sats(block["tx"][0]["vout"][0]["value"]), 0)
         assert_equal(self.outputs(block, POT_SCRIPT), bidder + peg_fee)
         assert_equal(self.outputs(block, POOL_SCRIPT), fee - bidder)
@@ -256,6 +281,8 @@ class FastBlocksFeeSplitTest(SidechainTest):
         split = n0.getposinfo()["feesplit"]
         assert_equal(split["active"], False)
         assert_equal(split["activationheight"], FEE_SPLIT_HEIGHT)
+        assert_equal(split["curve"], 1)
+        assert_equal(split["curve2height"], INT_MAX)
         self.check_peg()
 
         self.log.info("Before the height: the producer keeps half the fees, the pot the rest; no pool")
@@ -411,6 +438,94 @@ class FastBlocksFeeSplitTest(SidechainTest):
         after = n0.getposinfo()["feesplit"]
         assert_equal(after["pool"], before["pool"])
         assert_equal(after["poolepochs"], before["poolepochs"])
+        self.resume()
+        self.clock.advance(3)
+        self.anchor()
+        self.check_peg()
+
+        self.run_curve2()
+
+    def spacing_phase(self, spacing, count):
+        """A mainchain `spacing` seconds apart (`count` blocks: the seed, an hour back, among them); a merged
+        mined block with a payment, split by S at its mainchain block and the curve of its height; then a
+        block of stake with a payment, by the seed's S. Returns the two blocks."""
+        n0 = self.nodes[0]
+        self.mainchain_spaced(spacing, count)
+        txid = self.send()
+        bmm = self.bmm_block()
+        assert_equal(bmm["kind"], "bmm")
+        assert txid in [tx["txid"] for tx in bmm["tx"]]
+        fee = self.fee_of(n0, txid)
+        bmm_spacing = self.main_spacing(self.main.getblockcount() - 1)
+        assert_equal(bmm_spacing, spacing)
+        bidder = bidder_share(fee, spacing, self.curve_at(bmm["height"]))
+        assert_equal(self.outputs(bmm, POOL_SCRIPT), fee - bidder)
+        assert_equal(sats(bmm["tx"][0]["vout"][0]["value"]), bidder)
+        self.check_peg()
+        self.resume()
+        self.clock.advance(2)
+        info = n0.getposinfo()
+        curve = self.curve_at(n0.getblockcount() + 1)
+        assert_equal(info["feesplit"]["spacing"], spacing)
+        assert_equal(info["feesplit"]["curve"], curve)
+        assert_equal(info["feesplit"]["bidderbps"], bidder_bps2(spacing) if curve == 2 else bidder_share(10000, spacing))
+        assert_equal(info["feesplit"]["validatorsbps"], 10000 - info["feesplit"]["bidderbps"])
+        assert_equal(n0.getstakinginfo()["feesplit"]["curve"], curve)
+        txid = self.send()
+        block = self.confirm(n0, txid)
+        assert_equal(self.check_split(block, self.fee_of(n0, txid)), spacing)
+        self.anchor()
+        self.check_peg()
+        return bmm, block
+
+    def run_curve2(self):
+        n0 = self.nodes[0]
+        self.log.info("The second fee curve: the nodes restarted with its height a little ahead of the tip")
+        stop_bmm(self.main, self.main_address, n0, self.nodes)
+        self.in_sync()
+        self.curve2_height = n0.getblockcount() + 40
+        self.side_args = self.side_args + [f"-testactivationheight=feecurve2@{self.curve2_height}"]
+        for i in range(2):
+            self.restart_node(i, extra_args=self.node_args(i))
+        self.connect_nodes(0, 1)
+        split = n0.getposinfo()["feesplit"]
+        assert_equal(split["curve"], 1)
+        assert_equal(split["curve2height"], self.curve2_height)
+        self.resume()
+        self.check_peg()
+
+        self.log.info("Before its height, S = 120: the first curve (a quarter to the bidder)")
+        bmm, block = self.spacing_phase(120, 45)
+        assert_greater_than(self.curve2_height, block["height"])
+        assert_equal(self.curve_at(bmm["height"]), 1)
+        assert_equal(n0.getposinfo()["feesplit"]["bidderbps"], 2500)
+
+        self.log.info("From its height: S = 120, 45/55")
+        self.clock.advance_until(lambda: n0.getblockcount() >= self.curve2_height, 80)
+        info = n0.getposinfo()["feesplit"]
+        assert_equal((info["curve"], info["spacing"], info["bidderbps"], info["validatorsbps"]), (2, 120, 4500, 5500))
+        txid = self.send()
+        block = self.confirm(n0, txid)
+        assert_greater_than(block["height"], self.curve2_height - 1)
+        fee = self.fee_of(n0, txid)
+        assert_equal(self.check_split(block, fee), 120)
+        assert_equal(self.outputs(block, POT_SCRIPT), fee * 4500 // 10000)
+        self.anchor()
+        self.check_peg()
+
+        self.log.info("From its height: S = 600, the floor of 20 % (a merged mined block and a block of stake)")
+        bmm, block = self.spacing_phase(600, 20)
+        assert_equal((self.curve_at(bmm["height"]), self.curve_at(block["height"])), (2, 2))
+        assert_equal(n0.getposinfo()["feesplit"]["bidderbps"], 2000)
+
+        self.log.info("From its height: S = 60, 50/50")
+        bmm, block = self.spacing_phase(60, 75)
+        assert_equal(n0.getposinfo()["feesplit"]["bidderbps"], 5000)
+
+        self.log.info("A restart keeps the curve")
+        self.restart_node(1, extra_args=self.node_args(1))
+        self.connect_nodes(0, 1)
+        assert_equal(self.nodes[1].getposinfo()["feesplit"]["curve"], 2)
         self.resume()
         self.clock.advance(3)
         self.anchor()
