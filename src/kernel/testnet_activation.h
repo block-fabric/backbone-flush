@@ -12,14 +12,13 @@
  * slot 7 (Consensus::SidechainParams::main_activation_height of the test network, and the PoS rules'
  * pos.main_activation_height with it).
  *
- * Slot 7 is proposed on the Chains testnet (18/Oct/2026); until it activates this is 0, which the
- * node accepts on a test network with a warning in its log (CheckSidechainActivation) and which
- * leaves nothing of the mainchain out. Once the slot is active, set it to the "activationheight" that
- * `chains-cli -testnet getsidechain 7` shows, rebuild, and start the nodes of the test network
- * only then: a node started before keeps the record of the mainchain it began (from height 0, not from
- * the activation; harmless, but start new datadirs with the height set).
+ * Slot 7 activated at Chains testnet block 4997 (18/Oct/2026): the "activationheight" that
+ * `chains-cli -testnet getsidechain 7` shows. (Until it was set, 0, which a test network accepts with a
+ * warning in the log, CheckSidechainActivation, and which leaves nothing of the mainchain out.) Start the
+ * nodes of the test network with a release that has it: a node started before keeps the record of the
+ * mainchain it began (from height 0, not from the activation; harmless, but start new datadirs).
  */
-inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{0};
+inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{4997};
 
 /**
  * The fee split (Consensus::PosParams::fee_split_height, pos/feesplit.h) on the test network and signet.
