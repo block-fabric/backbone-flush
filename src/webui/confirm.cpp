@@ -823,12 +823,17 @@ std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const s
     args.push_back(entry->commit_txid);
     const UniValue tx{confirm::Call{node, wallet, "gettransaction", args}.Read("gettransaction", args, true)};
     const UniValue& depth{tx.isObject() ? tx.find_value("confirmations") : NullUniValue};
-    if (!depth.isNum() || depth.getInt<int64_t>() < 0 || tx.find_value("abandoned").isTrue()) {
+    bool commit_abandoned{tx.isObject() && tx.find_value("abandoned").isTrue()};
+    if (tx.isObject() && tx.find_value("details").isArray()) {
+        for (const UniValue& d : tx.find_value("details").getValues()) commit_abandoned |= d.find_value("abandoned").isTrue();
+    }
+    if (!depth.isNum() || depth.getInt<int64_t>() < 0 || commit_abandoned) {
         LogInfo("webui: the authorization of %s is dropped: its first step %s is not in the wallet any more", name, entry->commit_txid);
         return std::nullopt;
     }
-    // Sent already: again only if its transaction left the mempool without a block (what the page resends then); in a
-    // block, the authorization is used up; still waiting in the mempool, nothing to do.
+    // Sent already: the method never runs again under the authorization (a new transaction could pay twice while the
+    // first may still confirm). While it waits in the mempool, nothing; out of it without a block, that very transaction
+    // is broadcast again, a few times at most; in a block, conflicted, abandoned or gone, the authorization is used up.
     if (!entry->reveal_txid.empty()) {
         UniValue reveal{UniValue::VARR};
         reveal.push_back(entry->reveal_txid);
@@ -838,11 +843,33 @@ std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const s
         }
         const UniValue sent{confirm::Call{node, wallet, "gettransaction", reveal}.Read("gettransaction", reveal, true)};
         const UniValue& sent_depth{sent.isObject() ? sent.find_value("confirmations") : NullUniValue};
-        if (!sent_depth.isNum() || sent_depth.getInt<int64_t>() != 0) {
-            LogInfo("webui: the authorization of %s is used up: its transaction %s is in a block, or gone", name, entry->reveal_txid);
+        const UniValue& hex{sent.isObject() ? sent.find_value("hex") : NullUniValue};
+        // Abandoned: said by each entry of its details (gettransaction), or at the top.
+        bool abandoned{sent.isObject() && sent.find_value("abandoned").isTrue()};
+        if (sent.isObject() && sent.find_value("details").isArray()) {
+            for (const UniValue& d : sent.find_value("details").getValues()) abandoned |= d.find_value("abandoned").isTrue();
+        }
+        if (!sent_depth.isNum() || sent_depth.getInt<int64_t>() != 0 || abandoned || !hex.isStr() ||
+            entry->rebroadcasts >= Authorizations::MAX_REBROADCASTS) {
+            LogInfo("webui: the authorization of %s is used up (its transaction %s is in a block, conflicted, abandoned or sent again enough)", name, entry->reveal_txid);
             return std::nullopt;
         }
-        LogInfo("webui: %s is sent again as accepted: %s left the mempool without a block", name, entry->reveal_txid);
+        ++entry->rebroadcasts;
+        UniValue raw{UniValue::VARR};
+        raw.push_back(hex);
+        try {
+            const UniValue txid{RunRpc(node, "sendrawtransaction", raw, std::string{})};
+            LogInfo("webui: %s: its transaction %s broadcast again as accepted (%d of %d)", name, entry->reveal_txid, entry->rebroadcasts, Authorizations::MAX_REBROADCASTS);
+            UniValue result{UniValue::VOBJ};
+            result.pushKV("txid", txid.isStr() ? txid.get_str() : entry->reveal_txid);
+            result.pushKV("rebroadcast", true);
+            m_authorizations.GiveBack(std::move(*entry), now);
+            return result;
+        } catch (const HostError& e) {
+            // Not taken back (stale at this tip, its inputs spent): used up; the call is asked as any other.
+            LogInfo("webui: the authorization of %s is used up: its transaction %s is not taken back (%s)", name, entry->reveal_txid, e.what());
+            return std::nullopt;
+        }
     }
     // At most the fee the user was shown, at the wallet's fee rate now.
     const std::optional<CAmount> fee{m_fee ? m_fee(wallet, entry->vsize) : std::nullopt};

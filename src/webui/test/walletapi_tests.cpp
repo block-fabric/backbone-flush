@@ -1143,11 +1143,11 @@ BOOST_AUTO_TEST_CASE(two_steps_in_one_question)
     BOOST_CHECK_EQUAL(confirmed.authorizations().Size(), 0U);
 }
 
-BOOST_AUTO_TEST_CASE(second_step_sent_again_only_when_dropped)
+BOOST_AUTO_TEST_CASE(second_step_never_runs_twice)
 {
-    // The second step's transaction left the mempool without a block (stale, evicted): the same call again runs without
-    // a question (what the pages resend); while it waits in the mempool, or once it is in a block, nothing: one
-    // registration, however often the page asks.
+    // Once the second step made its transaction, the method never runs again under the authorization (a new transaction
+    // could pay twice while the first may still confirm): out of the mempool without a block, that very transaction is
+    // broadcast again, a few times at most; abandoned or conflicted, the authorization is used up, the call asked again.
     if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
     loader->registerRpcs();
     webui::confirm::ConfirmedRpc confirmed{[this]() -> interfaces::Node& { return *node; },
@@ -1169,8 +1169,7 @@ BOOST_AUTO_TEST_CASE(second_step_sent_again_only_when_dropped)
     Call("wallets.create", Obj({{"name", "r"}}));
     const std::string a{Call("wallet.newAddress", Obj({{"wallet", "r"}})).get_str()};
     const std::string b{Call("wallet.newAddress", Obj({{"wallet", "r"}})).get_str()};
-    Mine(1, GetScriptForDestination(DecodeDestination(a)));
-    Mine(1, GetScriptForDestination(DecodeDestination(a)));
+    for (int i{0}; i < 4; ++i) Mine(1, GetScriptForDestination(DecodeDestination(a)));
     Mine(100, CScript{} << OP_TRUE);
     const auto call{[&](const UniValue& params) {
         try {
@@ -1179,39 +1178,59 @@ BOOST_AUTO_TEST_CASE(second_step_sent_again_only_when_dropped)
             return std::make_pair(e.code, UniValue{});
         }
     }};
-    const UniValue second{Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{"2"}})}, {"authorizedOnly", true}})};
+    const auto accept_both{[&](const std::string& amount) {
+        Answer(true);
+        BOOST_REQUIRE_EQUAL(call(Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{a}, UniValue{"1"}})}, {"then", Obj({{"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{amount}})}})}})).first, 0);
+    }};
+    const auto second{[&](const std::string& amount) { return Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{amount}})}, {"authorizedOnly", true}}); }};
+    const auto drop{[&](const std::string& txid) {
+        const CTransactionRef tx{m_node.mempool->get(Txid::FromHex(txid).value())};
+        BOOST_REQUIRE(tx);
+        {
+            LOCK2(cs_main, m_node.mempool->cs);
+            m_node.mempool->removeRecursive(*tx, MemPoolRemovalReason::EXPIRY);
+        }
+        Sync();
+    }};
+    const auto wallet_txs{[&] { return node->executeRpc("listtransactions", List({UniValue{"*"}, UniValue{1000}}), "/wallet/r").size(); }};
+
     asked.clear();
-    Answer(true);
-    const auto [paid, commit]{call(Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{a}, UniValue{"1"}})}, {"then", Obj({{"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{"2"}})}})}}))};
-    BOOST_REQUIRE_EQUAL(paid, 0);
-    const auto [ok, first]{call(second)};
+    accept_both("2");
+    const auto [ok, first]{call(second("2"))};
     BOOST_REQUIRE_EQUAL(ok, 0);
-    const Txid txid{Txid::FromHex(first.get_str()).value()};
-    // In the mempool: not again.
-    BOOST_CHECK_EQUAL(call(second).first, webui::BRIDGE_AUTH_NEEDED);
-    // Dropped from it: sent again, without a question.
-    const CTransactionRef tx{m_node.mempool->get(txid)};
-    BOOST_REQUIRE(tx);
-    {
-        LOCK2(cs_main, m_node.mempool->cs);
-        m_node.mempool->removeRecursive(*tx, MemPoolRemovalReason::EXPIRY);
+    const std::string txid{first.get_str()};
+    const size_t made{wallet_txs()};
+    // In the mempool: nothing.
+    BOOST_CHECK_EQUAL(call(second("2")).first, webui::BRIDGE_AUTH_NEEDED);
+    // Out of it without a block: the same transaction broadcast again, no new one, without a question; a few times at most.
+    for (int i{0}; i < webui::confirm::Authorizations::MAX_REBROADCASTS; ++i) {
+        drop(txid);
+        const auto [again, resent]{call(second("2"))};
+        BOOST_REQUIRE_EQUAL(again, 0);
+        BOOST_CHECK_EQUAL(resent["txid"].get_str(), txid);
+        BOOST_CHECK(resent["rebroadcast"].isTrue());
+        BOOST_CHECK(m_node.mempool->get(Txid::FromHex(txid).value()));
     }
-    Sync();
-    const auto [again, resent]{call(second)};
-    BOOST_REQUIRE_EQUAL(again, 0);
-    BOOST_CHECK(resent.get_str() != first.get_str());
-    BOOST_CHECK_EQUAL(asked.size(), 1U);
-    // In a block: used up.
-    const CTransactionRef mined{m_node.mempool->get(Txid::FromHex(resent.get_str()).value())};
-    BOOST_REQUIRE(mined);
-    // With the first step's transaction, whose change it may spend.
-    const CTransactionRef parent{m_node.mempool->get(Txid::FromHex(commit.get_str()).value())};
-    BOOST_REQUIRE(parent);
-    CreateAndProcessBlock({CMutableTransaction{*parent}, CMutableTransaction{*mined}}, CScript{} << OP_TRUE);
-    Sync();
-    BOOST_CHECK_EQUAL(call(second).first, webui::BRIDGE_AUTH_NEEDED);
+    BOOST_CHECK_EQUAL(wallet_txs(), made);
+    drop(txid);
+    BOOST_CHECK_EQUAL(call(second("2")).first, webui::BRIDGE_AUTH_NEEDED);
     BOOST_CHECK_EQUAL(confirmed.authorizations().Size(), 0U);
+    BOOST_CHECK_EQUAL(wallet_txs(), made);
     BOOST_CHECK_EQUAL(asked.size(), 1U);
+    // Asked as any other then (here declined).
+    BOOST_CHECK_EQUAL(call(Obj({{"wallet", "r"}, {"method", "sendtoaddress"}, {"params", List({UniValue{b}, UniValue{"2"}})}})).first, webui::BRIDGE_CANCELLED);
+    BOOST_CHECK_EQUAL(asked.size(), 2U);
+
+    // Abandoned after it left the mempool: used up, never sent again.
+    accept_both("3");
+    const auto [ok3, third]{call(second("3"))};
+    BOOST_REQUIRE_EQUAL(ok3, 0);
+    drop(third.get_str());
+    node->executeRpc("abandontransaction", List({third}), "/wallet/r");
+    const size_t before{wallet_txs()};
+    BOOST_CHECK_EQUAL(call(second("3")).first, webui::BRIDGE_AUTH_NEEDED);
+    BOOST_CHECK_EQUAL(confirmed.authorizations().Size(), 0U);
+    BOOST_CHECK_EQUAL(wallet_txs(), before);
 }
 
 BOOST_AUTO_TEST_CASE(dust)

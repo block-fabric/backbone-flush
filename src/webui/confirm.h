@@ -169,10 +169,11 @@ using FeeFn = std::function<std::optional<CAmount>(const std::string& wallet, in
  * the method and the parameters of the second step exactly as shown (canonical, compared as JSON), to the transaction of
  * the first step (still in the wallet, not replaced, when the second comes), to the network fee the question said at most
  * (the wallet's fee for it then must not be more) and to a time (EXPIRY). It is taken by the call that matches it, one
- * at a time; given back when that call failed without making a transaction. Once the second step made its transaction it
- * does one thing more only: the same call again if that transaction left the mempool without being in a block (stale,
- * evicted: what the pages resend), and nothing once it is in a block or while it waits in the mempool; one registration,
- * however often the page asks. The page never sees nor names one: it can neither make, nor widen, nor reuse it.
+ * at a time; given back when that call failed without making a transaction. Once the second step made its transaction,
+ * the method never runs again under it: the same call then only broadcasts that very transaction again if it left the
+ * mempool without a block (what the pages resend), at most MAX_REBROADCASTS times; while it waits in the mempool nothing
+ * happens; in a block, conflicted, abandoned, gone, or not taken back by the mempool, the authorization is used up and the
+ * call is asked as any other. One transaction, however often the page asks. The page never sees nor names one: it can neither make, nor widen, nor reuse it.
  */
 class Authorizations
 {
@@ -188,9 +189,12 @@ public:
         CAmount fee_cap{0};
         int64_t vsize{0};
         std::chrono::steady_clock::time_point expires;
-        //! The transaction the second step made, once it ran: sent again only if it left the mempool without a block.
+        //! The transaction the second step made, once it ran: that very transaction is broadcast again (never a new one)
+        //! if it left the mempool without a block, at most MAX_REBROADCASTS times.
         std::string reveal_txid{};
+        int rebroadcasts{0};
     };
+    static constexpr int MAX_REBROADCASTS{3};
     //! How long one lasts: an hour (a reservation is deep enough in a few blocks).
     static constexpr std::chrono::seconds EXPIRY{3600};
     //! At most so many kept (the oldest goes).

@@ -298,11 +298,17 @@ Rules the code keeps:
   abandoned, when the second comes; the fee cap (the wallet's fee for it then
   must not be more); and an hour. The matching call runs without a question,
   one at a time: the authorization is taken before it runs, and given back if
-  the call failed (nothing was made). Once it made its transaction, it allows
-  one thing more only: the same call again if that transaction left the
-  mempool without being in a block (stale, evicted: the pages' resend after two
-  blocks), never while it waits in the mempool, and it is used up once it is in
-  a block: one registration, however often the page asks. Anything else is asked as before; with
+  the call failed (nothing was made). Once it made its transaction, the method
+  never runs again under it (a new transaction could pay twice while the first
+  may still confirm, after a reorganisation or from another node's mempool):
+  the same call only broadcasts that very transaction again
+  (`sendrawtransaction` of the wallet's copy) if it left the mempool without a
+  block (the pages' resend after two blocks), at most three times; while it
+  waits in the mempool nothing happens; in a block, conflicted, abandoned, gone,
+  or refused by the mempool, the authorization is used up and the call is
+  asked as any other (the registration made then, after the user's yes,
+  abandons the dropped one itself). One transaction, however often the page
+  asks. Anything else is asked as before; with
   `authorizedOnly` (what the pages send when they register by themselves) it
   is refused instead (`BRIDGE_AUTH_NEEDED`), so the page shows "Confirm
   registration" on its card rather than a dialog out of nowhere. A locked
