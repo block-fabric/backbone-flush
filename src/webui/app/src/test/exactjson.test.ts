@@ -40,7 +40,10 @@ describe('exact numbers of JSON', () => {
       expect(await request('rpc', 'listmyassets', [])).toEqual({ balance: String(BIG) });
       expect(await request('rpc', 'getbalances', [])).toEqual({ balance: Number(BIG) });
       expect(await request('rpc', 'getbalances', [], { exact: true })).toEqual({ balance: String(BIG) });
-      expect(sent.map((r) => r.exact)).toEqual([true, undefined, true]);
+      // What the host confirmed and ran (rpc.confirmed) answers exactly too, for such a method.
+      expect(await request('host', 'rpc.confirmed', { method: 'listmyassets', params: [] })).toEqual({ balance: String(BIG) });
+      expect(await request('host', 'rpc.confirmed', { method: 'sendtoaddress', params: [] })).toEqual({ balance: Number(BIG) });
+      expect(sent.map((r) => r.exact)).toEqual([true, undefined, true, true, undefined]);
     } finally {
       setTransport(null);
     }

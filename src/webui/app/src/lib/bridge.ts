@@ -107,7 +107,9 @@ export async function request<T>(kind: 'rpc' | 'host', method: string, params: u
   const rid = String(nextRid++);
   const body: BridgeRequest = { rid, kind, method, params };
   if (options.wallet != null) body.wallet = options.wallet;
-  const exact = options.exact === true || (kind === 'rpc' && exactMethods.has(method));
+  // A method a chain named, called directly or through the host's confirmation (rpc.confirmed: what it ran answers).
+  const confirmedOf = kind === 'host' && method === 'rpc.confirmed' && params && !Array.isArray(params) ? params.method : undefined;
+  const exact = options.exact === true || (kind === 'rpc' && exactMethods.has(method)) || (typeof confirmedOf === 'string' && exactMethods.has(confirmedOf));
   if (exact) body.exact = true;
   const { signal } = options;
   if (signal?.aborted) throw new BridgeError(ErrorCode.CANCELLED, 'Cancelled');
