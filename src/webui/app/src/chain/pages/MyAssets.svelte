@@ -42,7 +42,8 @@
     type Reservation,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import PendingCard from '../../components/PendingCard.svelte';
 
   $effect(() => startBitAssets());
 
@@ -236,13 +237,6 @@
     }
   }
 
-  const STAGES: { id: 'reserving' | 'waiting' | 'registering' | 'registered'; label: string }[] = [
-    { id: 'reserving', label: 'Reserved' },
-    { id: 'waiting', label: 'Deep enough' },
-    { id: 'registering', label: 'Registered' },
-    { id: 'registered', label: 'In your assets' },
-  ];
-  const ORDER = ['reserving', 'waiting', 'registering', 'registered'];
 </script>
 
 {#if noWallet}
@@ -329,25 +323,12 @@
                 <AssetBadge id={p.asset} label={p.name} />
                 <span class="muted small">{p.supply} · {p.decimals} decimals{p.public ? '' : ` · ${t('private name')}`}</span>
               </header>
-              {#if stage === 'taken'}
-                <p class="ba-problems bad">Someone registered this name first. The reservation can only be released.</p>
-              {:else}
-                <ol class="ba-steps">
-                  {#each STAGES as s (s.id)}
-                    <li class:done={ORDER.indexOf(stage) > ORDER.indexOf(s.id)} class:now={stage === s.id}>{t(s.label)}</li>
-                  {/each}
-                </ol>
-                <p class="ba-help">
-                  {#if stage === 'reserving'}The reservation waits for a block. It hides the name, so that nobody can see it coming and take it first.
-                  {:else if stage === 'waiting'}{tn('Registered by itself in %n block(s), once the reservation is deep enough that whoever makes a block cannot take the name first.', waitOf(p.name))}
-                  {:else if stage === 'registering' && p.registration}The registration waits for a block; then it is in your assets.
-                  {:else if stage === 'registering'}Deep enough: being registered.
-                  {:else}Done.{/if}
-                </p>
-              {/if}
-              {#if p.error}<p class="ba-problems bad" role="alert"><SafeText text={p.error} /></p>{/if}
+              <!-- Its progress (components/PendingCard.svelte): reserved, registering by itself in so long, registered;
+                   the user's word when the app needs it (after a restart, or a locked wallet). -->
+              <PendingCard op={pendingOpOf(p)} />
+              {#if stage === 'waiting' && !simple}<p class="ba-help">{tn('Registered by itself in %n block(s), once the reservation is deep enough that whoever makes a block cannot take the name first.', waitOf(p.name))}</p>{/if}
               <div class="row">
-                {#if stage === 'registering' && !p.registration}<button type="button" class="btn primary small" onclick={() => register(p)}>Register now</button>{/if}
+                {#if stage === 'registering' && !p.registration && p.needsConfirm === undefined && !p.error}<button type="button" class="btn small" onclick={() => register(p)}>Register now</button>{/if}
                 {#if stage !== 'registered' && !p.registration}<button type="button" class="btn small danger" onclick={() => release(p.name)}>Release</button>{/if}
                 {#if stage === 'registered'}<button type="button" class="btn small" onclick={() => wallets.current !== null && dropPending(wallets.current, p.name)}>Dismiss</button>{/if}
               </div>

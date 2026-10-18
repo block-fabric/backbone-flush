@@ -7,7 +7,9 @@
 // register once the reservation is deep enough, as chains-qt kept them in QSettings; registered by themselves,
 // as chains-qt did), and the prices of the pools as the app saw them (the charts).
 import { BridgeError, request, setExactMethods } from '../../lib/bridge';
-import { errorText, walletRpc, withKeys } from '../../lib/dialogs.svelte';
+import { errorText, walletRpc, walletRpcIfAuthorized, withKeys } from '../../lib/dialogs.svelte';
+import { go } from '../../lib/nav.svelte';
+import { publishPending, type PendingOp } from '../../lib/pending.svelte';
 import { t } from '../../lib/i18n.svelte';
 import { every } from '../../lib/poll';
 import { rpc } from '../../lib/rpc';
@@ -38,6 +40,11 @@ export interface PendingIssue {
   registeredAt?: number;
   /** Why the last registration failed (an error of the node, shown as it is). */
   error?: string;
+  /**
+   * Deep enough, and the host would have to ask (no authorization since the app started again, or a locked wallet):
+   * the user confirms it on its card. Not kept in the journal.
+   */
+  needsConfirm?: string;
 }
 
 export interface PricePoint {
@@ -201,7 +208,7 @@ export function sanitizeJournal(raw: unknown): Journal {
   if (Array.isArray(r.pending)) {
     j.pending = r.pending
       .filter((p) => p && str(p.wallet) && str(p.name) && str(p.supply) && typeof p.decimals === 'number' && str(p.asset))
-      .map((p) => ({ ...p, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined }))
+      .map((p) => ({ ...p, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, needsConfirm: undefined }))
       .slice(-MAX_PENDING);
   }
   if (r.prices && typeof r.prices === 'object') {
@@ -215,7 +222,10 @@ export function sanitizeJournal(raw: unknown): Journal {
 /** Write the journal; false (and the user told, once) when it cannot be. */
 export async function writeJournal(): Promise<boolean> {
   try {
-    await request('host', 'bitassets.store.save', { value: $state.snapshot(ba.journal) });
+    const value = $state.snapshot(ba.journal);
+    // What the host would ask about now is not kept: after a restart it is known again.
+    value.pending = value.pending.map(({ needsConfirm: _, ...p }) => p);
+    await request('host', 'bitassets.store.save', { value });
     journalWarned = false;
     return true;
   } catch (e) {
@@ -278,6 +288,7 @@ export function pendingOf(wallet: string | null): PendingIssue[] {
 /** An asset reserved by this app: to be registered by itself once the reservation is deep enough. Written at once. */
 export async function notePending(p: PendingIssue): Promise<boolean> {
   ba.journal.pending = [...ba.journal.pending.filter((x) => !(x.wallet === p.wallet && x.name === p.name)), p].slice(-MAX_PENDING);
+  publish();
   return writeJournal();
 }
 
@@ -286,6 +297,7 @@ export function dropPending(wallet: string, name: string): void {
   const before = ba.journal.pending.length;
   ba.journal.pending = ba.journal.pending.filter((x) => !(x.wallet === wallet && x.name === name));
   if (ba.journal.pending.length !== before) saveJournal();
+  publish();
 }
 
 /** The parameters of registerasset for an asset being created. */
@@ -293,11 +305,78 @@ export function registerParams(p: PendingIssue): unknown[] {
   return [p.name, p.supply, p.decimals, p.data, p.public];
 }
 
+/** Assets registered a moment ago, for their cards and the indicator of the top bar (not kept). */
+const recentDone = $state<{ wallet: string; name: string; asset: string; ended: number }[]>([]);
+const KEEP_DONE_MS = 10 * 60_000;
+
+/** The registered ones of a wallet a moment ago. */
+export function recentlyRegistered(wallet: string | null): { wallet: string; name: string; asset: string; ended: number }[] {
+  const now = Date.now();
+  return recentDone.filter((d) => d.wallet === wallet && now - d.ended < KEEP_DONE_MS);
+}
+
+/**
+ * The progress of an asset being created, for its card (components/PendingCard.svelte) and the indicator of the top
+ * bar: reserved, waiting for the depth (block k of reveal_depth), the user's word needed, the registration sent,
+ * registered.
+ */
+export function pendingOpOf(p: PendingIssue): PendingOp {
+  const needed = Math.max(1, ba.info?.reveal_depth ?? 1);
+  const r = ba.wallet === p.wallet ? ba.mine?.reservations.find((x) => x.name === p.name) : undefined;
+  const base = { key: `${p.wallet}\u0000${p.name}`, what: t('Asset'), name: p.name, wallet: p.wallet, needed, page: 'my-assets' as const, tab: 'issuing' };
+  if (ba.assets.some((a) => a.asset === p.asset)) return { ...base, stage: 'done', depth: needed, ended: Date.now() };
+  if (r?.taken) return { ...base, stage: 'failed', depth: null, error: t('Someone registered this name first. The reservation can only be released.') };
+  if (p.registration) return { ...base, stage: 'registering', depth: needed };
+  if (!r) return { ...base, stage: 'reserved', depth: null, error: p.error };
+  const depth = Math.max(0, needed - (r.wait ?? 0));
+  if ((r.wait ?? 0) > 0) return { ...base, stage: 'waiting', depth };
+  if (p.needsConfirm !== undefined || p.error) {
+    return { ...base, stage: 'confirm', depth, error: p.error, action: { label: p.error ? 'Try again' : 'Confirm registration', run: () => void registerByUser(p) } };
+  }
+  return { ...base, stage: 'waiting', depth };
+}
+
+/** What this store is doing, for the indicator of the top bar (lib/pending.svelte.ts). */
+function publish(): void {
+  const wallet = ba.wallet;
+  const ops = wallet === null ? [] : pendingOf(wallet).map(pendingOpOf);
+  for (const d of recentlyRegistered(wallet)) {
+    ops.push({ key: `${d.wallet}\u0000${d.name}`, what: t('Asset'), name: d.name, wallet: d.wallet, stage: 'done', depth: null, needed: 0, ended: d.ended, page: 'my-assets', tab: 'holdings' });
+  }
+  publishPending('bitassets', ops);
+}
+
+/** The user registers it from its card or a toast: asked as the host asks (no question when it was accepted with its reservation). */
+async function registerByUser(p: PendingIssue): Promise<void> {
+  try {
+    await registerNow(p);
+  } catch (e) {
+    p.error = errorText(e);
+    saveJournal();
+    publish();
+  }
+}
+
+let registering = false;
+
 /**
  * Register what can be: the assets being created whose reservation is deep enough (wait 0), as chains-qt did
- * every few seconds. A wallet that needs its passphrase is left for the user ("Register now").
+ * every few seconds; never in a refresh (the lists go on while it runs), never with a question of the host: the
+ * registration the user accepted with its reservation runs without one; else its card asks the user (a restart, a
+ * locked wallet).
  */
 async function registerReady(wallet: string): Promise<void> {
+  if (registering) return;
+  registering = true;
+  try {
+    await registerReadyOnce(wallet);
+  } finally {
+    registering = false;
+    publish();
+  }
+}
+
+async function registerReadyOnce(wallet: string): Promise<void> {
   const mine = ba.mine;
   if (!mine || ba.wallet !== wallet) return;
   let changed = false;
@@ -306,6 +385,8 @@ async function registerReady(wallet: string): Promise<void> {
     if (registered) {
       // In a block: in the assets of the wallet from now on.
       ba.journal.pending = ba.journal.pending.filter((x) => x !== p);
+      recentDone.push({ wallet, name: p.name, asset: p.asset, ended: Date.now() });
+      toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', p.name), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
       changed = true;
       continue;
     }
@@ -324,9 +405,17 @@ async function registerReady(wallet: string): Promise<void> {
       const r = mine.reservations.find((x) => x.name === p.name);
       if (!r || r.taken || (r.wait ?? 0) > 0) continue;
     }
+    if (p.needsConfirm !== undefined && !p.registration) continue;
     try {
-      const done = await rpc.raw<{ txid: string }>('registerasset', registerParams(p), { wallet });
-      p.registration = done.txid;
+      const done = await walletRpcIfAuthorized<{ txid: string }>(wallet, 'registerasset', registerParams(p));
+      if ('needed' in done) {
+        // The host would ask: the user confirms it on its card, told once.
+        p.needsConfirm = done.needed;
+        changed = true;
+        toast('info', t('%1 is ready to register', p.name), t('Confirm its registration on its card in My assets.'), 12000, [{ label: t('Confirm'), run: () => void registerByUser(p) }]);
+        continue;
+      }
+      p.registration = done.result.txid;
       p.registeredAt = ba.height;
       p.error = undefined;
       changed = true;
@@ -338,6 +427,7 @@ async function registerReady(wallet: string): Promise<void> {
       if (p.error !== message) {
         p.error = message;
         changed = true;
+        if (message) toast('error', t('%1 was not registered', p.name), message, 12000, [{ label: t('Try again'), run: () => void registerByUser(p) }]);
       }
     }
   }
@@ -351,7 +441,9 @@ export async function registerNow(p: PendingIssue): Promise<string | null> {
   p.registration = done.txid;
   p.registeredAt = ba.height;
   p.error = undefined;
+  p.needsConfirm = undefined;
   saveJournal();
+  publish();
   void refreshBitAssets();
   return done.txid;
 }
@@ -450,7 +542,6 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
             ba.mineError = '';
             ba.wallet = wallet;
             await readReceiptAuctions();
-            await registerReady(wallet);
           }
         } catch (e) {
           if (wallets.current === wallet) {
@@ -467,10 +558,13 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
       ba.version++;
       askNode = againNode;
       againNode = false;
+      publish();
     } while (again);
   } finally {
     running = false;
   }
+  // The registrations ready, after the refresh: it never waits for them.
+  if (ba.wallet !== null && ba.wallet === wallets.current && ba.mineState === 'ok') void registerReady(ba.wallet);
 }
 
 /** The auctions of the wallet's receipts not in the page of auctions read (audit 7 E-BA3: the list is paged). */
@@ -544,6 +638,8 @@ export function resetBitAssets(): void {
   journalWarned = false;
   running = false;
   again = false;
+  registering = false;
+  recentDone.splice(0);
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
   Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });

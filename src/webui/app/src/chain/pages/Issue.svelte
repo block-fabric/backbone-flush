@@ -8,7 +8,8 @@
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import NoWallet from '../../components/NoWallet.svelte';
-  import { errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
+  import PendingCard from '../../components/PendingCard.svelte';
+  import { errorText, inform, prepareConfirm, walletRpcTwoSteps } from '../../lib/dialogs.svelte';
   import { t, tn } from '../../lib/i18n.svelte';
   import { niceTimeOffset } from '../../lib/format';
   import { go, PAGES } from '../../lib/nav.svelte';
@@ -18,7 +19,7 @@
   import AssetBadge from '../ba/AssetBadge.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
   import { amountParam, DATA_FIELDS, hashName, dataProblems, dataToSet, formatUnits, MAX_AMOUNT, MAX_DECIMALS, MAX_INFO, nameProblem, smallestAmount, type DataField } from '../ba/model';
-  import { ba, notePending, pendingOf, refreshBitAssets, startBitAssets } from '../ba/store.svelte';
+  import { ba, notePending, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, type PendingIssue } from '../ba/store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import '../ba/terms';
@@ -132,6 +133,11 @@
     if (i > 0) step = order[i - 1];
   }
 
+  // The review shows: the question of the host is likely, its window is made ahead (it shows at once).
+  $effect(() => {
+    if (step === 'review') prepareConfirm();
+  });
+
   let busy = $state(false);
   let created = $state('');
   async function create() {
@@ -139,25 +145,28 @@
     if (wallet === null || busy || supplyValue === null) return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; asset: string }>(wallet, 'reserveasset', [name]);
-      if (!done) return;
-      const saved = await notePending({
+      // Both steps in one question of the host: the reservation now, and the registration exactly as shown, which the
+      // app then sends by itself without asking again (confirm.h, Reveal).
+      const issue: PendingIssue = {
         wallet,
         name,
-        asset: done.asset,
+        asset: '',
         supply: amountParam(supplyValue, decimals),
         decimals,
         data: dataToSet(fields),
         public: published,
         time: Math.floor(Date.now() / 1000),
-        reservation: done.txid,
-      });
+        reservation: '',
+      };
+      const done = await walletRpcTwoSteps<{ txid: string; asset: string }>(wallet, 'reserveasset', [name], { method: 'registerasset', params: registerParams(issue) });
+      if (!done) return;
+      const saved = await notePending({ ...issue, asset: done.asset, reservation: done.txid });
       if (!saved) {
         await inform(t('The journal of the assets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in My assets, with its supply and data.', name), 'warning');
       }
       created = name;
       step = 'done';
-      toast('success', t('Name reserved'), tn('%1 is registered by itself once the reservation is %n block(s) deep.', depth, name));
+      toast('success', t('Name reserved'), tn('%1 is registered by itself once the reservation is %n block(s) deep, without asking again.', depth, name));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Register new asset'), errorText(e), 'error');
@@ -165,6 +174,15 @@
       busy = false;
     }
   }
+
+  // Its progress, live, as on its card in My assets.
+  const createdOp = $derived.by(() => {
+    if (!created || wallets.current === null) return null;
+    const p = pendingOf(wallets.current).find((x) => x.name === created);
+    if (p) return pendingOpOf(p);
+    const d = recentlyRegistered(wallets.current).find((x) => x.name === created);
+    return d ? { key: d.name, what: t('Asset'), name: d.name, wallet: d.wallet, stage: 'done' as const, depth: null, needed: 0, ended: d.ended } : null;
+  });
 
   function again() {
     name = '';
@@ -273,14 +291,16 @@
               <li><strong>{tn('%n block(s) later (about %1): the registration.', depth, niceTimeOffset(depth * spacing))}</strong> Not sooner, so that whoever makes a block cannot take the name first. This app sends it by itself while it runs.</li>
               <li><strong>The block after: in your assets</strong>, with its supply and its control coin.</li>
             </ol>
-            <p class="ba-help">Two small transactions, each with the fee of the wallet. A reservation can be released while it is not registered.</p>
-            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Reserving…' : simple ? 'Create the token' : 'Reserve and issue'}</button></div>
+            <p class="ba-help">Two small transactions, each with the fee of the wallet, confirmed together once. A reservation can be released while it is not registered.</p>
+            <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy} aria-busy={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Waiting for your confirmation…' : simple ? 'Create the token' : 'Reserve and issue'}</button></div>
+            {#if busy}<p class="ba-help" role="status">Confirm both steps in the window of the app; the reservation is sent once you accept.</p>{/if}
           </div>
         {:else}
           <div class="ba-form done">
             <Icon name="check" size={28} />
             <h2><SafeText text={created} /> is reserved</h2>
             <p class="ba-help">{tn('It is registered by itself once the reservation is %n block(s) deep, then it is in your assets after the block after. Keep the app running meanwhile, or come back to it.', depth)}</p>
+            {#if createdOp}<PendingCard op={createdOp} />{/if}
             <div class="row"><button type="button" class="btn primary" onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Issue another</button></div>
           </div>
         {/if}

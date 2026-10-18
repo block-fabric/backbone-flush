@@ -50,6 +50,7 @@ import {
   type Holdings,
   type Pool,
 } from './ba/model';
+import { pendingList } from '../lib/pending.svelte';
 import { ACTIVITY_PAGE, ASSET_PAGE, ba, baView, MAX_ASSETS, nameOf, notePrices, priceSeries, readAllAssets, refreshBitAssets, resetBitAssets, sanitizeJournal, sendIntent } from './ba/store.svelte';
 import { setTransport, type BridgeRequest } from '../lib/bridge';
 import { buildCommands, menuSections } from '../lib/commands.svelte';
@@ -113,12 +114,31 @@ function units(n: number | string, d: number): bigint {
 // the call: here, at once, as the node would.
 const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction'];
 
+// The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
+// (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
+const asked: string[] = [];
+const authorized: string[] = [];
+let answerDelay = 0;
+
 async function fakeNode(r: BridgeRequest): Promise<unknown> {
   if (r.method === 'rpc.confirmedMethods') return { confirmed: CONFIRMED, keyed: ['listmyassets', 'listassetactivity'] };
   if (r.method === 'rpc.confirmed') {
-    const c = r.params as { method: string; params: unknown[]; wallet?: string };
+    const c = r.params as { method: string; params: unknown[]; wallet?: string; then?: { method: string; params: unknown[] }; authorizedOnly?: boolean };
     expect(CONFIRMED).toContain(c.method);
-    return fakeNode({ ...r, kind: 'rpc', method: c.method, params: c.params, wallet: c.wallet } as BridgeRequest);
+    const key = JSON.stringify([c.wallet, c.method, c.params]);
+    const i = authorized.indexOf(key);
+    if (i >= 0) {
+      authorized.splice(i, 1);
+    } else if (c.authorizedOnly) {
+      throw Object.assign(new Error(`${c.method} needs your confirmation`), { code: -32801 });
+    } else {
+      asked.push(c.then ? `${c.method}+${c.then.method}` : c.method);
+      if (answerDelay) await new Promise((resolve) => setTimeout(resolve, answerDelay));
+    }
+    const result = await fakeNode({ ...r, kind: 'rpc', method: c.method, params: c.params, wallet: c.wallet } as BridgeRequest);
+    if (!c.then) return result;
+    authorized.push(JSON.stringify([c.wallet, c.then.method, c.then.params]));
+    return { ...(result as object), authorized: 3600 };
   }
   calls.push(r);
   const p = (r.params ?? []) as unknown[];
@@ -249,6 +269,9 @@ beforeEach(() => {
   store = null;
   locked = false;
   calls.length = 0;
+  asked.length = 0;
+  authorized.length = 0;
+  answerDelay = 0;
   resetBitAssets();
   setTransport(fakeNode);
 });
@@ -525,11 +548,55 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
     await waitFor(() => expect(screen.getByRole('heading', { name: /COPPER is reserved/ })).toBeTruthy());
     expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', asset: 'f'.repeat(64), supply: '1000.25', decimals: 2, data: { info: 'Copper, by the gram' }, public: true }] });
-    // Deep enough: registered by itself.
+    // One question for both steps: the reservation and the registration exactly as it will be sent.
+    expect(asked).toEqual(['reserveasset+registerasset']);
+    // Deep enough: registered by itself, without a second question.
     mine.reservations.push({ txid: id('6'), name: 'COPPER', taken: false, height: 21, registers_from: 23, wait: 0 });
     await refreshBitAssets();
     await waitFor(() => expect(called('registerasset').length).toBe(1));
     expect(called('registerasset')[0].params).toEqual(['COPPER', '1000.25', 2, { info: 'Copper, by the gram' }, true]);
+    expect(asked).toEqual(['reserveasset+registerasset']);
+    expect(authorized).toEqual([]);
+  });
+
+  it('a registration with no authorization (the app started again): its card asks the user, never a dialog by itself', async () => {
+    store = { pending: [{ wallet: 'w', name: 'TIN', asset: id('f'), supply: '5', decimals: 0, data: {}, public: true, time: 1, reservation: id('6') }], prices: {} };
+    mine.reservations.push({ txid: id('6'), name: 'TIN', taken: false, height: 15, registers_from: 17, wait: 0 });
+    render(MyAssets);
+    render(DialogHost);
+    nav.tab = 'issuing';
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirm registration' })).toBeTruthy());
+    expect(asked).toEqual([]);
+    expect(called('registerasset')).toEqual([]);
+    expect(pendingList().find((o) => o.name === 'TIN')?.stage).toBe('confirm');
+    await fireEvent.click(screen.getByRole('button', { name: 'Confirm registration' }));
+    await waitFor(() => expect(called('registerasset').length).toBe(1));
+    expect(asked).toEqual(['registerasset']);
+    await waitFor(() => expect(pendingList().find((o) => o.name === 'TIN')?.stage).toBe('registering'));
+  });
+
+  it('the pages go on while a question of the host waits (a slow dialog, a slow host): the refresh is never held', async () => {
+    answerDelay = 1500;
+    render(Issue);
+    await waitFor(() => expect(ba.loaded).toBe(true));
+    await fireEvent.input(screen.getByLabelText('Its name'), { target: { value: 'ZINC' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '7' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(await screen.findByRole('button', { name: /Reserve and issue/ }));
+    // The question shows: the page says it waits for it, and the lists are still asked again, at once.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Waiting for your confirmation/ })).toBeTruthy());
+    const version = ba.version;
+    const t0 = Date.now();
+    await refreshBitAssets();
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(ba.version).toBeGreaterThan(version);
+    await waitFor(() => expect(screen.getByRole('heading', { name: /ZINC is reserved/ })).toBeTruthy(), { timeout: 4000 });
+    // Its progress on the page, and in the top bar.
+    expect(document.querySelector('.pending-card')).toBeTruthy();
+    expect(pendingList().find((o) => o.name === 'ZINC')?.stage).toBe('reserved');
   });
 
   it('Trade: a swap quoted by the node, confirmed with its least, and a new pool with both amounts', async () => {
@@ -671,12 +738,15 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
 
   it('a registration dropped from the mempool is sent again (audit 7 E-BA7)', async () => {
     store = { pending: [{ wallet: 'w', name: 'IRON', asset: id('f'), supply: '1', decimals: 0, data: {}, public: true, time: 1, reservation: id('r'), registration: id('6'), registeredAt: 18 }], prices: {} };
+    // Accepted with its reservation: the host sends it again without a question, as its transaction left the mempool.
+    authorized.push(JSON.stringify(['w', 'registerasset', ['IRON', '1', 0, {}, true]]));
     await refreshBitAssets();
     // Two blocks on (21 >= 18 + 2), not in the mempool (the fake node knows no getmempoolentry): registered again.
     await waitFor(() => expect(called('registerasset').length).toBe(1));
     expect(called('getmempoolentry')[0].params).toEqual([id('6')]);
     expect(ba.journal.pending[0].registration).toBe(id('7'));
     expect(ba.journal.pending[0].registeredAt).toBe(21);
+    expect(asked).toEqual([]);
   });
 
   it('names an asset in a confirmation by its label and number, or the start of its hash (audit port-2 #5)', async () => {
