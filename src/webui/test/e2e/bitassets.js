@@ -100,14 +100,77 @@
     await submit('#issue-info', 'Next');
     await waitFor('the review', () => text('.issue').includes('On the way'));
     await shot('ba-issue-review');
+    // One question of the host for both steps, in its themed window (never the dialog of the system), shown at once
+    // (made ahead by the review, dialog.prepare); the page and the host stay responsive meanwhile; then no second question.
+    const dialog = (action, more = {}) => host('test.dialog', { action, ...more });
+    let maxGap = 0;
+    let lastTick = performance.now();
+    const ticker = setInterval(() => {
+      const n = performance.now();
+      maxGap = Math.max(maxGap, n - lastTick - 50);
+      lastTick = n;
+    }, 50);
+    let maxHost = 0;
+    let probing = true;
+    const probe = (async () => {
+      while (probing) {
+        const t0 = performance.now();
+        await host('window.state');
+        maxHost = Math.max(maxHost, performance.now() - t0);
+        await sleep(100);
+      }
+    })();
+    await host('test.confirmAnswer', { always: false });
+    await host('test.confirmAnswer', { show: true });
+    const asked0 = (await host('test.confirmed', {})).length;
+    const t0 = performance.now();
     await click('Reserve and issue');
+    const kinds = [];
+    let kind = '';
+    for (let i = 0; i < 300 && kind !== 'themed' && kind !== 'native'; i++) {
+      kind = await dialog('kind');
+      if (kinds[kinds.length - 1] !== kind) kinds.push(kind);
+      if (kind !== 'themed') await sleep(50);
+    }
+    const shownIn = Math.round(performance.now() - t0);
+    await check('the registration is asked in the themed dialog of the host, never the dialog of the system', kind === 'themed' && !kinds.includes('native'), JSON.stringify(kinds));
+    await check('the dialog shows at once (made ahead)', shownIn < 3000, `${shownIn} ms`);
+    await waitFor('the page to say it waits for the confirmation', () => text('.issue').includes('Waiting for your confirmation'));
+    const facts = await dialog('eval', { script: `({ title: document.querySelector('#dialog-title').textContent, text: document.body.innerText, theme: document.documentElement.dataset.theme })` });
+    await check('one question shows both steps, the details and the fees', /Step 1 of 2/.test(facts.text) && /Step 2 of 2/.test(facts.text) && /registerasset/.test(facts.text) && /1000/.test(facts.text) && /One gram of gold/.test(facts.text) && /Step 2, at most/.test(facts.text), facts.text);
+    await check('in the theme of the app (Midnight)', facts.theme === 'midnight', facts.theme);
+    await dialog('snapshot', { name: 'ba-issue-one-confirmation' });
+    await sleep(1500);
+    await dialog('eval', { script: `document.getElementById('dialog-accept').click(); true` });
     await waitFor('the reservation made', () => text('.issue').includes('GOLD is reserved'), 30000);
+    await host('test.confirmAnswer', { always: true });
+    await shot('ba-issue-reserved');
     const journal = await host('bitassets.store.load');
     await check('what to register kept by the app in its journal', !!journal && journal.pending.some((p) => p.name === 'GOLD' && p.supply === '1000'), JSON.stringify(journal));
     await go('my-assets', 'issuing');
     await sleep(1500);
     await shot('ba-my-issuing');
+    await waitFor('the progress card', () => document.querySelector('.pending-card'));
+    await waitFor('the reservation in a block', () => /block \d of \d|Registration sent/.test(text('.pending-card')), 60000);
+    await shot('ba-pending-card');
     const gold = await waitFor('GOLD registered by the app by itself', async () => (await rpc('listassets')).find((a) => a.label === 'GOLD'), 180000);
+    const again = (await host('test.confirmed', {})).slice(asked0);
+    await check('one question in all for both steps: the registration was not asked again', again.length === 1 && !again.some((q) => q.title === 'Register an asset'), JSON.stringify(again.map((q) => q.title)));
+    probing = false;
+    await probe;
+    clearInterval(ticker);
+    await check('the page and the host stayed responsive throughout (no frozen window)', maxGap < 1000 && maxHost < 1000, `page ${Math.round(maxGap)} ms, host ${Math.round(maxHost)} ms`);
+    // Done: said in the top bar (and a toast), its card registered.
+    const pill = await waitFor('the indicator of the top bar saying it is registered', () => {
+      const b = $('.pending-pill');
+      return b && /Registered/.test(b.getAttribute('aria-label') || '') ? b : null;
+    }, 60000);
+    pill.click();
+    await waitFor('its card', () => $('.pending-ind .pending-card[data-stage="done"]'));
+    await shot('ba-registered');
+    pill.click();
+    await go('my-assets', 'issuing');
+    await sleep(800);
     await check('GOLD registered with its supply and description', gold.supply === 1000 && gold.decimals === 2 && gold.data.info.startsWith('One gram'), JSON.stringify(gold));
     await waitFor('GOLD in the wallet', async () => (await held('GOLD')) === 1000, 60000);
 

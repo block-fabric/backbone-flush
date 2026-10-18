@@ -102,13 +102,35 @@ std::set<std::string> KeyedRpcMethods()
     return {"listmyassets", "listassetactivity"};
 }
 
+namespace {
+/** The second step of reserveasset: registerasset of the same name, [name, supply, decimals, data, public]. */
+confirm::Reveal RegisterAfterReserve()
+{
+    confirm::Reveal reveal;
+    reveal.method = "registerasset";
+    reveal.title = "Create an asset";
+    reveal.accept = "Reserve and register";
+    reveal.first_label = "Reservation";
+    reveal.second_label = "Registration";
+    reveal.what = "Two transactions: the reservation hides the name until it is deep enough, so that nobody who sees it coming can "
+                  "take it first; the registration then creates the asset with the supply and data below, and its control coin.";
+    reveal.matches = confirm::SameFirstParam;
+    // A registration spends the reservation and makes the control coin, the supply and the change; its data adds to it.
+    reveal.second_vsize = [](const UniValue& params) { return int64_t{350} + (params.size() > 3 ? static_cast<int64_t>(params[3].write().size()) : 0); };
+    reveal.when = confirm::AfterDepth("getbitassetsinfo", "reveal_depth");
+    return reveal;
+}
+} // namespace
+
 std::map<std::string, confirm::Method> ConfirmedRpcMethods()
 {
     // What the pages do that pays or signs: never the page's to call by itself. The host shows each call on the desktop, its
     // destinations whole first, then its amounts, then the rest of its parameters, with the passphrase of a locked wallet
     // typed there, and runs it with the keys unlocked for it alone (confirm.h, audit 7 #1).
     return {
-        {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), /*fee_unknown=*/true}},
+        // Reserved and registered in one question: the registration, exactly as shown, is sent by the app without asking
+        // again once the reservation is deep enough (confirm::Reveal).
+        {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), /*fee_unknown=*/true, 1, false, RegisterAfterReserve()}},
         {"registerasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Register an asset", "Register", "The wallet registers an asset it reserved, with the supply shown."), /*fee_unknown=*/true}},
         {"releaseassetreservation", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release a reservation", "Release", "The wallet gives up a reservation of an asset name."), /*fee_unknown=*/true}},
         {"sendasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Send an asset", "Send", "The wallet sends units of an asset to the address shown.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
