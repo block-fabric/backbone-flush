@@ -12,7 +12,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetSelect from './AssetSelect.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsAtMost, unitsOf, type Pool } from './model';
+  import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsAtMost, unitsOf, type Pool, type Amount } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
 
   let a = $state('');
@@ -137,7 +137,7 @@
       // The amounts confirmed (the second, into a pool someone provides to, the most that goes in), and what
       // was expected: a deposit meant to set the price is refused if someone opened the pool meanwhile.
       const params: unknown[] = [assetArg(sA), amountParam(sAUnits, sDa), assetArg(sB), amountParam(sSetsPrice ? sBUnits : sDeposit.take1, sDb), sSlippage, sSetsPrice];
-      const done = await walletRpc<{ txid: string; amount_a: number; amount_b: number; shares: number }>(wallet, 'addliquidity', params);
+      const done = await walletRpc<{ txid: string; amount_a: Amount; amount_b: Amount; shares: Amount }>(wallet, 'addliquidity', params);
       if (!done) return;
       toast('success', t('Adding liquidity'), t('%1 %2 and %3 %4 into their pool, for about %5 shares, with the next block.', formatAmount(done.amount_a, sDa), la, formatAmount(done.amount_b, sDb), lb, String(done.shares)));
       aText = '';

@@ -10,6 +10,8 @@
 #include <tinyformat.h>
 #include <util/fs.h>
 #include <webui/bridge.h>
+#include <webui/dialog.h>
+#include <webui/guard.h>
 #include <webui/local.h>
 
 #include <boost/test/unit_test.hpp>
@@ -54,6 +56,27 @@ BOOST_AUTO_TEST_CASE(journal_of_bitassets)
     }
     BOOST_CHECK(webui::local::ReadStore(path).isNull());
     BOOST_CHECK(fs::exists(fs::PathFromString(fs::PathToString(path) + ".unreadable")));
+}
+
+BOOST_AUTO_TEST_CASE(confirmation_of_an_amount_past_2_53_units)
+{
+    // What the host shows of a send of 2^60 + 1 units of an asset with 8 decimals (audit 7 E-BA6): the page sends the
+    // amount as text, and the dialog of the host says it digit for digit, as the node will take it.
+    UniValue params{UniValue::VARR};
+    params.push_back("rbast1qexample");
+    params.push_back("0x" + std::string(64, 'a'));
+    params.push_back("11529215046.06846977");
+    const auto rows{webui::guard::ParamRows("sendasset", params, {"address", "asset", "amount"}, [](const std::string& name) {
+        return name == "address" ? webui::guard::ParamRole::DESTINATION : name == "amount" ? webui::guard::ParamRole::AMOUNT : webui::guard::ParamRole::OTHER;
+    })};
+    bool shown{false};
+    for (const auto& row : rows) {
+        if (row.label == "amount") {
+            BOOST_CHECK_EQUAL(row.value, "11529215046.06846977");
+            shown = true;
+        }
+    }
+    BOOST_CHECK(shown);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

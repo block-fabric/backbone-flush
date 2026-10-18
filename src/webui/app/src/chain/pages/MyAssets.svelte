@@ -36,6 +36,7 @@
     receiptAction,
     unitsOf,
     withdraw,
+    type Amount,
     type Auction,
     type Position,
     type Reservation,
@@ -184,7 +185,7 @@
     });
     if (r.choice !== 'yes') return;
     try {
-      const done = await walletRpc<{ txid: string; amount_a: number; amount_b: number }>(wallet, 'removeliquidity', [assetArg(pos.asset_a_id), assetArg(pos.asset_b_id), percent, slippage]);
+      const done = await walletRpc<{ txid: string; amount_a: Amount; amount_b: Amount }>(wallet, 'removeliquidity', [assetArg(pos.asset_a_id), assetArg(pos.asset_b_id), percent, slippage]);
       if (!done) return;
       removing = null;
       toast('success', t('Liquidity taken out'), t('About %1 %2 and %3 %4, with the next block.', formatAmount(done.amount_a, da), pos.asset_a, formatAmount(done.amount_b, db), pos.asset_b));

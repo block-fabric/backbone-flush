@@ -57,7 +57,7 @@ export type DataField = (typeof DATA_FIELDS)[number];
 export type Amount = number | string;
 
 /** The RPC methods of BitAssets whose results carry amounts: read exactly (audit 7 E-BA6). */
-export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid'];
+export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid', 'swapasset', 'addliquidity', 'removeliquidity', 'bidauction'];
 
 /** An amount as a double: for a ratio, a chart, an order; never for what is shown or sent. */
 export function approx(value: Amount | undefined | null): number {

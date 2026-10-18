@@ -821,6 +821,66 @@ describe('Simple mode', () => {
   });
 });
 
+describe('audit 7 E-BA6: amounts past 2^53 units, exact from the node to the dialog', () => {
+  // 2^60 + 1 units of an asset with 8 decimals: no double holds it (1152921504606846977).
+  const BIG = '11529215046.06846977';
+  const NUM = '\u0000num:';
+  /** The node writes these as JSON numbers: in the fixtures, marked, then written bare in the text of the reply. */
+  const num = (digits: string) => `${NUM}${digits}` as unknown as number;
+  const rawJson = (value: unknown) => JSON.stringify(value).replace(new RegExp(`"\\\\u0000num:([^"]+)"`, 'g'), '$1');
+
+  beforeEach(() => {
+    assets[0] = { ...assets[0], decimals: 8, supply: num('23058430092.13693953'), minted: num('23058430092.13693953') };
+    mine.assets[0] = { ...mine.assets[0], decimals: 8, balance: num(BIG), supply: num('23058430092.13693953') };
+    auctions[0] = { ...auctions[0], base: 'GOLD', quote: 'CHN', amount: num('11529215046.06846978'), remaining: num(BIG), cost_of_remaining: num('9007199254.74099313') };
+    // The host gives the results of the methods BitAssets reads exactly as text, as the node wrote them.
+    setTransport(async (r) => {
+      const result = await fakeNode(r);
+      if (!r.exact) {
+        expect(JSON.stringify(result ?? null)).not.toContain('\\u0000num:');
+        return result;
+      }
+      return { $rawjson: rawJson(result ?? null) };
+    });
+  });
+
+  it('a balance is read, shown and filled in by Max with every digit', async () => {
+    render(LocalSend);
+    render(DialogHost);
+    await loaded();
+    expect(ba.mine!.assets[0].balance).toBe(BIG);
+    sendIntent.asset = GOLD;
+    await waitFor(() => expect(document.querySelector('#asset-amount')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: 'Max' }));
+    await waitFor(() => expect((document.querySelector('#asset-amount') as HTMLInputElement).value).toBe(BIG));
+    await fireEvent.input(document.querySelector('#asset-to')!, { target: { value: OTHER } });
+    const send = screen.getByRole('button', { name: /^Send$/ });
+    await waitFor(() => expect(send).toHaveProperty('disabled', false), { timeout: 3000 });
+    await fireEvent.click(send);
+    // The confirmation of the page, then what the host is asked to confirm and run: the same digits.
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain(`Send 11,529,215,046.06846977 #1739-0029 · "GOLD" to this address?`));
+    await answer('yes', 4000);
+    await waitFor(() => expect(called('sendasset')[0]?.params).toEqual([OTHER, assetArg(GOLD), BIG]));
+  });
+
+  it('My assets shows the balance and the supply exactly', async () => {
+    render(MyAssets);
+    await loaded();
+    await waitFor(() => expect(document.body.textContent).toContain('11,529,215,046.06846977'));
+  });
+
+  it('Buy all pays the cost of what is left exactly, and says it so', async () => {
+    render(Auctions);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.body.textContent).toContain('11,529,215,046.06846977'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Buy all that is left' }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Pay 9,007,199,254.74099313 CHN for the 11,529,215,046.06846977'));
+    await answer('yes');
+    await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '9007199254.74099313', true]));
+  });
+});
+
 describe('audit 7: names and amounts', () => {
   it('names that carry a number are refused, as the wallet refuses them (E-BA4)', () => {
     for (const n of ['GOLD (#1739-0029)', 'GOLD #2', 'GOLD 1739-0029', '(x)']) expect(nameMimicsNumber(n)).toBe(true);

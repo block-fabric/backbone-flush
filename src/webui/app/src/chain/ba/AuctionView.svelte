@@ -15,7 +15,7 @@
   import { barWidth } from './actions';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, AUCTION_STATUS, auctionPriceAt, auctionProgress, formatAmount, formatPrice, formatUnits, isChn, unitPrice, unitsAtLeast, unitsAtMost, unitsOf, type Auction, type AuctionUnits, type BidQuote } from './model';
+  import { amountParam, AUCTION_STATUS, auctionPriceAt, auctionProgress, formatAmount, formatPrice, formatUnits, isChn, unitPrice, unitsAtLeast, unitsAtMost, unitsOf, type Auction, type AuctionUnits, type BidQuote, type Amount } from './model';
   import { ba, decimalsOf, nameOf, refreshBitAssets } from './store.svelte';
 
   let { auction }: { auction: Auction } = $props();
@@ -100,7 +100,7 @@
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; pays: number; buys: number }>(wallet, 'bidauction', [auction.auction, amountParam(bid, dq)]);
+      const done = await walletRpc<{ txid: string; pays: Amount; buys: Amount }>(wallet, 'bidauction', [auction.auction, amountParam(bid, dq)]);
       if (!done) return;
       toast('success', t('Bidding'), t('%1 %2 for at least %3 %4, with the next block.', formatAmount(done.pays, dq), auction.quote, formatAmount(done.buys, db), auction.base));
       bidText = '';
@@ -138,7 +138,7 @@
     try {
       // The cost as a cap, rounded up where the JSON number is not exact (audit 7 E-BA6): the wallet pays what
       // all that is left costs, never more, and refuses only a cost above the cap.
-      const done = await walletRpc<{ txid: string; pays: number; buys: number }>(wallet, 'bidauction', [auction.auction, amountParam(unitsAtLeast(now.cost_of_remaining, dq), dq), true]);
+      const done = await walletRpc<{ txid: string; pays: Amount; buys: Amount }>(wallet, 'bidauction', [auction.auction, amountParam(unitsAtLeast(now.cost_of_remaining, dq), dq), true]);
       if (!done) return;
       toast('success', t('Bidding'), t('%1 %2 for the %3 %4 left, with the next block.', formatAmount(done.pays, dq), now.quote, formatAmount(done.buys, db), now.base));
       void refreshBitAssets();

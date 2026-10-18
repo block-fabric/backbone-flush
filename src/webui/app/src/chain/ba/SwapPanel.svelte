@@ -12,7 +12,7 @@
   import AssetSelect from './AssetSelect.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote } from './model';
+  import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
   import { ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
@@ -170,7 +170,7 @@
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; quote: number; min_out: number }>(wallet, 'swapasset', [assetArg(sPay), amountParam(sAmount, sPayDecimals), assetArg(sGet), sSlip, MAX_IMPACT, amountParam(sLeast, sGetDecimals)]);
+      const done = await walletRpc<{ txid: string; quote: Amount; min_out: Amount }>(wallet, 'swapasset', [assetArg(sPay), amountParam(sAmount, sPayDecimals), assetArg(sGet), sSlip, MAX_IMPACT, amountParam(sLeast, sGetDecimals)]);
       if (!done) return;
       toast('success', t('Swapping'), t('%1 %2 for about %3 %4 (at least %5), with the next block.', formatUnits(sAmount, sPayDecimals), payLabel, formatAmount(done.quote, sGetDecimals), getLabel, formatAmount(done.min_out, sGetDecimals)));
       amountText = '';
