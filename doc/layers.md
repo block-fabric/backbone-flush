@@ -42,7 +42,7 @@ Everything about blocks and consensus order, unchanged: blocks of stake, leaders
 and epochs (15-second slots, 1.5 million weight units a block of which 400,000 for
 transactions other than the coinbase), anchors (tickets, acknowledgements), the fork
 choice, finality, staking (bonds, unbonds, jailing, slashing, evidence), the fee pot
-and its split, the producer and the anchorer, `-validator*` options, every PoS RPC
+and the fee split, the producer and the anchorer, `-validator*` options, every PoS RPC
 (`getposinfo`, `getstakinginfo`, `getvalidators`, `getleaderschedule`,
 `getanchorinfo`, `listevidence`, `submitevidence`, `setstaking`, `createbond`,
 `createunbond`, `listbonds`, `signbondpop`, `checkpegbalance`), the parameters of
@@ -102,11 +102,14 @@ template's state transition. Where they meet:
   the bound is valid again in a later block: the miner and the producer leave it out,
   the mempool keeps it. This is a rule of Layers from its genesis (a new chain: no
   activation height).
-- **Fees.** An asset transaction is an ordinary transaction for the fees: a block of
-  stake shares them as FastBlocks does (the producer's share, the pot), a BMM block
-  keeps them.
-- **The peg balance.** `getsidechainstate`'s `pegbalance` and `checkpegbalance` add
-  `assets`: the CHN the pools and the auctions not collected hold (put in by markers,
+- **Fees.** An asset transaction is an ordinary transaction for the fees: FastBlocks' fee split applies to it
+  as to any other, from Layers' first block on every network (`fee_split_height` 0: a new chain, no height
+  to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). The BMM bidder
+  gets the fees of peg transactions whole and a share of ordinary fees by the mainchain's pace; the rest goes
+  to the validator pool, paid to every validator by stake each epoch (doc/fastblocks.md, "Fees, the pot and
+  the validator pool").
+- **The peg balance.** `getsidechainstate`'s `pegbalance` and `checkpegbalance` count, besides
+  FastBlocks' parts (the validator pool among them), `assets`: the CHN the pools and the auctions not collected hold (put in by markers,
   out of the UTXO set). CHN freed by retiring an asset becomes a withdrawal (to
   mainchain miners), so is in `withdrawals`; CHN owed by pools and auctions and not
   paid yet is in `payouts`.
