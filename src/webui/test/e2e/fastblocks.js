@@ -129,8 +129,8 @@
     });
     await check('the Staking card says Active', text('.fb-cards').includes('Active'));
 
-    // --- Staking, This node ---
-    await go('staking', 'node');
+    // --- Staking, Validator (Layers: one Staking section; this node as a validator in its Validator tab) ---
+    await go('staking', 'validator');
     await waitFor('the state of this node', () => text('#fb-node-state') === 'Active', 30000);
     await waitFor('the slots it leads next', () => $('ol[aria-label="Slots this node leads next"] li'), 30000);
     await check('Staking: this node active, its payout address shown, its next slots listed', text('.staking').includes(PAYOUT));
@@ -139,8 +139,11 @@
     // this validator's own: BMM reward).
     for (let i = 0; i < 4; i++) await rpc('sendtoaddress', [await rpc('getnewaddress', [], W_), 1], W_);
     // The producer's share of fees, paid to the imported payout address: Staked, in all (the third cell).
+    // (The wallet's income is in the Overview tab.)
+    await go('staking', 'overview');
     const stakedInAll = () => $('table[aria-label="Staking income"] tbody tr td:nth-child(3)')?.textContent ?? '';
     await waitFor('the staking income of the wallet', () => /[1-9]/.test(stakedInAll()), 120000);
+    await check('Overview: the fee split and the leader of this slot', /%/.test(text('#fb-fee-split')) && text('#fb-leader-now') !== '');
     await check('the income of the validator shows as Staked', true);
 
     // --- Staking, Bonds: a bond to the second key, more, some back ---
@@ -193,7 +196,7 @@
     await check('Schedule: the leaders of the epoch and the epochs', true);
 
     // --- Staking off and on: the desktop asked first ---
-    await go('staking', 'node');
+    await go('staking', 'validator');
     await host('test.confirmAnswer', { yes: true });
     await clickId('fb-staking-stop');
     await waitFor('staking off', async () => !(await rpc('getstakinginfo')).enabled, 20000);
@@ -217,23 +220,25 @@
     await check('the history labels the validator income Staked', true);
 
     // --- Finality & BMM, Slashing & jail ---
-    await go('finality');
+    // Finality & BMM and Slashing & jail: views of Staking's Network tab (the pages FastBlocks had).
+    await go('staking', 'finality');
     await waitFor('the BMM-confirmed height', () => /block \d/.test(text('#fb-anchored-height')), 30000);
     await waitFor('the newest BMM blocks', () => $$('table[aria-label="Newest BMM blocks"] tbody tr').length > 0, 30000);
     await check('Finality: the BMM-confirmed height and the newest BMM blocks; the validator bids', /a mainchain block/.test(text('.finality')));
-    await go('slashing');
+    await go('staking', 'slashing');
     await waitFor('the slashing page', () => /Proofs of double signing/.test(text('.slashing')), 20000);
     await check('Slashing: no proof, no validator jailed', /knows no proof/.test(text('.slashing')));
 
     // --- Every page, in the layouts and looks, at this width ---
     const PAGES = [
       ['home', ''],
-      ['staking', 'node'],
+      ['staking', 'overview'],
+      ['staking', 'validator'],
       ['staking', 'bonds'],
       ['staking', 'validators'],
       ['staking', 'schedule'],
-      ['finality', ''],
-      ['slashing', ''],
+      ['staking', 'finality'],
+      ['staking', 'slashing'],
       ['explorer', ''],
       ['transactions', ''],
     ];
