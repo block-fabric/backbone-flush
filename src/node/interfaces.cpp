@@ -34,6 +34,7 @@
 #include <netaddress.h>
 #include <netbase.h>
 #include <node/blockstorage.h>
+#include <undo.h>
 #include <node/coin.h>
 #include <node/context.h>
 #include <sidechain/follower.h>
@@ -785,6 +786,37 @@ public:
         return chainman().ActiveChainstate().SideState().BitAssets().AssetOfSeq(seq);
     }
     int getBitAssetsRevealDepth() override { return chainman().GetConsensus().sidechain.bitassets_reveal_depth; }
+    std::optional<std::vector<CTxOut>> getSpentOutputs(const uint256& block_hash, const Txid& txid) override
+    {
+        const CBlockIndex* index;
+        {
+            LOCK(::cs_main);
+            index = chainman().m_blockman.LookupBlockIndex(block_hash);
+            if (!index || !chainman().ActiveChain().Contains(*index) || !(index->nStatus & BLOCK_HAVE_DATA) || !(index->nStatus & BLOCK_HAVE_UNDO)) return std::nullopt;
+        }
+        auto block{std::make_shared<CBlock>()};
+        if (!chainman().m_blockman.ReadBlock(*block, *index)) return std::nullopt;
+        CBlockUndo undo;
+        if (!chainman().m_blockman.ReadBlockUndo(undo, *index)) return std::nullopt;
+        for (size_t i{1}; i < block->vtx.size(); ++i) {
+            if (block->vtx[i]->GetHash() != txid) continue;
+            if (i - 1 >= undo.vtxundo.size() || undo.vtxundo[i - 1].vprevout.size() != block->vtx[i]->vin.size()) return std::nullopt;
+            std::vector<CTxOut> spent;
+            for (const Coin& coin : undo.vtxundo[i - 1].vprevout) spent.push_back(coin.out);
+            return spent;
+        }
+        return std::nullopt;
+    }
+    std::optional<bitassets::LogoRecord> getBitAssetLogo(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetLogo(asset);
+    }
+    bool bitAssetsLogosActive() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.LogoActive(chainman().ActiveChain().Height() + 1);
+    }
     std::optional<int> getBitAssetsReservationHeight(const Txid& txid) override
     {
         LOCK(::cs_main);

@@ -140,6 +140,13 @@ struct SidechainParams {
     uint32_t pending_min_score{6480};
     /** Mainchain blocks after its commitment in which the mainchain has to propose a bundle. */
     int unproposed_expiry_blocks{1440};
+    /**
+     * BitAssets: the first block of the logos of assets (SetLogo, a registration with a logo;
+     * bitassets/logo.h). Before it, a marker of those kinds is not valid, as it never was: nodes have
+     * to be upgraded before it. Never (the largest int) until set.
+     */
+    int logo_height{std::numeric_limits<int>::max()};
+    bool LogoActive(int height) const { return height >= logo_height; }
 };
 
 /**

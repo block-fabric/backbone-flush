@@ -249,6 +249,27 @@ the pools the block changes as they were before it, `0x83` the orders, `0x84` th
 their result outputs. All of them through the store's journal: a block taken back takes its
 clearing, its accumulators, its observations and its oracles' records back.
 
+## Logos of assets
+
+Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of exactly 256 x 256 pixels, at most
+32768 bytes, carried by the marker of the transaction that sets it (SetLogo, kind 32; a registration with one, kind
+33 — clear of the DEX's kinds 13 to 17), by the holder of the control coin; consensus checks the file's structure only
+(bitassets/logo.cpp: chunks or segments, sizes, CRCs, no metadata, nothing after the end; `bad-ba-logo-*`). The state
+keeps each asset's current logo (tables 0x90 and 0x91, clear of the DEX's 0x80-0x89 and FastBlocks' 0x50-0x5f; the
+test of duplicate table ids keeps them apart), so a pruned node serves it, and a reorganization puts the one before back.
+
+- Activation: `SidechainParams::logo_height`. Main network and signet 0 (Layers is not launched); test network
+  `TESTNET_LOGO_HEIGHT` in `src/kernel/testnet_activation.h`, a placeholder (never) until the deploy sets it a few
+  blocks above the tip (every node upgraded before it); regtest 0 or `-testactivationheight=logo@<height>`. Like
+  `dex_height`, a height set goes into the fingerprint of the drivechain database (each node makes it again once).
+- RPCs: `getassetlogo`, `setassetlogo`, `registerasset ... <logo>`, `logo` in `getasset` / `listassets`, `logo_height`
+  in `getbitassetsinfo`; `listassettransactions` lists the asset moves of the wallet with the other side (an operation
+  of the DEX shows as what it sent and received).
+- The app: the logo picker in Register new asset and Change logo, logos wherever assets show, the logo in the
+  confirmation; Your assets on the Home and the Overview; asset transfers in Transactions.
+- Tests: `bitassets_logo_tests` (unit), `feature_bitassets_logo.py`, `feature_bitassets_transactions.py`,
+  `feature_layers_logo.py` (the same with the DEX in force).
+
 ## The app
 
 `layers-app` is `fastblocks-app` with every page of `bitassets-app`. Staking is one

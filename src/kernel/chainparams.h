@@ -146,6 +146,8 @@ public:
         std::optional<int> dex_height{};
         //! FastBlocks: Consensus::PosParams::fee_curve2_height (-testactivationheight=feecurve2@<height>; regtest only).
         std::optional<int> fee_curve2_height{};
+        //! BitAssets: Consensus::SidechainParams::logo_height (-testactivationheight=logo@<height>; regtest only).
+        std::optional<int> logo_height{};
     };
 
     /**
