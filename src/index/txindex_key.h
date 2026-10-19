@@ -28,6 +28,7 @@ namespace txindex {
  *   ["next_block_seq"]                       -> next block seq to assign
  *   ["txid_hash_salt"]                       -> txid hasher salt
  *   ["best_block_v2"]                        -> current sync locator
+ *   ["tx_offsets_v2"]                        -> marker: offsets count the header as serialized
  *   ['t', txid]                              -> legacy CDiskTxPos
  *   ['B']                                    -> legacy sync locator
  */
@@ -38,13 +39,18 @@ constexpr uint8_t DB_BLOCK_HASH{'h'};
 inline const std::string DB_NEXT_BLOCK_SEQ{"next_block_seq"};
 inline const std::string DB_TXID_HASH_SALT{"txid_hash_salt"};
 inline const std::string DB_BEST_BLOCK_V2{"best_block_v2"};
+//! Present in a database whose offsets count each header as it is serialized (176 bytes for the
+//! extended header of a block of stake). An earlier version counted every header as 80 bytes: on a
+//! chain with extended blocks, a database with entries but without this marker is rebuilt.
+inline const std::string DB_TX_OFFSETS_V2{"tx_offsets_v2"};
 //! Prefix of a legacy (pre-hashing) txindex row.
 constexpr uint8_t DB_TXINDEX{'t'};
 
 //! Empty value of a hashed txindex row, whose position is encoded in its key.
 inline constexpr std::array<std::byte, 0> EMPTY_VALUE{};
 
-//! Serialized size of a block header, the offset of the first byte after it.
+//! Serialized size of a plain block header. An extended header (BLOCK_EXTENSION_BIT) is longer:
+//! offsets are computed from the header as serialized (FirstTxOffset), never from this constant.
 constexpr uint32_t BLOCK_HEADER_SIZE{80};
 
 //! The location of a transaction: the sequence number of the block that contains it

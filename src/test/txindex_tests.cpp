@@ -423,4 +423,81 @@ BOOST_FIXTURE_TEST_CASE(txindex_reorg_keeps_stale_entries, TestChain100Setup)
     txindex.Stop();
 }
 
+BOOST_AUTO_TEST_CASE(txindex_offset_after_extended_header)
+{
+    // A block of stake has an extended header (BLOCK_EXTENSION_BIT): 80 bytes, then hashSections and
+    // the signature. Its transactions start after the header as serialized, not after 80 bytes.
+    SetBlockExtensions(true);
+    for (const bool extended : {false, true}) {
+        CBlock block;
+        block.nVersion = extended ? (4 | BLOCK_EXTENSION_BIT) : 4;
+        block.ext.hashSections = uint256{3};
+        block.ext.sig.fill(0x5a);
+        block.vSections = {1, 2, 3};
+        for (uint32_t i{0}; i < 3; ++i) {
+            CMutableTransaction mtx;
+            mtx.vin.emplace_back(Txid::FromUint256(uint256{static_cast<uint8_t>(i + 1)}), i);
+            mtx.vout.emplace_back(i * COIN, CScript() << OP_TRUE);
+            block.vtx.push_back(MakeTransactionRef(std::move(mtx)));
+        }
+        BOOST_CHECK_EQUAL(block.IsExtended(), extended);
+        const size_t header_size{GetSerializeSize(static_cast<const CBlockHeader&>(block))};
+        BOOST_CHECK_EQUAL(header_size, extended ? 176U : txindex::BLOCK_HEADER_SIZE);
+        BOOST_CHECK_EQUAL(txindex::FirstTxOffset(block), header_size + 1);
+
+        DataStream stream{};
+        stream << TX_WITH_WITNESS(block);
+        const std::vector<std::byte> bytes{stream.begin(), stream.end()};
+        uint32_t offset{txindex::FirstTxOffset(block)};
+        for (const auto& tx : block.vtx) {
+            SpanReader reader{std::span{bytes}.subspan(offset)};
+            CTransactionRef read;
+            reader >> TX_WITH_WITNESS(read);
+            BOOST_CHECK(read->GetHash() == tx->GetHash());
+            offset += tx->ComputeTotalSize();
+        }
+    }
+    SetBlockExtensions(false);
+}
+
+BOOST_FIXTURE_TEST_CASE(txindex_rebuilds_stale_offsets, TestChain100Setup)
+{
+    // A database written before offsets counted an extended header as serialized has no marker: on a
+    // chain with extended blocks it is rebuilt when it opens; with the marker, or on a chain without
+    // extended blocks (whose offsets were right), it is kept.
+    const auto open_and_sync{[&] {
+        auto index{std::make_unique<TxIndex>(interfaces::MakeChain(m_node), /*n_cache_size=*/1_MiB, /*f_memory=*/false)};
+        BOOST_REQUIRE(index->Init());
+        return index;
+    }};
+    {
+        auto index{open_and_sync()};
+        index->Sync();
+        BOOST_CHECK(TxIndexTest::GetDB(*index).Exists(txindex::DB_TX_OFFSETS_V2));
+        TxIndexTest::GetDB(*index).Erase(txindex::DB_TX_OFFSETS_V2, /*fSync=*/true);
+        index->Stop();
+    }
+    for (const bool extensions : {false, true}) {
+        SetBlockExtensions(extensions);
+        {
+            std::unique_ptr<TxIndex> index;
+            if (extensions) {
+                ASSERT_DEBUG_LOG("it is rebuilt from the genesis block");
+                index = open_and_sync();
+            } else {
+                index = open_and_sync();
+            }
+            CDBWrapper& db{TxIndexTest::GetDB(*index)};
+            BOOST_CHECK(db.Exists(txindex::DB_TX_OFFSETS_V2));
+            // Kept: the entries are still there. Rebuilt: an empty index.
+            BOOST_CHECK_EQUAL(db.Exists(txindex::DB_NEXT_BLOCK_SEQ), !extensions);
+            if (!extensions) db.Erase(txindex::DB_TX_OFFSETS_V2, /*fSync=*/true);
+            index->Sync();
+            for (const auto& txn : m_coinbase_txns) BOOST_CHECK(index->FindTx(txn->GetHash()));
+            index->Stop();
+        }
+    }
+    SetBlockExtensions(false);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

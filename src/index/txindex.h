@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 
+class CBlock;
 namespace interfaces {
 class Chain;
 }
@@ -21,6 +22,12 @@ class TxIndexTest;
 }
 
 inline constexpr bool DEFAULT_TXINDEX{false};
+
+namespace txindex {
+//! Offset of a block's first transaction from the start of the block: past the header as it is
+//! serialized (80 bytes, or more for an extended header, a block of stake) and the transaction count.
+uint32_t FirstTxOffset(const CBlock& block);
+} // namespace txindex
 
 /// A found transaction and the hash of the block that contains it.
 struct TxIndexResult {
