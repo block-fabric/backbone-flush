@@ -172,8 +172,9 @@
             : { key: 'status', label: '', value: (r) => r.sortKey, width: '2.6rem', align: 'center', noFilter: true },
           { key: 'date', label: 'Date', value: (r) => r.time, width: '11.5rem' },
           { key: 'type', label: 'Type', value: (r) => chainTxOf(r.txid)?.type ?? typeText(r.type, r.role), width: '10rem' },
-          { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: 'minmax(14rem, 1fr)' },
-          ...(CHAIN_TX_COLUMN ? [{ key: 'chain', label: CHAIN_TX_COLUMN, value: (r: TxRecord) => chainTxOf(r.txid)?.search ?? '', width: 'minmax(12rem, 1fr)', noFilter: true }] : []),
+          // With the chain's column, the label gives it room: the amount stays in view.
+          { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: CHAIN_TX_COLUMN ? 'minmax(8rem, 1fr)' : 'minmax(14rem, 1fr)' },
+          ...(CHAIN_TX_COLUMN ? [{ key: 'chain', label: CHAIN_TX_COLUMN, value: (r: TxRecord) => chainTxOf(r.txid)?.search ?? '', width: '13rem', noFilter: true }] : []),
           { key: 'amount', label: `Amount (${prefs.unit})`, value: (r) => r.amount, width: '12rem', align: 'end' },
         ],
   );
@@ -313,7 +314,7 @@
           oncontext={(r, e) => openMenu(r, e)}
         >
           {#snippet cell(row, column)}
-            <span class="cellwrap {rowClass(row)}" title={column.key === 'label' ? `${statusText(row)}\n${typeText(row.type, row.role)} ${addressText(row, true)}` : undefined}>
+            <span class="cellwrap {rowClass(row)}" class:chain={column.key === 'chain'} title={column.key === 'label' ? `${statusText(row)}\n${typeText(row.type, row.role)} ${addressText(row, true)}` : undefined}>
               {#if column.key === 'status'}<TxStatusIcon record={row} />{#if simple && !narrow}<span class="status-word">{statusText(row)}</span>{/if}
               {:else if column.key === 'date'}{narrow ? formatTime(row.time, true) : formatTime(row.time)}
               {:else if column.key === 'type'}<span class="type {row.type}"><Icon name={row.type === 'mined' ? 'mine' : row.amount < 0n ? 'send' : 'receive'} size={14} /> {chainTxOf(row.txid)?.type ?? (typeText(row.type, row.role) || 'Other')}</span>
@@ -393,6 +394,11 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* The chain's column (LocalTxCell): a fixed width, its content cut to it (each row is a grid of its own). */
+  .cellwrap.chain {
+    display: block;
+    max-width: 100%;
   }
   .cellwrap.unconfirmed {
     color: var(--text-muted);
