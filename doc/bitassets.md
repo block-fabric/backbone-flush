@@ -235,7 +235,14 @@ refused if someone made it meanwhile, rather than going in at their price.
 Wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `listmyassets`, `sendasset`,
 `mintasset`, `burnasset`, `updateasset`, `setassetlogo`, `transferassetcontrol`, `fixassetsupply`, `swapasset`,
 `addliquidity`, `removeliquidity`, `createauction`, `bidauction`, `collectauction`,
-`listassetactivity`.
+`listassetactivity`, `listassettransactions`.
+
+`listassettransactions (count skip asset)` lists the asset moves of the wallet, newest first, one entry per asset a
+transaction moves: its category (send, receive, register, mint, burn, swap, pool_add, pool_remove, auction, bid,
+collect, logo, update, control, reserve, release), the asset with its label and number, the amount (exact) and its sign,
+the network fee when the wallet paid it, and the other side: for a send the addresses it went to, for a receive the
+addresses that paid the transaction, read from the undo data of its block (or the mempool) — no index; "unknown" when
+the block is pruned. A result of a swap or a bid spent since is shown as the least the transaction asked (`at_least`).
 
 ## Differences from the original
 
