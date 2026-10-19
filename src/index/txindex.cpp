@@ -53,6 +53,13 @@ SipHasher13UJ ReadOrCreateTxidHasher(CDBWrapper& db)
 }
 } // namespace
 
+uint32_t txindex::FirstTxOffset(const CBlock& block)
+{
+    // The header as serialized: 80 bytes, or more for an extended header (a block of stake).
+    const uint32_t header_size{static_cast<uint32_t>(GetSerializeSize(static_cast<const CBlockHeader&>(block)))};
+    return header_size + GetSizeOfCompactSize(block.vtx.size());
+}
+
 /** Access to the txindex database (indexes/txindex/) */
 class TxIndex::DB : public BaseIndex::DB
 {
@@ -72,12 +79,39 @@ public:
     void WriteBestBlock(CDBBatch& batch, const CBlockLocator& locator) override;
 
 private:
+    //! f_wipe already includes the rebuild of a database with stale offsets (HasStaleTxOffsets).
+    struct WipeResolved {};
+    DB(size_t n_cache_size, bool f_memory, bool f_wipe, WipeResolved);
     DB(size_t n_cache_size, bool f_memory, bool f_wipe, bool has_legacy);
 };
 
 static fs::path TxIndexDBPath() { return gArgs.GetDataDirNet() / "indexes" / "txindex"; }
 
+//! Whether the database on disk has entries written before the offsets counted an extended header
+//! as serialized (the transactions of a block of stake recorded 96 bytes too early): it is then
+//! rebuilt. Only a chain with extended blocks can have such entries.
+static bool HasStaleTxOffsets()
+{
+    if (!BlockExtensionsEnabled()) return false;
+    const fs::path path{TxIndexDBPath()};
+    if (!fs::exists(path / "CURRENT")) return false;
+    bool stale;
+    {
+        const CDBWrapper db{DBParams{.path = path, .cache_bytes = 1 << 20, .bloom_filter = false}};
+        stale = db.Exists(txindex::DB_NEXT_BLOCK_SEQ) && !db.Exists(txindex::DB_TX_OFFSETS_V2);
+    }
+    if (stale) {
+        LogWarning("txindex has transaction positions of an earlier version, wrong in blocks of stake: "
+                   "it is rebuilt from the genesis block (%s).", fs::PathToString(path));
+    }
+    return stale;
+}
+
 TxIndex::DB::DB(size_t n_cache_size, bool f_memory, bool f_wipe) :
+    DB(n_cache_size, f_memory, f_wipe || (!f_memory && HasStaleTxOffsets()), WipeResolved{})
+{}
+
+TxIndex::DB::DB(size_t n_cache_size, bool f_memory, bool f_wipe, WipeResolved) :
     // Bloom filters are built for every key but only consulted by point reads,
     // which iterators bypass: the per-tx hashed ('x') lookups seek with an
     // iterator, and the 's'/'h' point reads are at most one per block against a
@@ -91,7 +125,10 @@ TxIndex::DB::DB(size_t n_cache_size, bool f_memory, bool f_wipe, bool has_legacy
     BaseIndex::DB(TxIndexDBPath(), n_cache_size, f_memory, f_wipe, /*f_obfuscate=*/false, /*f_bloom=*/has_legacy),
     m_hasher{ReadOrCreateTxidHasher(*this)},
     m_has_legacy{has_legacy}
-{}
+{
+    // Every entry from now on counts the header as serialized (see HasStaleTxOffsets).
+    if (!Exists(txindex::DB_TX_OFFSETS_V2)) Write(txindex::DB_TX_OFFSETS_V2, uint8_t{1}, /*fSync=*/true);
+}
 
 CBlockLocator TxIndex::DB::ReadBestBlock() const
 {
@@ -122,7 +159,7 @@ void TxIndex::DB::WriteTxs(const interfaces::BlockInfo& block)
     batch.Write(txindex::BlockHashKey{block.hash}, block_seq);
     batch.Write(txindex::BlockSeqKey{block_seq}, block.hash);
     batch.Write(txindex::DB_NEXT_BLOCK_SEQ, block_seq + 1);
-    uint32_t tx_offset_in_block{txindex::BLOCK_HEADER_SIZE + GetSizeOfCompactSize(block.data->vtx.size())};
+    uint32_t tx_offset_in_block{txindex::FirstTxOffset(*block.data)};
     for (const auto& tx : block.data->vtx) {
         const uint32_t stored{std::min(tx_offset_in_block, txindex::BlockTxPosition::OFFSET_UNKNOWN)};
         const txindex::DBKey key{txindex::CreateKeyPrefix(m_hasher, tx->GetHash()),
