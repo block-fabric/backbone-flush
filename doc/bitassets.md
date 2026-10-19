@@ -273,7 +273,7 @@ is full: a page costs about the entries it skips, not the assets there are. A te
 name, its start, or the start of any of its words (any case): by relevance it reads the names that
 start with the text, then the words that do; in another order it collects the matches (at most 5000)
 and sorts them, or, if there are more, walks that order with the text as a filter. The wallet's
-assets (`mine`), a number or a hash are a set sorted the same way. Each call looks at 50 000 entries
+assets (`searchmyassets`), a list of assets, a number or a hash are a set sorted the same way. Each call looks at 50 000 entries
 and reads 10 000 rows at most: a page cut short by that says `partial`, with a cursor to go on.
 Cursors are the key of the last entry returned: stable while the chain moves (an asset that moves in
 the order meanwhile may show twice or not at all, as in any paged list of live data).
@@ -298,33 +298,43 @@ Measured with a million assets in LevelDB on the development PC (`BITASSETS_INDE
 (`1739-0029`), or a hash (`0x` optional); `filters` is an object of `min_supply` (whole units),
 `has_pool`, `has_logo`, `active_within_blocks` / `exclude_dead` (blocks: only those touched within),
 `created_after` (height), `exclude_burned` (supply 0), `exclude_retired` (default true),
-`exclude_keywords` (whole words of the names, any case), `mine` (what the wallet of the request holds
-or controls, in blocks; bounded by the wallet's own transactions); `sort` is `relevance` (default; no
+`exclude_keywords` (whole words of the names, any case), `assets` (only these: names, numbers or hashes, at
+most 5000); `exclude_dead: true` means not touched within the volume window (about a day); `sort` is `relevance` (default; no
 text: as activity), `name`, `newest`, `oldest`, `supply`, `activity`, `volume`, `pool_depth`; `limit`
 1 to 200 (default 50). It returns `assets` (number, id, name, supply, minted, burned, flags, pools,
 `pool_depth` and `volume` in CHN, `created`, `last_activity`, and how a text matched: `exact`,
-`prefix` or `word`), `next` (the cursor of the next page, left out at the end), `partial`, `scanned`,
-`height`.
+`prefix` or `word`, and, unless retired, the other fields of `getasset`: registration, data, releasable,
+control, logo), `next_cursor` (the cursor of the next page, null at the end), `partial`, `scanned`, `height`.
+Arguments are positional in this order (`null` for no cursor) or named.
+
+`searchmyassets (query filters sort cursor limit)` (wallet): the same among the assets the wallet holds or
+controls, in blocks (its own token outputs, bounded by the wallet's transactions), the wallet chosen as for any
+wallet command (`-rpcwallet`, `/wallet/<name>`). The node's `searchassets` never reads a wallet: `mine` there is
+refused with a pointer to `searchmyassets`.
 
 ```
 bitassets-cli searchassets gold
 bitassets-cli -named searchassets query=gold sort=volume limit=20 filters='{"has_pool":true}'
 bitassets-cli searchassets "" '{"exclude_dead":1440,"exclude_burned":true,"exclude_keywords":["test"]}' newest
-bitassets-cli -rpcwallet=w searchassets "" '{"mine":true}' name
-bitassets-cli searchassets "" '{}' newest <next of the page before>
+bitassets-cli -rpcwallet=w searchmyassets "" '{}' name
+bitassets-cli searchassets "" '{}' newest <next_cursor of the page before>
 bitassets-cli searchassets "#1739-0029"
 ```
 
 `searchpools (query filters sort cursor limit)`: pools whose assets match the text (of the first 1000
-assets it matches); filters `exclude_abandoned` (default true), `chn_only`, `min_depth` (CHN); sorts
+assets it matches, found within one search budget: a text that few names match among millions stops there and
+says `partial`); filters `exclude_keywords` (either asset's name), `exclude_abandoned` (default true), `chn_only`, `min_depth` (CHN); sorts
 `depth` (default; pools with CHN), `volume` (traded within the window), `price_change` (of the second
 asset in the first, CHN for a pool with CHN, over the window, largest rise first), `newest`. Each pool
-as `listpools` shows it, with `depth`, `volume_window`, `price_change` (percent), `last_activity`.
+as `listpools` shows it, with `depth`, `volume_window`, `price_change` (percent), `last_activity`. The sorts and
+filters of `searchassets` are taken too (an app sends the same object): `relevance`, `pool_depth`, `name`,
+`supply`, `oldest` sort by depth, `activity` by volume; the filters of assets are left aside.
 
 `searchauctions (query filters sort cursor limit)`: auctions not closed that sell or sell for an asset
 the text matches; filter `status` (`open`, `upcoming`, `active` = open or upcoming (default), `ended`
-= not collected yet, `any`) and `include_closed` (sort newest, no text); sorts `ending_soon` (default)
-and `newest`. Each auction as `listauctions` shows it.
+= not collected yet, `any`), `include_closed` (sort newest, no text) and `exclude_keywords`; sorts
+`ending_soon` (default; any sort of `searchassets` but `newest`) and `newest`. All three return `next_cursor`
+and `partial`. Each auction as `listauctions` shows it.
 
 `getassetindexinfo`: `synced` (always: it is at the tip), `height`, `bestblock`, `count` (assets
 indexed, retired ones included), `retired`, `pools`, `volume_window`, `max_page`.
