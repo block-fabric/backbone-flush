@@ -1,35 +1,23 @@
 <script lang="ts">
-  // The cards of BitAssets on the home of the dashboard: what the wallet holds (its worth in CHN, the assets
-  // being issued), the markets (the pools that trade most, with their prices), and the auctions running (the
-  // ones that end soonest, at their price now). Each opens its page.
+  // The cards of BitAssets on the home of the dashboard (My assets, the table of what the wallet holds, is
+  // ba/HeldAssets.svelte above them: one card since user feedback 2026-10-19): the markets (the pools that trade
+  // most, with their prices), and the auctions running (the ones that end soonest, at their price now). Each opens
+  // its page.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import Card from '../../views/home/Card.svelte';
   import { formatCount } from '../../lib/format';
   import { go, goTo } from '../../lib/nav.svelte';
-  import { wallets } from '../../lib/state.svelte';
   import './ba.css';
   import AssetBadge from './AssetBadge.svelte';
-  import { approx, formatAmount, formatPrice, isChn, unitPrice } from './model';
-  import { ba, chnPrice, decimalsOf, pendingOf, startBitAssets } from './store.svelte';
+  import { formatAmount, formatPrice, isChn, unitPrice } from './model';
+  import { ba, decimalsOf, startBitAssets } from './store.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { withoutHidden } from './visible.svelte';
 
   $effect(() => startBitAssets());
   // Simple mode (lib/uimode.svelte.ts): no auctions card (Advanced's), the actions in plain words.
   const simple = $derived(simpleMode());
 
-  // What the wallet hides (its asset filters) counts nowhere here.
-  const holdings = $derived(withoutHidden(ba.wallet === wallets.current ? (ba.mine?.assets ?? []) : [], (h) => h.asset, (h) => h.label).items);
-  const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * approx(h.balance), 0));
-  const top = $derived(
-    holdings
-      .filter((h) => approx(h.balance) > 0)
-      .slice()
-      .sort((a, b) => (chnPrice(b.asset) ?? 0) * approx(b.balance) - (chnPrice(a.asset) ?? 0) * approx(a.balance))
-      .slice(0, 3),
-  );
-  const issuing = $derived(pendingOf(wallets.current).length + (ba.mine?.reservations.filter((r) => !pendingOf(wallets.current).some((p) => p.name === r.name)).length ?? 0));
   const markets = $derived(
     ba.pools
       .filter((p) => !p.abandoned)
@@ -48,26 +36,6 @@
 
 {#if ba.loaded && !ba.error}
   <div class="ba-cards">
-    <Card title="My assets" icon="holdings" open={() => go('my-assets')} openLabel="Open My assets" stat>
-      <span class="value num">{formatPrice(worth)} CHN</span>
-      <dl class="pairs">
-        <dt>Assets held</dt><dd class="num">{holdings.filter((h) => approx(h.balance) > 0).length}</dd>
-        <dt>Controlled</dt><dd class="num">{holdings.filter((h) => h.control).length}</dd>
-        <dt>Being issued</dt><dd class="num">{issuing}</dd>
-      </dl>
-      {#if top.length}
-        <ul class="mini">
-          {#each top as h (h.asset)}
-            <li><button type="button" class="link" onclick={() => goTo('my-assets', '', h.asset)}><AssetBadge id={h.asset} label={h.label} size="s" /></button><span class="num small">{formatAmount(h.balance, h.decimals, { max: 4 })}</span></li>
-          {/each}
-        </ul>
-      {/if}
-      {#snippet actions()}
-        <button type="button" class="btn grow" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create a token' : 'Issue'}</button>
-        <button type="button" class="btn ghost" onclick={() => go('send')}>Send</button>
-      {/snippet}
-    </Card>
-
     <Card title="Markets" icon="swap" open={() => go('trade', simple ? 'swap' : 'pools')} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
       <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
       <dl class="pairs">
