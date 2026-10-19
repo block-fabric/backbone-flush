@@ -30,7 +30,8 @@ Programs: `fastblocksd`, `fastblocks-cli`, `fastblocks-qt`; data directory
 `main_activation_height` names the mainchain block that activated slot 5; the
 test network and signet only warn (it is 0 there until the slot activates; the
 test network's is `TESTNET_MAIN_ACTIVATION_HEIGHT` in `src/kernel/testnet_activation.h`,
-set once slot 5 activates on the test network reset on 17/Oct/2026).
+set once slot 5 activated on the test network reset on 17/Oct/2026: 69; FastBlocks' test network
+restarted from a new genesis on 19/Oct/2026, every rule from its first block, in the same slot).
 
 ## Parameters
 
@@ -42,9 +43,9 @@ set once slot 5 activates on the test network reset on 17/Oct/2026).
 | `max_unanchored_slots` | 240 (1 h) | 240 (1 h) | 100 |
 | `stall_seconds` | 1800 | 600 | 30 |
 | Producer share (before the fee split) | 50 % | 50 % | 50 % |
-| Fee split from height (`fee_split_height`) | 0 (from the first block) | `TESTNET_FEE_SPLIT_HEIGHT` / `SIGNET_FEE_SPLIT_HEIGHT` (`src/kernel/testnet_activation.h`; never until set) | never, unless `-testactivationheight=feesplit@<height>` |
+| Fee split from height (`fee_split_height`) | 0 (from the first block) | 0 (from the first block) | never, unless `-testactivationheight=feesplit@<height>` |
 | Bidder's share of ordinary fees, curve 1 (below `fee_curve2_height`) | max(10 %, 50 % × min(1, 60 s / S)) | same | same |
-| Fee curve 2 from height (`fee_curve2_height`) | 0 (from the first block) | `TESTNET_FEE_CURVE2_HEIGHT` / `SIGNET_FEE_CURVE2_HEIGHT` (`src/kernel/testnet_activation.h`; never until set) | never, unless `-testactivationheight=feecurve2@<height>` |
+| Fee curve 2 from height (`fee_curve2_height`) | 0 (from the first block) | 0 (from the first block) | never, unless `-testactivationheight=feecurve2@<height>` |
 | Bidder's share of ordinary fees, curve 2 | clamp(50 % − 5 % × (S − 60 s) / 60 s, 20 %, 50 %) | same | same |
 | Anchors that make a block final (wallets) | 6 | 3 | 1 |
 | Minimum stake | 1 CHN | 0.01 | 0.0001 |
@@ -1485,10 +1486,8 @@ Choices made in building it:
 - the pool's shares go to the bond owner's P2WPKH, the only address the chain has for a validator, at
   the first anchor after the epoch, behind a marker the wallets read;
 - activation: `PosParams::fee_split_height`, a height of FastBlocks. Main 0 (the main network has not
-  started: from its first block). Test network and signet: `TESTNET_FEE_SPLIT_HEIGHT` and
-  `SIGNET_FEE_SPLIT_HEIGHT` in `src/kernel/testnet_activation.h`, placeholders (`INT_MAX`: never) that
-  the coordinator sets to a height a little ahead of the tip before the upgraded nodes start (every
-  node of the network needs the same); regtest: never, unless `-testactivationheight=feesplit@<height>`
+  started: from its first block). Test network and signet: 0 too (the test network ran from 7055
+  between 18/Oct and its restart from a new genesis on 19/Oct/2026); regtest: never, unless `-testactivationheight=feesplit@<height>`
   (so the tests of the old rule run unchanged). Before it the old rule holds exactly; a pool output there
   only burns its coins.
 
@@ -1502,9 +1501,8 @@ integers: the basis points rounded down (5000 − ⌈500 (S − 60) / 60⌉), B 
 Everything else is unchanged (S, the peg fees to the bidder whole, the pool by stake, BMM blocks).
 
 - Activation: `PosParams::fee_curve2_height`, a height of FastBlocks; below it curve 1 holds exactly.
-  Main 0. Test network and signet: `TESTNET_FEE_CURVE2_HEIGHT` / `SIGNET_FEE_CURVE2_HEIGHT` in
-  `src/kernel/testnet_activation.h`, placeholders (`INT_MAX`) the coordinator sets as for the fee split
-  (a little ahead of the tip, every node the same, before the upgraded nodes start). Regtest: never,
+  Main, test network and signet 0 (the test network ran it from 8391 until its restart from a new
+  genesis on 19/Oct/2026). Regtest: never,
   unless `-testactivationheight=feecurve2@<height>`.
 - `getposinfo` / `getstakinginfo` `feesplit` say the curve the next block takes (`curve`, `curve2height`)
   and give `bidderbps` / `bmmbidderbps` by it.

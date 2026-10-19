@@ -381,23 +381,27 @@ public:
         // This chain is a sidechain of the Chains testnet.
         // A new genesis at each restart of the test network (audit 7, finding 3): a chain of an earlier
         // start shares no genesis with this one, so it is no branch of it (its blocks, bonds, unbonds
-        // and signatures name another genesis). Layers' first, of 2026-10-18 15:30 UTC.
-        MakeSidechain({.slot = 7, .genesis_message = "Layers testnet 18/Oct/2026: assets on a fast chain", .genesis_time = 1792337400,
+        // and signatures name another genesis). The restart of 2026-10-19 19:45 UTC, every rule from the first
+        // block; was "Layers testnet 18/Oct/2026: assets on a fast chain", 1792337400 (Layers' first, of
+        // 2026-10-18 15:30 UTC).
+        MakeSidechain({.slot = 7, .genesis_message = "Layers testnet 19/Oct/2026: every rule from the first block", .genesis_time = 1792439100,
                        .message_start = {0x6c, 0x79, 0x72, 0x02}, .default_port = 19255, .bech32_hrp = "tly"});
         // The mainchain of the test network votes on a withdrawal bundle within 600 blocks.
         consensus.sidechain.bundle_retry_delay = 20;
         consensus.sidechain.bitassets_reveal_depth = 3;
-        consensus.sidechain.dex_height = TESTNET_DEX_HEIGHT; // kernel/testnet_activation.h: the test network runs since before the DEX
-        // The logos of assets: the test network runs since before them (kernel/testnet_activation.h).
-        consensus.sidechain.logo_height = TESTNET_LOGO_HEIGHT;
+        // The DEX, logos, tickers and display names from the first block (the test network restarted on
+        // 19/Oct/2026).
+        consensus.sidechain.dex_height = 0;
+        consensus.sidechain.logo_height = 0;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
-        consensus.sidechain.ticker_height = TESTNET_TICKER_HEIGHT;
+        consensus.sidechain.ticker_height = 0;
         // The height of the mainchain block that activated the slot; nothing is left out at 0.
         consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 7 activates on the test network (kernel/testnet_activation.h)
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
-        consensus.pos.fee_split_height = TESTNET_FEE_SPLIT_HEIGHT; // Layers: 0, from the first block (kernel/testnet_activation.h)
-        consensus.pos.fee_curve2_height = TESTNET_FEE_CURVE2_HEIGHT; // a placeholder (kernel/testnet_activation.h): the test network runs since before it
+        // The fee split and the second fee curve from the first block (the test network restarted on 19/Oct/2026).
+        consensus.pos.fee_split_height = 0;
+        consensus.pos.fee_curve2_height = 0;
         // A tenth of the testnet mainchain's withdrawal_min_score (300); proposals within an hour.
         consensus.sidechain.pending_min_score = 30;
         consensus.sidechain.unproposed_expiry_blocks = 60;
@@ -535,8 +539,8 @@ public:
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
         consensus.sidechain.bitassets_reveal_depth = 3;
         consensus.sidechain.dex_height = 0; // Layers' DEX from the first block
-        consensus.pos.fee_split_height = SIGNET_FEE_SPLIT_HEIGHT; // kernel/testnet_activation.h
-        consensus.pos.fee_curve2_height = SIGNET_FEE_CURVE2_HEIGHT;
+        consensus.pos.fee_split_height = 0; // not launched: from the first block
+        consensus.pos.fee_curve2_height = 0;
         consensus.sidechain.logo_height = 0;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
