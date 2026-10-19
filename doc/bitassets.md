@@ -115,6 +115,79 @@ for it, and has taken none of it in, does not count; once the asset is retired (
 is registered again, as another asset), that auction takes no more bids, and its seller collects
 what it sells.
 
+## Logos
+
+An asset can have a logo: a PNG or a JPEG of exactly 256 x 256 pixels, at most 32768 bytes, kept on
+the chain. Whoever holds the asset's control coin sets it — at the registration (`registerasset`
+with `logo`) or later (`setassetlogo`, which also removes it with an empty logo) — and a new one
+replaces the one before. A fixed asset (control coin burned) keeps the logo it has.
+
+**Carrier.** The logo goes whole into the marker of the transaction that sets it (operation
+`SetLogo`, kind 32; a registration with a logo is kind 33: the registration, then the logo). One
+transaction, signed like any other, spending and outputting the control coin as `updateasset` does.
+A 32 KB OP_RETURN is standard here (`-datacarriersize` defaults to 98 000 bytes, a transaction to
+392 000 weight units) and a full logo is about 131 000 weight units, 3% of a block's 4 000 000 for
+transactions. Witness data (an inscription-style envelope in a tapscript) would cost a quarter of
+that, but takes two transactions (a commitment, then a reveal spending it) that a reorganization or
+a replacement can separate (the commitment's coins stranded), and a signer the wallet does not have
+(the envelope is no miniscript); at 1 sat/vB a full logo costs about 0.00033 CHN in a marker against
+0.00009 in a witness, and logos are set rarely. The marker was chosen: atomic, one confirmation of
+exactly the bytes shown, nothing new to sign.
+
+**Rules** (`bitassets/logo.h`; consensus checks the structure of the file, it decodes no image):
+
+- At most 32768 bytes, not empty. PNG (signature `89 50 4E 47 0D 0A 1A 0A`) or JPEG (`FF D8`);
+  anything else (SVG, GIF, WebP, BMP, HTML...) is refused (`bad-ba-logo-format`).
+- PNG: every chunk's length within the file and its CRC-32 right; the chunks IHDR, PLTE, tRNS,
+  IDAT, IEND only (no text, time, gamma, colour profile, Exif, animation or private chunk). IHDR
+  first, 13 bytes: 256 x 256, a bit depth and colour type the PNG standard pairs (grey 1/2/4/8/16,
+  RGB 8/16, palette 1/2/4/8, grey+alpha and RGBA 8/16), compression and filter 0, **not
+  interlaced**. PLTE once, before the image data, for a palette image only (and required by one),
+  at most 2^depth entries. tRNS once, before the image data, after PLTE, of its colour type's size
+  (no more entries than the palette), never with an alpha channel. IDAT chunks one after another,
+  more than 0 bytes in all, starting with a zlib header (deflate, window up to 32 KiB, no preset
+  dictionary, its check right). IEND empty and last: nothing after it.
+- JPEG: SOI, then segments of SOF0 (baseline) or SOF2 (progressive), DQT, DHT, DRI and SOS only,
+  each of the length its content gives; no APPn (JFIF, Exif, XMP, ICC, Adobe), no COM, no other
+  frame type (extended, lossless, hierarchical, arithmetic), DNL, DHP, EXP, fill bytes or stray
+  markers. One SOF before the first scan: 8-bit, 256 x 256, 1 or 3 components (different ids,
+  sampling factors 1–4, quantization tables 0–3). DQT: 8-bit tables of 64 values filling the
+  segment; DHT: tables filling the segment, of at most 256 values, each a prefix code; DRI 4 bytes.
+  SOS: 1 to 4 of the frame's components, each once; baseline 0–63 with no approximation, progressive
+  a DC scan (0–0) or an AC scan of one component (s–e, 1 ≤ s ≤ e ≤ 63). Its entropy-coded data
+  holds FF only before 00 or a restart marker (FFD0–FFD7). At least one scan; EOI last, nothing after.
+- The reasons: `bad-ba-logo-empty`, `-oversize`, `-format`, `-size` (not 256 x 256), `-trailing`,
+  `-png-*` and `-jpeg-*`; `bad-ba-logo-none` (removing a logo there is not), `bad-ba-logo-asset`,
+  and `bad-ba-no-control` / `bad-ba-asset-unknown` as for `updateasset`.
+
+**Activation.** From `SidechainParams::logo_height`: before it a marker that sets a logo is not
+valid (`bad-ba-logo-inactive`), as no such marker was; nodes have to be upgraded before the chain
+reaches it (an older node refuses a block with one). Main network and signet: 0 (not launched).
+Test network: `TESTNET_LOGO_HEIGHT` in `src/kernel/testnet_activation.h`, a placeholder (never)
+until the deploy sets it a few blocks above the tip. Regtest: 0, or
+`-testactivationheight=logo@<height>`. `getbitassetsinfo` says `logo_height` (-1: never).
+
+**State and storage.** The state records each asset's logo (table 0x90: SHA-256 of the bytes,
+format, size, height, transaction) and keeps its bytes apart (0x91), only the current logo of each
+asset; no rule reads them. They are kept with the sidechain state, not read from the blocks, so a
+pruned node serves them too; the journal of each block puts the logo before back when a
+reorganization disconnects it, and a state derived again from the blocks has them again. Retiring
+an asset drops its logo (the name registered again starts without one).
+
+**Commands.** `getasset` and `listassets` say `logo` {`hash`, `mime`, `size`, `height`, `txid`}
+(never the bytes); `getassetlogo <asset>` gives them with `base64` (at most 32768 bytes).
+`setassetlogo <asset> <base64> ({"fee_rate": sat/vB})` (an empty logo removes it) and
+`registerasset ... <logo>` check the logo against the rules before they pay for anything.
+
+**Showing a logo.** The bytes are the chain's: show them only as an image of the MIME type the node
+gives, never as a document or markup — the app makes a `data:image/png;base64,...` (or jpeg) URL
+for an `<img>`, and its own pages never put a logo in HTML. A file the rules take is one image and
+nothing else, but its pixels are anyone's: data hidden in the image data itself (steganography)
+cannot be told apart, and a deflate stream may be unusual (a decoder stops at 256 x 256: at most
+256 x (1 + 256 x 8) bytes, about 0.5 MB, whatever the stream claims). The app (`bitassets-app`)
+crops and scales any picture to 256 x 256, encodes it as PNG (a palette when that is smaller) and
+as JPEG (quality about 80), keeps the smaller, and strips every metadata segment.
+
 ## CHN in pools and auctions
 
 CHN that goes into a pool or an auction leaves circulation: the marker burns it (its value is the
@@ -132,8 +205,8 @@ providers; less from collecting an auction is not paid (it was burned when it we
 
 ## Rules from genesis
 
-The rules of the audits apply from block 0 on every network: there are no activation heights, and
-the rules before them are gone.
+The rules of the audits apply from block 0 on every network: there are no activation heights for
+them, and the rules before them are gone. (The logos of assets, added after, have one: Logos.)
 
 - A reservation registers only bound to its output's script; one of the name alone registers
   nothing (it can only be released, and the name reserved again).
@@ -148,7 +221,7 @@ from its blocks at startup (a pruned node cannot, and has to be resynced).
 
 ## Commands
 
-Node: `getasset`, `listassets`, `getassethistory`, `getbitassetsinfo`, `listpools`, `getpool`,
+Node: `getasset`, `listassets`, `getassethistory`, `getassetlogo`, `getbitassetsinfo`, `listpools`, `getpool`,
 `quoteswap`, `listauctions`, `getauction`, `quotebid`.
 `listassets`, `listpools` and `listauctions` return a page at a time (`count`, at most 1000 for
 pools and auctions, and `skip`; `listauctions` also by asset). The pools and auctions are ordered,
@@ -160,7 +233,7 @@ that what the wallet would sign as the least is lower, it refuses instead of sig
 `addliquidity` takes what the caller expects (`sets_price`): a deposit that was to make a pool is
 refused if someone made it meanwhile, rather than going in at their price.
 Wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `listmyassets`, `sendasset`,
-`mintasset`, `burnasset`, `updateasset`, `transferassetcontrol`, `fixassetsupply`, `swapasset`,
+`mintasset`, `burnasset`, `updateasset`, `setassetlogo`, `transferassetcontrol`, `fixassetsupply`, `swapasset`,
 `addliquidity`, `removeliquidity`, `createauction`, `bidauction`, `collectauction`,
 `listassetactivity`.
 

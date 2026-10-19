@@ -5,6 +5,8 @@
 #ifndef BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 #define BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 
+#include <limits>
+
 /**
  * BitAssets on the Chains test network: the height of the Chains testnet block that activated BitAssets in
  * slot 4 (Consensus::SidechainParams::main_activation_height of the test network).
@@ -18,5 +20,13 @@
  * the activation; harmless, but start new datadirs with the height set).
  */
 inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{67};
+
+/**
+ * The logos of assets on the test network (Consensus::SidechainParams::logo_height; bitassets/logo.h,
+ * doc/bitassets.md "Logos"): a marker that sets a logo is valid from this BitAssets block on. A
+ * placeholder (never) until the deploy: set it a few blocks above the tip then, rebuild, and upgrade
+ * every node of the test network before the chain reaches it (a node of before would refuse the blocks).
+ */
+inline constexpr int TESTNET_LOGO_HEIGHT{std::numeric_limits<int>::max()};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

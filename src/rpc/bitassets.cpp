@@ -4,6 +4,7 @@
 //
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
+#include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <coins.h>
@@ -80,6 +81,29 @@ UniValue OutputToJSON(Chainstate& chainstate, const COutPoint& outpoint) EXCLUSI
     return obj;
 }
 
+std::vector<RPCResult> LogoResults()
+{
+    return {
+        {RPCResult::Type::STR_HEX, "hash", "SHA-256 of its bytes"},
+        {RPCResult::Type::STR, "mime", "image/png or image/jpeg"},
+        {RPCResult::Type::NUM, "size", "Its size in bytes"},
+        {RPCResult::Type::NUM, "height", "The height of the block that set it"},
+        {RPCResult::Type::STR_HEX, "txid", "The transaction that set it"},
+    };
+}
+
+UniValue LogoToJSON(const bitassets::LogoRecord& logo)
+{
+    UniValue obj(UniValue::VOBJ);
+    // The hash as sha256sum prints it, of the bytes in order.
+    obj.pushKV("hash", HexStr(logo.hash));
+    obj.pushKV("mime", bitassets::LogoMime(static_cast<bitassets::LogoFormat>(logo.format)));
+    obj.pushKV("size", logo.size);
+    obj.pushKV("height", logo.height);
+    obj.pushKV("txid", logo.txid.GetHex());
+    return obj;
+}
+
 std::vector<RPCResult> AssetResults()
 {
     return {
@@ -103,6 +127,7 @@ std::vector<RPCResult> AssetResults()
             {RPCResult::Type::NUM, "vout", ""},
             {RPCResult::Type::STR, "address", /*optional=*/true, "Who controls it"},
         }},
+        {RPCResult::Type::OBJ, "logo", /*optional=*/true, "Its logo now, if it has one (its bytes: getassetlogo)", LogoResults()},
     };
 }
 
@@ -134,6 +159,7 @@ UniValue AssetToJSON(Chainstate& chainstate, const bitassets::State& state, cons
     if (!record.fixed) {
         if (const auto outpoint{state.FirstTokenOf(asset, bitassets::Token::Kind::CONTROL)}) obj.pushKV("control", OutputToJSON(chainstate, *outpoint));
     }
+    if (const auto logo{state.GetLogo(asset)}) obj.pushKV("logo", LogoToJSON(*logo));
     return obj;
 }
 
@@ -462,6 +488,44 @@ RPCMethod getassethistory()
     };
 }
 
+RPCMethod getassetlogo()
+{
+    return RPCMethod{
+        "getassetlogo",
+        strprintf("The logo of an asset: a PNG or JPEG of %ux%u pixels, at most %u bytes, as the chain has it.\n"
+                  "Show it only as an image of its MIME type (a data: URL in an <img>, say), never as a document.", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES),
+        {
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "", [] {
+            std::vector<RPCResult> results{{RPCResult::Type::STR_HEX, "asset", "The asset"}};
+            for (auto& r : LogoResults()) results.push_back(std::move(r));
+            results.push_back({RPCResult::Type::STR, "base64", "Its bytes, in base64"});
+            return results;
+        }()},
+        RPCExamples{HelpExampleCli("getassetlogo", "\"GOLD\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId asset{ParseAsset(request.params[0], state)};
+    Registered(state, asset);
+    const auto logo{state.GetLogo(asset)};
+    const auto bytes{state.GetLogoBytes(asset)};
+    if (!logo || !bytes) throw JSONRPCError(RPC_INVALID_PARAMETER, "This asset has no logo");
+    // Bounded: the rules let no logo be larger.
+    if (bytes->size() > bitassets::MAX_LOGO_BYTES) throw JSONRPCError(RPC_INTERNAL_ERROR, "The logo is larger than a logo can be");
+    UniValue result{LogoToJSON(*logo)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("asset", asset.GetHex());
+    for (const auto& key : result.getKeys()) obj.pushKV(key, result[key]);
+    obj.pushKV("base64", EncodeBase64(*bytes));
+    return obj;
+},
+    };
+}
+
 RPCMethod getbitassetsinfo()
 {
     return RPCMethod{
@@ -477,6 +541,8 @@ RPCMethod getbitassetsinfo()
             {RPCResult::Type::NUM, "auctions_all", "Auctions, those closed included"},
             {RPCResult::Type::NUM, "height", "The height of the next block, which the prices are for"},
             {RPCResult::Type::NUM, "reveal_depth", "How many blocks after the block that made a reservation a block may take its registration"},
+            {RPCResult::Type::NUM, "logo_height", "The first block of the logos of assets (-1: never on this network)"},
+            {RPCResult::Type::NUM, "max_logo_bytes", "The most bytes a logo may have"},
         }},
         RPCExamples{HelpExampleCli("getbitassetsinfo", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -493,6 +559,9 @@ RPCMethod getbitassetsinfo()
     LOCK(::cs_main);
     result.pushKV("height", chainman.ActiveChain().Height() + 1);
     result.pushKV("reveal_depth", chainman.GetConsensus().sidechain.bitassets_reveal_depth);
+    const int logo_height{chainman.GetConsensus().sidechain.logo_height};
+    result.pushKV("logo_height", logo_height == std::numeric_limits<int>::max() ? -1 : logo_height);
+    result.pushKV("max_logo_bytes", static_cast<uint64_t>(bitassets::MAX_LOGO_BYTES));
     return result;
 },
     };
@@ -743,6 +812,7 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &getasset},
         {"bitassets", &listassets},
         {"bitassets", &getassethistory},
+        {"bitassets", &getassetlogo},
         {"bitassets", &getbitassetsinfo},
         {"bitassets", &listpools},
         {"bitassets", &getpool},
