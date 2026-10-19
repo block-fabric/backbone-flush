@@ -17,7 +17,7 @@
     {#each moves as e, i (i)}
       {@const side = counterparty(e)}
       <span class="move">
-        {#if e.asset}<AssetBadge id={e.asset} label={e.label ?? ''} seq={e.seq ?? ''} size="s" />{/if}
+        {#if e.asset}<span class="badge" title={e.seq ? `${e.label ?? ''} #${e.seq}` : (e.label ?? '')}><AssetBadge id={e.asset} label={e.label ?? ''} seq={full ? (e.seq ?? '') : ''} size="s" /></span>{/if}
         {#if e.amount !== undefined}<span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no">{signedAmount(e)}</span>{/if}
         {#if side.dir && side.parties.length}
           <span class="party faint">{side.dir === 'to' ? 'to' : 'from'}
@@ -54,8 +54,28 @@
   .full .move {
     flex-wrap: wrap;
   }
+  .badge {
+    flex: 0 1 auto;
+    min-width: 1.6rem;
+    max-width: 6rem;
+    overflow: hidden;
+  }
+  .full .badge {
+    max-width: none;
+  }
+  .amt {
+    flex: none;
+  }
   .amt {
     font-variant-numeric: tabular-nums;
+  }
+  .party {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .full .party {
+    overflow: visible;
   }
   .amt.neg {
     color: var(--negative);
