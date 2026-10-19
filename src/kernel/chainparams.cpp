@@ -256,6 +256,7 @@ public:
         consensus.sidechain.logo_height = 0;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
+        consensus.sidechain.ticker_height = 0;
         // A tenth of the mainchain's withdrawal_min_score (64800); proposals within a day.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -391,6 +392,7 @@ public:
         consensus.sidechain.logo_height = TESTNET_LOGO_HEIGHT;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
+        consensus.sidechain.ticker_height = TESTNET_TICKER_HEIGHT;
         // The height of the mainchain block that activated the slot; nothing is left out at 0.
         consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 7 activates on the test network (kernel/testnet_activation.h)
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
@@ -538,6 +540,7 @@ public:
         consensus.sidechain.logo_height = 0;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
+        consensus.sidechain.ticker_height = 0;
         // The Chains signet has the rules of its main network.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -666,6 +669,9 @@ public:
             consensus.sidechain.dex_height = opts.dep_opts.dex_height.value_or(std::numeric_limits<int>::max());
             // The logos of assets from the first block, unless a test asks (-testactivationheight=logo@<height>).
             consensus.sidechain.logo_height = opts.dep_opts.logo_height.value_or(0);
+            // Tickers and display names only if a test asks (-testactivationheight=ticker@<height>):
+            // the names of the tests of before are not tickers.
+            if (opts.dep_opts.ticker_height) consensus.sidechain.ticker_height = *opts.dep_opts.ticker_height;
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).

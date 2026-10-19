@@ -270,6 +270,25 @@ test of duplicate table ids keeps them apart), so a pruned node serves it, and a
 - Tests: `bitassets_logo_tests` (unit), `feature_bitassets_logo.py`, `feature_bitassets_transactions.py`,
   `feature_layers_logo.py` (the same with the DEX in force).
 
+## Tickers and display names
+
+Layers has BitAssets' tickers and display names whole (doc/bitassets.md, "Tickers and display names"): from
+`SidechainParams::ticker_height` the name of a new asset is a ticker (2 to 12 of A-Z and 0-9, published; the wallet
+uppercases), assets registered before keep their names; an optional display name, not unique, at most 64 bytes of
+UTF-8 from a frozen Unicode 15.0 table (no controls, bidi or zero-width characters, combining marks, nothing NFC
+changes), set at the registration (marker kind 35) or by the holder of the control coin (SetDisplayName, kind 34) —
+clear of the DEX's kinds 13 to 17. The state keeps it in table 0x92 (clear of the DEX's 0x80-0x89 and FastBlocks'
+0x50-0x5f), journaled; the search index (layout 2) finds assets by it after the names, and a layout-1 index is
+brought to layout 2 in place at startup (nothing derived again).
+
+- Activation: main network and signet 0 (Layers is not launched); test network `TESTNET_TICKER_HEIGHT` in
+  `src/kernel/testnet_activation.h`, a placeholder (never) until the deploy sets it a few blocks above the tip
+  (every node upgraded before it; a height set goes into the fingerprint of the drivechain database, which each node
+  makes again once); regtest never or `-testactivationheight=ticker@<height>`.
+- RPCs: `registerasset ... <display_name>`, `setassetdisplayname`, `display_name` in `getasset` / `listassets` /
+  `searchassets`, `ticker_height` and the limits in `getbitassetsinfo`.
+- Tests: `bitassets_ticker_tests` (unit), `feature_bitassets_ticker.py`.
+
 ## Search of the assets
 
 Layers has BitAssets' search index whole (doc/bitassets.md, "The search index"): `searchassets`, `searchpools`,
