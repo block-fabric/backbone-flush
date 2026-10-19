@@ -14,8 +14,9 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import UnitsInput from './UnitsInput.svelte';
+  import LogoPicker, { type PickedLogo } from './LogoPicker.svelte';
   import { amountParam, approx, assetArg, DATA_FIELDS, dataProblems, dataUpdates, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
-  import { nameOf, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
+  import { ba, nameOf, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
 
@@ -38,7 +39,7 @@
       .catch(() => undefined);
   });
 
-  type Action = 'mint' | 'data' | 'control' | 'burn' | '';
+  type Action = 'mint' | 'data' | 'logo' | 'control' | 'burn' | '';
   let open = $state<Action>('');
   let busy = $state(false);
 
@@ -64,6 +65,16 @@
   });
   const problems = $derived(dataProblems(fields));
   const updates = $derived(dataUpdates(asset?.data, fields));
+  // The logo: set (in place of the one before) or removed, by the control coin; shown in the host's confirmation.
+  let logo = $state<PickedLogo | null>(null);
+  const logosActive = $derived((ba.info?.logo_height ?? -1) >= 0 && (ba.info?.logo_height ?? 0) <= ba.height);
+  async function saveLogo(remove: boolean) {
+    if (!remove && !logo) return;
+    await run('setassetlogo', [arg, remove ? '' : (logo?.base64 ?? '')], () => {
+      toast('success', remove ? t('Logo removed') : t('Logo set'), t('The logo of %1 changes with the next block.', holding.label));
+      logo = null;
+    });
+  }
   // Give control.
   let giveTo = $state('');
   let giveValid = $state(false);
@@ -107,6 +118,9 @@
           break;
         case 'fixassetsupply':
           r = await walletRpc<T>(wallet, 'fixassetsupply', params);
+          break;
+        case 'setassetlogo':
+          r = await walletRpc<T>(wallet, 'setassetlogo', params);
           break;
         default:
           r = await walletRpc<T>(wallet, 'burnasset', params);
@@ -270,6 +284,21 @@
         </form>
       {/if}
 
+      {#if logosActive}
+        <button type="button" class="act" aria-expanded={open === 'logo'} onclick={() => toggle('logo')}><Icon name="picture" size={16} /> <span>{asset?.logo ? 'Change its logo' : 'Add a logo'}</span></button>
+        {#if open === 'logo'}
+          <form class="ba-form body" onsubmit={(e) => { e.preventDefault(); void saveLogo(false); }}>
+            <LogoPicker id="manage-logo" bind:logo />
+            {#if logo}<div class="logo-before-after"><AssetBadge {id} label={holding.label} size="l" showLabel={false} /> <Icon name="chevron-right" size={16} /> <AssetBadge {id} label={holding.label} size="l" showLabel={false} preview={logo.url} /></div>{/if}
+            <p class="ba-help">Everyone sees it wherever the asset is shown. It replaces the logo before; the fee pays for its bytes on the chain.</p>
+            <div class="row-buttons">
+              <button type="submit" class="btn primary" disabled={busy || !logo}>Save the logo</button>
+              {#if asset?.logo}<button type="button" class="btn" disabled={busy} onclick={() => void saveLogo(true)}>Remove the logo</button>{/if}
+            </div>
+          </form>
+        {/if}
+      {/if}
+
       <button type="button" class="act" aria-expanded={open === 'control'} onclick={() => toggle('control')}><Icon name="crown" size={16} /> <span>Control and supply</span></button>
       {#if open === 'control'}
         <div class="ba-form body">
@@ -296,6 +325,16 @@
 </section>
 
 <style>
+  .logo-before-after {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .row-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
   .manage {
     display: flex;
     flex-direction: column;

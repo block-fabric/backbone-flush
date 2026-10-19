@@ -20,6 +20,8 @@
 #include <webui/dialog.h>
 #include <webui/guard.h>
 #include <webui/local.h>
+#include <test/bitassets_logo_samples.h>
+#include <util/strencodings.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -276,6 +278,66 @@ BOOST_AUTO_TEST_CASE(confirmation_of_an_amount_past_2_53_units)
         }
     }
     BOOST_CHECK(shown);
+}
+
+BOOST_AUTO_TEST_CASE(logos_as_the_host_shows_them)
+{
+    // A logo the rules take: a data: URL of the type they found, its size and hash; the rows of a confirmation show it as a picture.
+    std::string reason;
+    const auto png{webui::local::ReadLogoParam(UniValue{EncodeBase64(ParseHex(LOGO_PNG_PALETTE))}, reason)};
+    BOOST_REQUIRE(png);
+    BOOST_CHECK_EQUAL(png->mime, "image/png");
+    BOOST_CHECK(png->url.starts_with("data:image/png;base64,iVBORw0KGgo"));
+    BOOST_CHECK(webui::dialog::IsImageDataUrl(png->url));
+    const auto rows{webui::local::LogoRows(*png)};
+    BOOST_REQUIRE_EQUAL(rows.size(), 3U);
+    BOOST_CHECK(rows[0].kind == webui::dialog::Row::Kind::IMAGE);
+    BOOST_CHECK_EQUAL(rows[2].value, png->hash);
+    const auto jpeg{webui::local::ReadLogoParam(UniValue{EncodeBase64(ParseHex(LOGO_JPEG_BASELINE))}, reason)};
+    BOOST_REQUIRE(jpeg);
+    BOOST_CHECK(jpeg->url.starts_with("data:image/jpeg;base64,"));
+    // Whatever the page or the chain says the type is, a file the rules refuse is no logo: an SVG, a PNG with more after it.
+    BOOST_CHECK(!webui::local::ReadLogoParam(UniValue{EncodeBase64(std::string{"<svg onload=alert(1)/>"})}, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-logo-format");
+    auto trailing{ParseHex(LOGO_PNG_PALETTE)};
+    trailing.push_back('<');
+    BOOST_CHECK(!webui::local::ReadLogoParam(UniValue{EncodeBase64(trailing)}, reason));
+    BOOST_CHECK(!webui::local::ReadLogoParam(UniValue{"not base64!"}, reason));
+    BOOST_CHECK(!webui::local::ReadLogoParam(UniValue{std::string(50000, 'A')}, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-logo-oversize");
+    // Setting one pays: confirmed on the desktop; the page reads the transfers without the keys.
+    const auto methods{webui::local::ConfirmedRpcMethods()};
+    BOOST_CHECK(methods.contains("setassetlogo") && methods.at("setassetlogo").kind == webui::confirm::Method::Kind::SPEND);
+    BOOST_CHECK(webui::local::RpcMethods().contains("listassettransactions"));
+    BOOST_CHECK(!webui::local::RpcMethods().contains("setassetlogo"));
+}
+
+BOOST_AUTO_TEST_CASE(logo_cache_counts_what_it_keeps)
+{
+    // The same asset asked again and again: one entry, its bytes counted once (the security review of the cache).
+    webui::local::LogoCache cache;
+    webui::local::Logo logo{"image/png", 3, std::string(64, 'a'), "data:image/png;base64," + std::string(40000, 'A')};
+    for (int i{0}; i < 2000; ++i) cache.Put(std::string(64, 'b'), logo);
+    BOOST_CHECK_EQUAL(cache.Size(), 1U);
+    BOOST_CHECK_EQUAL(cache.Bytes(), logo.url.size());
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // Many assets: the oldest go, never below an empty list, and the count stays the sum.
+    for (int i{0}; i < 2000; ++i) cache.Put(strprintf("%064x", i), logo);
+    BOOST_CHECK(cache.Size() <= webui::local::LogoCache::MAX_ENTRIES);
+    BOOST_CHECK(cache.Bytes() <= webui::local::LogoCache::MAX_BYTES);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // One larger than the whole cache is not kept, and empties nothing it should not count.
+    webui::local::Logo huge{logo};
+    huge.url = std::string(webui::local::LogoCache::MAX_BYTES + 1, 'A');
+    const size_t before{cache.Size()};
+    cache.Put(std::string(64, 'c'), huge);
+    BOOST_CHECK_EQUAL(cache.Size(), before);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // Replacing a kept asset's logo by a huge one drops the old one too.
+    cache.Put(std::string(64, 'd'), logo);
+    cache.Put(std::string(64, 'd'), huge);
+    BOOST_CHECK(cache.Size() < before);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -15,7 +15,7 @@ import { every } from '../../lib/poll';
 import { rpc } from '../../lib/rpc';
 import { node, toast, wallets } from '../../lib/state.svelte';
 import { WalletError } from '../../lib/wallet';
-import { EXACT_METHODS, type Activity, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holdings, type Pool } from './model';
+import { EXACT_METHODS, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holdings, type Pool } from './model';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
 setExactMethods(EXACT_METHODS);
@@ -32,6 +32,8 @@ export interface PendingIssue {
   decimals: number;
   data: AssetData;
   public: boolean;
+  /** Its logo (base64 of a PNG or JPEG the rules take: ba/logo.ts), registered with it; none if absent. */
+  logo?: string;
   /** When it was reserved (seconds), and the reservation's transaction. */
   time: number;
   reservation: string;
@@ -68,6 +70,8 @@ export interface Journal {
 }
 
 const MAX_PENDING = 100;
+/** The base64 of the largest logo (32768 bytes). */
+const MAX_LOGO_BASE64 = 43_692;
 const MAX_POINTS = 120;
 const MAX_PRICED_POOLS = 60;
 
@@ -83,6 +87,8 @@ export const MAX_ASSETS = 20_000;
 /** Entries of the asset activity read at first, and more each time "Show more" is pressed (up to MAX_ACTIVITY). */
 export const ACTIVITY_PAGE = 200;
 export const MAX_ACTIVITY = 5000;
+/** Asset moves of the wallet read (listassettransactions), newest first. */
+export const TRANSFERS = 1000;
 
 /**
  * Every asset of the chain, in the order of registration, in pages of ASSET_PAGE (audit port-2 #4: a single
@@ -154,6 +160,10 @@ export const ba = $state({
   /** Of the wallet loaded: what it holds (null until known). */
   mine: null as Holdings | null,
   activity: [] as Activity[],
+  /** The asset moves of the wallet, with the other side (listassettransactions): the Transactions page and the activity. */
+  transfers: [] as AssetTx[],
+  /** The wallet they are of. */
+  transfersWallet: null as string | null,
   /** Whether the holdings of the wallet could be read: a locked wallet needs its passphrase to tell its reservations. */
   mineState: 'none' as MineState,
   mineError: '',
@@ -208,7 +218,7 @@ export function sanitizeJournal(raw: unknown): Journal {
   if (Array.isArray(r.pending)) {
     j.pending = r.pending
       .filter((p) => p && str(p.wallet) && str(p.name) && str(p.supply) && typeof p.decimals === 'number' && str(p.asset))
-      .map((p) => ({ ...p, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, needsConfirm: undefined }))
+      .map((p) => ({ ...p, logo: str(p.logo) && p.logo.length <= MAX_LOGO_BASE64 && /^[A-Za-z0-9+/]+={0,2}$/.test(p.logo) ? p.logo : undefined, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, needsConfirm: undefined }))
       .slice(-MAX_PENDING);
   }
   if (r.prices && typeof r.prices === 'object') {
@@ -302,7 +312,8 @@ export function dropPending(wallet: string, name: string): void {
 
 /** The parameters of registerasset for an asset being created. */
 export function registerParams(p: PendingIssue): unknown[] {
-  return [p.name, p.supply, p.decimals, p.data, p.public];
+  // The logo last, and only with one: the parameters a registration without one always had.
+  return p.logo ? [p.name, p.supply, p.decimals, p.data, p.public, p.logo] : [p.name, p.supply, p.decimals, p.data, p.public];
 }
 
 /** Assets registered a moment ago, for their cards and the indicator of the top bar (not kept). */
@@ -501,7 +512,15 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
           ])
         : null;
       nodeCalls?.catch(() => undefined);
-      const walletCalls = wallet === null ? null : Promise.all([rpc.raw<Holdings>('listmyassets', [], { wallet }), rpc.raw<Activity[]>('listassetactivity', [baView.activity], { wallet })]);
+      const walletCalls =
+        wallet === null
+          ? null
+          : Promise.all([
+              rpc.raw<Holdings>('listmyassets', [], { wallet }),
+              rpc.raw<Activity[]>('listassetactivity', [baView.activity], { wallet }),
+            ]);
+      // Needs no key: read for a locked wallet too (one call for every row of the Transactions page).
+      const transfersCall = wallet === null ? null : rpc.raw<AssetTx[]>('listassettransactions', [TRANSFERS, 0], { wallet }).catch(() => null);
       // Neither fails unheard of: each is awaited below.
       walletCalls?.catch(() => undefined);
       try {
@@ -522,9 +541,17 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
       } catch (e) {
         ba.error = errorText(e);
       }
+      if (transfersCall) {
+        const transfers = await transfersCall;
+        if (wallets.current === wallet && transfers) {
+          ba.transfers = transfers;
+          ba.transfersWallet = wallet;
+        }
+      }
       if (wallet === null || walletCalls === null) {
         ba.mine = null;
         ba.activity = [];
+        ba.transfers = [];
         ba.mineState = 'none';
         ba.wallet = null;
       } else {
@@ -642,7 +669,7 @@ export function resetBitAssets(): void {
   recentDone.splice(0);
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
-  Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
+  Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
   Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '' });
   sellIntent.asset = '';

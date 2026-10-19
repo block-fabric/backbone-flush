@@ -10,6 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CHAIN } from './config';
 import { LOCAL_COMMANDS, LOCAL_PAGES, type LocalPage } from './local';
 import LocalCards from './LocalCards.svelte';
+import LocalOverview from './LocalOverview.svelte';
 import LocalSend from './LocalSend.svelte';
 import DialogHost from '../components/DialogHost.svelte';
 import Assets from './pages/Assets.svelte';
@@ -112,7 +113,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -212,6 +213,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     case 'createauction':
     case 'collectauction':
     case 'releaseassetreservation':
+    case 'setassetlogo':
       return { txid: id('7') };
     case 'swapasset':
       return { txid: id('7'), quote: 4.98, min_out: 4.95 };
@@ -807,6 +809,33 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     expect(screen.getByRole('heading', { name: 'Auctions' })).toBeTruthy();
     // 200 GOLD at 0.1 CHN.
     expect(screen.getByText('20 CHN')).toBeTruthy();
+  });
+
+  it('the assets the wallet holds, on the Home and the Overview: by worth, with their numbers and balances', async () => {
+    for (const which of ['home', 'overview']) {
+      const shown = which === 'home' ? render(LocalCards) : render(LocalOverview);
+      await loaded();
+      const held = await waitFor(() => screen.getByTestId('held-assets'));
+      expect(within(held).getByRole('heading', { name: 'Your assets' })).toBeTruthy();
+      const rows = [...held.querySelectorAll('tbody tr')].map((r) => r.textContent ?? '');
+      // GOLD first (a pool prices it: 200 at 0.1 CHN), then SILVER (no price: –).
+      expect(rows[0]).toContain('GOLD');
+      expect(rows[0]).toContain('#1739-0029');
+      expect(rows[0]).toContain('200');
+      expect(rows[0]).toContain('20');
+      expect(rows[1]).toContain('SILVER');
+      expect(rows[1]).toContain('–');
+      shown.unmount();
+    }
+  });
+
+  it('no assets yet: the way to get some', async () => {
+    mine = { assets: [], reservations: [], liquidity: [], receipts: [] };
+    render(LocalOverview);
+    await waitFor(() => expect(ba.mineState).toBe('ok'));
+    const held = await waitFor(() => screen.getByTestId('held-assets'));
+    await waitFor(() => expect(within(held).getByRole('button', { name: 'Register new asset' })).toBeTruthy());
+    expect(within(held).getByRole('button', { name: 'Get assets in Trade' })).toBeTruthy();
   });
 });
 

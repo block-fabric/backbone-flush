@@ -25,3 +25,5 @@ webui_local_e2e(fastblocks_simple 49410
 webui_local_e2e(bitassets 49420)
 # bitassets_simple.js: Simple mode, as a user chooses it: Create a token, Swap from its plain quote, My assets.
 webui_local_e2e(bitassets_simple 49430 --js-var SIMPLE=true)
+# bitassets_logo.js: an asset registered with a logo (picker, confirmation, lists, Home, Overview) and sent (Transactions).
+webui_local_e2e(bitassets_logo 49700)

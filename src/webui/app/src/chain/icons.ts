@@ -26,6 +26,8 @@ export const LOCAL_ICONS = {
   flame: 'M12 21a6 6 0 0 0 6-6c0-3.5-2.5-5.5-3.5-8.5-1 2-2 3-3.5 3.5C11 7.5 10 5 9 3 7.5 6 6 8.5 6 12.5V15a6 6 0 0 0 6 6zM12 21a2.5 2.5 0 0 1-2.5-2.5c0-1.5 1.2-2.4 2.5-3.5 1.3 1.1 2.5 2 2.5 3.5A2.5 2.5 0 0 1 12 21z',
   /** Back to a list. */
   back: 'M15 5l-7 7 7 7',
+  /** A logo: a picture, a hill and a sun in a frame. */
+  picture: 'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5a1.5 1.5 0 1 0 0-.01',
   /** The control coin: a crown. */
   crown: 'M4 17l-1-9 5 4 4-7 4 7 5-4-1 9zM5 20h14',
 } as const satisfies Record<string, string>;

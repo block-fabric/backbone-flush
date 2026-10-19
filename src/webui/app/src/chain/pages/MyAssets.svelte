@@ -19,6 +19,8 @@
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetBadge from '../ba/AssetBadge.svelte';
+  import LocalTxCell from '../LocalTxCell.svelte';
+  import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
   import {
@@ -457,7 +459,7 @@
                   <tr>
                     <td class="num">{formatTime(a.time)}</td>
                     <td>{t(OPERATIONS[a.operation] ?? 'Other')}</td>
-                    <td><SafeText text={a.summary} /></td>
+                    <td><SafeText text={a.summary} />{#if assetMovesOf(a.txid).length}<div class="activity-moves"><LocalTxCell txid={a.txid} full /></div>{/if}</td>
                     <td class="end">{#if a.confirmations === 0}<span class="ba-warn">waiting</span>{:else}{formatCount(a.confirmations)}{/if}</td>
                     <td class="ba-mono"><span translate="no">{shortHash(a.txid, 6)}</span> <CopyButton text={a.txid} label="Copy the transaction" /></td>
                   </tr>
@@ -475,6 +477,9 @@
 {/if}
 
 <style>
+  .activity-moves {
+    margin-top: 0.25rem;
+  }
   .more {
     display: flex;
     justify-content: center;
