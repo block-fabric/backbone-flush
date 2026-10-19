@@ -145,7 +145,30 @@
     set(typeSelect, 'chain');
     await waitFor('a Sent asset row with its destination', () => text('.transactions').includes('Sent asset') && text('.transactions').includes(to), 60000);
     await sleep(600);
+    // One row per transaction (the wallet's own halves of it merged), and the amount always whole in view.
+    const rowsOf = () => $$('.transactions [role="row"]').slice(1);
+    const count = (word) => rowsOf().filter((r) => r.textContent.includes(word)).length;
+    await check('one row per transaction: one send, one registration, one reservation', count('Sent asset') === 1 && count('Registered') === 1 && count('Name reserved') === 1, JSON.stringify(rowsOf().map((r) => r.textContent.replace(/\s+/g, ' ').slice(0, 80))));
+    const amountsInView = () => {
+      const table = $('.transactions [role="grid"], .transactions .table');
+      const right = table.getBoundingClientRect().right;
+      return rowsOf().every((r) => {
+        const cells = $$('[role="gridcell"]', r);
+        const last = cells[cells.length - 1];
+        return last && last.getBoundingClientRect().right <= right + 1 && last.scrollWidth <= last.clientWidth + 1;
+      });
+    };
+    await check('the amount of every row is whole in view (dashboard)', amountsInView(), `${window.innerWidth} px`);
     await shot('transactions-sent-asset');
+    T().savePrefs({ layout: 'workspace' });
+    await sleep(800);
+    await go('transactions');
+    await waitFor('the transactions in the workspace', () => text('.transactions').includes('Sent asset'), 30000);
+    await sleep(600);
+    await check('the amount of every row is whole in view (workspace)', amountsInView(), '');
+    await shot('transactions-workspace');
+    T().savePrefs({ layout: 'dashboard' });
+    await sleep(800);
     T().wallets.current = OTHER;
     await sleep(500);
     await go('transactions');
@@ -153,6 +176,7 @@
     const senders = (await rpc('listassettransactions', [], OTHER)).find((e) => e.txid === sent.txid).from.map((f) => f.address);
     await check('the receiver knows who paid', senders.length > 0 && senders[0] !== 'unknown', JSON.stringify(senders));
     await waitFor('a Received asset row with the sender', () => text('.transactions').includes('Received asset') && text('.transactions').includes(senders[0]), 60000);
+    await check('one row for what came in', $$('.transactions [role="row"]').slice(1).filter((r) => r.textContent.includes('Received asset')).length === 1, '');
     await sleep(600);
     await shot('transactions-received-asset');
     T().wallets.current = W;

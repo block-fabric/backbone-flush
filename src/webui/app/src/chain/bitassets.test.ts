@@ -10,6 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { CHAIN } from './config';
 import { LOCAL_COMMANDS, LOCAL_PAGES, type LocalPage } from './local';
 import LocalCards from './LocalCards.svelte';
+import { checkLogo } from './ba/logo';
 import LocalOverview from './LocalOverview.svelte';
 import LocalSend from './LocalSend.svelte';
 import DialogHost from '../components/DialogHost.svelte';
@@ -149,7 +150,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
   const byArg = (arg: unknown) => assets.find((a) => assetArg(a.asset) === arg || a.label === arg);
   switch (r.method) {
     case 'getbitassetsinfo':
-      return { assets: assets.length + hidden.length, reservations: 1, pools: pools.length, auctions: auctions.length, height: 21, reveal_depth: 2 };
+      return { assets: assets.length + hidden.length, reservations: 1, pools: pools.length, auctions: auctions.length, height: 21, reveal_depth: 2, logo_height: 0, max_logo_bytes: 32768 };
     case 'listassets': {
       // [count, skip, match], as the node takes them; `hidden` are the newest past what the page reads.
       const all = [...assets, ...hidden].filter((a) => p[2] === undefined || a.label.toLowerCase().includes(String(p[2]).toLowerCase()));
@@ -461,6 +462,49 @@ describe.runIf(CHAIN.name === 'BitAssets')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Retire it/ }));
     await answer('yes');
     await waitFor(() => expect(called('releaseasset')[0]?.params).toEqual([assetArg(PEBBLES)]));
+  });
+
+  it('My assets: the controller adds a logo (picked, cropped, encoded), changes it and removes it', async () => {
+    // A picture as the web view decodes it, and a canvas that draws it (jsdom has neither).
+    const pixels = new Uint8ClampedArray(256 * 256 * 4).map((_, i) => (i % 4 === 3 ? 255 : i % 4 === 0 ? 240 : 40));
+    const proto = HTMLCanvasElement.prototype as unknown as Record<string, unknown>;
+    const saved = { getContext: proto.getContext, toBlob: proto.toBlob, bitmap: (globalThis as Record<string, unknown>).createImageBitmap };
+    proto.getContext = () => ({ clearRect() {}, drawImage() {}, fillRect() {}, fillStyle: '', imageSmoothingEnabled: true, imageSmoothingQuality: 'high', getImageData: () => ({ data: pixels }) });
+    proto.toBlob = (cb: (b: Blob | null) => void) => cb(null);
+    (globalThis as Record<string, unknown>).createImageBitmap = async () => ({ width: 640, height: 480, close() {} });
+    try {
+      render(MyAssets);
+      render(DialogHost);
+      await loaded();
+      const panel = await screen.findByRole('region', { name: 'Manage GOLD' });
+      await fireEvent.click(within(panel).getByRole('button', { name: 'Add a logo' }));
+      const save = within(panel).getByRole('button', { name: 'Save the logo' }) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+      const input = panel.querySelector('#manage-logo-file') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [new File([new Uint8Array([1, 2, 3])], 'logo.png', { type: 'image/png' })], configurable: true });
+      await fireEvent.change(input);
+      await waitFor(() => expect(panel.querySelector('[data-testid="logo-size"]')?.textContent).toMatch(/PNG, 1 colour:/), { timeout: 3000 });
+      await waitFor(() => expect(save.disabled).toBe(false));
+      // The logo as it will look, beside the asset as it is.
+      expect(panel.querySelectorAll('.logo-before-after img').length).toBe(1);
+      await fireEvent.click(save);
+      await waitFor(() => expect(called('setassetlogo')).toHaveLength(1));
+      const [arg, base64] = called('setassetlogo')[0].params as [string, string];
+      expect(arg).toBe(assetArg(GOLD));
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      expect(checkLogo(bytes)).toEqual({ ok: true, format: 'png' });
+      // Once listed with it: "Change its logo", and it can be removed.
+      assets[0] = { ...assets[0], logo: { hash: 'f'.repeat(64), mime: 'image/png', size: bytes.length, height: 21, txid: id('7') } };
+      await refreshBitAssets();
+      await waitFor(() => expect(within(panel).queryByRole('button', { name: 'Change its logo' })).not.toBeNull());
+      await fireEvent.click(within(panel).getByRole('button', { name: 'Change its logo' }));
+      await fireEvent.click(await within(panel).findByRole('button', { name: 'Remove the logo' }));
+      await waitFor(() => expect(called('setassetlogo')[1]?.params).toEqual([assetArg(GOLD), '']));
+    } finally {
+      proto.getContext = saved.getContext;
+      proto.toBlob = saved.toBlob;
+      (globalThis as Record<string, unknown>).createImageBitmap = saved.bitmap;
+    }
   });
 
   it('My assets: mints, changes the data and burns an asset it controls', async () => {
