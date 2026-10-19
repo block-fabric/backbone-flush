@@ -289,7 +289,9 @@ Rules the code keeps:
   params}}`): the host checks that the second is the declared second step of
   the first, of the same name (`Reveal::matches`), canonicalizes both, and asks
   one question that shows each step whole, their network fees (about, and the
-  most the second may pay: twice its fee now) and when the second runs. Only
+  most the second may pay: twice its fee now, checked again at the wallet's fee
+  rate for its estimated size before it runs; the wallet's own `-maxtxfee`
+  bounds any transaction) and when the second runs. Only
   if the user accepts and the first ran does the host keep an authorization,
   in its memory alone, bound to: the wallet; the method and the canonical
   parameters of the second step, compared as JSON (any difference: name,
