@@ -7,7 +7,7 @@
   "uriScheme": "layers",
   "brand": {
     "color": "#8f7cff",
-    "iconHue": 250,
+    "iconHue": 0,
     "mark": ["M16 4L29 11 16 18 3 11z", "M3 16.5l13 7 13-7", "M3 22l13 7 13-7"]
   },
   "networks": {
