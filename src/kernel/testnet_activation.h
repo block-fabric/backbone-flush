@@ -53,6 +53,6 @@ inline constexpr int SIGNET_FEE_CURVE2_HEIGHT{0};
  * placeholder (never) until the deploy: set it a few blocks above the tip then, rebuild, and upgrade
  * every node of the test network before the chain reaches it (a node of before would refuse the blocks).
  */
-inline constexpr int TESTNET_LOGO_HEIGHT{std::numeric_limits<int>::max()};
+inline constexpr int TESTNET_LOGO_HEIGHT{4373};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H
