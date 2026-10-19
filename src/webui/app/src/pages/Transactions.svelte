@@ -173,8 +173,8 @@
           { key: 'date', label: 'Date', value: (r) => r.time, width: '11.5rem' },
           { key: 'type', label: 'Type', value: (r) => chainTxOf(r.txid)?.type ?? typeText(r.type, r.role), width: '10rem' },
           // With the chain's column, the label gives it room: the amount stays in view.
-          { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: CHAIN_TX_COLUMN ? 'minmax(8rem, 1fr)' : 'minmax(14rem, 1fr)' },
-          ...(CHAIN_TX_COLUMN ? [{ key: 'chain', label: CHAIN_TX_COLUMN, value: (r: TxRecord) => chainTxOf(r.txid)?.search ?? '', width: '13rem', noFilter: true }] : []),
+          { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: CHAIN_TX_COLUMN ? 'minmax(4rem, 1fr)' : 'minmax(14rem, 1fr)' },
+          ...(CHAIN_TX_COLUMN ? [{ key: 'chain', label: CHAIN_TX_COLUMN, value: (r: TxRecord) => chainTxOf(r.txid)?.search ?? '', width: '14rem', noFilter: true }] : []),
           { key: 'amount', label: `Amount (${prefs.unit})`, value: (r) => r.amount, width: '12rem', align: 'end' },
         ],
   );
