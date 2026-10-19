@@ -136,13 +136,14 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     }
     // Bonds, unbonds, staking and proofs of possession go through the host, which asks the desktop.
     for (const char* m : {"createbond", "createunbond", "setstaking", "signbondpop"}) BOOST_CHECK_MESSAGE(!methods.contains(m), m);
-    // Layers: and the 12 of the assets the pages read (journal_of_bitassets below), two of which sign with the wallet's
-    // keys; the 16 that pay or sign are confirmed by the host; no bond among any of them.
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 12U);
+    // Layers: and the 13 of the assets the pages read (journal_of_bitassets below; listassettransactions with no key), two
+    // of which sign with the wallet's keys; the 17 that pay or sign (setassetlogo among them) are confirmed by the host; no
+    // bond among any of them.
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 13U);
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
-    BOOST_CHECK_EQUAL(confirmed.size(), 16U);
+    BOOST_CHECK_EQUAL(confirmed.size(), 17U);
     for (const char* m : {"getposinfo", "getstakinginfo", "listbonds", "createbond", "createunbond", "setstaking", "signbondpop"}) {
         BOOST_CHECK_MESSAGE(!keyed.contains(m), m);
         BOOST_CHECK_MESSAGE(!confirmed.contains(m), m);
