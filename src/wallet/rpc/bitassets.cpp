@@ -1449,8 +1449,10 @@ RPCMethod listassettransactions()
         RPCExamples{HelpExampleCli("listassettransactions", "") + HelpExampleCli("listassettransactions", "20 0 \"GOLD\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
-    const auto pwallet{ReadyWallet(request)};
+    // It reads, and needs no key: a locked wallet answers too.
+    const std::shared_ptr<CWallet> pwallet{GetWalletForJSONRPCRequest(request)};
     if (!pwallet) return UniValue::VNULL;
+    pwallet->BlockUntilSyncedToCurrentChain();
     const int count{request.params[0].isNull() ? 100 : request.params[0].getInt<int>()};
     const int skip{request.params[1].isNull() ? 0 : request.params[1].getInt<int>()};
     if (count < 0 || count > 1000 || skip < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "count: 0 to 1000; skip: 0 or more");
