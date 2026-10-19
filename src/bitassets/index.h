@@ -230,6 +230,13 @@ std::optional<int> MatchTier(std::string_view norm_name, std::string_view text);
 /** A page of the assets that match; throws std::invalid_argument for a cursor that is not one of this search. */
 Page Search(const sidechain::StoreView& view, const Request& request);
 
+/**
+ * The assets a request matches, in its order, for a search of their pools or auctions: at most
+ * `max_assets`, and at most SCAN_BUDGET index entries looked at over all the pages it takes (a text that
+ * few names match, among millions, does not walk the whole index). `partial` if it stopped before the end.
+ */
+std::vector<AssetId> MatchingAssets(const sidechain::StoreView& view, Request request, size_t max_assets, bool& partial);
+
 enum class PoolSort : uint8_t { DEPTH, VOLUME, CHANGE, NEWEST };
 std::optional<PoolSort> ParsePoolSort(const std::string& name);
 struct PoolRequest {

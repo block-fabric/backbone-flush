@@ -855,6 +855,27 @@ Page Search(const sidechain::StoreView& view, const Request& request)
     return page;
 }
 
+std::vector<AssetId> MatchingAssets(const sidechain::StoreView& view, Request request, size_t max_assets, bool& partial)
+{
+    std::vector<AssetId> assets;
+    size_t scanned{0};
+    request.limit = MAX_PAGE;
+    while (true) {
+        const Page page{Search(view, request)};
+        scanned += page.scanned;
+        for (const Hit& hit : page.hits) {
+            if (assets.size() >= max_assets) break;
+            assets.push_back(hit.row.id);
+        }
+        if (page.next.empty()) return assets;
+        if (assets.size() >= max_assets || scanned >= SCAN_BUDGET || page.partial) {
+            partial = true;
+            return assets;
+        }
+        request.cursor = page.next;
+    }
+}
+
 PoolPage SearchPools(const sidechain::StoreView& view, const PoolRequest& request)
 {
     PoolPage page;

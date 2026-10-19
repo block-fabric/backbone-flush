@@ -190,6 +190,35 @@ BOOST_AUTO_TEST_CASE(search_orders_filters_and_cursors)
     BOOST_CHECK(entries > 0);
 }
 
+BOOST_AUTO_TEST_CASE(matching_assets_bounded)
+{
+    // The assets a text names, for a search of pools or auctions: bounded however few names match among many.
+    sidechain::EmptyStore empty;
+    sidechain::StoreOverlay store{empty};
+    constexpr uint32_t N{30'000};
+    for (uint32_t seq{0}; seq < N; ++seq) PutAssetRow(store, std::nullopt, MakeRow(seq, strprintf("foo bar %u", seq), 1, 1, 1));
+    Request r;
+    // Every later word "bar" read, none matching: one call's budget of rows, then it stops.
+    r.text = "bar 99999";
+    bool partial{false};
+    BOOST_CHECK(MatchingAssets(store, r, 1000, partial).empty());
+    BOOST_CHECK(partial);
+    const Page page{Search(store, r)};
+    BOOST_CHECK(page.partial);
+    BOOST_CHECK(!page.next.empty());
+    BOOST_CHECK(page.scanned <= ROW_BUDGET + 1);
+    // Many matches: the first 1000.
+    r.text = "foo";
+    partial = false;
+    BOOST_CHECK_EQUAL(MatchingAssets(store, r, 1000, partial).size(), 1000U);
+    BOOST_CHECK(partial);
+    // Few: all of them, complete.
+    r.text = "foo bar 2999";
+    partial = false;
+    BOOST_CHECK_EQUAL(MatchingAssets(store, r, 1000, partial).size(), 11U); // 2999 and 29990 to 29999
+    BOOST_CHECK(!partial);
+}
+
 BOOST_AUTO_TEST_CASE(blocks_and_undo)
 {
     // The index from what blocks change in the state, and back by their undo data.

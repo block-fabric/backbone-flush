@@ -111,6 +111,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "quoteswap", 3, "exact_out" },
     { "searchassets", 1, "filters" },
     { "searchassets", 4, "limit" },
+    { "searchmyassets", 1, "filters" },
+    { "searchmyassets", 4, "limit" },
     { "searchpools", 1, "filters" },
     { "searchpools", 4, "limit" },
     { "searchauctions", 1, "filters" },

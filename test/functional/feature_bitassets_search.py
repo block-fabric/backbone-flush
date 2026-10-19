@@ -73,17 +73,17 @@ class BitAssetsSearchTest(BitAssetsTest):
     def run_test(self):
         super().run_test()
 
-    def pages(self, node, query="", filters=None, sort="relevance", limit=50):
-        """Every page of a search, by its cursor: the assets in order."""
-        out, cursor, calls = [], "", 0
+    def pages(self, node, query="", filters=None, sort="relevance", limit=50, method="searchassets"):
+        """Every page of a search, by its cursor: the assets in order (the app's positional arguments, null for no cursor)."""
+        out, cursor, calls = [], None, 0
         while True:
-            page = node.searchassets(query, filters or {}, sort, cursor, limit)
+            page = getattr(node, method)(query, filters or {}, sort, cursor, limit)
             assert len(page["assets"]) <= limit
             calls += 1
             out += page["assets"]
-            if "next" not in page:
+            if page["next_cursor"] is None:
                 return out
-            cursor = page["next"]
+            cursor = page["next_cursor"]
             assert calls < 10000
 
     def rows(self, node):
@@ -108,7 +108,7 @@ class BitAssetsSearchTest(BitAssetsTest):
                 continue
             if "min_supply" in f and r["supply"] < Decimal(str(f["min_supply"])):
                 continue
-            within = min([f[k] for k in ("active_within_blocks", "exclude_dead") if k in f], default=None)
+            within = min([WINDOW if f[k] is True else f[k] for k in ("active_within_blocks", "exclude_dead") if k in f], default=None)
             if within is not None and r["last_activity"] < height - within + 1:
                 continue
             if "created_after" in f and r["created"] <= f["created_after"]:
@@ -312,6 +312,7 @@ class BitAssetsSearchTest(BitAssetsTest):
             {"min_supply": "12.5", "exclude_burned": True},
             {"active_within_blocks": 3},
             {"exclude_dead": 2},
+            {"exclude_dead": True},
             {"created_after": table[COUNT // 2]["created"]},
             {"exclude_keywords": ["doge", "PEPE", "frog inu"]},
             {"exclude_keywords": ["scam"], "exclude_burned": True, "min_supply": 10},
@@ -331,18 +332,34 @@ class BitAssetsSearchTest(BitAssetsTest):
         assert_equal(side.searchassets(retired["asset"])["assets"], [])
         for node in (side, other):
             mine = {a["asset"] for a in node.listmyassets()["assets"] if a["balance"] > 0 or a["control"]}
-            got = self.pages(node, "", {"mine": True}, "name", 200)
+            got = self.pages(node, "", {}, "name", 200, "searchmyassets")
             assert_equal({a["asset"] for a in got}, mine)
             assert_equal([a["seq"] for a in got], [s for s in self.expect(table, "", {}, "name") if by_seq[s]["asset"] in mine])
-            got = self.pages(node, "gold", {"mine": True}, "relevance", 7)
+            got = self.pages(node, "gold", {}, "relevance", 7, "searchmyassets")
             assert_equal([a["seq"] for a in got], [s for s in self.expect(table, "gold") if by_seq[s]["asset"] in mine])
-        assert {"goldy gold", "my gold coin"} <= {a.get("name") for a in self.pages(other, "gold", {"mine": True})}
+        assert {"goldy gold", "my gold coin"} <= {a.get("name") for a in self.pages(other, "gold", {}, "relevance", 50, "searchmyassets")}
+        # The wallet's fields of getasset come with each (unless retired).
+        page = side.searchassets("GOLD")["assets"][0]
+        assert_equal(page["logo"]["hash"], side.getasset("GOLD")["logo"]["hash"])
+        assert_equal(page["registered"], page["created"])
+        assert "control" in page and "releasable" in page
+        # The node's command reads no wallet: mine is the wallet's command.
+        assert_raises_rpc_error(-8, "searchmyassets", side.searchassets, "", {"mine": True})
+        # An explicit list of assets instead.
+        listed = [by_name["GOLD"]["seq"], "Silver", "0x" + by_name["my gold coin"]["asset"]]
+        assert_equal([a["name"] for a in side.searchassets("", {"assets": listed}, "name")["assets"]], ["GOLD", "my gold coin", "Silver"])
+        # Several wallets: the request names one.
+        side.createwallet("second")
+        assert_raises_rpc_error(-19, "Multiple wallets are loaded", side.searchmyassets)
+        assert_equal(side.get_wallet_rpc("second").searchmyassets()["assets"], [])
+        assert_equal(len(side.get_wallet_rpc(self.default_wallet_name).searchmyassets("", {}, "name", None, 200)["assets"]), 200)
+        side.unloadwallet("second")
 
         self.log.info("Bad arguments")
         assert_raises_rpc_error(-8, "Unknown sort", side.searchassets, "", {}, "price")
         assert_raises_rpc_error(-8, "Unknown filter", side.searchassets, "", {"colour": "red"})
         assert_raises_rpc_error(-8, "limit is from 1 to 200", side.searchassets, "", {}, "name", "", 201)
-        name_cursor = side.searchassets("", {}, "name", "", 1)["next"]
+        name_cursor = side.searchassets("", {}, "name", None, 1)["next_cursor"]
         assert_raises_rpc_error(-8, "not one of this search", side.searchassets, "", {}, "supply", name_cursor)
         assert_raises_rpc_error(-8, "not one a search returned", side.searchassets, "", {}, "supply", "zz")
 
@@ -360,7 +377,11 @@ class BitAssetsSearchTest(BitAssetsTest):
         assert_equal(sorted(p["asset_a"] for p in side.searchpools("gold")["pools"]), sorted(n for n in pooled if tier(norm(n), "gold") is not None))
         newest = side.searchpools("", {}, "newest", "", 2)
         assert_equal(len(newest["pools"]), 2)
-        rest = side.searchpools("", {}, "newest", newest["next"], 200)
+        rest = side.searchpools("", {}, "newest", newest["next_cursor"], 200)
+        assert_equal(rest["next_cursor"], None)
+        # The app's filters and sorts of the assets are taken by the pools and auctions too.
+        assert_equal(len(side.searchpools("", {"exclude_dead": True, "has_logo": True}, "pool_depth")["pools"]), 5)
+        assert_equal([p["asset_a"] for p in side.searchpools("", {"exclude_keywords": ["silver"]}, "activity")["pools"]], ["GOLD"])
         assert_equal(len(rest["pools"]), 3)
         auctions = side.searchauctions()["auctions"]
         assert_equal([a["base"] for a in auctions], ["Silver", "GOLD"])
@@ -396,6 +417,11 @@ class BitAssetsSearchTest(BitAssetsTest):
         assert_equal(other.getassetindexinfo(), side.getassetindexinfo())
         self.restart_node(0)
         assert_equal(self.rows(self.nodes[0]), after)
+        # Without the wallet: the search, but no searchmyassets.
+        self.restart_node(0, extra_args=self.extra_args[0] + ["-disablewallet"])
+        assert_equal(self.rows(self.nodes[0]), after)
+        assert_raises_rpc_error(-32601, "Method not found", self.nodes[0].searchmyassets)
+        assert_raises_rpc_error(-8, "searchmyassets", self.nodes[0].searchassets, "", {"mine": True})
         self.check_in_sync()
 
 
