@@ -459,7 +459,7 @@
                   <tr>
                     <td class="num">{formatTime(a.time)}</td>
                     <td>{t(OPERATIONS[a.operation] ?? 'Other')}</td>
-                    <td><SafeText text={a.summary} />{#if assetMovesOf(a.txid).length}<div class="activity-moves"><LocalTxCell txid={a.txid} /></div>{/if}</td>
+                    <td><SafeText text={a.summary} />{#if assetMovesOf(a.txid).length}<div class="activity-moves"><LocalTxCell txid={a.txid} full /></div>{/if}</td>
                     <td class="end">{#if a.confirmations === 0}<span class="ba-warn">waiting</span>{:else}{formatCount(a.confirmations)}{/if}</td>
                     <td class="ba-mono"><span translate="no">{shortHash(a.txid, 6)}</span> <CopyButton text={a.txid} label="Copy the transaction" /></td>
                   </tr>

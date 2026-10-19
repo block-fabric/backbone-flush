@@ -7,12 +7,13 @@
   import AssetBadge from './ba/AssetBadge.svelte';
   import { assetMovesOf, counterparty, signedAmount } from './txinfo.svelte';
 
-  let { txid }: { txid: string } = $props();
+  // In the table: one line, cut to its column (the row's menu has the explorer); in the activity: whole, with the link.
+  let { txid, full = false }: { txid: string; full?: boolean } = $props();
   const moves = $derived(assetMovesOf(txid));
 </script>
 
 {#if moves.length}
-  <span class="moves" data-testid="asset-moves">
+  <span class="moves" class:full data-testid="asset-moves">
     {#each moves as e, i (i)}
       {@const side = counterparty(e)}
       <span class="move">
@@ -25,23 +26,33 @@
         {/if}
       </span>
     {/each}
-    <button type="button" class="link small" onclick={(ev) => { ev.stopPropagation(); go('explorer', `search:${txid}`); }}>Explorer</button>
+    {#if full}<button type="button" class="link small" onclick={(ev) => { ev.stopPropagation(); go('explorer', `search:${txid}`); }}>Explorer</button>{/if}
   </span>
 {/if}
 
 <style>
   .moves {
-    display: inline-flex;
+    display: flex;
+    gap: 0.6rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .moves.full {
     flex-direction: column;
     gap: 0.15rem;
-    min-width: 0;
+    white-space: normal;
   }
   .move {
     display: inline-flex;
-    flex-wrap: wrap;
     align-items: center;
     gap: 0.35rem;
     min-width: 0;
+  }
+  .full .move {
+    flex-wrap: wrap;
   }
   .amt {
     font-variant-numeric: tabular-nums;
@@ -55,6 +66,8 @@
   .addr {
     font-family: var(--font-mono);
     font-size: 0.8rem;
+  }
+  .full .addr {
     overflow-wrap: anywhere;
   }
   .small {
