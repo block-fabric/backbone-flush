@@ -392,6 +392,44 @@ export interface TxRecord {
 }
 
 /**
+ * One record per transaction for the transactions `merge` says (those the chain knows more of: an asset moved): the
+ * wallet's own outputs (a token's change, a send to itself) are halves of the same transaction, listed by the node as
+ * a send and a receive. The record kept is the one that pays out most (else the first), with the sums of the credits,
+ * debits and amounts of all of them: the net in the coin, the fee included; its key stays its own. Others as they are.
+ */
+export function mergeByTxid(records: readonly TxRecord[], merge: (txid: string) => boolean): TxRecord[] {
+  const groups = new Map<string, TxRecord[]>();
+  for (const r of records) {
+    if (!merge(r.txid)) continue;
+    const g = groups.get(r.txid);
+    if (g) g.push(r);
+    else groups.set(r.txid, [r]);
+  }
+  if (!groups.size) return records as TxRecord[];
+  const out: TxRecord[] = [];
+  const done = new Set<string>();
+  for (const r of records) {
+    const g = groups.get(r.txid);
+    if (!g) {
+      out.push(r);
+      continue;
+    }
+    if (done.has(r.txid)) continue;
+    done.add(r.txid);
+    if (g.length === 1) {
+      out.push(r);
+      continue;
+    }
+    const base = g.reduce((a, b) => (b.amount < a.amount ? b : a));
+    const credit = g.reduce((n, x) => n + x.credit, 0n);
+    const debit = g.reduce((n, x) => n + x.debit, 0n);
+    const amount = g.reduce((n, x) => n + x.amount, 0n);
+    out.push({ ...base, credit, debit, amount });
+  }
+  return out;
+}
+
+/**
  * An output of a coinbase with a role of the chain (chain/roles.ts) that pays nothing: FastBlocks' block of stake
  * without fees pays its producer a Staked output of 0. Not a payment: the history, the notices and the CSV leave
  * it out (those that pay something stay).
