@@ -53,16 +53,15 @@ struct PosParams {
      * The first block (of this chain) of the fee split (pos/feesplit.h): the fees of peg transactions go
      * to the BMM bidder, the other fees split between the bidder and the validator pool by the spacing of
      * mainchain blocks, the pool shared by stake among the validators of each epoch; the producer of a
-     * block of stake keeps none. Below it, producer_share_bps. Main 0; the test network and signet
-     * TESTNET_FEE_SPLIT_HEIGHT / SIGNET_FEE_SPLIT_HEIGHT (kernel/testnet_activation.h); regtest never,
+     * block of stake keeps none. Below it, producer_share_bps. Main, the test network and signet 0;
+     * regtest never,
      * unless -testactivationheight=feesplit@<height>.
      */
     int fee_split_height{0};
     /**
      * The first block (of this chain) whose bidder's share of ordinary fees takes the second curve
      * (pos/feesplit.h, FeeCurve::LINEAR: 50 % at S <= 60 s, 5 points less a minute, 20 % from 420 s);
-     * below it, the first (FeeCurve::FIRST). Main 0; the test network and signet
-     * TESTNET_FEE_CURVE2_HEIGHT / SIGNET_FEE_CURVE2_HEIGHT (kernel/testnet_activation.h); regtest never,
+     * below it, the first (FeeCurve::FIRST). Main, the test network and signet 0; regtest never,
      * unless -testactivationheight=feecurve2@<height>.
      */
     int fee_curve2_height{0};

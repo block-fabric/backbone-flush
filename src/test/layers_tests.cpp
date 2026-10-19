@@ -168,13 +168,13 @@ BOOST_AUTO_TEST_CASE(asset_payouts_bound_counts_their_own_across_blocks_of_stake
 }
 
 /** The first block of every network, as getblockhash 0 shows it (feature_layers_genesis.py checks the
- * daemon, layers-util and doc/layers.md against the same). The test network's is that of the network
- * running since 2026-10-18: it must never change. */
+ * daemon, layers-util and doc/layers.md against the same). The test network's is that of its restart of
+ * 19/Oct/2026: it changes only with a restart of the test network. */
 BOOST_AUTO_TEST_CASE(genesis_hashes)
 {
     const std::vector<std::pair<ChainType, std::string>> expected{
         {ChainType::MAIN, "164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857"},
-        {ChainType::TESTNET, "252a644146ba279b9b1a86dc957d42c4ff57b9ad4ca7be1218173afc92e9aff5"},
+        {ChainType::TESTNET, "6ad3a3ff068fecfba95fc4aeec8404ac1db31cb840b852164db054ff31daa382"},
         {ChainType::SIGNET, "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101"},
         {ChainType::REGTEST, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"},
     };
@@ -183,6 +183,23 @@ BOOST_AUTO_TEST_CASE(genesis_hashes)
         BOOST_CHECK_EQUAL(params->GenesisBlock().GetHash().GetHex(), hash);
         BOOST_CHECK_EQUAL(params->GetConsensus().hashGenesisBlock.GetHex(), hash);
     }
+}
+
+/** Every rule of Layers from the first block on every network but regtest (the test network since its restart
+ * of 19/Oct/2026): no activation height of the test network's own, only the mainchain's slot activation. A merge
+ * of FastBlocks' or BitAssets' chain parameters must not bring one of theirs back. */
+BOOST_AUTO_TEST_CASE(rules_from_genesis)
+{
+    for (const auto chain : {ChainType::MAIN, ChainType::TESTNET, ChainType::SIGNET}) {
+        const auto params{CreateChainParams(*m_node.args, chain)};
+        const Consensus::Params& consensus{params->GetConsensus()};
+        BOOST_CHECK_EQUAL(consensus.sidechain.dex_height, 0);
+        BOOST_CHECK_EQUAL(consensus.sidechain.logo_height, 0);
+        BOOST_CHECK_EQUAL(consensus.sidechain.ticker_height, 0);
+        BOOST_CHECK_EQUAL(consensus.pos.fee_split_height, 0);
+        BOOST_CHECK_EQUAL(consensus.pos.fee_curve2_height, 0);
+    }
+    BOOST_CHECK_EQUAL(CreateChainParams(*m_node.args, ChainType::TESTNET)->GetConsensus().sidechain.main_activation_height, 4997);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
