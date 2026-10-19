@@ -1329,7 +1329,7 @@ UniValue HitToJSON(const bitassets::index::Hit& hit)
     obj.pushKV("supply", AmountToJSON(row.supply, row.decimals));
     obj.pushKV("minted", AmountToJSON(row.minted, row.decimals));
     obj.pushKV("burned", AmountToJSON(row.burned, row.decimals));
-    obj.pushKV("fixed", (row.flags & FIXED) != 0);
+    obj.pushKV("fixed", (row.flags & bitassets::index::FIXED) != 0);
     obj.pushKV("retired", (row.flags & RETIRED) != 0);
     obj.pushKV("has_logo", (row.flags & HAS_LOGO) != 0);
     obj.pushKV("has_pool", (row.flags & HAS_POOL) != 0);
