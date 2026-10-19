@@ -9,7 +9,10 @@
 
 #include <webui/local.h>
 
+#include <bitassets/logo.h>
 #include <common/args.h>
+#include <crypto/sha256.h>
+#include <util/strencodings.h>
 #include <interfaces/node.h>
 #include <node/context.h>
 #include <tinyformat.h>
@@ -19,6 +22,8 @@
 
 #include <cstdio>
 #include <fstream>
+#include <list>
+#include <mutex>
 #include <sstream>
 
 namespace webui::local {
@@ -37,6 +42,96 @@ fs::path StorePath(interfaces::Node& node, const std::string& name)
     return context->args->GetDataDirNet() / fs::u8path(name);
 }
 } // namespace
+
+std::optional<Logo> ReadLogo(std::span<const unsigned char> bytes, std::string& reason)
+{
+    const auto format{bitassets::CheckLogo(bytes, reason)};
+    if (!format) return std::nullopt;
+    Logo logo;
+    logo.mime = bitassets::LogoMime(*format);
+    logo.size = bytes.size();
+    uint256 hash;
+    CSHA256().Write(bytes.data(), bytes.size()).Finalize(hash.data());
+    logo.hash = HexStr(hash);
+    // The type is the one the rules found, never one the chain or the page says.
+    logo.url = "data:" + logo.mime + ";base64," + EncodeBase64(bytes);
+    return logo;
+}
+
+std::optional<Logo> ReadLogoParam(const UniValue& value, std::string& reason)
+{
+    if (!value.isStr()) {
+        reason = "not a string";
+        return std::nullopt;
+    }
+    if (value.get_str().size() > (bitassets::MAX_LOGO_BYTES + 2) / 3 * 4) {
+        reason = "bad-ba-logo-oversize";
+        return std::nullopt;
+    }
+    const auto bytes{DecodeBase64(value.get_str())};
+    if (!bytes) {
+        reason = "not base64";
+        return std::nullopt;
+    }
+    return ReadLogo(*bytes, reason);
+}
+
+std::vector<dialog::Row> LogoRows(const Logo& logo)
+{
+    return {
+        confirm::Image("Logo", logo.url),
+        confirm::Text("Logo file", strprintf("%s, %ux%u pixels, %u bytes", logo.mime == "image/png" ? "PNG" : "JPEG", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, logo.size)),
+        confirm::Text("Logo SHA-256", logo.hash),
+    };
+}
+
+UniValue LogoCache::Get(interfaces::Node& node, const std::string& asset, const std::string& hash)
+{
+    if (asset.size() != 64 || !IsHex(asset)) throw HostError(BRIDGE_INVALID_REQUEST, "asset: the id of an asset (64 hex digits)");
+    {
+        std::lock_guard lock{m_mutex};
+        for (auto it{m_entries.begin()}; it != m_entries.end(); ++it) {
+            if (it->asset != asset || (!hash.empty() && it->logo.hash != hash)) continue;
+            m_entries.splice(m_entries.begin(), m_entries, it);
+            return ToJson(asset, it->logo);
+        }
+    }
+    UniValue args{UniValue::VARR};
+    args.push_back("0x" + asset);
+    UniValue result;
+    try {
+        result = node.executeRpc("getassetlogo", args, "/");
+    } catch (const UniValue&) {
+        return UniValue{}; // no logo (or no such asset)
+    } catch (const std::exception&) {
+        return UniValue{};
+    }
+    if (!result.isObject() || !result.find_value("base64").isStr()) return UniValue{};
+    std::string reason;
+    const auto logo{ReadLogoParam(result.find_value("base64"), reason)};
+    // Checked again here, as the rules check it: what the page gets is a picture of PNG or JPEG bytes, or nothing.
+    if (!logo) return UniValue{};
+    std::lock_guard lock{m_mutex};
+    std::erase_if(m_entries, [&](const Entry& e) { return e.asset == asset; });
+    m_entries.push_front({asset, *logo});
+    m_bytes += logo->url.size();
+    while (m_entries.size() > MAX_ENTRIES || m_bytes > MAX_BYTES) {
+        m_bytes -= m_entries.back().logo.url.size();
+        m_entries.pop_back();
+    }
+    return ToJson(asset, *logo);
+}
+
+UniValue LogoCache::ToJson(const std::string& asset, const Logo& logo)
+{
+    UniValue out{UniValue::VOBJ};
+    out.pushKV("asset", asset);
+    out.pushKV("hash", logo.hash);
+    out.pushKV("mime", logo.mime);
+    out.pushKV("size", static_cast<uint64_t>(logo.size));
+    out.pushKV("url", logo.url);
+    return out;
+}
 
 UniValue ReadStore(const fs::path& path)
 {
@@ -91,6 +186,8 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         // What the wallet holds and did: they need the keys too (a reservation is told by a signature of the wallet).
         {"listmyassets", Bridge::Thread::WORKER},
         {"listassetactivity", Bridge::Thread::WORKER},
+        // The asset moves of the wallet with the other side: it reads only (no key).
+        {"listassettransactions", Bridge::Thread::WORKER},
         // What the wallet does, transactions it signs: confirmed on the desktop (ConfirmedRpcMethods, below).
     };
 }
@@ -116,9 +213,48 @@ confirm::Reveal RegisterAfterReserve()
                   "take it first; the registration then creates the asset with the supply and data below, and its control coin.";
     reveal.matches = confirm::SameFirstParam;
     // A registration spends the reservation and makes the control coin, the supply and the change; its data adds to it.
-    reveal.second_vsize = [](const UniValue& params) { return int64_t{350} + (params.size() > 3 ? static_cast<int64_t>(params[3].write().size()) : 0); };
+    reveal.second_vsize = [](const UniValue& params) {
+        // Its logo, if any, goes whole into the marker: a byte for a virtual byte.
+        const int64_t logo{params.size() > 5 && params[5].isStr() ? static_cast<int64_t>(params[5].get_str().size() * 3 / 4) : 0};
+        return int64_t{350} + (params.size() > 3 ? static_cast<int64_t>(params[3].write().size()) : 0) + logo;
+    };
     reveal.when = confirm::AfterDepth("getbitassetsinfo", "reveal_depth");
     return reveal;
+}
+} // namespace
+
+namespace {
+/**
+ * A describer that shows a logo among the parameters (`index`, base64) as a picture with its size and hash, never as text,
+ * the other parameters as `generic` does; a logo the rules refuse is refused before anything is asked.
+ */
+std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> WithLogo(std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> generic, size_t index, bool remove_allowed)
+{
+    return [=](const confirm::Call& call) -> std::optional<Window::ConfirmDialog> {
+        const UniValue value{call.Arg(index)};
+        UniValue others{call.params};
+        if (others.isArray() && index < others.size()) {
+            UniValue trimmed{UniValue::VARR};
+            for (size_t i{0}; i < others.size(); ++i) trimmed.push_back(i == index ? UniValue{} : others[i]);
+            others = trimmed;
+        }
+        confirm::Call shown{call.node, call.wallet, call.method, others, call.fee_for};
+        auto dialog{generic(shown)};
+        if (!dialog) return dialog;
+        if (value.isNull() || (value.isStr() && value.get_str().empty())) {
+            if (remove_allowed && value.isStr()) dialog->rows.push_back(confirm::Text("Logo", "removed: the asset is shown by its initials"));
+            return dialog;
+        }
+        std::string reason;
+        const auto logo{ReadLogoParam(value, reason)};
+        if (!logo) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("The rules refuse this logo (%s): a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata", reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+        for (auto& row : LogoRows(*logo)) dialog->rows.push_back(std::move(row));
+        if (call.method == "setassetlogo" && call.fee_for) {
+            // The logo goes whole into the transaction: about its size, and the inputs and outputs of an update.
+            if (const auto fee{call.fee_for(static_cast<int64_t>(logo->size) + 260)}) dialog->rows.push_back(confirm::Amount("Network fee, about", *fee));
+        }
+        return dialog;
+    };
 }
 } // namespace
 
@@ -131,7 +267,8 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         // Reserved and registered in one question: the registration, exactly as shown, is sent by the app without asking
         // again once the reservation is deep enough (confirm::Reveal).
         {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), /*fee_unknown=*/true, 1, false, RegisterAfterReserve()}},
-        {"registerasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Register an asset", "Register", "The wallet registers an asset it reserved, with the supply shown."), /*fee_unknown=*/true}},
+        {"registerasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithLogo(confirm::Generic("Register an asset", "Register", "The wallet registers an asset it reserved, with the supply shown."), 5, false), /*fee_unknown=*/true}},
+        {"setassetlogo", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithLogo(confirm::Generic("Set the logo of an asset", "Set the logo", "The wallet puts this logo on the chain for an asset it controls, in place of the one before: everyone sees it where the asset is shown."), 1, true), /*fee_unknown=*/false, 2}},
         {"releaseassetreservation", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release a reservation", "Release", "The wallet gives up a reservation of an asset name."), /*fee_unknown=*/true}},
         {"sendasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Send an asset", "Send", "The wallet sends units of an asset to the address shown.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
         {"mintasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Mint an asset", "Mint", "The wallet mints more units of an asset it controls.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
@@ -152,6 +289,31 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
 void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm, confirm::KeysFn keys)
 {
     (void)keys;
+    // The logo of an asset as a data: URL of the type the rules found (image/png or image/jpeg), for an <img> only; null when
+    // it has none. Kept in memory (LogoCache), by asset and hash: the pages ask with the hash listassets gives.
+    static LogoCache logos;
+    bridge.RegisterHost("bitassets.logo", [node](const UniValue& params) {
+        const UniValue& asset{Param(params, "asset")};
+        const UniValue& hash{Param(params, "hash")};
+        if (!asset.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "asset: the id of an asset");
+        if (!hash.isNull() && (!hash.isStr() || hash.get_str().size() != 64 || !IsHex(hash.get_str()))) throw HostError(BRIDGE_INVALID_REQUEST, "hash: 64 hex digits");
+        return logos.Get(node(), asset.get_str(), hash.isStr() ? hash.get_str() : std::string{});
+    }, Bridge::Thread::WORKER);
+    // A logo the user picked, as the rules and the confirmation will see it: {ok, reason?, mime, size, hash}. Read only.
+    bridge.RegisterHost("bitassets.checkLogo", [](const UniValue& params) {
+        std::string reason;
+        const auto logo{ReadLogoParam(Param(params, "base64"), reason)};
+        UniValue out{UniValue::VOBJ};
+        out.pushKV("ok", logo.has_value());
+        if (!logo) {
+            out.pushKV("reason", reason);
+            return out;
+        }
+        out.pushKV("mime", logo->mime);
+        out.pushKV("size", static_cast<uint64_t>(logo->size));
+        out.pushKV("hash", logo->hash);
+        return out;
+    }, Bridge::Thread::WORKER);
     // The journal of the app: the assets being created (what to register once each reservation is deep enough), and
     // the prices of the pools as the app saw them; in a file of the data directory, with a sanity cap.
     bridge.RegisterHost("bitassets.store.load", [node](const UniValue&) {

@@ -35,6 +35,9 @@ export interface BitAssetsInfo {
   /** The height of the next block, which the prices are for. */
   height: number;
   reveal_depth: number;
+  /** The first block of the logos of assets (-1: never on this network; older nodes: absent). */
+  logo_height?: number;
+  max_logo_bytes?: number;
 }
 
 export interface AssetData {
@@ -57,7 +60,7 @@ export type DataField = (typeof DATA_FIELDS)[number];
 export type Amount = number | string;
 
 /** The RPC methods of BitAssets whose results carry amounts: read exactly (audit 7 E-BA6). */
-export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid', 'swapasset', 'addliquidity', 'removeliquidity', 'bidauction'];
+export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'listassettransactions', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid', 'swapasset', 'addliquidity', 'removeliquidity', 'bidauction'];
 
 /** An amount as a double: for a ratio, a chart, an order; never for what is shown or sent. */
 export function approx(value: Amount | undefined | null): number {
@@ -84,6 +87,17 @@ export interface Asset {
   releasable: boolean;
   release_fee?: Amount;
   control?: { txid: string; vout: number; address?: string };
+  /** Its logo now (getassetlogo has its bytes; the pages ask the host for it: logos.svelte.ts). */
+  logo?: AssetLogo;
+}
+
+export interface AssetLogo {
+  /** SHA-256 of its bytes (hex). */
+  hash: string;
+  mime: 'image/png' | 'image/jpeg';
+  size: number;
+  height: number;
+  txid: string;
 }
 
 export interface Pool {
@@ -174,6 +188,35 @@ export interface Activity {
   confirmations: number;
   operation: string;
   summary: string;
+}
+
+/** A side of an asset transfer: an address, and whether it is this wallet's. */
+export interface TxParty {
+  /** "unknown" where the outputs a transaction spent cannot be read (its block pruned). */
+  address: string;
+  mine: boolean;
+}
+
+/** An asset a transaction of the wallet moved (listassettransactions): one entry per asset. */
+export interface AssetTx {
+  txid: string;
+  time: number;
+  confirmations: number;
+  blockhash?: string;
+  blockheight?: number;
+  category: 'send' | 'receive' | 'register' | 'mint' | 'burn' | 'swap' | 'pool_add' | 'pool_remove' | 'auction' | 'bid' | 'collect' | 'logo' | 'update' | 'control' | 'reserve' | 'release' | string;
+  asset?: string;
+  label?: string;
+  seq?: string;
+  decimals?: number;
+  amount?: Amount;
+  sign: -1 | 0 | 1;
+  at_least?: boolean;
+  at_most?: boolean;
+  fee?: Amount;
+  to: TxParty[];
+  from: TxParty[];
+  abandoned: boolean;
 }
 
 export interface SwapQuote {

@@ -1,9 +1,11 @@
 <script lang="ts">
-  // An asset as the pages show it: a round mark in the hue of its hash (the same everywhere, so that two assets
-  // of names alike are told apart at a glance), its label, and its number. CHN in the colour of the chain.
+  // An asset as the pages show it: its logo from the chain (an <img> of a data: URL the host checked: logos.svelte.ts),
+  // else a round mark in the hue of its hash (the same everywhere, so that two assets of names alike are told apart at a
+  // glance), its label, and its number. CHN in the colour of the chain.
   import SafeText from '../../components/SafeText.svelte';
   import { css } from '../../lib/actions';
   import { assetHue, initials, isChn } from './model';
+  import { isLogoUrl, logoHashOf, logoUrl } from './logos.svelte';
 
   let {
     id,
@@ -11,6 +13,8 @@
     seq = '',
     size = 'm',
     showLabel = true,
+    logo,
+    preview = '',
   }: {
     id: string;
     /** Text of the chain. */
@@ -18,11 +22,21 @@
     seq?: string;
     size?: 's' | 'm' | 'l';
     showLabel?: boolean;
+    /** The hash of its logo, when the caller knows it (else the list of assets says it). */
+    logo?: string;
+    /** A logo not on the chain yet (the picker's): a data: URL of PNG or JPEG bytes. */
+    preview?: string;
   } = $props();
+
+  const url = $derived(isChn(id) ? '' : isLogoUrl(preview) ? preview : logoUrl(id, logo ?? logoHashOf(id)));
 </script>
 
 <span class="badge-asset {size}">
-  <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? 'C' : initials(label)}</span></span>
+  {#if url}
+    <img class="mark logo" src={url} alt="" width="64" height="64" decoding="async" draggable="false" referrerpolicy="no-referrer" aria-hidden="true" />
+  {:else}
+    <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? 'C' : initials(label)}</span></span>
+  {/if}
   {#if showLabel}
     <span class="words">
       <SafeText class="label" text={label} />
@@ -54,6 +68,13 @@
     font-weight: 750;
     letter-spacing: 0.02em;
   }
+  .mark.logo {
+    display: block;
+    object-fit: cover;
+    border: 1px solid var(--line-strong);
+    background: var(--surface-2);
+    padding: 0;
+  }
   .mark.chn {
     border-color: var(--brand, var(--accent));
     background: var(--accent-soft);
@@ -63,6 +84,10 @@
     height: 1.5rem;
     font-size: 0.6rem;
     border-width: 1.5px;
+  }
+  .s .mark.logo,
+  .l .mark.logo {
+    border-width: 1px;
   }
   .l .mark {
     width: 3.2rem;

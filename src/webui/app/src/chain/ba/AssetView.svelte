@@ -137,7 +137,7 @@
     <p class="ba-empty">Loading…</p>
   {:else}
     <header class="panel hero">
-      <AssetBadge {id} label={asset.label} size="l" showLabel={false} />
+      <AssetBadge {id} label={asset.label} size="l" showLabel={false} logo={asset.logo?.hash} />
       <div class="who">
         <h2 class="name"><SafeText text={asset.label} /></h2>
         <div class="tags">
@@ -153,6 +153,7 @@
         {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={send}><Icon name="send" size={15} /> Send</button>{/if}
         {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={sell}><Icon name="gavel" size={15} /> Sell by auction</button>{/if}
         {#if controlled}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="crown" size={15} /> Manage</button>{/if}
+        {#if controlled && !asset.fixed && (ba.info?.logo_height ?? -1) >= 0}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="picture" size={15} /> {asset.logo ? 'Change logo' : 'Add a logo'}</button>{/if}
       </div>
     </header>
 
@@ -236,6 +237,7 @@
               {/each}
               <dt>Hash</dt><dd class="ba-mono"><span translate="no">{shortHash(asset.asset, 12)}</span> <CopyButton text={asset.asset} label="Copy the hash" /></dd>
               <dt>Number</dt><dd><span translate="no">{asset.seq}</span></dd>
+              {#if asset.logo}<dt>Logo</dt><dd class="ba-mono"><span translate="no">{asset.logo.mime === 'image/png' ? 'PNG' : 'JPEG'}, {(asset.logo.size / 1024).toFixed(1)} KB, {shortHash(asset.logo.hash, 10)}</span> <CopyButton text={asset.logo.hash} label="Copy the hash of the logo" /> <span class="faint">block {asset.logo.height}</span></dd>{/if}
               <dt>Registration</dt><dd class="ba-mono"><span translate="no">{shortHash(asset.registration, 10)}</span> <CopyButton text={asset.registration} label="Copy the transaction" /></dd>
               {#if asset.control?.address}<dt>Controlled by</dt><dd class="ba-mono"><span translate="no">{asset.control.address}</span> <CopyButton text={asset.control.address} label="Copy the address" /></dd>{/if}
             </dl>

@@ -19,6 +19,7 @@
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
+  import LogoPicker, { type PickedLogo } from '../ba/LogoPicker.svelte';
   import { amountParam, DATA_FIELDS, hashName, dataProblems, dataToSet, formatUnits, MAX_AMOUNT, MAX_DECIMALS, MAX_INFO, nameProblem, smallestAmount, type DataField } from '../ba/model';
   import { ba, notePending, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, type PendingIssue } from '../ba/store.svelte';
   import Term from '../../components/Term.svelte';
@@ -94,6 +95,10 @@
   let advanced = $state(false);
   let published = $state(true);
   const problems = $derived(dataProblems(fields));
+  // Its logo (optional): on the chain with the registration, once the chain has the rules of logos (logo_height).
+  let logo = $state<PickedLogo | null>(null);
+  const logoHeight = $derived(ba.info?.logo_height ?? -1);
+  const logosSoon = $derived(logoHeight >= 0 && logoHeight <= Math.max(ba.height, 0) + (ba.info?.reveal_depth ?? 1));
   const maxInfo = MAX_INFO;
   const infoBytes = $derived(new TextEncoder().encode(fields.info).length);
 
@@ -159,6 +164,7 @@
         public: published,
         time: Math.floor(Date.now() / 1000),
         reservation: '',
+        ...(logo && logosSoon ? { logo: logo.base64 } : {}),
       };
       const done = await walletRpcTwoSteps<{ txid: string; asset: string }>(wallet, 'reserveasset', [name], { method: 'registerasset', params: registerParams(issue) });
       if (!done) return;
@@ -193,6 +199,7 @@
     fields = { info: '', commitment: '', ipv4: '', ipv6: '', encryptionkey: '', signingkey: '' };
     published = true;
     advanced = false;
+    logo = null;
     created = '';
     step = 'name';
   }
@@ -257,6 +264,16 @@
               <textarea id="issue-info" rows="4" placeholder="What it is: a description, a link (optional)" bind:value={fields.info} aria-invalid={problems.info ? 'true' : undefined}></textarea>
               {#if problems.info}<span class="error">{t(problems.info)}</span>{:else}<span class="hint">{infoBytes} / {maxInfo} bytes</span>{/if}
             </div>
+            <div class="field">
+              <label for="issue-logo-file">Logo</label>
+              {#if logosSoon}
+                <LogoPicker id="issue-logo" bind:logo />
+              {:else if logoHeight >= 0}
+                <span class="hint">Logos are on the chain from block {logoHeight}.</span>
+              {:else}
+                <span class="hint">This network has no logos of assets yet.</span>
+              {/if}
+            </div>
             {#if simple && !advanced}
               <p class="ba-help">Its name is listed, so that anyone can find it.</p>
             {:else}
@@ -283,6 +300,7 @@
               <dt>Initial supply</dt><dd>{formatUnits(supplyValue ?? 0n, decimals)}</dd>
               <dt>Decimals</dt><dd>{decimals}</dd>
               <dt>The name</dt><dd>{published ? 'Published' : 'Private: only its hash'}</dd>
+              {#if logo && logosSoon}<dt>Logo</dt><dd class="logo-line"><img class="logo-review" src={logo.url} alt="" width="64" height="64" /> {logo.kind}, {(logo.size / 1024).toFixed(1)} KB</dd>{/if}
               {#each DATA_FIELDS.filter((f) => fields[f].trim()) as f (f)}
                 <dt>{t(FIELD_NAMES[f])}</dt><dd><SafeText class="ba-mono" text={fields[f]} /></dd>
               {/each}
@@ -311,7 +329,7 @@
       {#if step !== 'done'}
         <aside class="panel preview" aria-label="Preview">
           <span class="muted small">Preview</span>
-          <AssetBadge id={previewId} label={name || '?'} />
+          <AssetBadge id={previewId} label={name || '?'} preview={logosSoon ? (logo?.url ?? '') : ''} />
           {#if fields.info.trim()}<SafeText class="blurb" text={fields.info} />{:else}<span class="faint small">No description.</span>{/if}
           <dl class="ba-lines">
             <dt>Supply</dt><dd>{supplyValue !== null ? formatUnits(supplyValue, decimals) : '–'}</dd>
@@ -367,5 +385,17 @@
   }
   .small {
     font-size: 0.85rem;
+  }
+  .logo-line {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .logo-review {
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    object-fit: cover;
   }
 </style>

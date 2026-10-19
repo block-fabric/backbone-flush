@@ -10,6 +10,7 @@
   import { wallets } from '../lib/state.svelte';
   import './ba/ba.css';
   import AssetBadge from './ba/AssetBadge.svelte';
+  import HeldAssets from './ba/HeldAssets.svelte';
   import { approx, formatAmount, formatPrice, isChn, unitPrice } from './ba/model';
   import { ba, chnPrice, decimalsOf, pendingOf, startBitAssets } from './ba/store.svelte';
   import { simpleMode } from '../lib/uimode.svelte';
@@ -45,6 +46,7 @@
 </script>
 
 {#if ba.loaded && !ba.error}
+  {#if wallets.current !== null}<div class="ba-held"><HeldAssets /></div>{/if}
   <div class="ba-cards">
     <Card title="My assets" icon="holdings" open={() => go('my-assets')} openLabel="Open My assets" stat>
       <span class="value num">{formatPrice(worth)} CHN</span>
@@ -120,6 +122,9 @@
 {/if}
 
 <style>
+  .ba-held {
+    margin-bottom: 1rem;
+  }
   .ba-cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));

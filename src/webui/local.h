@@ -12,7 +12,11 @@
 #include <webui/guard.h>
 
 #include <functional>
+#include <list>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <span>
 #include <set>
 #include <string>
 #include <vector>
@@ -47,6 +51,42 @@ std::set<std::string> KeyedRpcMethods();
  * with the keys unlocked for it alone (audit 7 #1). confirm::Method::Kind SPEND for a wallet's, NODE for the node's.
  */
 std::map<std::string, confirm::Method> ConfirmedRpcMethods();
+
+/** A logo of an asset (bitassets/logo.h) as the host shows it: checked by the rules' own check. */
+struct Logo {
+    std::string mime;
+    size_t size{0};
+    //! SHA-256 of the bytes, as sha256sum prints it.
+    std::string hash;
+    //! "data:<mime>;base64,...": for an <img> only.
+    std::string url;
+};
+/** A logo from its bytes, if the rules take it; else why (`reason`). */
+std::optional<Logo> ReadLogo(std::span<const unsigned char> bytes, std::string& reason);
+/** A logo given in base64 (a parameter of setassetlogo, registerasset), if the rules take it. */
+std::optional<Logo> ReadLogoParam(const UniValue& value, std::string& reason);
+/** The rows of a confirmation that show a logo: the picture (dialog::Row::Kind::IMAGE), its file and its hash. */
+std::vector<dialog::Row> LogoRows(const Logo& logo);
+
+/** The logos the pages asked for (bitassets.logo), newest first: at most MAX_ENTRIES, MAX_BYTES of URLs. */
+class LogoCache
+{
+public:
+    static constexpr size_t MAX_ENTRIES{512};
+    static constexpr size_t MAX_BYTES{16 << 20};
+    /** The logo of an asset (its id, 64 hex digits) as JSON {asset, hash, mime, size, url}, null if it has none; `hash` if known. */
+    UniValue Get(interfaces::Node& node, const std::string& asset, const std::string& hash);
+    static UniValue ToJson(const std::string& asset, const Logo& logo);
+
+private:
+    struct Entry {
+        std::string asset;
+        Logo logo;
+    };
+    std::mutex m_mutex;
+    std::list<Entry> m_entries;
+    size_t m_bytes{0};
+};
 
 /** The node, while it runs (throws a HostError before); the host methods take it per call. */
 using NodeFn = std::function<interfaces::Node&()>;

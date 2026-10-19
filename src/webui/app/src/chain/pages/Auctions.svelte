@@ -15,6 +15,7 @@
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetSelect from '../ba/AssetSelect.svelte';
+  import AssetBadge from '../ba/AssetBadge.svelte';
   import AuctionView from '../ba/AuctionView.svelte';
   import Chart from '../ba/Chart.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
@@ -196,7 +197,7 @@
               {@const up = unitPrice(a.unit_price)}
               <li>
                 <button type="button" class="ba-row" aria-current={picked === a.auction} onclick={() => (picked = a.auction)}>
-                  <Icon name="gavel" size={18} />
+                  <AssetBadge id={a.base_id} label={a.base} size="s" showLabel={false} />
                   <span class="main">
                     <span>{formatAmount(a.remaining, decimalsOf(a.base_id), { max: 4 })} <SafeText text={a.base} /> <span class="faint">for</span> <SafeText text={a.quote} /></span>
                     <span class="ba-bar"><span use:barWidth={prog.sold}></span></span>
