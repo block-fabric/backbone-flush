@@ -743,7 +743,7 @@ export function isoLocal(secs: number): string {
 }
 
 /** The transaction history as chains-qt exports it: Confirmed, Date, Type, Label, Address, Amount, ID. */
-export function transactionsCsv(records: readonly TxRecord[], unit: Unit): string {
+export function transactionsCsv(records: readonly TxRecord[], unit: Unit, extra?: { header: string[]; values: (r: TxRecord) => string[] | undefined }): string {
   const rows = records.map((r) => [
     String(r.status === 'confirmed' || r.status === 'confirming'),
     isoLocal(r.time),
@@ -752,8 +752,10 @@ export function transactionsCsv(records: readonly TxRecord[], unit: Unit): strin
     r.address,
     formatAmount(r.amount, unit, { separators: false }),
     r.txid,
+    // The chain's own columns (chain/txinfo.svelte.ts CHAIN_TX_CSV), empty where it knows nothing more.
+    ...(extra ? (extra.values(r) ?? extra.header.map(() => '')) : []),
   ]);
-  return toCsv(['Confirmed', 'Date', 'Type', 'Label', 'Address', `Amount (${unit})`, 'ID'], rows);
+  return toCsv(['Confirmed', 'Date', 'Type', 'Label', 'Address', `Amount (${unit})`, 'ID', ...(extra?.header ?? [])], rows);
 }
 
 /** The address list as chains-qt exports it: Label, Address. */
