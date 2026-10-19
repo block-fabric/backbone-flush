@@ -270,6 +270,17 @@ test of duplicate table ids keeps them apart), so a pruned node serves it, and a
 - Tests: `bitassets_logo_tests` (unit), `feature_bitassets_logo.py`, `feature_bitassets_transactions.py`,
   `feature_layers_logo.py` (the same with the DEX in force).
 
+## Search of the assets
+
+Layers has BitAssets' search index whole (doc/bitassets.md, "The search index"): `searchassets`, `searchpools`,
+`searchauctions`, `getassetindexinfo`, derived data kept with the state block by block (key byte 0xA0, clear of
+FastBlocks' 0x50-0x5f, the DEX's 0x80-0x89 and the logos' 0x90-0x91), always on, undone with a block by a
+reorganisation, left out of the state's hash, no rule reads it. Blocks of stake and BMM blocks update it alike, and
+what the DEX does to the pools (routes, batches) counts as activity and volume of their assets as a swap does. The
+volume and price-change window, `SidechainParams::asset_volume_window`, is 5760 blocks on the main network, the test
+network and signet (a day of 15-second slots), 10 on regtest. Upgrading derives the sidechain state once from the
+blocks at startup (index layout 1).
+
 ## The app
 
 `layers-app` is `fastblocks-app` with every page of `bitassets-app`. Staking is one
