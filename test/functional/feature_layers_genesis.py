@@ -18,11 +18,11 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework.util import assert_equal, p2p_port, write_config
 
-# The first blocks of Layers (the test network's is the one of the network running since 2026-10-18:
-# it must never change).
+# The first blocks of Layers (the test network's is the one of its restart of 19/Oct/2026: it changes
+# only with a restart of the test network).
 GENESIS = {
     "main": "164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857",
-    "testnet": "252a644146ba279b9b1a86dc957d42c4ff57b9ad4ca7be1218173afc92e9aff5",
+    "testnet": "6ad3a3ff068fecfba95fc4aeec8404ac1db31cb840b852164db054ff31daa382",
     "signet": "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101",
     "regtest": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 }

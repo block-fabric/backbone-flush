@@ -20,8 +20,8 @@ bitassets/main` bring their later work.
 | RPC port | 9254 | 19254 | 39254 | 29254 |
 | Magic bytes | `6c 79 72 01` ("lyr") | `6c 79 72 02` | `6c 79 72 03` | `6c 79 72 04` |
 | Address prefix | `ly` | `tly` | `tly` | `rsc` (the template's, as the other sidechains') |
-| First block | "Layers: assets on a fast chain" | "Layers testnet 18/Oct/2026: assets on a fast chain" (1792337400) | "Layers signet 18/Oct/2026: assets on a fast chain" | the template's |
-| Hash of the first block | `164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857` | `252a644146ba279b9b1a86dc957d42c4ff57b9ad4ca7be1218173afc92e9aff5` | `68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101` | `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206` |
+| First block | "Layers: assets on a fast chain" | "Layers testnet 19/Oct/2026: every rule from the first block" (1792439100) | "Layers signet 18/Oct/2026: assets on a fast chain" | the template's |
+| Hash of the first block | `164aeae68926b8814474e6f1580a6253df0c04d53826ea715400a8070dab0857` | `6ad3a3ff068fecfba95fc4aeec8404ac1db31cb840b852164db054ff31daa382` | `68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101` | `0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206` |
 | Assets' reveal depth | 6 blocks | 3 | 3 | 2 |
 
 Programs: `layersd`, `layers-cli`, `layers-app` (the wallet, in the `layers-app`
@@ -32,7 +32,10 @@ main, 111/196 elsewhere).
 
 The hashes of the first blocks are as `getblockhash 0` shows them (and `layers-util
 getchainparams`, which printed them in the reverse byte order, upstream's `HexStr` of
-the hash, until 2026-10-18: the test network's showed as `f5afe992…2a25`).
+the hash, until 2026-10-18: the test network's first one, 252a6441…aff5, showed as
+`f5afe992…2a25`). The test network restarted from a new genesis on 19/Oct/2026 (every rule
+from its first block; the first ran from 18/Oct with the DEX and the second fee curve from
+1374, logos from 4373).
 `feature_layers_genesis.py` checks that the daemon, the util, its test data and this
 table agree on every network.
 
@@ -40,7 +43,9 @@ The test network's `main_activation_height` (and with it
 `pos.main_activation_height`, which FastBlocks' leader seed and first record use) is
 `TESTNET_MAIN_ACTIVATION_HEIGHT` in `src/kernel/testnet_activation.h`: 4997, the Chains
 testnet block that activated slot 7 (`chains-cli -testnet getsidechain 7`'s
-`activationheight`). The main network refuses to start until its height is named.
+`activationheight`; the restart of 19/Oct/2026 keeps the slot). It is the only height of the
+test network's own: every rule of Layers holds from the first block there, as on the main
+network and signet. The main network refuses to start until its height is named.
 
 ## What is FastBlocks'
 
@@ -111,10 +116,8 @@ template's state transition. Where they meet:
 - **Fees.** An asset transaction is an ordinary transaction for the fees: FastBlocks' fee split applies to it
   as to any other, from Layers' first block on every network (`fee_split_height` 0: a new chain, no height
   to set later; regtest keeps FastBlocks' option `-testactivationheight=feesplit@<height>`). FastBlocks' second fee curve (`fee_curve2_height`, the bidder's
-  share 50 % down to 20 %, linear) holds from the first block on the main network and signet; Layers' test
-  network, running since before it with the first curve, takes it from `TESTNET_FEE_CURVE2_HEIGHT`
-  (`src/kernel/testnet_activation.h`, `INT_MAX` until the coordinator sets it with `TESTNET_DEX_HEIGHT`);
-  regtest `-testactivationheight=feecurve2@<height>`. The BMM bidder
+  share 50 % down to 20 %, linear) holds from the first block on every network (the test network since its
+  restart of 19/Oct/2026); regtest `-testactivationheight=feecurve2@<height>`. The BMM bidder
   gets the fees of peg transactions whole and a share of ordinary fees by the mainchain's pace; the rest goes
   to the validator pool, paid to every validator by stake each epoch (doc/fastblocks.md, "Fees, the pot and
   the validator pool").
@@ -138,10 +141,8 @@ template's state transition. Where they meet:
 ## The DEX
 
 Rules of the assets from `dex_height` (`Consensus::SidechainParams::dex_height`,
-`src/bitassets/dex.h`): the main network and signet from their first block (0); the test network
-from `TESTNET_DEX_HEIGHT` in `src/kernel/testnet_activation.h` (`INT_MAX`, never, until it is set
-a little ahead of the tip when the test network's nodes upgrade: it runs since 2026-10-18 under the
-rules before it); regtest never, unless `-testactivationheight=dex@<height>`. Before the height
+`src/bitassets/dex.h`): every network from its first block (0; the test network since its
+restart of 19/Oct/2026); regtest never, unless `-testactivationheight=dex@<height>`. Before the height
 every rule is the one above, exactly (a marker of the new kinds is `bad-ba-marker`, as it always
 was). `getdexinfo` shows the height and whether the next block has the rules. The height goes into
 the drivechain database's fingerprint once it is set (a database of a chain connected without the
@@ -258,9 +259,8 @@ Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of 
 keeps each asset's current logo (tables 0x90 and 0x91, clear of the DEX's 0x80-0x89 and FastBlocks' 0x50-0x5f; the
 test of duplicate table ids keeps them apart), so a pruned node serves it, and a reorganization puts the one before back.
 
-- Activation: `SidechainParams::logo_height`. Main network and signet 0 (Layers is not launched); test network
-  `TESTNET_LOGO_HEIGHT` in `src/kernel/testnet_activation.h`, a placeholder (never) until the deploy sets it a few
-  blocks above the tip (every node upgraded before it); regtest 0 or `-testactivationheight=logo@<height>`. Like
+- Activation: `SidechainParams::logo_height`. Main network, test network and signet 0 (from the first block);
+  regtest 0 or `-testactivationheight=logo@<height>`. Like
   `dex_height`, a height set goes into the fingerprint of the drivechain database (each node makes it again once).
 - RPCs: `getassetlogo`, `setassetlogo`, `registerasset ... <logo>`, `logo` in `getasset` / `listassets`, `logo_height`
   in `getbitassetsinfo`; `listassettransactions` lists the asset moves of the wallet with the other side (an operation
@@ -281,10 +281,7 @@ clear of the DEX's kinds 13 to 17. The state keeps it in table 0x92 (clear of th
 0x50-0x5f), journaled; the search index (layout 2) finds assets by it after the names, and a layout-1 index is
 brought to layout 2 in place at startup (nothing derived again).
 
-- Activation: main network and signet 0 (Layers is not launched); test network `TESTNET_TICKER_HEIGHT` in
-  `src/kernel/testnet_activation.h`, a placeholder (never) until the deploy sets it a few blocks above the tip
-  (every node upgraded before it; a height set goes into the fingerprint of the drivechain database, which each node
-  makes again once); regtest never or `-testactivationheight=ticker@<height>`.
+- Activation: main network, test network and signet 0 (from the first block); regtest never or `-testactivationheight=ticker@<height>`.
 - RPCs: `registerasset ... <display_name>`, `setassetdisplayname`, `display_name` in `getasset` / `listassets` /
   `searchassets`, `ticker_height` and the limits in `getbitassetsinfo`.
 - Tests: `bitassets_ticker_tests` (unit), `feature_bitassets_ticker.py`.
