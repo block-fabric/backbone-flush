@@ -172,9 +172,8 @@
             : { key: 'status', label: '', value: (r) => r.sortKey, width: '2.6rem', align: 'center', noFilter: true },
           { key: 'date', label: 'Date', value: (r) => r.time, width: '11.5rem' },
           { key: 'type', label: 'Type', value: (r) => chainTxOf(r.txid)?.type ?? typeText(r.type, r.role), width: '10rem' },
-          // With the chain's column, the label gives it room: the amount stays in view.
-          { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: CHAIN_TX_COLUMN ? 'minmax(4rem, 1fr)' : 'minmax(14rem, 1fr)' },
-          ...(CHAIN_TX_COLUMN ? [{ key: 'chain', label: CHAIN_TX_COLUMN, value: (r: TxRecord) => chainTxOf(r.txid)?.search ?? '', width: '14rem', noFilter: true }] : []),
+          // What the chain knows of a transaction (an asset moved, with the other side) takes the place of its label (LocalTxCell).
+          { key: 'label', label: CHAIN_TX_COLUMN ? `Label / ${CHAIN_TX_COLUMN}` : 'Label', value: (r) => chainTxOf(r.txid)?.search ?? addressText(r, true), width: 'minmax(14rem, 1fr)' },
           { key: 'amount', label: `Amount (${prefs.unit})`, value: (r) => r.amount, width: '12rem', align: 'end' },
         ],
   );
@@ -314,11 +313,11 @@
           oncontext={(r, e) => openMenu(r, e)}
         >
           {#snippet cell(row, column)}
-            <span class="cellwrap {rowClass(row)}" class:chain={column.key === 'chain'} title={column.key === 'label' ? `${statusText(row)}\n${typeText(row.type, row.role)} ${addressText(row, true)}` : undefined}>
+            <span class="cellwrap {rowClass(row)}" class:chain={column.key === 'label' && !narrow && !!chainTxOf(row.txid)} title={column.key === 'label' ? `${statusText(row)}\n${typeText(row.type, row.role)} ${addressText(row, true)}` : undefined}>
               {#if column.key === 'status'}<TxStatusIcon record={row} />{#if simple && !narrow}<span class="status-word">{statusText(row)}</span>{/if}
               {:else if column.key === 'date'}{narrow ? formatTime(row.time, true) : formatTime(row.time)}
               {:else if column.key === 'type'}<span class="type {row.type}"><Icon name={row.type === 'mined' ? 'mine' : row.amount < 0n ? 'send' : 'receive'} size={14} /> {chainTxOf(row.txid)?.type ?? (typeText(row.type, row.role) || 'Other')}</span>
-              {:else if column.key === 'chain'}<LocalTxCell txid={row.txid} />
+              {:else if column.key === 'label' && !narrow && chainTxOf(row.txid)}<LocalTxCell txid={row.txid} />
               {:else if column.key === 'label'}{#if narrow}<span class="type {row.type}" title={typeText(row.type, row.role) || 'Other'}><Icon name={row.type === 'mined' ? 'mine' : row.amount < 0n ? 'send' : 'receive'} size={14} /></span> {/if}<span class:bare={!row.label} translate="no">{addressText(row)}</span>
               {:else if column.key === 'amount'}
                 {#if prefs.mask}<Amount sats={row.amount} showUnit={false} />
@@ -395,7 +394,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* The chain's column (LocalTxCell): a fixed width, its content cut to it (each row is a grid of its own). */
+  /* What the chain knows (LocalTxCell), in the label's place: cut to it. */
   .cellwrap.chain {
     display: block;
     max-width: 100%;
