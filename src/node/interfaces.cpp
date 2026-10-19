@@ -767,6 +767,16 @@ public:
         return chainman().ActiveChainstate().SideState().BitAssets().AssetOfSeq(seq);
     }
     int getBitAssetsRevealDepth() override { return chainman().GetConsensus().sidechain.bitassets_reveal_depth; }
+    std::optional<bitassets::LogoRecord> getBitAssetLogo(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetLogo(asset);
+    }
+    bool bitAssetsLogosActive() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.LogoActive(chainman().ActiveChain().Height() + 1);
+    }
     std::optional<int> getBitAssetsReservationHeight(const Txid& txid) override
     {
         LOCK(::cs_main);

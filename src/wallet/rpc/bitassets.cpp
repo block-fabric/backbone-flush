@@ -5,9 +5,11 @@
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
 #include <addresstype.h>
+#include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <core_io.h>
+#include <crypto/sha256.h>
 #include <hash.h>
 #include <key_io.h>
 #include <rpc/util.h>
@@ -198,7 +200,8 @@ struct Out {
  * Make, sign and send a BitAssets transaction: the outputs `outs` first, in this order, then the
  * marker (burning `chn_in`, the CHN the operation takes in), then the change.
  */
-CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operation, const std::vector<Out>& outs, const std::vector<COutPoint>& inputs, CAmount chn_in = 0)
+CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operation, const std::vector<Out>& outs, const std::vector<COutPoint>& inputs, CAmount chn_in = 0,
+                     const std::optional<CFeeRate>& fee_rate = std::nullopt)
 {
     Marker marker;
     marker.operation = std::move(operation);
@@ -211,6 +214,7 @@ CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operat
 
     CCoinControl coin_control;
     for (const COutPoint& input : inputs) coin_control.Select(input);
+    if (fee_rate) coin_control.m_feerate = *fee_rate;
     auto res{CreateTransaction(wallet, recipients, /*change_pos=*/recipients.size(), coin_control, /*sign=*/true)};
     if (!res) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
     const CTransactionRef tx{res->tx};
@@ -328,6 +332,36 @@ int RevealHeight(CWallet& wallet, int made)
     return static_cast<int>(std::max<int64_t>(wallet.chain().getBitAssetsHeight(), deep));
 }
 
+/**
+ * A logo given to an RPC: base64 of a PNG or JPEG the rules take (bitassets/logo.h), checked here so that
+ * the wallet never pays for a transaction the rules refuse. An empty string, if `allow_empty`: none.
+ */
+std::vector<unsigned char> ParseLogo(const UniValue& value, bool allow_empty)
+{
+    const std::string& text{value.get_str()};
+    // Base64 of the largest logo, and no more: nothing larger is decoded.
+    if (text.size() > (bitassets::MAX_LOGO_BYTES + 2) / 3 * 4) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (bad-ba-logo-oversize): a logo is at most %u bytes", bitassets::MAX_LOGO_BYTES));
+    const auto bytes{DecodeBase64(text)};
+    if (!bytes) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is not base64");
+    if (bytes->empty()) {
+        if (!allow_empty) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is empty");
+        return {};
+    }
+    std::string reason;
+    if (!bitassets::CheckLogo(*bytes, reason)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (%s): a PNG or a JPEG of exactly %ux%u pixels, at most %u bytes, "
+                                                            "without metadata or chunks other than the image's (see doc/bitassets.md, Logos)",
+                                                            reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+    }
+    return *bytes;
+}
+
+/** The logos of assets are in the rules from the next block, or a logo is refused here. */
+void NeedLogos(CWallet& wallet)
+{
+    if (!wallet.chain().bitAssetsLogosActive()) throw JSONRPCError(RPC_WALLET_ERROR, "The logos of assets are not in the rules of the chain yet (logo_height in getbitassetsinfo)");
+}
+
 UniValue TxResult(const CTransactionRef& tx)
 {
     UniValue result(UniValue::VOBJ);
@@ -411,6 +445,7 @@ RPCMethod registerasset()
             {"decimals", RPCArg::Type::NUM, RPCArg::Default{0}, strprintf("The decimals it is shown with, at most %u: with 2, 1 is 100 units", bitassets::MAX_DECIMALS)},
             {"data", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "Its data", bitassets::DataArgs()},
             {"public", RPCArg::Type::BOOL, RPCArg::Default{true}, "Publish the name, so that it is listed and found by name. Otherwise only its hash is on the chain"},
+            {"logo", RPCArg::Type::STR, RPCArg::Optional::OMITTED, strprintf("Its logo, in base64: a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata (see setassetlogo)", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES)},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -448,6 +483,10 @@ RPCMethod registerasset()
     reg.supply = supply;
     reg.decimals = decimals;
     if (!request.params[3].isNull()) reg.data = bitassets::ParseData(request.params[3]);
+    if (!request.params[5].isNull() && !request.params[5].get_str().empty()) {
+        NeedLogos(*pwallet);
+        reg.logo = ParseLogo(request.params[5], /*allow_empty=*/false);
+    }
     if (request.params[4].isNull() || request.params[4].get_bool()) {
         // Published, it would read as another asset's number where names are shown with theirs.
         if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, std::string{NAME_MIMICS_NUMBER} + " (register it unpublished: public false)");
@@ -769,6 +808,70 @@ RPCMethod updateasset()
     if (updates.Empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to change");
     const auto [inputs, total]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
     return TxResult(Send(*pwallet, bitassets::UpdateAsset{asset.id, updates}, {{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset.id)}}, inputs));
+},
+    };
+}
+
+RPCMethod setassetlogo()
+{
+    return RPCMethod{
+        "setassetlogo",
+        strprintf("Set the logo of an asset this wallet controls, or remove it (an empty logo). The logo goes whole into the transaction:\n"
+                  "a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata (no text, Exif, ICC profile or comment) and\n"
+                  "nothing after its end; the rules check its structure, and refuse anything else. It replaces the logo before.", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES) +
+            HELP_REQUIRING_PASSPHRASE,
+        {
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"logo", RPCArg::Type::STR, RPCArg::Optional::NO, "The logo, in base64; \"\" removes it"},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {
+                {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"the wallet's fee rate"}, "The fee rate, in " + CURRENCY_ATOM + "/vB"},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "hash", /*optional=*/true, "SHA-256 of the logo (none when removed)"},
+            {RPCResult::Type::NUM, "size", "Its size in bytes (0 when removed)"},
+            {RPCResult::Type::STR_AMOUNT, "fee", "The network fee paid"},
+        }},
+        RPCExamples{HelpExampleCli("setassetlogo", "\"GOLD\" \"iVBORw0KGgo...\"") + HelpExampleCli("setassetlogo", "\"GOLD\" \"\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
+    if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "CHN has no logo here");
+    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: its control coin was burned");
+    NeedLogos(*pwallet);
+    const std::vector<unsigned char> logo{ParseLogo(request.params[1], /*allow_empty=*/true)};
+    if (logo.empty() && !pwallet->chain().getBitAssetLogo(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "This asset has no logo to remove");
+    std::optional<CFeeRate> fee_rate;
+    if (!request.params[2].isNull()) {
+        const UniValue& rate{request.params[2].find_value("fee_rate")};
+        if (!rate.isNull()) fee_rate = CFeeRate{AmountFromValue(rate, /*decimals=*/3)};
+    }
+    const auto [inputs, total]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
+    const CTransactionRef tx{Send(*pwallet, bitassets::SetLogo{asset.id, logo}, {{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset.id)}}, inputs, 0, fee_rate)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    if (!logo.empty()) {
+        uint256 hash;
+        CSHA256().Write(logo.data(), logo.size()).Finalize(hash.data());
+        result.pushKV("hash", HexStr(hash));
+    }
+    result.pushKV("size", static_cast<uint64_t>(logo.size()));
+    CAmount fee{0};
+    {
+        LOCK(pwallet->cs_wallet);
+        CAmount in{0}, out{tx->GetValueOut()};
+        for (const CTxIn& txin : tx->vin) {
+            if (const CWalletTx* prev{pwallet->GetWalletTx(txin.prevout.hash)}) in += prev->GetTx()->vout[txin.prevout.n].nValue;
+        }
+        fee = in - out;
+    }
+    result.pushKV("fee", ValueFromAmount(fee));
+    return result;
 },
     };
 }
@@ -1394,6 +1497,10 @@ RPCMethod listassetactivity()
                 } else if constexpr (std::is_same_v<T, bitassets::ReleaseAsset>) {
                     operation = "release";
                     summary = "Retired a dead asset (its pools' CHN go to mainchain miners)";
+                } else if constexpr (std::is_same_v<T, bitassets::SetLogo>) {
+                    operation = "logo";
+                    summary = op.logo.empty() ? "Removed the logo of " + LabelOfAsset(*pwallet, op.asset)
+                                              : strprintf("Set the logo of %s (%u bytes)", LabelOfAsset(*pwallet, op.asset), op.logo.size());
                 }
             }, *e.marker.operation);
         } else {

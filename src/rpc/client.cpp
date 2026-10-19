@@ -67,6 +67,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "mintasset", 1, "amount" },
     { "burnasset", 1, "amount" },
     { "updateasset", 1, "data" },
+    { "setassetlogo", 2, "options" },
     { "fixassetsupply", 1, "confirm" },
     { "swapasset", 1, "amount_in" },
     { "swapasset", 3, "slippage" },

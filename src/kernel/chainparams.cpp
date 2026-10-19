@@ -241,6 +241,8 @@ public:
         // Set when the slot activates on the mainchain: the height of the block that activated it.
         consensus.sidechain.main_activation_height = 0;
         consensus.sidechain.bitassets_reveal_depth = 6;
+        // The logos of assets from the first block (the network is not launched).
+        consensus.sidechain.logo_height = 0;
         // A tenth of the mainchain's withdrawal_min_score (64800); proposals within a day.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -347,6 +349,8 @@ public:
         // The mainchain of the test network votes on a withdrawal bundle within 600 blocks.
         consensus.sidechain.bundle_retry_delay = 20;
         consensus.sidechain.bitassets_reveal_depth = 3;
+        // The logos of assets: the test network runs since before them (kernel/testnet_activation.h).
+        consensus.sidechain.logo_height = TESTNET_LOGO_HEIGHT;
         // The height of the mainchain block that activated the slot; nothing is left out at 0.
         consensus.sidechain.main_activation_height = TESTNET_MAIN_ACTIVATION_HEIGHT; // set once slot 4 activates on the reset test network (kernel/testnet_activation.h)
         // A tenth of the testnet mainchain's withdrawal_min_score (300); proposals within an hour.
@@ -462,6 +466,7 @@ public:
                        .message_start = {0x62, 0x61, 0x73, 0x03}, .default_port = 39355, .bech32_hrp = "tba"});
         consensus.sidechain.main_activation_height = 0;
         consensus.sidechain.bitassets_reveal_depth = 3;
+        consensus.sidechain.logo_height = 0;
         // The Chains signet has the rules of its main network.
         consensus.sidechain.pending_min_score = 6480;
         consensus.sidechain.unproposed_expiry_blocks = 1440;
@@ -554,6 +559,8 @@ public:
             consensus.sidechain.main_activation_height = opts.sidechain_activation_height;
             consensus.sidechain.bundle_retry_delay = 5;
             consensus.sidechain.bitassets_reveal_depth = 2;
+            // The logos of assets from the first block, unless a test asks (-testactivationheight=logo@<height>).
+            consensus.sidechain.logo_height = opts.dep_opts.logo_height.value_or(0);
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
             consensus.sidechain.pending_min_score = 3;
             consensus.sidechain.unproposed_expiry_blocks = 20;

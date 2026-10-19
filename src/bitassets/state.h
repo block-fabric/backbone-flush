@@ -272,9 +272,14 @@ struct Register {
     AssetData data;
     //! The name, if the registration makes it public.
     std::optional<std::string> text;
+    //! Its logo (bitassets/logo.h), if any: from SidechainParams::logo_height, a registration with one
+    //! is a marker of the kind REGISTER_WITH_LOGO_KIND (these fields, then the logo).
+    std::vector<unsigned char> logo;
     SERIALIZE_METHODS(Register, obj) { READWRITE(obj.name, obj.nonce, VARINT(obj.supply), obj.decimals, obj.data, BA_OPT(obj.text)); }
     friend bool operator==(const Register&, const Register&) = default;
 };
+/** The kind of the marker of a Register that carries a logo. */
+inline constexpr uint8_t REGISTER_WITH_LOGO_KIND{33};
 
 /** More of an asset, by whoever spends its control coin. */
 struct Mint {
@@ -410,7 +415,28 @@ struct ReleaseAsset {
     friend bool operator==(const ReleaseAsset&, const ReleaseAsset&) = default;
 };
 
-using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset>;
+/**
+ * Set the logo of an asset (bitassets/logo.h), or remove it (an empty one), by whoever spends its
+ * control coin; it replaces the one before. Valid from SidechainParams::logo_height (kinds 32 and 33
+ * stay clear of those Layers adds, 13 on).
+ */
+struct SetLogo {
+    static constexpr uint8_t KIND{32};
+    AssetId asset;
+    std::vector<unsigned char> logo;
+    SERIALIZE_METHODS(SetLogo, obj) { READWRITE(obj.asset, obj.logo); }
+    friend bool operator==(const SetLogo&, const SetLogo&) = default;
+};
+
+using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset, SetLogo>;
+
+/** Whether an operation sets a logo (SetLogo, or a Register with one): valid from SidechainParams::logo_height only. */
+bool IsLogoOperation(const Operation& op);
+/**
+ * Whether a transaction may be in a block at a height where logos are `active` or not: one whose
+ * marker sets a logo is not valid before (bad-ba-logo-inactive), as no such marker was.
+ */
+[[nodiscard]] bool CheckLogoActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
 /** The marker output of a transaction. */
 struct Marker {
@@ -524,6 +550,19 @@ struct AssetRecord {
     friend bool operator==(const AssetRecord&, const AssetRecord&) = default;
 
     const AssetData& Current() const { return data; }
+};
+
+/** The logo of an asset as the state records it (its bytes are kept apart: State::GetLogoBytes). */
+struct LogoRecord {
+    //! SHA-256 of the bytes.
+    uint256 hash;
+    //! LogoFormat.
+    uint8_t format{0};
+    uint32_t size{0};
+    int32_t height{0};
+    Txid txid;
+    SERIALIZE_METHODS(LogoRecord, obj) { READWRITE(obj.hash, obj.format, obj.size, obj.height, obj.txid); }
+    friend bool operator==(const LogoRecord&, const LogoRecord&) = default;
 };
 
 /** Every value each field of the data of an asset has had, oldest first, with where it was set. */
@@ -694,6 +733,11 @@ struct Result {
  * whole: 0x39 outputs by what they carry (its id, then its kind), 0x3a pools by asset, 0x3b
  * auctions not closed by asset. What a block changes,
  * the store's journal notes: its undo data.
+ *
+ * Logos (from SidechainParams::logo_height): 0x90 the logo of each asset that has one (LogoRecord), 0x91
+ * its bytes. No rule reads the bytes: they are kept for those who show them (getassetlogo), with the
+ * state, so that a pruned node has them too; only the current logo of each asset is kept, and a
+ * reorganization puts the one before back through the journal.
  */
 class State
 {
@@ -741,6 +785,10 @@ public:
     void ForEachPool(const std::function<bool(const uint256&, const Pool&)>& fn) const;
     void ForEachAuction(const std::function<bool(const Txid&, const Auction&)>& fn) const;
     void ForEachReservation(const std::function<bool(const Txid&, const uint256&)>& fn) const;
+    /** The logo of an asset, if it has one. */
+    std::optional<LogoRecord> GetLogo(const AssetId& asset) const;
+    /** The bytes of the logo of an asset, if it has one. */
+    std::optional<std::vector<unsigned char>> GetLogoBytes(const AssetId& asset) const;
     /** The first output, by outpoint, that carries a token of this kind and id. */
     std::optional<COutPoint> FirstTokenOf(const uint256& id, Token::Kind kind) const;
     /** The pools of an asset, by id. */

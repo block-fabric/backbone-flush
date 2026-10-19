@@ -825,7 +825,8 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         }
         const int height{m_active_chainstate.m_chain.Height() + 1};
         size_t payouts{0};
-        if (!side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts)) {
+        if (!bitassets::CheckLogoActivation(tx, side_params.LogoActive(height), reject_reason) ||
+            !side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts)) {
             return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
         }
         ws.m_side_payouts += payouts;
@@ -5931,7 +5932,8 @@ void Chainstate::RemoveStaleDrivechainTxs()
             const CTransactionRef tx{m_mempool->get(txid)};
             if (!tx) continue;
             const bitassets::RecordingView reads{side.View()};
-            if (!bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) {
+            if (!bitassets::CheckLogoActivation(*tx, m_chainman.GetConsensus().sidechain.LogoActive(tip->nHeight + 1), reject_reason) ||
+                !bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, m_chainman.GetConsensus().sidechain.bitassets_reveal_depth)) {
                 stale.push_back(tx);
                 continue;
             }

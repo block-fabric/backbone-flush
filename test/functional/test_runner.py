@@ -171,6 +171,7 @@ BASE_SCRIPTS = [
     'feature_sidechain.py',
     'feature_bitassets.py',
     'feature_bitassets_invalid.py',
+    'feature_bitassets_logo.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',
     'feature_sidechain_catchup.py',

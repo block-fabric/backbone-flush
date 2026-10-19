@@ -6,6 +6,8 @@
 
 #include <bitassets/state.h>
 
+#include <bitassets/logo.h>
+
 #include <arith_uint256.h>
 
 #include <crypto/hmac_sha256.h>
@@ -26,6 +28,16 @@ template <typename T>
 void WriteOperation(DataStream& s, const T& op)
 {
     s << T::KIND << op;
+}
+
+/** A registration with a logo is a marker of its own kind: the registration, then the logo. */
+void WriteOperation(DataStream& s, const Register& op)
+{
+    if (op.logo.empty()) {
+        s << Register::KIND << op;
+    } else {
+        s << REGISTER_WITH_LOGO_KIND << op << op.logo;
+    }
 }
 
 template <typename T>
@@ -199,6 +211,14 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
         case Bid::KIND: ReadOperation<Bid>(s, marker.operation); break;
         case Collect::KIND: ReadOperation<Collect>(s, marker.operation); break;
         case ReleaseAsset::KIND: ReadOperation<ReleaseAsset>(s, marker.operation); break;
+        case SetLogo::KIND: ReadOperation<SetLogo>(s, marker.operation); break;
+        case REGISTER_WITH_LOGO_KIND: {
+            Register reg;
+            s >> reg >> reg.logo;
+            // An empty one is written as a Register (the check below): one way to write a marker.
+            marker.operation = std::move(reg);
+            break;
+        }
         default: return std::nullopt;
         }
         ReadOutputs(s, marker.outputs);
@@ -541,6 +561,11 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         if (!GoodData(reg->data)) return invalid("bad-ba-data");
         if (reg->text && (!IsAssetName(*reg->text) || HashName(*reg->text) != reg->name)) return invalid("bad-ba-name-text");
         if (reg->name.IsNull()) return invalid("bad-ba-name");
+        if (!reg->logo.empty() && !CheckLogo(reg->logo, reject_reason)) return false;
+    } else if (const auto* set{std::get_if<SetLogo>(&op)}) {
+        if (set->asset.IsNull()) return invalid("bad-ba-logo-asset");
+        // Empty: the logo is removed.
+        if (!set->logo.empty() && !CheckLogo(set->logo, reject_reason)) return false;
     } else if (const auto* mint{std::get_if<Mint>(&op)}) {
         if (!positive(mint->amount) || mint->asset.IsNull()) return invalid("bad-ba-amount");
     } else if (const auto* update{std::get_if<UpdateAsset>(&op)}) {
@@ -574,6 +599,24 @@ std::set<uint32_t> TokenOutputs(const CTransaction& tx)
     if (!marker) return outputs;
     for (const MarkerOutput& out : marker->outputs) outputs.insert(out.n);
     return outputs;
+}
+
+bool IsLogoOperation(const Operation& op)
+{
+    if (std::holds_alternative<SetLogo>(op)) return true;
+    const auto* reg{std::get_if<Register>(&op)};
+    return reg && !reg->logo.empty();
+}
+
+bool CheckLogoActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (marker && marker->operation && IsLogoOperation(*marker->operation)) {
+        reject_reason = "bad-ba-logo-inactive";
+        return false;
+    }
+    return true;
 }
 
 bool CheckDependsOnHeight(const CTransaction& tx)
@@ -618,6 +661,13 @@ struct State::Plan {
     //! A Bid in an asset with an output for what comes back of it: after the other results, carrying
     //! that (nothing if nothing comes back).
     std::optional<Result> back;
+    //! The logo an asset gets (empty bytes: none any more), and its format.
+    struct Logo {
+        AssetId asset;
+        std::vector<unsigned char> bytes;
+        LogoFormat format{LogoFormat::PNG};
+    };
+    std::optional<Logo> logo;
 };
 
 namespace {
@@ -633,6 +683,8 @@ constexpr uint8_t POOLS_BY_ASSET{0x3a};
 constexpr uint8_t AUCTIONS_BY_ASSET{0x3b};
 const sidechain::Table<uint256, ReservationOrigin> ORIGINS{0x3d};
 constexpr uint8_t HISTORY{0x3e};
+const sidechain::Table<uint256, LogoRecord> LOGOS{0x90};
+const sidechain::Table<uint256, std::vector<unsigned char>> LOGO_BYTES{0x91};
 //! Missing: the layout before it was written down (1).
 const sidechain::Cell<uint32_t> LAYOUT{0x3f, 1};
 
@@ -682,6 +734,8 @@ sidechain::StoreOverlay& State::Writable() const { return *Assert(m_overlay); }
 std::optional<Token> State::GetToken(const COutPoint& outpoint) const { return TOKENS.Get(*m_view, outpoint); }
 std::optional<AssetRecord> State::GetAsset(const AssetId& asset) const { return ASSETS.Get(*m_view, asset); }
 bool State::HasAsset(const AssetId& asset) const { return ASSETS.Contains(*m_view, asset); }
+std::optional<LogoRecord> State::GetLogo(const AssetId& asset) const { return LOGOS.Get(*m_view, asset); }
+std::optional<std::vector<unsigned char>> State::GetLogoBytes(const AssetId& asset) const { return LOGO_BYTES.Get(*m_view, asset); }
 
 AssetHistory State::GetHistory(const AssetId& asset) const
 {
@@ -1011,6 +1065,10 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         });
         plan.assets.emplace_back(reg->name, std::move(record));
         plan.seq = std::make_pair(NextSeq(), reg->name);
+        if (!reg->logo.empty()) {
+            std::string why;
+            plan.logo = Plan::Logo{reg->name, reg->logo, *Assert(CheckLogo(reg->logo, why))};
+        }
     } else if (const auto* mint{op ? std::get_if<Mint>(op) : nullptr}) {
         const auto found{GetAsset(mint->asset)};
         if (!found) return invalid("bad-ba-asset-unknown");
@@ -1041,6 +1099,19 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
             ++n;
         });
         plan.assets.emplace_back(update->asset, std::move(record));
+    } else if (const auto* set{op ? std::get_if<SetLogo>(op) : nullptr}) {
+        if (!HasAsset(set->asset)) return invalid("bad-ba-asset-unknown");
+        // The control coin of this asset, as for its data (UpdateAsset); the books hold the
+        // transaction to output it again.
+        if (!spends(Token::Kind::CONTROL, set->asset)) return invalid("bad-ba-no-control");
+        Plan::Logo logo{set->asset, set->logo};
+        if (set->logo.empty()) {
+            if (!GetLogo(set->asset)) return invalid("bad-ba-logo-none");
+        } else {
+            std::string why;
+            logo.format = *Assert(CheckLogo(set->logo, why));
+        }
+        plan.logo = std::move(logo);
     } else if (const auto* burn{op ? std::get_if<Burn>(op) : nullptr}) {
         std::map<AssetId, AssetRecord> changed;
         for (const Token& token : burn->tokens) {
@@ -1383,6 +1454,24 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             return true;
         });
         for (const sidechain::StoreBytes& key : history) out.Erase(key);
+        // And its logo: an asset registered again under the name starts without one.
+        LOGOS.Erase(out, *plan->asset_gone);
+        LOGO_BYTES.Erase(out, *plan->asset_gone);
+    }
+    if (plan->logo) {
+        if (plan->logo->bytes.empty()) {
+            LOGOS.Erase(out, plan->logo->asset);
+            LOGO_BYTES.Erase(out, plan->logo->asset);
+        } else {
+            LogoRecord record;
+            CSHA256().Write(plan->logo->bytes.data(), plan->logo->bytes.size()).Finalize(record.hash.data());
+            record.format = static_cast<uint8_t>(plan->logo->format);
+            record.size = static_cast<uint32_t>(plan->logo->bytes.size());
+            record.height = height;
+            record.txid = tx.GetHash();
+            LOGOS.Put(out, plan->logo->asset, record);
+            LOGO_BYTES.Put(out, plan->logo->asset, plan->logo->bytes);
+        }
     }
     if (released) *released = plan->released;
     if (plan->auction) SetAuction(plan->auction->first, plan->auction->second);
