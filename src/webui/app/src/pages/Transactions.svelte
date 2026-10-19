@@ -27,6 +27,7 @@
     DATE_FILTERS,
     dateRange,
     filterRecords,
+    mergeByTxid,
     plainText,
     sortNewestFirst,
     statusText,
@@ -95,18 +96,20 @@
     const t = setTimeout(() => (searchApplied = text), 250);
     return () => clearTimeout(t);
   });
+  // One row per transaction the chain knows more of (an asset moved): its halves to the wallet itself merged (mergeByTxid).
+  const records = $derived(mergeByTxid(current.records, (txid) => !!chainTxOf(txid)));
   const shown = $derived.by(() => {
     const type = typeFilter === 'chain' ? 'all' : typeFilter;
-    const base = filterRecords(current.records, { ...range, type, search: searchApplied, minAmount, showInactive: true });
+    const base = filterRecords(records, { ...range, type, search: searchApplied, minAmount, showInactive: true });
     let rows = base;
     // What the chain knows is searched too (an asset by its name or number, the other side's address).
     const needle = searchApplied.trim().toLowerCase();
     if (needle) {
       const found = new Set(base.map((r) => r.key));
-      const more = filterRecords(current.records, { ...range, type, search: '', minAmount, showInactive: true }).filter((r) => !found.has(r.key) && (chainTxOf(r.txid)?.search.toLowerCase().includes(needle) ?? false));
+      const more = filterRecords(records, { ...range, type, search: '', minAmount, showInactive: true }).filter((r) => !found.has(r.key) && (chainTxOf(r.txid)?.search.toLowerCase().includes(needle) ?? false));
       if (more.length) {
         const keep = new Set([...found, ...more.map((r) => r.key)]);
-        rows = current.records.filter((r) => keep.has(r.key));
+        rows = records.filter((r) => keep.has(r.key));
       }
     }
     return typeFilter === 'chain' ? rows.filter((r) => chainTxOf(r.txid)) : rows;
@@ -258,7 +261,7 @@
   <header class="page-head">
     <h1>Transactions</h1>
     <div class="row">
-      <span class="muted count">{totals.count.toLocaleString('en')} of {current.records.length.toLocaleString('en')}</span>
+      <span class="muted count">{totals.count.toLocaleString('en')} of {records.length.toLocaleString('en')}</span>
       <button type="button" class="btn small" onclick={exportCsv} disabled={prefs.mask} title="Export the data in the current tab to a file"><Icon name="download" size={16} /> Export</button>
     </div>
   </header>
@@ -313,7 +316,7 @@
           oncontext={(r, e) => openMenu(r, e)}
         >
           {#snippet cell(row, column)}
-            <span class="cellwrap {rowClass(row)}" class:chain={column.key === 'label' && !narrow && !!chainTxOf(row.txid)} title={column.key === 'label' ? `${statusText(row)}\n${typeText(row.type, row.role)} ${addressText(row, true)}` : undefined}>
+            <span class="cellwrap {rowClass(row)}" class:label-cell={column.key === 'label'} class:chain={column.key === 'label' && !narrow && !!chainTxOf(row.txid)} title={column.key === 'label' ? `${statusText(row)}\n${chainTxOf(row.txid)?.type ?? typeText(row.type, row.role)} ${chainTxOf(row.txid)?.search ?? addressText(row, true)}` : undefined}>
               {#if column.key === 'status'}<TxStatusIcon record={row} />{#if simple && !narrow}<span class="status-word">{statusText(row)}</span>{/if}
               {:else if column.key === 'date'}{narrow ? formatTime(row.time, true) : formatTime(row.time)}
               {:else if column.key === 'type'}<span class="type {row.type}"><Icon name={row.type === 'mined' ? 'mine' : row.amount < 0n ? 'send' : 'receive'} size={14} /> {chainTxOf(row.txid)?.type ?? (typeText(row.type, row.role) || 'Other')}</span>
@@ -393,6 +396,12 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* The label adds nothing to the width of its row (each row is a grid at least as wide as its content): it is cut to
+     its column, the full text in its tooltip and the details, so that the amount is always in view. */
+  .cellwrap.label-cell {
+    contain: inline-size;
+    width: 100%;
   }
   /* What the chain knows (LocalTxCell), in the label's place: cut to it. */
   .cellwrap.chain {

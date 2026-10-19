@@ -457,7 +457,7 @@ export async function encodeLogo(rgba: Uint8Array | Uint8ClampedArray, jpeg?: (q
   if (rgba.length !== LOGO_SIZE * LOGO_SIZE * 4) throw new Error('A logo is 256 x 256 pixels');
   const candidates: EncodedLogo[] = [];
   const q = quantize(rgba);
-  candidates.push({ bytes: await encodePalettePng(q), format: 'png', kind: `PNG, ${q.colors} colours` });
+  candidates.push({ bytes: await encodePalettePng(q), format: 'png', kind: `PNG, ${q.colors} colour${q.colors === 1 ? "" : "s"}` });
   candidates.push({ bytes: await encodeTruecolorPng(rgba), format: 'png', kind: 'PNG' });
   let transparent = false;
   for (let i = 3; i < rgba.length; i += 4) if (rgba[i] !== 255) transparent = true;
