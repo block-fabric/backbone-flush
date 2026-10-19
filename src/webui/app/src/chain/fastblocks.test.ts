@@ -472,8 +472,10 @@ describe('the pages of FastBlocks', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
     // Layers: Staking, one section, then the pages of the assets.
     expect(own).toEqual(['staking', 'assets', 'my-assets', 'issue', 'trade', 'auctions']);
-    expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...own, 'explorer']);
-    expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...own, 'explorer']);
+    // Register new asset (issue) is a tab of My assets (user feedback 2026-10-19).
+    const navPages = own.filter((id) => id !== 'issue');
+    expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...navPages, 'explorer']);
+    expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...navPages, 'explorer']);
     expect(chainBeforeTools(HOME_QUICK_ACTIONS.map((q) => q.page), (p) => p)).toBeNull();
     expect(HOME_QUICK_ACTIONS.map((q) => q.label)).toContain('Stake');
     const chain = menuSections(buildCommands()).find((s) => s.group === 'Chains')!;

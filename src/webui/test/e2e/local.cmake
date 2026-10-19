@@ -27,3 +27,8 @@ webui_local_e2e(bitassets 49420)
 webui_local_e2e(bitassets_simple 49430 --js-var SIMPLE=true)
 # bitassets_logo.js: an asset registered with a logo (picker, confirmation, lists, Home, Overview) and sent (Transactions).
 webui_local_e2e(bitassets_logo 49700)
+# ba_bulk.js: 300 assets made by a script while the Transactions page shows (user feedback 2026-10-19, item 10): at most
+# 10 frames over 50 ms, the UI thread of the host answering within a second.
+webui_local_e2e(ba_bulk 49720 --js-var COUNT=300 --js-var "PAGE=\"transactions\"" --js-var MAXLONG=10)
+# ba_ignore.js: a spam asset received, ignored from its notice, gone from Home, My assets and the Transactions page, back once unignored.
+webui_local_e2e(ba_ignore 49730)

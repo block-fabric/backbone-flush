@@ -13,12 +13,14 @@
   import { approx, formatAmount, formatPrice, isChn, unitPrice } from './model';
   import { ba, chnPrice, decimalsOf, pendingOf, startBitAssets } from './store.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
+  import { withoutHidden } from './visible.svelte';
 
   $effect(() => startBitAssets());
   // Simple mode (lib/uimode.svelte.ts): no auctions card (Advanced's), the actions in plain words.
   const simple = $derived(simpleMode());
 
-  const holdings = $derived(ba.wallet === wallets.current ? (ba.mine?.assets ?? []) : []);
+  // What the wallet hides (its asset filters) counts nowhere here.
+  const holdings = $derived(withoutHidden(ba.wallet === wallets.current ? (ba.mine?.assets ?? []) : [], (h) => h.asset, (h) => h.label).items);
   const worth = $derived(holdings.reduce((n, h) => n + (chnPrice(h.asset) ?? 0) * approx(h.balance), 0));
   const top = $derived(
     holdings
@@ -87,7 +89,7 @@
       {/if}
       {#snippet actions()}
         <button type="button" class="btn grow" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>
-        <button type="button" class="btn ghost" onclick={() => go('assets')}>Explore assets</button>
+        <button type="button" class="btn ghost" onclick={() => go('assets')}>Browse assets</button>
       {/snippet}
     </Card>
 
