@@ -32,3 +32,5 @@ webui_local_e2e(bitassets_logo 49700)
 webui_local_e2e(ba_bulk 49720 --js-var COUNT=300 --js-var "PAGE=\"transactions\"" --js-var MAXLONG=10)
 # ba_ignore.js: a spam asset received, ignored from its notice, gone from Home, My assets and the Transactions page, back once unignored.
 webui_local_e2e(ba_ignore 49730)
+# ba_feedback.js: pictures of the pages the user feedback of 2026-10-19 changed.
+webui_local_e2e(ba_feedback 49740)
