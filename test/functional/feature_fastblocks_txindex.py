@@ -12,7 +12,7 @@ mempool or blockchain transaction" for each transaction of a block of stake.
     (without the block hash), and the coinbases of both blocks;
   - after a restart, too;
   - the upgrade: an index written by a node of before the fix (FASTBLOCKS_PREVIOUS_BIN, a directory
-    with its fastblocksd; the step is skipped without it) does not find the transaction of the block
+    with its fastblocksd, or Layers' layersd; the step is skipped without it) does not find the transaction of the block
     of stake; the node of now rebuilds that index when it starts, and finds both.
 """
 
@@ -112,7 +112,9 @@ class FastBlocksTxindexTest(SidechainTest):
         shutil.rmtree(node.chain_path / "indexes" / "txindex")
         argv_len = len(node.binaries.node_argv())
         args = node.args
-        node.args = [os.path.join(previous, "fastblocksd")] + args[argv_len:]
+        # fastblocksd, or the daemon of a chain built on FastBlocks (Layers: layersd).
+        daemon = next((os.path.join(previous, d) for d in ("fastblocksd", "layersd") if os.path.exists(os.path.join(previous, d))), os.path.join(previous, "fastblocksd"))
+        node.args = [daemon] + args[argv_len:]
         node.start()
         node.wait_for_rpc_connection()
         self.wait_synced_index()
