@@ -51,6 +51,8 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // The logos of assets: their height once set (a database of a chain connected without their rules
     // is made again), nothing while it is never (as before they existed: a database of before is kept).
     if (sidechain.logo_height != std::numeric_limits<int>::max()) hasher << std::string{"logo"} << sidechain.logo_height;
+    // Tickers and display names, the same way.
+    if (sidechain.ticker_height != std::numeric_limits<int>::max()) hasher << std::string{"ticker"} << sidechain.ticker_height;
     return hasher.GetHash();
 }
 

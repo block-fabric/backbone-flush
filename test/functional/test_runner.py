@@ -191,6 +191,7 @@ BASE_SCRIPTS = [
     'feature_layers_logo.py',
     'feature_fastblocks_feesplit.py',
     'feature_bitassets_logo.py',
+    'feature_bitassets_ticker.py',
     'feature_bitassets_transactions.py',
     'feature_bitassets_search.py',
     'feature_fastblocks_txindex.py',
