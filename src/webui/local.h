@@ -77,13 +77,19 @@ public:
     /** The logo of an asset (its id, 64 hex digits) as JSON {asset, hash, mime, size, url}, null if it has none; `hash` if known. */
     UniValue Get(interfaces::Node& node, const std::string& asset, const std::string& hash);
     static UniValue ToJson(const std::string& asset, const Logo& logo);
+    /** Keep a logo of an asset (in place of the one before of it): the newest first, the oldest out past the limits. */
+    void Put(const std::string& asset, const Logo& logo);
+    /** What it keeps: how many, the bytes it counts, and the bytes of what it holds (the same; the tests). */
+    size_t Size() const;
+    size_t Bytes() const;
+    size_t CountedBytes() const;
 
 private:
     struct Entry {
         std::string asset;
         Logo logo;
     };
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::list<Entry> m_entries;
     size_t m_bytes{0};
 };

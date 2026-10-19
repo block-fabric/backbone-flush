@@ -113,4 +113,32 @@ BOOST_AUTO_TEST_CASE(logos_as_the_host_shows_them)
     BOOST_CHECK(!webui::local::RpcMethods().contains("setassetlogo"));
 }
 
+BOOST_AUTO_TEST_CASE(logo_cache_counts_what_it_keeps)
+{
+    // The same asset asked again and again: one entry, its bytes counted once (the security review of the cache).
+    webui::local::LogoCache cache;
+    webui::local::Logo logo{"image/png", 3, std::string(64, 'a'), "data:image/png;base64," + std::string(40000, 'A')};
+    for (int i{0}; i < 2000; ++i) cache.Put(std::string(64, 'b'), logo);
+    BOOST_CHECK_EQUAL(cache.Size(), 1U);
+    BOOST_CHECK_EQUAL(cache.Bytes(), logo.url.size());
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // Many assets: the oldest go, never below an empty list, and the count stays the sum.
+    for (int i{0}; i < 2000; ++i) cache.Put(strprintf("%064x", i), logo);
+    BOOST_CHECK(cache.Size() <= webui::local::LogoCache::MAX_ENTRIES);
+    BOOST_CHECK(cache.Bytes() <= webui::local::LogoCache::MAX_BYTES);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // One larger than the whole cache is not kept, and empties nothing it should not count.
+    webui::local::Logo huge{logo};
+    huge.url = std::string(webui::local::LogoCache::MAX_BYTES + 1, 'A');
+    const size_t before{cache.Size()};
+    cache.Put(std::string(64, 'c'), huge);
+    BOOST_CHECK_EQUAL(cache.Size(), before);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+    // Replacing a kept asset's logo by a huge one drops the old one too.
+    cache.Put(std::string(64, 'd'), logo);
+    cache.Put(std::string(64, 'd'), huge);
+    BOOST_CHECK(cache.Size() < before);
+    BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

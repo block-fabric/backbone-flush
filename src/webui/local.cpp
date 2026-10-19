@@ -111,15 +111,50 @@ UniValue LogoCache::Get(interfaces::Node& node, const std::string& asset, const 
     const auto logo{ReadLogoParam(result.find_value("base64"), reason)};
     // Checked again here, as the rules check it: what the page gets is a picture of PNG or JPEG bytes, or nothing.
     if (!logo) return UniValue{};
+    Put(asset, *logo);
+    return ToJson(asset, *logo);
+}
+
+void LogoCache::Put(const std::string& asset, const Logo& logo)
+{
     std::lock_guard lock{m_mutex};
-    std::erase_if(m_entries, [&](const Entry& e) { return e.asset == asset; });
-    m_entries.push_front({asset, *logo});
-    m_bytes += logo->url.size();
-    while (m_entries.size() > MAX_ENTRIES || m_bytes > MAX_BYTES) {
+    // The one before of this asset goes, its bytes counted out with it.
+    for (auto it{m_entries.begin()}; it != m_entries.end();) {
+        if (it->asset == asset) {
+            m_bytes -= it->logo.url.size();
+            it = m_entries.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    // Larger than the whole cache (no logo of the rules is: at most 44 KiB of URL): given, not kept.
+    if (logo.url.size() > MAX_BYTES) return;
+    m_entries.push_front({asset, logo});
+    m_bytes += logo.url.size();
+    while (!m_entries.empty() && (m_entries.size() > MAX_ENTRIES || m_bytes > MAX_BYTES)) {
         m_bytes -= m_entries.back().logo.url.size();
         m_entries.pop_back();
     }
-    return ToJson(asset, *logo);
+}
+
+size_t LogoCache::Bytes() const
+{
+    std::lock_guard lock{m_mutex};
+    return m_bytes;
+}
+
+size_t LogoCache::Size() const
+{
+    std::lock_guard lock{m_mutex};
+    return m_entries.size();
+}
+
+size_t LogoCache::CountedBytes() const
+{
+    std::lock_guard lock{m_mutex};
+    size_t n{0};
+    for (const Entry& e : m_entries) n += e.logo.url.size();
+    return n;
 }
 
 UniValue LogoCache::ToJson(const std::string& asset, const Logo& logo)
