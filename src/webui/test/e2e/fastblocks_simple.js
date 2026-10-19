@@ -47,7 +47,7 @@
       return p.active && p.lastposslot >= 0 && p.anchors > 0;
     }, 180000);
     await waitFor('the deposit credited', async () => (await rpc('getbalances', [], W_)).mine.trusted >= 20, 240000);
-    await check('the pages of Advanced out of the sidebar', !/Finality|Slashing/.test(text('nav.sidebar .scroll')) && /Staking/.test(text('nav.sidebar .scroll')), text('nav.sidebar .scroll'));
+    await check('the pages of Advanced out of the sidebar', !/Finality|Slashing/.test(text('nav.sidebar .scroll')) && /Stake and earn/.test(text('nav.sidebar .scroll')), text('nav.sidebar .scroll'));
 
     // --- The home: one card, in words ---
     T().savePrefs({ tipsDone: false });
@@ -57,9 +57,12 @@
     await check('the home has one card of FastBlocks, in words', $$('.fb-cards .card').length === 1 && !text('.fb-cards').includes('Next slots'));
     await shot('home-midnight');
 
-    // --- Staking: the card ---
-    T().go('staking');
+    // --- Staking: the card, opened from its entry of the sidebar ("Stake and earn" in Simple mode) ---
+    const entry = $$('nav.sidebar .scroll button').find((b) => b.textContent.trim().replace(/\s+/g, ' ').startsWith('Stake and earn'));
+    await check('the sidebar has Stake and earn', !!entry, text('nav.sidebar .scroll'));
+    entry.click();
     await waitFor('the card', () => $('#fb-simple-state'), 30000);
+    await check('Stake and earn opens Staking', T().nav.page === 'staking' && entry.getAttribute('aria-current') === 'page', `${T().nav.page}`);
     await check('Staking says Earning', text('#fb-simple-state') === 'Earning', text('#fb-simple-state'));
     await check('the validators and the schedule are not shown', !$$('[role="tab"]').some((t) => /Validators|Schedule/.test(t.textContent)));
     set(await waitFor('the amount', () => $('#fb-simple-amount')), '2');

@@ -10,7 +10,7 @@ webui_local_e2e(fastblocks 49400
   --app-arg=-validatorkeyfile={tmp}/validator.key
   --app-arg=-validatorpayout=rsc1qqghd0tuw5wc9k0ec22t8qr7gy3tz5c5sx6gvwx
   --app-arg=-validatoranchorbid=0.00001)
-# Simple mode (fastblocks_simple.js): the home's one card, the Staking card, a stake through it and Stop staking
+# Simple mode (fastblocks_simple.js): the home's one card, the Staking card opened from "Stake and earn" of the sidebar, a stake through it and Stop staking
 # (a danger on the desktop), the node a validator as for fastblocks.js.
 webui_local_e2e(fastblocks_simple 49410
   --js-var SIMPLE=true
