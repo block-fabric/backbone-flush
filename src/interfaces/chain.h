@@ -209,6 +209,13 @@ public:
     virtual bool getBitAssetReleasable(const bitassets::AssetId& asset) = 0;
     //! BitAssets: the asset a number names (its number in the order of registration), if any.
     virtual std::optional<bitassets::AssetId> getBitAssetOfSeq(uint32_t seq) = 0;
+    //! The outputs a transaction of a block spent, in the order of its inputs, from the undo data of that block (none if the
+    //! block is not in the active chain, is pruned, or does not hold the transaction): who paid it, without an index.
+    virtual std::optional<std::vector<CTxOut>> getSpentOutputs(const uint256& block_hash, const Txid& txid) = 0;
+    //! BitAssets: the logo of an asset, if it has one.
+    virtual std::optional<bitassets::LogoRecord> getBitAssetLogo(const bitassets::AssetId& asset) = 0;
+    //! BitAssets: whether the next block has the rules of the logos (SidechainParams::logo_height).
+    virtual bool bitAssetsLogosActive() = 0;
     //! BitAssets: how deep a reservation is before a registration reveals it (bitassets_reveal_depth).
     virtual int getBitAssetsRevealDepth() = 0;
     //! BitAssets: the height of the block that made a reservation not revealed yet, if it is in one.

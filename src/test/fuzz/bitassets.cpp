@@ -9,6 +9,7 @@
 // auctions that hold it and of its pools with providers are what the tables say; and every asset's
 // supply is what its coins, pools and auctions hold.
 
+#include <bitassets/logo.h>
 #include <bitassets/state.h>
 #include <primitives/transaction.h>
 #include <sidechain/store.h>
@@ -277,5 +278,18 @@ FUZZ_TARGET(bitassets_state, .init = initialize_bitassets)
         reverted.Revert(read);
         assert(sidechain::StoreHash(reverted) == before);
         CheckIndexes(reverted);
+    }
+}
+
+FUZZ_TARGET(bitassets_logo)
+{
+    // The check of a logo never reads past its input, and what it takes is a PNG or JPEG of at most MAX_LOGO_BYTES.
+    std::string reason;
+    const auto format{bitassets::CheckLogo(buffer, reason)};
+    if (format) {
+        assert(!buffer.empty() && buffer.size() <= bitassets::MAX_LOGO_BYTES);
+        assert(*format == bitassets::LogoFormat::PNG ? buffer[0] == 0x89 : buffer[0] == 0xFF && buffer[1] == 0xD8);
+    } else {
+        assert(reason.starts_with("bad-ba-logo-"));
     }
 }

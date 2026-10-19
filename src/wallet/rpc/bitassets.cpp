@@ -6,9 +6,12 @@
 
 #include <addresstype.h>
 #include <bitassets/dex.h>
+#include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
+#include <coins.h>
 #include <core_io.h>
+#include <crypto/sha256.h>
 #include <hash.h>
 #include <key_io.h>
 #include <rpc/util.h>
@@ -200,7 +203,8 @@ struct Out {
  * Make, sign and send a BitAssets transaction: the outputs `outs` first, in this order, then the
  * marker (burning `chn_in`, the CHN the operation takes in), then the change.
  */
-CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operation, const std::vector<Out>& outs, const std::vector<COutPoint>& inputs, CAmount chn_in = 0)
+CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operation, const std::vector<Out>& outs, const std::vector<COutPoint>& inputs, CAmount chn_in = 0,
+                     const std::optional<CFeeRate>& fee_rate = std::nullopt)
 {
     Marker marker;
     marker.operation = std::move(operation);
@@ -213,6 +217,7 @@ CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operat
 
     CCoinControl coin_control;
     for (const COutPoint& input : inputs) coin_control.Select(input);
+    if (fee_rate) coin_control.m_feerate = *fee_rate;
     auto res{CreateTransaction(wallet, recipients, /*change_pos=*/recipients.size(), coin_control, /*sign=*/true)};
     if (!res) throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
     const CTransactionRef tx{res->tx};
@@ -328,6 +333,36 @@ int RevealHeight(CWallet& wallet, int made)
 {
     const int64_t deep{int64_t{made} + wallet.chain().getBitAssetsRevealDepth()};
     return static_cast<int>(std::max<int64_t>(wallet.chain().getBitAssetsHeight(), deep));
+}
+
+/**
+ * A logo given to an RPC: base64 of a PNG or JPEG the rules take (bitassets/logo.h), checked here so that
+ * the wallet never pays for a transaction the rules refuse. An empty string, if `allow_empty`: none.
+ */
+std::vector<unsigned char> ParseLogo(const UniValue& value, bool allow_empty)
+{
+    const std::string& text{value.get_str()};
+    // Base64 of the largest logo, and no more: nothing larger is decoded.
+    if (text.size() > (bitassets::MAX_LOGO_BYTES + 2) / 3 * 4) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (bad-ba-logo-oversize): a logo is at most %u bytes", bitassets::MAX_LOGO_BYTES));
+    const auto bytes{DecodeBase64(text)};
+    if (!bytes) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is not base64");
+    if (bytes->empty()) {
+        if (!allow_empty) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is empty");
+        return {};
+    }
+    std::string reason;
+    if (!bitassets::CheckLogo(*bytes, reason)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (%s): a PNG or a JPEG of exactly %ux%u pixels, at most %u bytes, "
+                                                            "without metadata or chunks other than the image's (see doc/bitassets.md, Logos)",
+                                                            reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+    }
+    return *bytes;
+}
+
+/** The logos of assets are in the rules from the next block, or a logo is refused here. */
+void NeedLogos(CWallet& wallet)
+{
+    if (!wallet.chain().bitAssetsLogosActive()) throw JSONRPCError(RPC_WALLET_ERROR, "The logos of assets are not in the rules of the chain yet (logo_height in getbitassetsinfo)");
 }
 
 UniValue TxResult(const CTransactionRef& tx)
@@ -465,6 +500,7 @@ RPCMethod registerasset()
             {"decimals", RPCArg::Type::NUM, RPCArg::Default{0}, strprintf("The decimals it is shown with, at most %u: with 2, 1 is 100 units", bitassets::MAX_DECIMALS)},
             {"data", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "Its data", bitassets::DataArgs()},
             {"public", RPCArg::Type::BOOL, RPCArg::Default{true}, "Publish the name, so that it is listed and found by name. Otherwise only its hash is on the chain"},
+            {"logo", RPCArg::Type::STR, RPCArg::Optional::OMITTED, strprintf("Its logo, in base64: a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata (see setassetlogo)", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES)},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -502,6 +538,10 @@ RPCMethod registerasset()
     reg.supply = supply;
     reg.decimals = decimals;
     if (!request.params[3].isNull()) reg.data = bitassets::ParseData(request.params[3]);
+    if (!request.params[5].isNull() && !request.params[5].get_str().empty()) {
+        NeedLogos(*pwallet);
+        reg.logo = ParseLogo(request.params[5], /*allow_empty=*/false);
+    }
     if (request.params[4].isNull() || request.params[4].get_bool()) {
         // Published, it would read as another asset's number where names are shown with theirs.
         if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, std::string{NAME_MIMICS_NUMBER} + " (register it unpublished: public false)");
@@ -823,6 +863,70 @@ RPCMethod updateasset()
     if (updates.Empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to change");
     const auto [inputs, total]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
     return TxResult(Send(*pwallet, bitassets::UpdateAsset{asset.id, updates}, {{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset.id)}}, inputs));
+},
+    };
+}
+
+RPCMethod setassetlogo()
+{
+    return RPCMethod{
+        "setassetlogo",
+        strprintf("Set the logo of an asset this wallet controls, or remove it (an empty logo). The logo goes whole into the transaction:\n"
+                  "a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata (no text, Exif, ICC profile or comment) and\n"
+                  "nothing after its end; the rules check its structure, and refuse anything else. It replaces the logo before.", bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES) +
+            HELP_REQUIRING_PASSPHRASE,
+        {
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"logo", RPCArg::Type::STR, RPCArg::Optional::NO, "The logo, in base64; \"\" removes it"},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {
+                {"fee_rate", RPCArg::Type::AMOUNT, RPCArg::DefaultHint{"the wallet's fee rate"}, "The fee rate, in " + CURRENCY_ATOM + "/vB"},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "hash", /*optional=*/true, "SHA-256 of the logo (none when removed)"},
+            {RPCResult::Type::NUM, "size", "Its size in bytes (0 when removed)"},
+            {RPCResult::Type::STR_AMOUNT, "fee", "The network fee paid"},
+        }},
+        RPCExamples{HelpExampleCli("setassetlogo", "\"GOLD\" \"iVBORw0KGgo...\"") + HelpExampleCli("setassetlogo", "\"GOLD\" \"\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
+    if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "CHN has no logo here");
+    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: its control coin was burned");
+    NeedLogos(*pwallet);
+    const std::vector<unsigned char> logo{ParseLogo(request.params[1], /*allow_empty=*/true)};
+    if (logo.empty() && !pwallet->chain().getBitAssetLogo(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "This asset has no logo to remove");
+    std::optional<CFeeRate> fee_rate;
+    if (!request.params[2].isNull()) {
+        const UniValue& rate{request.params[2].find_value("fee_rate")};
+        if (!rate.isNull()) fee_rate = CFeeRate{AmountFromValue(rate, /*decimals=*/3)};
+    }
+    const auto [inputs, total]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
+    const CTransactionRef tx{Send(*pwallet, bitassets::SetLogo{asset.id, logo}, {{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset.id)}}, inputs, 0, fee_rate)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    if (!logo.empty()) {
+        uint256 hash;
+        CSHA256().Write(logo.data(), logo.size()).Finalize(hash.data());
+        result.pushKV("hash", HexStr(hash));
+    }
+    result.pushKV("size", static_cast<uint64_t>(logo.size()));
+    CAmount fee{0};
+    {
+        LOCK(pwallet->cs_wallet);
+        CAmount in{0}, out{tx->GetValueOut()};
+        for (const CTxIn& txin : tx->vin) {
+            if (const CWalletTx* prev{pwallet->GetWalletTx(txin.prevout.hash)}) in += prev->GetTx()->vout[txin.prevout.n].nValue;
+        }
+        fee = in - out;
+    }
+    result.pushKV("fee", ValueFromAmount(fee));
+    return result;
 },
     };
 }
@@ -1661,6 +1765,319 @@ RPCMethod releaseasset()
     };
 }
 
+RPCMethod listassettransactions()
+{
+    const std::vector<RPCResult> party{
+        {RPCResult::Type::STR, "address", "An address, \"unknown\" where the outputs a transaction spent cannot be read (a pruned block)"},
+        {RPCResult::Type::BOOL, "mine", "Whether it is this wallet's"},
+    };
+    return RPCMethod{
+        "listassettransactions",
+        "The asset transactions of this wallet, newest first, one entry per asset each moves: what kind of move it is, the\n"
+        "asset and amount (signed), the network fee the wallet paid, and who the other side is: the addresses an asset was\n"
+        "sent to, or the addresses that paid a transaction the wallet received an asset by (the outputs it spent, from the\n"
+        "undo data of its block or the mempool: no index; \"unknown\" when they cannot be read).",
+        {
+            {"count", RPCArg::Type::NUM, RPCArg::Default{100}, "How many entries, at most 1000"},
+            {"skip", RPCArg::Type::NUM, RPCArg::Default{0}, "How many to skip"},
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Only the entries of this asset (" + std::string{bitassets::ASSET_ARG_HELP} + ")"},
+        },
+        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", ""},
+            {RPCResult::Type::NUM_TIME, "time", "When the wallet saw it"},
+            {RPCResult::Type::NUM, "confirmations", ""},
+            {RPCResult::Type::STR_HEX, "blockhash", /*optional=*/true, ""},
+            {RPCResult::Type::NUM, "blockheight", /*optional=*/true, ""},
+            {RPCResult::Type::STR, "category", "send, receive, register, mint, burn, swap, pool_add, pool_remove, auction, bid, collect, logo, update, control, reserve, release"},
+            {RPCResult::Type::STR_HEX, "asset", /*optional=*/true, "The asset (none for a reservation)"},
+            {RPCResult::Type::STR, "label", /*optional=*/true, "Its label"},
+            {RPCResult::Type::STR, "seq", /*optional=*/true, "Its number"},
+            {RPCResult::Type::NUM, "decimals", /*optional=*/true, ""},
+            {RPCResult::Type::NUM, "amount", /*optional=*/true, "How much of it moved, in whole assets (exact)"},
+            {RPCResult::Type::NUM, "sign", "+1 into the wallet, -1 out of it, 0 neither (a change of its data, a logo)"},
+            {RPCResult::Type::BOOL, "at_least", /*optional=*/true, "The amount is the least the transaction asked for (a result not read)"},
+            {RPCResult::Type::BOOL, "at_most", /*optional=*/true, "The amount is the most it offered (a deposit into a pool)"},
+            {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The network fee, when the wallet paid all of it"},
+            {RPCResult::Type::ARR, "to", "Where the asset went (outputs of others first)", {{RPCResult::Type::OBJ, "", "", party}}},
+            {RPCResult::Type::ARR, "from", "Who paid the transaction, for what the wallet received", {{RPCResult::Type::OBJ, "", "", party}}},
+            {RPCResult::Type::BOOL, "abandoned", ""},
+        }}}},
+        RPCExamples{HelpExampleCli("listassettransactions", "") + HelpExampleCli("listassettransactions", "20 0 \"GOLD\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    // It reads, and needs no key: a locked wallet answers too.
+    const std::shared_ptr<CWallet> pwallet{GetWalletForJSONRPCRequest(request)};
+    if (!pwallet) return UniValue::VNULL;
+    pwallet->BlockUntilSyncedToCurrentChain();
+    const int count{request.params[0].isNull() ? 100 : request.params[0].getInt<int>()};
+    const int skip{request.params[1].isNull() ? 0 : request.params[1].getInt<int>()};
+    if (count < 0 || count > 1000 || skip < 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "count: 0 to 1000; skip: 0 or more");
+    std::optional<AssetId> only;
+    if (!request.params[2].isNull()) only = ParseAsset(*pwallet, request.params[2]).id;
+
+    struct Party {
+        std::string address;
+        bool mine;
+    };
+    struct Row {
+        int64_t time;
+        Txid txid;
+        int confirmations;
+        std::optional<std::pair<uint256, int>> block;
+        std::string category;
+        std::optional<AssetId> asset;
+        uint64_t amount{0};
+        bool has_amount{false};
+        int sign{0};
+        bool at_least{false}, at_most{false};
+        std::optional<CAmount> fee;
+        std::vector<Party> to, from;
+        bool abandoned;
+    };
+    struct Seen {
+        CTransactionRef tx;
+        int64_t time;
+        int confirmations;
+        std::optional<std::pair<uint256, int>> block;
+        bool any_mine, all_mine;
+        CAmount debit;
+        std::vector<bool> owned;
+        bool abandoned;
+        Marker marker;
+    };
+    std::vector<Seen> seen;
+    {
+        LOCK(pwallet->cs_wallet);
+        for (const auto& [txid, wtx] : pwallet->mapWallet) {
+            const CTransactionRef tx{wtx.GetTx()};
+            auto marker{bitassets::GetMarker(*tx)};
+            if (!marker) continue;
+            const int depth{pwallet->GetTxDepthInMainChain(wtx)};
+            if (depth < 0) continue; // conflicted
+            Seen s{tx, wtx.GetTxTime(), depth, std::nullopt, false, AllInputsMine(*pwallet, *tx), 0, {}, wtx.isAbandoned(), std::move(*marker)};
+            if (const auto* conf{wtx.state<TxStateConfirmed>()}) s.block = std::make_pair(conf->confirmed_block_hash, conf->confirmed_block_height);
+            for (const CTxIn& in : tx->vin) s.any_mine |= InputIsMine(*pwallet, in);
+            if (s.all_mine) s.debit = CachedTxGetDebit(*pwallet, wtx, /*avoid_reuse=*/false);
+            for (const CTxOut& out : tx->vout) s.owned.push_back(pwallet->IsMine(out));
+            seen.push_back(std::move(s));
+        }
+    }
+    const auto address{[&](const CScript& script) {
+        CTxDestination dest;
+        return ExtractDestination(script, dest) ? EncodeDestination(dest) : std::string{"script " + HexStr(script).substr(0, 16)};
+    }};
+    std::vector<Row> rows;
+    for (const Seen& s : seen) {
+        const CTransaction& tx{*s.tx};
+        const Txid txid{tx.GetHash()};
+        // What each output carries: the marker says it for the outputs it names a token for; a result output, the state
+        // says while it is not spent.
+        std::map<uint32_t, Token> tokens;
+        for (const bitassets::MarkerOutput& out : s.marker.outputs) {
+            if (out.token) {
+                Token t{*out.token};
+                if (t.id.IsNull()) t.id = txid.ToUint256();
+                tokens[out.n] = t;
+            } else if (out.n < tx.vout.size() && s.owned[out.n]) {
+                if (const auto t{pwallet->chain().getBitAssetsToken(COutPoint{txid, out.n})}) tokens[out.n] = *t;
+            }
+        }
+        const auto base{[&](std::string category) {
+            Row r{s.time, txid, s.confirmations, s.block, std::move(category)};
+            r.abandoned = s.abandoned;
+            if (s.all_mine) r.fee = s.debit - tx.GetValueOut();
+            return r;
+        }};
+        const auto add{[&](std::string category, const AssetId& asset, std::optional<uint64_t> amount, int sign, bool at_least = false, bool at_most = false) {
+            if (asset.IsNull()) return; // CHN: the transactions of the wallet say it
+            Row r{base(std::move(category))};
+            r.asset = asset;
+            r.sign = sign;
+            if (amount) {
+                r.amount = *amount;
+                r.has_amount = true;
+            }
+            r.at_least = at_least;
+            r.at_most = at_most;
+            for (const auto& [n, t] : tokens) {
+                if (t.id != asset || (t.kind != Token::Kind::ASSET && t.kind != Token::Kind::CONTROL)) continue;
+                const Party p{address(tx.vout[n].scriptPubKey), s.owned[n]};
+                // Change back to the wallet is no destination of a send.
+                if (sign < 0 && p.mine) continue;
+                // What came in: to the wallet's outputs (the sender's change is theirs).
+                if (sign > 0 && !p.mine && !s.any_mine) continue;
+                if (std::none_of(r.to.begin(), r.to.end(), [&](const Party& q) { return q.address == p.address; })) r.to.push_back(p);
+            }
+            std::stable_partition(r.to.begin(), r.to.end(), [](const Party& p) { return !p.mine; });
+            rows.push_back(std::move(r));
+        }};
+        const auto received{[&](const AssetId& asset, Token::Kind kind) {
+            uint64_t sum{0};
+            for (const auto& [n, t] : tokens) {
+                if (t.id == asset && t.kind == kind && s.owned[n]) sum += t.amount;
+            }
+            return sum;
+        }};
+        const auto sent{[&](const AssetId& asset, Token::Kind kind) {
+            uint64_t sum{0};
+            for (const auto& [n, t] : tokens) {
+                if (t.id == asset && t.kind == kind && !s.owned[n]) sum += t.amount;
+            }
+            return sum;
+        }};
+        std::set<AssetId> assets;
+        for (const auto& [n, t] : tokens) {
+            if (t.kind == Token::Kind::ASSET || t.kind == Token::Kind::CONTROL) assets.insert(t.id);
+        }
+        const size_t first{rows.size()};
+        if (!s.any_mine) {
+            // From someone else: what came to the wallet's outputs.
+            for (const AssetId& asset : assets) {
+                if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("receive", asset, got, +1);
+                if (received(asset, Token::Kind::CONTROL)) add("control", asset, std::nullopt, +1);
+            }
+        } else if (!s.marker.operation) {
+            for (const AssetId& asset : assets) {
+                if (const uint64_t gone{sent(asset, Token::Kind::ASSET)}) add("send", asset, gone, -1);
+                if (sent(asset, Token::Kind::CONTROL)) add("control", asset, std::nullopt, -1);
+            }
+        } else {
+            std::visit([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, bitassets::Reserve>) {
+                    rows.push_back(base("reserve"));
+                } else if constexpr (std::is_same_v<T, bitassets::Register>) {
+                    add("register", op.name, op.supply, +1);
+                } else if constexpr (std::is_same_v<T, bitassets::Mint>) {
+                    add("mint", op.asset, op.amount, +1);
+                } else if constexpr (std::is_same_v<T, bitassets::UpdateAsset>) {
+                    add("update", op.asset, std::nullopt, 0);
+                } else if constexpr (std::is_same_v<T, bitassets::SetLogo>) {
+                    add("logo", op.asset, std::nullopt, 0);
+                } else if constexpr (std::is_same_v<T, bitassets::ReleaseAsset>) {
+                    add("release", op.asset, std::nullopt, 0);
+                } else if constexpr (std::is_same_v<T, bitassets::Burn>) {
+                    for (const Token& t : op.tokens) {
+                        if (t.kind == Token::Kind::ASSET) add("burn", t.id, t.amount, -1);
+                        if (t.kind == Token::Kind::CONTROL) add("control", t.id, std::nullopt, -1);
+                    }
+                } else if constexpr (std::is_same_v<T, bitassets::Swap>) {
+                    add("swap", op.asset_in, op.amount_in, -1);
+                    const uint64_t got{received(op.asset_out, Token::Kind::ASSET)};
+                    add("swap", op.asset_out, got ? got : op.min_out, +1, /*at_least=*/!got);
+                } else if constexpr (std::is_same_v<T, bitassets::AddLiquidity>) {
+                    add("pool_add", op.asset_a, op.amount_a, -1, false, /*at_most=*/true);
+                    add("pool_add", op.asset_b, op.amount_b, -1, false, /*at_most=*/true);
+                } else if constexpr (std::is_same_v<T, bitassets::RemoveLiquidity>) {
+                    const uint64_t a{received(op.asset_a, Token::Kind::ASSET)}, b{received(op.asset_b, Token::Kind::ASSET)};
+                    add("pool_remove", op.asset_a, a ? a : op.min_a, +1, !a);
+                    add("pool_remove", op.asset_b, b ? b : op.min_b, +1, !b);
+                } else if constexpr (std::is_same_v<T, bitassets::CreateAuction>) {
+                    add("auction", op.base, op.base_amount, -1);
+                } else if constexpr (std::is_same_v<T, bitassets::Bid>) {
+                    if (const auto auction{pwallet->chain().getBitAssetsAuction(op.auction)}) {
+                        add("bid", auction->quote, op.quote_amount, -1);
+                        const uint64_t got{received(auction->base, Token::Kind::ASSET)};
+                        add("bid", auction->base, got ? got : op.min_base, +1, !got);
+                    }
+                } else if constexpr (std::is_same_v<T, bitassets::Collect>) {
+                    for (const AssetId& asset : assets) {
+                        if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("collect", asset, got, +1);
+                    }
+                    if (rows.size() == first) rows.push_back(base("collect"));
+                } else {
+                    // An operation added later (Layers' own): what moved, as a transfer.
+                    for (const AssetId& asset : assets) {
+                        if (const uint64_t gone{sent(asset, Token::Kind::ASSET)}) add("send", asset, gone, -1);
+                        if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("receive", asset, got, +1);
+                    }
+                }
+            }, *s.marker.operation);
+            // Units sent to others besides what the operation does (a mint to another address is its "to").
+        }
+        if (rows.size() == first) continue;
+        // Who paid what the wallet received from someone else: the outputs the transaction spent.
+        if (!s.any_mine) {
+            std::vector<Party> from;
+            std::optional<std::vector<CTxOut>> spent;
+            if (s.block) {
+                spent = pwallet->chain().getSpentOutputs(s.block->first, txid);
+            } else {
+                std::map<COutPoint, Coin> coins;
+                for (const CTxIn& in : tx.vin) coins[in.prevout];
+                pwallet->chain().findCoins(coins);
+                std::vector<CTxOut> outs;
+                for (const CTxIn& in : tx.vin) {
+                    if (coins[in.prevout].IsSpent()) break;
+                    outs.push_back(coins[in.prevout].out);
+                }
+                if (outs.size() == tx.vin.size()) spent = std::move(outs);
+            }
+            if (spent) {
+                LOCK(pwallet->cs_wallet);
+                for (const CTxOut& out : *spent) {
+                    const Party p{address(out.scriptPubKey), pwallet->IsMine(out)};
+                    if (std::none_of(from.begin(), from.end(), [&](const Party& q) { return q.address == p.address; })) from.push_back(p);
+                }
+            } else {
+                from.push_back({"unknown", false});
+            }
+            for (size_t i{first}; i < rows.size(); ++i) rows[i].from = from;
+        }
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { if (a.time != b.time) return a.time > b.time;
+        // Seen in the same second: the newer is the less deep.
+        if (a.confirmations != b.confirmations) return a.confirmations < b.confirmations;
+        return a.txid < b.txid; });
+    UniValue result(UniValue::VARR);
+    int skipped{0};
+    for (const Row& r : rows) {
+        if (only && (!r.asset || *r.asset != *only)) continue;
+        if (skipped++ < skip) continue;
+        if (result.size() >= static_cast<size_t>(count)) break;
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("txid", r.txid.GetHex());
+        obj.pushKV("time", r.time);
+        obj.pushKV("confirmations", r.confirmations);
+        if (r.block) {
+            obj.pushKV("blockhash", r.block->first.GetHex());
+            obj.pushKV("blockheight", r.block->second);
+        }
+        obj.pushKV("category", r.category);
+        if (r.asset) {
+            const auto record{pwallet->chain().getBitAsset(*r.asset)};
+            const uint8_t decimals{record ? record->decimals : uint8_t{0}};
+            obj.pushKV("asset", r.asset->GetHex());
+            obj.pushKV("label", bitassets::AssetLabel(*r.asset, record ? &*record : nullptr));
+            if (record) obj.pushKV("seq", bitassets::FormatSeq(record->seq));
+            obj.pushKV("decimals", decimals);
+            if (r.has_amount) obj.pushKV("amount", bitassets::AmountToJSON(r.amount, decimals));
+        }
+        obj.pushKV("sign", r.sign);
+        if (r.at_least) obj.pushKV("at_least", true);
+        if (r.at_most) obj.pushKV("at_most", true);
+        if (r.fee) obj.pushKV("fee", ValueFromAmount(*r.fee));
+        const auto parties{[](const std::vector<Party>& list) {
+            UniValue arr(UniValue::VARR);
+            for (const Party& p : list) {
+                UniValue o(UniValue::VOBJ);
+                o.pushKV("address", p.address);
+                o.pushKV("mine", p.mine);
+                arr.push_back(std::move(o));
+            }
+            return arr;
+        }};
+        obj.pushKV("to", parties(r.to));
+        obj.pushKV("from", parties(r.from));
+        obj.pushKV("abandoned", r.abandoned);
+        result.push_back(std::move(obj));
+    }
+    return result;
+},
+    };
+}
+
 RPCMethod listassetactivity()
 {
     return RPCMethod{
@@ -1766,6 +2183,10 @@ RPCMethod listassetactivity()
                 } else if constexpr (std::is_same_v<T, bitassets::SettleOracleContract>) {
                     operation = "settle";
                     summary = "Settled an oracle contract";
+                } else if constexpr (std::is_same_v<T, bitassets::SetLogo>) {
+                    operation = "logo";
+                    summary = op.logo.empty() ? "Removed the logo of " + LabelOfAsset(*pwallet, op.asset)
+                                              : strprintf("Set the logo of %s (%u bytes)", LabelOfAsset(*pwallet, op.asset), op.logo.size());
                 }
             }, *e.marker.operation);
         } else {

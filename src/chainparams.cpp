@@ -39,7 +39,9 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
         }
 
         const auto deployment_name{arg.substr(0, found)};
-        if (deployment_name == "feesplit") {
+        if (deployment_name == "logo") {
+            options.logo_height = *height;
+        } else if (deployment_name == "feesplit") {
             options.fee_split_height = *height;
         } else if (deployment_name == "dex") {
             options.dex_height = *height;
