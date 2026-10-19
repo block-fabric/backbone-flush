@@ -1082,6 +1082,7 @@ RPCMethod mintasset();
 RPCMethod burnasset();
 RPCMethod updateasset();
 RPCMethod setassetlogo();
+RPCMethod listassettransactions();
 RPCMethod transferassetcontrol();
 RPCMethod fixassetsupply();
 RPCMethod swapasset();
@@ -1168,6 +1169,7 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &burnasset},
         {"wallet", &updateasset},
         {"wallet", &setassetlogo},
+        {"wallet", &listassettransactions},
         {"wallet", &transferassetcontrol},
         {"wallet", &fixassetsupply},
         {"wallet", &swapasset},
