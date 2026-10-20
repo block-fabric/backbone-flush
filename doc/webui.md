@@ -651,6 +651,9 @@ only in `<bin>d`):
   (5 minutes). One confirmation per request.
 - `describeconfirmation "method" [params] (wallet)` describes a confirmed RPC method and runs nothing.
 - `webuievents (since timeout)` gives the events of the node (tip, wallets) to the app, in order.
+- `webuichosenfile "path" (write)`: the app, right after its own native chooser answered, gets a one-time
+  token for that file (absolute and canonical paths only: no link, no `..`); a request names files only
+  by such tokens (`webuihost … files`), never by a path, so the pages cannot name a file of their own.
 
 A host method that keeps something for its question (a prepared send) keeps it while the question is
 carried out to the app unanswered (`WalletApi`, `once`). `HOST_API` (remotehost.h and pack.mjs) is the

@@ -13,6 +13,7 @@
 - webuievents gives the events of the node in order.
 """
 
+import os
 import shutil
 
 from test_framework.test_framework import BitcoinTestFramework
@@ -125,6 +126,26 @@ class DescribeConfirmationTest(BitcoinTestFramework):
         assert_equal(hello["phase"], "ready")
         assert_equal(hello["info"]["embedded"], True)
         assert_equal(hello["info"]["network"], "regtest")
+
+        self.log.info("files: only those chosen in the app's chooser, by token, never a path of the pages")
+        backup = os.path.realpath(os.path.join(self.options.tmpdir, "backup-main.dat"))
+        request = {"kind": "host", "method": "wallet.backup", "params": {"wallet": "main", "file": backup}}
+        # A path the pages name: refused, nothing written.
+        assert_raises_rpc_error(-32600, "Only a file chosen by the user can be written", node.webuihost, request)
+        # A path given where a token goes: refused.
+        assert_raises_rpc_error(-8, "a token of a file chosen in the app is needed", node.webuihost, request, "", "", [backup])
+        assert not os.path.exists(backup)
+        # A link or ".." in the path: not taken.
+        assert_raises_rpc_error(-8, "not a canonical path", node.webuichosenfile, os.path.join(os.path.dirname(backup), "x", "..", "backup-main.dat"), True)
+        assert_raises_rpc_error(-8, "not an absolute path", node.webuichosenfile, "backup-main.dat", True)
+        # Chosen to be read, then written: refused.
+        read_only = node.webuichosenfile(backup, False)
+        assert_raises_rpc_error(-32600, "Only a file chosen by the user can be written", node.webuihost, request, "", "", [read_only])
+        # Chosen to be written: written, once.
+        token = node.webuichosenfile(backup, True)
+        assert_equal(node.webuihost(request, "", "", [token])["result"], backup)
+        assert os.path.exists(backup)
+        assert_raises_rpc_error(-8, "unknown, used or expired", node.webuihost, request, "", "", [token])
 
         self.log.info("the events of the node, in order")
         first = node.webuievents(0, 0)

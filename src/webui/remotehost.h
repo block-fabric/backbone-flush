@@ -114,7 +114,38 @@ private:
     bool m_stopped GUARDED_BY(m_mutex){false};
 };
 
-/** Add webuihost, describeconfirmation and webuievents to the table (rpc_extra::g_register of the daemon). */
+/**
+ * The files the user chose in the app's own chooser (a wallet backup to write, a file to hash): the app, right after its
+ * native chooser answered, gives the path here (webuichosenfile) and gets a one-time token for it; a request of the pages
+ * then names the token (webuihost files), never a path. A path is taken only absolute and already canonical (no "..",
+ * no symbolic link on the way, no relative part): what the user saw chosen is what is opened.
+ */
+class ChosenFiles
+{
+public:
+    struct File {
+        std::string path;
+        bool write{false};
+    };
+    static constexpr std::chrono::seconds EXPIRY{600};
+    static constexpr size_t MAX{32};
+    /** Why a path cannot be taken ("" when it can). */
+    static std::string Problem(const std::string& path);
+    /** A token for a chosen file. Throws std::runtime_error with the Problem. */
+    std::string Grant(const std::string& path, bool write, std::chrono::steady_clock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** The file of a token, once (gone after); nullopt for a token unknown, used or expired. */
+    std::optional<File> Take(const std::string& token, std::chrono::steady_clock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+
+private:
+    struct Entry {
+        File file;
+        std::chrono::steady_clock::time_point expires;
+    };
+    Mutex m_mutex;
+    std::map<std::string, Entry> m_entries GUARDED_BY(m_mutex);
+};
+
+/** Add webuihost, describeconfirmation, webuievents and webuichosenfile to the table (rpc_extra::g_register of the daemon). */
 void RegisterRpcCommands(CRPCTable& table);
 /** The node is shutting down: the host stops (the waits return, its handlers go). */
 void Interrupt();

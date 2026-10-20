@@ -23,6 +23,7 @@
 #include <support/cleanse.h>
 #include <tinyformat.h>
 #include <util/chaintype.h>
+#include <util/fs.h>
 #include <util/strencodings.h>
 #include <webui/bridge.h>
 #include <webui/chainconfig.h>
@@ -42,6 +43,7 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <set>
 
@@ -146,6 +148,47 @@ size_t Bindings::Size() const
     return m_entries.size();
 }
 
+std::string ChosenFiles::Problem(const std::string& path)
+{
+    if (path.empty() || path.size() > 4096 || path.find('\0') != std::string::npos) return "not a path";
+    const fs::path p{fs::PathFromString(path)};
+    if (!p.is_absolute()) return "not an absolute path";
+    std::error_code ec;
+    const fs::path canonical{std::filesystem::weakly_canonical(p, ec)};
+    if (ec) return "the path cannot be resolved";
+    // As given, nothing resolved away: no "..", no ".", no symbolic link on the way, no doubled separator.
+    if (fs::PathToString(canonical) != path) return "not a canonical path (a link, \"..\" or \".\" in it)";
+    if (std::filesystem::is_symlink(p, ec)) return "a symbolic link";
+    if (std::filesystem::exists(p, ec) && !std::filesystem::is_regular_file(p, ec)) return "not a file";
+    return {};
+}
+
+std::string ChosenFiles::Grant(const std::string& path, bool write, std::chrono::steady_clock::time_point now)
+{
+    if (const std::string problem{Problem(path)}; !problem.empty()) throw std::runtime_error(problem);
+    std::array<unsigned char, 32> bytes;
+    GetStrongRandBytes(bytes);
+    const std::string token{HexStr(bytes)};
+    LOCK(m_mutex);
+    std::erase_if(m_entries, [&](const auto& e) { return e.second.expires <= now; });
+    if (m_entries.size() >= MAX) {
+        m_entries.erase(std::ranges::min_element(m_entries, {}, [](const auto& e) { return e.second.expires; }));
+    }
+    m_entries.emplace(token, Entry{File{path, write}, now + EXPIRY});
+    return token;
+}
+
+std::optional<ChosenFiles::File> ChosenFiles::Take(const std::string& token, std::chrono::steady_clock::time_point now)
+{
+    LOCK(m_mutex);
+    const auto it{m_entries.find(token)};
+    if (it == m_entries.end()) return std::nullopt;
+    const Entry entry{it->second};
+    m_entries.erase(it);
+    if (entry.expires <= now) return std::nullopt;
+    return entry.file;
+}
+
 void EventLog::Add(std::string batch)
 {
     {
@@ -199,8 +242,9 @@ struct Context {
     std::string wallet;
     std::string token;
     SecureString passphrase;
-    //! The files the user chose in the app's own chooser for this request (a backup, a file to hash).
-    std::set<std::string> files;
+    //! The files the user chose in the app's own chooser for this request (a backup, a file to hash): by path, whether
+    //! to write. Only from tokens of ChosenFiles, never a path given with the request.
+    std::map<std::string, bool> files;
     bool describe_only{false};
     //! A question was answered yes in this request already: a second one is not asked (it would run the first again).
     bool accepted{false};
@@ -309,7 +353,9 @@ public:
         context.passphrase = std::move(passphrase);
         if (files.isArray()) {
             for (const UniValue& f : files.getValues()) {
-                if (f.isStr()) context.files.insert(f.get_str());
+                const auto file{f.isStr() ? m_files.Take(f.get_str(), std::chrono::steady_clock::now()) : std::nullopt};
+                if (!file) throw JSONRPCError(RPC_INVALID_PARAMETER, "files: a token of a file chosen in the app is needed (unknown, used or expired)");
+                context.files[file->path] = context.files[file->path] || file->write;
             }
         }
         const ContextScope scope{context};
@@ -370,6 +416,15 @@ public:
     UniValue Events(uint64_t since, std::chrono::milliseconds timeout) { return m_events.After(since, timeout); }
 
     Bindings& bindings() { return m_bindings; }
+
+    std::string ChooseFile(const std::string& path, bool write)
+    {
+        try {
+            return m_files.Grant(path, write, std::chrono::steady_clock::now());
+        } catch (const std::runtime_error& e) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("This file cannot be used: %s", e.what()));
+        }
+    }
 
 private:
     struct Parsed {
@@ -509,8 +564,12 @@ private:
         const guard::ConfirmFn confirm{[this](const Window::ConfirmDialog& dialog) { return Confirm(dialog); }};
         const guard::AskFn ask{[this](const Window::ConfirmDialog& dialog) { return Ask(dialog); }};
         // A file is the user's only when chosen in the app's own chooser for this request.
-        const auto chosen{[](const std::string& path) { return g_context && g_context->files.contains(path); }};
-        m_node_api = std::make_unique<NodeApi>(node, chosen, confirm);
+        const auto chosen{[](const std::string& path, bool write) {
+            if (!g_context) return false;
+            const auto it{g_context->files.find(path)};
+            return it != g_context->files.end() && (!write || it->second);
+        }};
+        m_node_api = std::make_unique<NodeApi>(node, [chosen](const std::string& path) { return chosen(path, false); }, confirm);
         m_node_api->Register(m_bridge);
 #if WEBUI_SIDECHAIN
         m_sidechain_api = std::make_unique<SidechainApi>(node, confirm);
@@ -519,7 +578,7 @@ private:
         confirm::KeysFn keys;
         confirm::FeeFn fee;
 #ifdef ENABLE_WALLET
-        m_wallet_api = std::make_unique<WalletApi>(node, [chosen](const std::string& path, bool) { return chosen(path); }, ask);
+        m_wallet_api = std::make_unique<WalletApi>(node, chosen, ask);
         m_wallet_api->Register(m_bridge);
         keys = [this](const std::string& wallet, Window::ConfirmDialog dialog, bool always, bool fee_unknown, const std::function<UniValue()>& run) {
             return m_wallet_api->WithKeys(wallet, std::move(dialog), always, fee_unknown, run);
@@ -549,6 +608,7 @@ private:
 #endif
     std::unique_ptr<confirm::ConfirmedRpc> m_confirmed;
     Bindings m_bindings;
+    ChosenFiles m_files;
     std::atomic<bool> m_stopped{false};
 };
 
@@ -637,7 +697,7 @@ RPCMethod webuihost()
             {"request", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::NO, "{kind: \"host\"|\"rpc\", method, params, wallet?}", {{"kind", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
             {"token", RPCArg::Type::STR, RPCArg::Default{""}, "the token of the question the user accepted"},
             {"passphrase", RPCArg::Type::STR, RPCArg::Default{""}, "the passphrase of the locked wallet, typed in the question"},
-            {"files", RPCArg::Type::ARR, RPCArg::Default{UniValue::VARR}, "files the user chose for this request in the app's own chooser", {{"file", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
+            {"files", RPCArg::Type::ARR, RPCArg::Default{UniValue::VARR}, "tokens (webuichosenfile) of the files the user chose for this request in the app's own chooser: never paths", {{"token", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
         },
         RPCResult{RPCResult::Type::OBJ, "", "", {
             {RPCResult::Type::ANY, "result", /*optional=*/true, "what the request answered"},
@@ -678,11 +738,31 @@ RPCMethod webuievents()
         }};
 }
 
+RPCMethod webuichosenfile()
+{
+    return RPCMethod{
+        "webuichosenfile",
+        "A file the user just chose in the native chooser of the app that shows this chain's pages: a one-time token for it, "
+        "valid 10 minutes, that a request of the pages names (webuihost files) to read or write it. Only an absolute, "
+        "canonical path (no link, no \"..\") is taken. The app calls it with what its own chooser answered, never with "
+        "a path of the pages.\n",
+        {
+            {"path", RPCArg::Type::STR, RPCArg::Optional::NO, "the file chosen"},
+            {"write", RPCArg::Type::BOOL, RPCArg::Default{false}, "chosen to be written (a backup)"},
+        },
+        RPCResult{RPCResult::Type::STR_HEX, "", "the token"},
+        RPCExamples{""},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
+            return GetHost(request)->ChooseFile(request.params[0].get_str(), !request.params[1].isNull() && request.params[1].get_bool());
+        }};
+}
+
 } // namespace
 
 void RegisterRpcCommands(CRPCTable& table)
 {
     static const CRPCCommand commands[]{
+        {"webui", &webuichosenfile},
         {"webui", &describeconfirmation},
         {"webui", &webuihost},
         {"webui", &webuievents},

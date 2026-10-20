@@ -8,11 +8,15 @@
 #include <webui/confirm.h>
 #include <webui/remotehost.h>
 
+#include <random.h>
+#include <tinyformat.h>
 #include <univalue.h>
+#include <util/fs.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <thread>
 
@@ -145,6 +149,43 @@ BOOST_AUTO_TEST_CASE(event_log)
     BOOST_CHECK(log.After(1'000'000, 0ms).find_value("reset").get_bool());
     log.Stop();
     BOOST_CHECK(log.After(log.After(0, 0ms).find_value("seq").getInt<uint64_t>(), 10s).find_value("batches").empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(remotehost_files_tests)
+
+BOOST_AUTO_TEST_CASE(chosen_files_only_by_token)
+{
+    const fs::path dir{fs::temp_directory_path() / fs::u8path(strprintf("remotehost-files-%d", FastRandomContext{}.rand32()))};
+    fs::create_directories(dir / "sub");
+    const fs::path canonical{fs::weakly_canonical(dir)};
+    const std::string file{fs::PathToString(canonical / "backup.dat")};
+    ChosenFiles files;
+    // Only absolute, canonical paths: nothing relative, no "..", no ".", no link, no folder.
+    BOOST_CHECK(ChosenFiles::Problem(file).empty());
+    BOOST_CHECK(!ChosenFiles::Problem("backup.dat").empty());
+    BOOST_CHECK(!ChosenFiles::Problem(fs::PathToString(canonical / "sub" / ".." / "backup.dat")).empty());
+    BOOST_CHECK(!ChosenFiles::Problem(fs::PathToString(canonical / "." / "backup.dat")).empty());
+    BOOST_CHECK(!ChosenFiles::Problem(fs::PathToString(canonical / "sub")).empty());
+    std::filesystem::create_symlink(canonical / "sub", canonical / "link");
+    BOOST_CHECK(!ChosenFiles::Problem(fs::PathToString(canonical / "link" / "x.dat")).empty());
+    std::filesystem::create_symlink(canonical / "backup.dat", canonical / "filelink");
+    BOOST_CHECK(!ChosenFiles::Problem(fs::PathToString(canonical / "filelink")).empty());
+    BOOST_CHECK_THROW(files.Grant(fs::PathToString(canonical / "link" / "x.dat"), true, T0), std::runtime_error);
+
+    // A token gives its file once, within its time; a forged token (or a path given as one) gives nothing.
+    const std::string token{files.Grant(file, /*write=*/true, T0)};
+    BOOST_CHECK(!files.Take(file, T0));
+    BOOST_CHECK(!files.Take(std::string(64, 'b'), T0));
+    const auto got{files.Take(token, T0 + 1s)};
+    BOOST_REQUIRE(got);
+    BOOST_CHECK_EQUAL(got->path, file);
+    BOOST_CHECK(got->write);
+    BOOST_CHECK(!files.Take(token, T0 + 2s));
+    const std::string late{files.Grant(file, false, T0)};
+    BOOST_CHECK(!files.Take(late, T0 + ChosenFiles::EXPIRY));
+    fs::remove_all(dir);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
