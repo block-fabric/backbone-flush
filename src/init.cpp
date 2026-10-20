@@ -80,6 +80,7 @@
 #include <policy/settings.h>
 #include <protocol.h>
 #include <random.h>
+#include <rpc/extra.h>
 #include <rpc/register.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
@@ -293,6 +294,7 @@ static void ShutdownNotify(const ArgsManager& args)
 
 void Interrupt(NodeContext& node)
 {
+    if (rpc_extra::g_interrupt) rpc_extra::g_interrupt();
 #if HAVE_SYSTEM
     ShutdownNotify(*node.args);
 #endif
@@ -1667,6 +1669,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 #ifdef ENABLE_ZMQ
     RegisterZMQRPCCommands(tableRPC);
 #endif
+    if (rpc_extra::g_register) rpc_extra::g_register(tableRPC);
 
     // Check port numbers
     if (!CheckHostPortOptions(args)) return false;
