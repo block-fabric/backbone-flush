@@ -763,12 +763,12 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-validatoranchorbid=<amount>", strprintf("FastBlocks: what a validator's own anchorer bids for a BMM commitment to its ticket in every mainchain block, whatever the fees (the pot goes to -validatorpayout), in coins of the mainchain; 0 turns it off. The node's merged miner (setbmm), if on, bids instead (default: %s; 0 on regtest)", FormatMoney(pos::DEFAULT_VALIDATOR_ANCHOR_BID)), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-validatorpayout=<address>", "FastBlocks: where the producer's share of the fees of its blocks of stake goes (default: a new address of the first wallet loaded; without a wallet, the first validator key's P2WPKH)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpcconnect=<ip>", "Address of the mainchain node that this sidechain node follows (default: 127.0.0.1)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-mainchainrpcport=<port>", "JSON-RPC port of the mainchain node (default: 9554, testnet: 19554, signet: 39554, regtest: 29554)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchainrpcport=<port>", "JSON-RPC port of the mainchain node (default: Chains: 9554, testnet: 19554, signet: 39554, regtest: 29554; Backbone: ecash: 8532, ecashbeta: 8532, ecashtest: 48532)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpcuser=<user>", "Username for the JSON-RPC connection to the mainchain node. Without it the cookie file of the mainchain node is used.", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpcpassword=<pw>", "Password for the JSON-RPC connection to the mainchain node. Any local user can read the command line: prefer -mainchainrpcpasswordfile, or the cookie file", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpcpasswordfile=<file>", "Read the password for the JSON-RPC connection to the mainchain node from the first line of <file>, once at startup. Use with -mainchainrpcuser. On Unix the file must be owned by this user and readable by no one else (chmod 600), or the node refuses to start; on Windows its access list is not checked, so keep it in a directory only you can read. Relative paths are prefixed by the net-specific data directory", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpccookiefile=<file>", "Cookie file of the mainchain node (default: the .cookie file in the data directory of the mainchain node)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-mainchaindatadir=<dir>", "Data directory of the mainchain node, where its cookie file is looked for (default: ~/.chains)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-mainchaindatadir=<dir>", "Data directory of the mainchain node, where its cookie file is looked for (default: ~/.chains for the Chains networks, ~/.backbone for ecash, ecashbeta and ecashtest; there in betanet/ and testnet4/ for the last two)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-mainchainrpcwallet=<name>", "Wallet of the mainchain node that pays for blind merged mining (default: its only loaded wallet)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-rpcport=<port>", strprintf("Listen for JSON-RPC connections on <port> (default: %u, testnet: %u, signet: %u, regtest: %u)", defaultBaseParams->RPCPort(), testnetBaseParams->RPCPort(), signetBaseParams->RPCPort(), regtestBaseParams->RPCPort()), ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
     argsman.AddArg("-rpcservertimeout=<n>", strprintf("Timeout during HTTP requests (default: %d)", DEFAULT_HTTP_SERVER_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::RPC);
@@ -2244,7 +2244,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         sidechain::MainClient::Options options;
         const ChainType chain_type{chainman.GetParams().GetChainType()};
         options.host = args.GetArg("-mainchainrpcconnect", "127.0.0.1");
-        options.port = static_cast<uint16_t>(args.GetIntArg("-mainchainrpcport", chain_type == ChainType::MAIN ? 9554 : chain_type == ChainType::TESTNET ? 19554 : chain_type == ChainType::SIGNET ? 39554 : 29554));
+        options.port = static_cast<uint16_t>(args.GetIntArg("-mainchainrpcport", sidechain::DefaultMainchainRPCPort(chain_type)));
         if (args.IsArgSet("-mainchainrpcuser")) {
             options.credentials = args.GetArg("-mainchainrpcuser", "") + ":" + (mainchain_password ? *mainchain_password : args.GetArg("-mainchainrpcpassword", ""));
         }
@@ -2252,15 +2252,16 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         if (args.IsArgSet("-mainchainrpccookiefile")) {
             options.cookie_file = fs::absolute(args.GetPathArg("-mainchainrpccookiefile"));
         } else {
-            // The default data directory of the mainchain node is next to this one's, named as on this system.
+            // The default data directory of the mainchain node is next to this one's, named as on this system:
+            // Chains' for the Chains networks, Backbone's for the eCash networks.
+            const bool ecash{IsEcashChain(chain_type)};
 #if defined(WIN32) || defined(__APPLE__)
-            const fs::path default_main_datadir{GetDefaultDataDir().parent_path() / "Chains"};
+            const fs::path default_main_datadir{GetDefaultDataDir(ecash).parent_path() / (ecash ? "Backbone" : "Chains")};
 #else
-            const fs::path default_main_datadir{GetDefaultDataDir().parent_path() / ".chains"};
+            const fs::path default_main_datadir{GetDefaultDataDir(ecash).parent_path() / (ecash ? ".backbone" : ".chains")};
 #endif
             fs::path main_datadir{args.IsArgSet("-mainchaindatadir") ? fs::absolute(args.GetPathArg("-mainchaindatadir")) : default_main_datadir};
-            const char* subdir{chain_type == ChainType::MAIN ? "" : chain_type == ChainType::TESTNET ? "testnet" : chain_type == ChainType::SIGNET ? "signet" : "regtest"};
-            options.cookie_file = main_datadir / subdir / ".cookie";
+            options.cookie_file = main_datadir / fs::u8path(sidechain::MainchainDataSubdir(chain_type)) / ".cookie";
         }
         if (args.IsArgSet("-mainchainrpcwallet")) {
             options.wallet = args.GetArg("-mainchainrpcwallet", "");

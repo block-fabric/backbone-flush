@@ -1456,6 +1456,54 @@ BOOST_AUTO_TEST_CASE(pending_bundle_holds_refunds_back_only_with_support)
     BOOST_CHECK_EQUAL(reason, "bad-sc-refund-in-bundle");
 }
 
+BOOST_AUTO_TEST_CASE(without_main_single_payout_a_supported_bundle_holds_new_ones_back)
+{
+    // Backbone on eCash (the enforcer's rules) does not fail the other bundles of a slot when it pays one:
+    // a bundle of another branch with support and a new one of this branch, holding the same withdrawal,
+    // could both be paid. Without single payout on the mainchain (SidechainParams::main_single_payout), a
+    // supported foreign bundle holds a new one back as well as refunds; one without support holds nothing.
+    for (const bool single_payout : {true, false}) {
+        Consensus::SidechainParams params;
+        params.pending_min_score = 3;
+        params.main_single_payout = single_payout;
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        MakeWithdrawal(state, key, pay, 1, params);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        const uint256 foreign{0xf0};
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        for (uint32_t score{1}; score <= 3; ++score) Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+            if (score == 1) b.proposed.push_back(foreign);
+            b.pending.push_back({foreign, score});
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(2, mainchain, 2, params, payouts, reason), reason);
+        BOOST_CHECK(!state.MainPending(mainchain, params));
+        BOOST_CHECK(state.NextBundle(2, uint256{0xa}, params, nullptr, std::nullopt, state.MainPending(mainchain, params)));
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(3, mainchain, 3, params, payouts, reason), reason);
+        const bool pending{state.MainPending(mainchain, params)};
+        BOOST_REQUIRE(pending);
+        const auto next{state.NextBundle(3, uint256{0xa}, params, nullptr, std::nullopt, pending)};
+        BOOST_CHECK_EQUAL(next.has_value(), single_payout);
+        // A block that commits to it anyway is invalid without single payout.
+        const auto bundle{state.NextBundle(3, uint256{0xa}, params)};
+        BOOST_REQUIRE(bundle);
+        sidechain::StoreOverlay copy_store{side.store, /*journal=*/false};
+        sidechain::State copy{copy_store};
+        BOOST_CHECK_EQUAL(copy.StartBundle(bundle->GetHash().ToUint256(), 3, uint256{0xa}, params, reason, std::nullopt, pending), single_payout);
+        if (!single_payout) BOOST_CHECK_EQUAL(reason, "bad-sc-bundle-not-allowed");
+        // Paid out, the foreign bundle holds nothing back any more, and its payout is not said as an anomaly.
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { b.bundles = {{foreign, true}}; });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(4, mainchain, 4, params, payouts, reason), reason);
+        BOOST_CHECK(!state.MainPending(mainchain, params));
+        BOOST_CHECK(state.NextBundle(4, uint256{0xa}, params, nullptr, std::nullopt, state.MainPending(mainchain, params)));
+    }
+}
+
 BOOST_AUTO_TEST_CASE(rising_leader_holds_refunds_back)
 {
     // Mainchain miners in follow mode upvote whichever bundle leads its slot, so a

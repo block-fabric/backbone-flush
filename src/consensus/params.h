@@ -161,6 +161,24 @@ struct SidechainParams {
      * sums the volume traded, about a day of blocks (1440 one-minute blocks). 0: no volume kept.
      */
     int asset_volume_window{1440};
+    /**
+     * Whether the mainchain pays one bundle per slot and fails the others (single payout): the Chains
+     * mainchain does, by consensus. Backbone on eCash does not (the rules of the bip300301_enforcer: a payout
+     * leaves the slot's other bundles pending and payable, and a paid bundle can be proposed and paid again),
+     * until the enforcer adopts our safety rules at a height (getdrivechaininfo's singlepayout). Without it,
+     * the rules of this chain keep single payout on its side: no bundle of this chain is made while another
+     * one of the slot is pending on the mainchain with support (see State::NextBundle), so that never two
+     * bundles holding the same withdrawals can both be paid; and the mainchain is told to downvote every
+     * bundle but this chain's (as with it).
+     */
+    bool main_single_payout{true};
+    /**
+     * Block assembly policy, not a rule: blocks during which a new withdrawal can still be taken back ahead of
+     * a bundle that would take it (sidechain::REFUND_GRACE_BLOCKS on the Chains networks: 6 one-minute blocks).
+     */
+    int refund_grace_blocks{6};
+    /** Mainchain blocks the record may be behind the mainchain node's headers before the link counts as syncing. */
+    int main_behind_margin{6};
 };
 
 /**

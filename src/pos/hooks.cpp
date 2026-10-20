@@ -1098,7 +1098,9 @@ int64_t FastBlocksHooks::FeeSplitSpacing(int main_height) const
 {
     const ChainstateManager* chainman{Chainman()};
     if (!chainman || !chainman->m_mainchain) return FEE_SPLIT_TARGET_SPACING;
-    return MedianSpacingAt(*chainman->m_mainchain, main_height, m_params.main_activation_height);
+    const int64_t spacing{MedianSpacingAt(*chainman->m_mainchain, main_height, m_params.main_activation_height)};
+    // In units of the network's target (PosParams::fee_target_spacing): exact where the target is the curves' own (60 s).
+    return m_params.fee_target_spacing == FEE_SPLIT_TARGET_SPACING ? spacing : spacing * FEE_SPLIT_TARGET_SPACING / m_params.fee_target_spacing;
 }
 
 bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step,
@@ -1934,7 +1936,13 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         }
     }
     if (again) {
-        const bool bundle{WITH_LOCK(::cs_main, return chainman->ActiveChainstate().SideState().NextBundle(tip->nHeight + 1, tip->GetBlockHash(), chainman->GetConsensus().sidechain).has_value())};
+        const bool bundle{WITH_LOCK(::cs_main, {
+            const sidechain::State side{chainman->ActiveChainstate().SideState()};
+            const Consensus::SidechainParams& params{chainman->GetConsensus().sidechain};
+            // Held back by a supported bundle of another branch where the mainchain has no single payout.
+            return side.NextBundle(tip->nHeight + 1, tip->GetBlockHash(), params, nullptr, std::nullopt,
+                                   chainman->m_mainchain && side.MainPendingNext(*chainman->m_mainchain, params)).has_value();
+        })};
         if (!bundle) {
             LOCK(m_anchor_mutex);
             m_bid.again = true;

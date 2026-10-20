@@ -275,10 +275,11 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
             }
             SetBundle(std::nullopt);
         }
-        // The rules of this chain take for granted that the mainchain pays one bundle per slot and
-        // fails the others: a bundle of another branch then never pays withdrawals that a bundle of
-        // this one pays too. A record that shows otherwise is said loudly: withdrawals may be paid twice.
-        if (int logged{g_pending_after_payout_logged.load()}; h > logged && PendingAfterPayout(*main_block) &&
+        // Where the rules of this chain take for granted that the mainchain pays one bundle per slot and
+        // fails the others (SidechainParams::main_single_payout), a bundle of another branch never pays
+        // withdrawals that a bundle of this one pays too. A record that shows otherwise is said loudly:
+        // withdrawals may be paid twice. (Where it does not, NextBundle keeps single payout on this side.)
+        if (int logged{g_pending_after_payout_logged.load()}; params.main_single_payout && h > logged && PendingAfterPayout(*main_block) &&
                                                                g_pending_after_payout_logged.compare_exchange_strong(logged, h)) {
             LogWarning("The mainchain block %s at height %d paid a withdrawal bundle of this sidechain and left another one pending: the mainchain does not pay "
                        "one bundle per slot, which the rules of this chain take for granted. A withdrawal may be paid twice; check the mainchain's software.",
@@ -351,12 +352,14 @@ bool State::MainPendingNext(const Mainchain& mainchain, const Consensus::Sidecha
 }
 
 std::optional<CMutableTransaction> State::NextBundle(int height, const uint256& prev, const Consensus::SidechainParams& params, std::vector<COutPoint>* withdrawals,
-                                                     std::optional<int32_t> max_withdrawal_height) const
+                                                     std::optional<int32_t> max_withdrawal_height, bool main_pending) const
 {
-    // A bundle of another branch pending on the mainchain does not hold a new one back: the mainchain
-    // pays one bundle per slot and fails the others, and what the other pays is matched here
-    // (ApplyMainEvents).
+    // A bundle of another branch pending on the mainchain does not hold a new one back where the mainchain
+    // pays one bundle per slot and fails the others: what the other pays is matched here (ApplyMainEvents).
+    // Where it does not, both could be paid: one with support holds a new one back until it is paid (its
+    // payouts then matched) or fails. Single payout, kept on this side.
     if (Bundle()) return std::nullopt;
+    if (!params.main_single_payout && main_pending) return std::nullopt;
     const int32_t last_failure{LastFailureHeight()};
     if (last_failure >= 0 && height - last_failure < params.bundle_retry_delay) return std::nullopt;
 
@@ -401,10 +404,10 @@ std::optional<CMutableTransaction> State::BundleTx() const
 }
 
 bool State::StartBundle(const uint256& hash, int height, const uint256& prev, const Consensus::SidechainParams& params, std::string& reject_reason,
-                        std::optional<int32_t> max_withdrawal_height)
+                        std::optional<int32_t> max_withdrawal_height, bool main_pending)
 {
     std::vector<COutPoint> withdrawals;
-    const auto bundle{NextBundle(height, prev, params, &withdrawals, max_withdrawal_height)};
+    const auto bundle{NextBundle(height, prev, params, &withdrawals, max_withdrawal_height, main_pending)};
     if (!bundle) {
         reject_reason = "bad-sc-bundle-not-allowed";
         return false;
@@ -614,7 +617,7 @@ bool State::ApplyPegStep(const CBlock& block, int height, const PegStep& step, c
             reject_reason = "bad-sc-bundle-closed";
             return false;
         }
-        if (!StartBundle(*commitment, peg_height, step.nonce, params, reject_reason, step.max_withdrawal_height)) return false;
+        if (!StartBundle(*commitment, peg_height, step.nonce, params, reject_reason, step.max_withdrawal_height, main_pending)) return false;
     }
     return true;
 }

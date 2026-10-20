@@ -681,6 +681,14 @@ public:
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
             consensus.sidechain.pending_min_score = 3;
             consensus.sidechain.unproposed_expiry_blocks = 20;
+            if (opts.main_enforcer) {
+                // The mainchain of Backbone's eCash regtest (backboned -testecash): the enforcer's rules, a bundle
+                // paid with more than 5 votes, in 10 blocks (Thresholds::SHORT), and no single payout.
+                consensus.sidechain.main_single_payout = false;
+                consensus.sidechain.pending_min_score = 2;
+                // Layers: the fee curves drawn for eCash's ten-minute blocks.
+                consensus.pos.fee_target_spacing = 600;
+            }
             // A sidechain has no sidechains of its own.
             consensus.drivechain.max_sidechains = 0;
             consensus.coinbase_maturity = 0;
@@ -775,6 +783,105 @@ public:
     }
 };
 
+/**
+ * The networks of this sidechain on Backbone, on eCash (ECX): a sidechain of backboned on -chain=ecash, ecashbeta
+ * and ecashtest. The rules of the Chains networks of this chain (main, test), with an identity of their own and the
+ * parameters tied to the blocks of the mainchain for eCash's: ten-minute blocks (one block of this chain per
+ * mainchain block), and the drivechain rules of the bip300301_enforcer (a bundle is paid with more than 13,150
+ * votes in 26,300 blocks; on the test network, more than 5 in 10), without single payout.
+ */
+class CEcashSidechainParams : public CChainParams {
+public:
+    CEcashSidechainParams(ChainType chain, const MainNetOptions& opts)
+    {
+        // The rules of the main network of this chain (the test network's for eCash's test network).
+        std::unique_ptr<const CChainParams> base;
+        if (chain == ChainType::ECASH_TESTNET) {
+            base = CChainParams::TestNet(TestNetOptions{.dep_opts = opts.dep_opts});
+        } else {
+            base = CChainParams::Main(opts);
+        }
+        static_cast<CChainParams&>(*this) = *base;
+        m_chain_type = chain;
+        // One block of this chain per block of the mainchain, every ten minutes: the stall and sync timers
+        // (net_processing, the warnings of a stale tip) and the estimates of the app count in those.
+        consensus.nPowTargetSpacing = 10 * 60;
+        consensus.nPowTargetTimespan = 2016 * consensus.nPowTargetSpacing;
+        // Without single payout on the mainchain, this chain keeps it (SidechainParams::main_single_payout).
+        consensus.sidechain.main_single_payout = false;
+        // Set when the slot activates on the mainchain: the height of the block that activated it.
+        consensus.sidechain.main_activation_height = 0;
+        // Ten-minute blocks: a block in which a new withdrawal can be taken back, and a link two blocks behind
+        // the mainchain node's headers is syncing.
+        consensus.sidechain.refund_grace_blocks = 1;
+        consensus.sidechain.main_behind_margin = 2;
+        switch (chain) {
+        case ChainType::ECASH:
+            // Layers on eCash: slot 46 (doc/ecash-sidechains.md).
+            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone: assets on a fast chain over eCash", .genesis_time = 1792454400,
+                           .message_start = {0x6c, 0x79, 0x72, 0x21}, .default_port = 8255, .bech32_hrp = "lyx"});
+            break;
+        case ChainType::ECASH_BETANET:
+            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone, eCash betanet", .genesis_time = 1792454400,
+                           .message_start = {0x6c, 0x79, 0x72, 0x22}, .default_port = 38255, .bech32_hrp = "blyx"});
+            break;
+        case ChainType::ECASH_TESTNET:
+            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone, eCash test network", .genesis_time = 1792454400,
+                           .message_start = {0x6c, 0x79, 0x72, 0x23}, .default_port = 48255, .bech32_hrp = "tlyx"});
+            break;
+        default:
+            assert(false);
+        }
+        if (chain == ChainType::ECASH_TESTNET) {
+            // The enforcer's Thresholds::SHORT on eCash's test network: a bundle is paid with more than 5 votes,
+            // and fails older than 10 blocks.
+            consensus.sidechain.bundle_retry_delay = 3; // half an hour
+            consensus.sidechain.pending_min_score = 2;
+            consensus.sidechain.unproposed_expiry_blocks = 12; // two hours
+        } else {
+            // A tenth of the enforcer's threshold of a bundle (13,150 votes), as on the Chains networks (6,480 of
+            // 64,800); retry and proposal delays as long in time as there: 15 blocks (2.5 hours, 144 one-minute
+            // blocks on Chains) and 144 blocks (a day, 1,440 on Chains).
+            consensus.sidechain.bundle_retry_delay = 15;
+            consensus.sidechain.pending_min_score = 1315;
+            consensus.sidechain.unproposed_expiry_blocks = 144;
+        }
+
+        // Layers: blocks of stake every slot (15 s), not ten minutes: Bitcoin's heuristics count a block a slot,
+        // as on the Chains networks; and a withdrawal can be taken back for as many blocks as there, and the
+        // retry delay is as there, in blocks of this chain.
+        consensus.nPowTargetSpacing = consensus.pos.slot_seconds;
+        consensus.nPowTargetTimespan = 2016 * consensus.nPowTargetSpacing;
+        consensus.sidechain.refund_grace_blocks = base->GetConsensus().sidechain.refund_grace_blocks;
+        consensus.sidechain.bundle_retry_delay = base->GetConsensus().sidechain.bundle_retry_delay;
+        consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
+        // The anchoring of the blocks of stake, for an anchor (a mainchain block) every ten minutes rather than
+        // every minute (doc/ecash-sidechains.md, "Layers"): what counts anchors as long in time as on Chains,
+        // what counts time with room for eCash's gaps between blocks (an hour without one is not rare) and
+        // for its median time, which lags the clock by about 50 minutes (5 minutes on Chains).
+        consensus.pos.fee_target_spacing = 600; // the bidder's share 50/50 at ten-minute blocks
+        consensus.pos.max_unanchored_slots = 720; // three hours of 15-second slots (an hour on Chains)
+        consensus.pos.stall_seconds = 3600;       // BMM blocks carry transactions after an hour without blocks of stake (30 min)
+        consensus.pos.seed_lookahead_seconds = 3600; // six eCash blocks (twenty on Chains)
+        consensus.pos.final_anchors = 3;          // half an hour (6 minutes on Chains); not consensus
+        if (chain == ChainType::ECASH_TESTNET) {
+            // As the test network of Chains in time: unbonding 2 hours, evidence and reserve an hour.
+            consensus.pos.unbonding_anchors = 12;
+            consensus.pos.evidence_window_anchors = 6;
+            consensus.pos.pot_reserve_anchors = 6;
+        } else {
+            consensus.pos.unbonding_anchors = 288;      // two days (2,880 one-minute anchors on Chains)
+            consensus.pos.evidence_window_anchors = 144; // a day (1,440)
+            consensus.pos.pot_reserve_anchors = 144;     // a day (1,440): each anchor pays 1/144 of the reserve
+        }
+    }
+};
+
+std::unique_ptr<const CChainParams> CChainParams::Ecash(ChainType chain, const MainNetOptions& options)
+{
+    return std::make_unique<const CEcashSidechainParams>(chain, options);
+}
+
 std::unique_ptr<const CChainParams> CChainParams::SigNet(const SigNetOptions& options)
 {
     return std::make_unique<const SigNetParams>(options);
@@ -813,6 +920,9 @@ std::optional<ChainType> GetNetworkForMagic(const MessageStartChars& message)
     const auto testnet_msg = CChainParams::TestNet()->MessageStart();
     const auto regtest_msg = CChainParams::RegTest()->MessageStart();
     const auto signet_msg = CChainParams::SigNet()->MessageStart();
+    for (const ChainType ecash : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        if (std::ranges::equal(message, CChainParams::Ecash(ecash)->MessageStart())) return ecash;
+    }
 
     if (std::ranges::equal(message, mainnet_msg)) {
         return ChainType::MAIN;

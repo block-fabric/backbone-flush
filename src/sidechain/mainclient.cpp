@@ -14,6 +14,7 @@
 #include <util/time.h>
 #include <util/translation.h>
 
+#include <cassert>
 #include <fstream>
 
 #ifndef WIN32
@@ -41,6 +42,41 @@ std::string PercentEncode(const std::string& text)
     return encoded;
 }
 } // namespace
+
+uint16_t DefaultMainchainRPCPort(ChainType chain)
+{
+    switch (chain) {
+    case ChainType::MAIN: return 9554;
+    case ChainType::TESTNET: return 19554;
+    case ChainType::SIGNET: return 39554;
+    case ChainType::REGTEST: return 29554;
+    // Backbone's, which are those of eCash's own node (betanet's too: it is its own client's main network).
+    case ChainType::ECASH: return 8532;
+    case ChainType::ECASH_BETANET: return 8532;
+    case ChainType::ECASH_TESTNET: return 48532;
+    }
+    assert(false);
+}
+
+std::string MainchainDataSubdir(ChainType chain)
+{
+    switch (chain) {
+    case ChainType::MAIN: return "";
+    case ChainType::TESTNET: return "testnet";
+    case ChainType::SIGNET: return "signet";
+    case ChainType::REGTEST: return "regtest";
+    // As Backbone (and eCash's own client) lays out its data directory.
+    case ChainType::ECASH: return "";
+    case ChainType::ECASH_BETANET: return "betanet";
+    case ChainType::ECASH_TESTNET: return "testnet4";
+    }
+    assert(false);
+}
+
+std::string MainchainName(ChainType chain)
+{
+    return IsEcashChain(chain) ? "Backbone" : "Chains";
+}
 
 util::Result<std::string> ReadPasswordFile(const fs::path& path)
 {

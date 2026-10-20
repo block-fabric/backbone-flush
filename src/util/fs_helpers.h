@@ -92,6 +92,12 @@ void ReleaseDirectoryLocks();
 
 bool TryCreateDirectories(const fs::path& p);
 fs::path GetDefaultDataDir();
+/**
+ * The default data directory of this program for a family of networks: for the Chains networks (`ecash`
+ * false; GetDefaultDataDir()), ~/.<name> (Windows %LOCALAPPDATA%\<Name>, macOS ~/Library/Application
+ * Support/<Name>); for the networks of Backbone on eCash, ~/.backbone-<name> (Backbone-<Name>).
+ */
+fs::path GetDefaultDataDir(bool ecash);
 
 /**
  * The default data directory on Windows: the legacy roaming folder (legacy) only if it

@@ -141,7 +141,7 @@ std::set<std::string> ArgsManager::GetUnsuitableSectionOnlyArgs() const
     if (m_network.empty()) return std::set<std::string> {};
 
     // if it's okay to use the default section for this network, don't worry
-    if (m_network == ChainTypeToString(ChainType::MAIN)) return std::set<std::string> {};
+    if (m_network == ChainTypeToString(ChainType::MAIN) || m_network == ChainTypeToString(ChainType::ECASH)) return std::set<std::string> {};
 
     for (const auto& arg : m_network_only_args) {
         if (OnlyHasDefaultSectionSetting(m_settings, m_network, SettingName(arg))) {
@@ -158,6 +158,9 @@ std::list<SectionInfo> ArgsManager::GetUnrecognizedSections() const
         ChainTypeToString(ChainType::REGTEST),
         ChainTypeToString(ChainType::SIGNET),
         ChainTypeToString(ChainType::TESTNET),
+        ChainTypeToString(ChainType::ECASH),
+        ChainTypeToString(ChainType::ECASH_BETANET),
+        ChainTypeToString(ChainType::ECASH_TESTNET),
         ChainTypeToString(ChainType::MAIN),
     };
 
@@ -347,7 +350,8 @@ fs::path ArgsManager::GetDataDir(bool net_specific) const
             return path;
         }
     } else {
-        path = GetDefaultDataDir();
+        // The Backbone data directory of this program for the eCash networks, its own for the Chains networks.
+        path = GetDefaultDataDir(EcashFamily_());
     }
 
     if (net_specific && !BaseParams().DataDir().empty()) {
@@ -355,6 +359,16 @@ fs::path ArgsManager::GetDataDir(bool net_specific) const
     }
 
     return path;
+}
+
+bool ArgsManager::EcashFamily_() const
+{
+    AssertLockHeld(cs_args);
+    // What the arguments so far name (the command line, before the configuration file in the data directory is read).
+    const auto chain{SettingToString(GetSetting_("-chain"))};
+    if (!chain) return false;
+    const auto type{ChainTypeFromString(*chain)};
+    return type && IsEcashChain(*type);
 }
 
 void ArgsManager::ClearPathCache()
@@ -863,7 +877,7 @@ fs::path ChooseWindowsDataDir(const fs::path& legacy, const fs::path& local, con
     // exists: something else (an app keeping its own settings there, an installer, a
     // half-removed old install) may create it, and switching the node to an empty
     // folder on the next start would look as if the chain and the wallet were gone.
-    for (const char* name : {"blocks", "chainstate", "wallets", "testnet", "signet", "regtest",
+    for (const char* name : {"blocks", "chainstate", "wallets", "testnet", "signet", "regtest", "betanet", "testnet4",
                              BITCOIN_CONF_FILENAME, BITCOIN_SETTINGS_FILENAME, ".lock"}) {
         if (exists(legacy / fs::u8path(name))) return legacy;
     }
@@ -872,16 +886,23 @@ fs::path ChooseWindowsDataDir(const fs::path& legacy, const fs::path& local, con
 
 fs::path GetDefaultDataDir()
 {
+    return GetDefaultDataDir(/*ecash=*/false);
+}
+
+fs::path GetDefaultDataDir(bool ecash)
+{
     // Windows:
     //   old: C:\Users\Username\AppData\Roaming\Chains
     //   new: C:\Users\Username\AppData\Local\Chains
     // macOS: ~/Library/Application Support/<name> (Chains, Thunder...)
     // Unix-like: ~/.<name> (~/.chains, ~/.thunder...)
+    // On eCash, the sidechains of Backbone: Backbone-<Name> (~/.backbone-<name>).
+    const std::string name{ecash ? std::string{"Backbone-"} + CLIENT_NAME : std::string{CLIENT_NAME}};
 #ifdef WIN32
     // Windows
     // Keep a datadir in the old location there; fresh installs start in the new, "proper" one.
-    return ChooseWindowsDataDir(GetSpecialFolderPath(CSIDL_APPDATA) / CLIENT_NAME,
-                                GetSpecialFolderPath(CSIDL_LOCAL_APPDATA) / CLIENT_NAME,
+    return ChooseWindowsDataDir(GetSpecialFolderPath(CSIDL_APPDATA) / fs::u8path(name),
+                                GetSpecialFolderPath(CSIDL_LOCAL_APPDATA) / fs::u8path(name),
                                 [](const fs::path& p) { return fs::exists(p); });
 #else
     fs::path pathRet;
@@ -892,10 +913,10 @@ fs::path GetDefaultDataDir()
         pathRet = fs::path(pszHome);
 #ifdef __APPLE__
     // macOS
-    return pathRet / "Library/Application Support" / CLIENT_NAME;
+    return pathRet / "Library/Application Support" / fs::u8path(name);
 #else
     // Unix-like
-    return pathRet / "." CLIENT_BIN_NAME;
+    return pathRet / fs::u8path(ecash ? "." "backbone-" CLIENT_BIN_NAME : "." CLIENT_BIN_NAME);
 #endif
 #endif
 }
@@ -966,7 +987,8 @@ std::variant<ChainType, std::string> ArgsManager::GetChainArg() const
 bool ArgsManager::UseDefaultSection(const std::string& arg) const
 {
     AssertLockHeld(cs_args);
-    return m_network == ChainTypeToString(ChainType::MAIN) || !m_network_only_args.contains(arg);
+    // The default section is that of the network at the root of the data directory: main's, or ecash's.
+    return m_network == ChainTypeToString(ChainType::MAIN) || m_network == ChainTypeToString(ChainType::ECASH) || !m_network_only_args.contains(arg);
 }
 
 common::SettingsValue ArgsManager::GetSetting_(const std::string& arg) const

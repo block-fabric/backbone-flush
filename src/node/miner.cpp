@@ -241,7 +241,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         }
         main_pending = peg_step && side->MainPending(mainchain, side_params);
         std::vector<COutPoint> bundled;
-        const auto bundle{peg_step ? side->NextBundle(peg_height, bundle_nonce, side_params, &bundled, max_withdrawal_height) : std::nullopt};
+        const auto bundle{peg_step ? side->NextBundle(peg_height, bundle_nonce, side_params, &bundled, max_withdrawal_height, main_pending) : std::nullopt};
         // Not a bundle the mainchain has closed already: the block would be invalid. One proposed ahead
         // and still pending is fine, as in State::ConnectBlock (all closes on record are before the
         // next mainchain block, which commits to this one).
@@ -255,12 +255,12 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
             // refund kept pending on purpose, of ever new withdrawals, would hold every withdrawal back.
             const bool overdue{std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) {
                 const auto found{side->GetWithdrawal(withdrawal)};
-                return found && nHeight - found->height > sidechain::REFUND_GRACE_BLOCKS;
+                return found && nHeight - found->height > side_params.refund_grace_blocks;
             })};
             const bool refund_pending{!overdue && m_mempool && WITH_LOCK(m_mempool->cs, return std::any_of(bundled.begin(), bundled.end(), [&](const COutPoint& withdrawal) EXCLUSIVE_LOCKS_REQUIRED(m_mempool->cs) { return m_mempool->m_refunds.contains(withdrawal); }))};
             if (!refund_pending) {
                 bundle_hash = bundle->GetHash().ToUint256();
-                if (!side->StartBundle(*bundle_hash, peg_height, bundle_nonce, side_params, reject_reason, max_withdrawal_height)) bundle_hash.reset();
+                if (!side->StartBundle(*bundle_hash, peg_height, bundle_nonce, side_params, reject_reason, max_withdrawal_height, main_pending)) bundle_hash.reset();
             }
         }
         // A chunk goes in whole or not at all: on an overlay of its own, kept if every transaction of

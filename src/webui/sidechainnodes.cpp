@@ -230,7 +230,10 @@ std::vector<std::string> SidechainNodes::NetworkArgs(const Sidechain& sidechain)
         args.emplace_back("-regtest");
         args.push_back(strprintf("-sidechainslot=%d", sidechain.slot));
         break;
-    default: break;
+    // The sidechains of Backbone on eCash: the network of the same name.
+    case ChainType::ECASH: args.emplace_back("-chain=ecash"); break;
+    case ChainType::ECASH_BETANET: args.emplace_back("-chain=ecashbeta"); break;
+    case ChainType::ECASH_TESTNET: args.emplace_back("-chain=ecashtest"); break;
     }
     return args;
 }
@@ -587,6 +590,8 @@ UniValue SidechainNodes::Call(const std::string& method, const UniValue& params)
         case ChainType::TESTNET: dir /= "testnet"; break;
         case ChainType::SIGNET: dir /= "signet"; break;
         case ChainType::REGTEST: dir /= "regtest"; break;
+        case ChainType::ECASH_BETANET: dir /= "betanet"; break;
+        case ChainType::ECASH_TESTNET: dir /= "testnet4"; break;
         default: break;
         }
         const fs::path file_path{dir / "debug.log"};

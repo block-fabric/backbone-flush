@@ -306,7 +306,7 @@ public:
      * block before its commitment (`bmm_main_height`, PegStep::main_height).
      */
     std::optional<int> FeeSplitMainHeight(bool pos_block, int64_t slot, int bmm_main_height) const;
-    /** S at a mainchain height, from the record (MedianSpacingAt from main_activation_height). */
+    /** S at a mainchain height, from the record (MedianSpacingAt from main_activation_height), in units of PosParams::fee_target_spacing (60 s × S / target). */
     int64_t FeeSplitSpacing(int main_height) const;
 
     /** The proofs this node knows that the chain has not punished, in a BMM block's coinbase (MAX_MINED_EVIDENCE, one per validator). */

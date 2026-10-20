@@ -10,14 +10,26 @@
 #include <string_view>
 
 enum class ChainType {
+    //! The networks of a sidechain of the Chains (CHN) mainchain: legacy, during the move to Backbone.
     MAIN,
     TESTNET,
     SIGNET,
     REGTEST,
+    //! The networks of a sidechain of Backbone, on eCash (ECX): of its main network, of its betanet and of its
+    //! test network (the mainchain's -chain=ecash, ecashbeta and ecashtest).
+    ECASH,
+    ECASH_BETANET,
+    ECASH_TESTNET,
 };
 
 std::string ChainTypeToString(ChainType chain);
 
 std::optional<ChainType> ChainTypeFromString(std::string_view chain);
+
+/** Whether `chain` is a network of a sidechain of Backbone on eCash, rather than of the Chains mainchain. */
+constexpr bool IsEcashChain(ChainType chain)
+{
+    return chain == ChainType::ECASH || chain == ChainType::ECASH_BETANET || chain == ChainType::ECASH_TESTNET;
+}
 
 #endif // BITCOIN_UTIL_CHAINTYPE_H

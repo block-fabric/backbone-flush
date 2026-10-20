@@ -171,6 +171,10 @@ void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& opti
         if (*lookahead < 0 || *lookahead > 365 * 24 * 60 * 60) throw std::runtime_error("Invalid -posseedlookahead");
         options.pos_seed_lookahead = *lookahead;
     }
+    if (args.GetBoolArg("-testmainenforcer", false)) {
+        if (!options.sidechain_slot) throw std::runtime_error("-testmainenforcer needs -sidechainslot");
+        options.main_enforcer = true;
+    }
     if (const auto height{args.GetIntArg("-sidechainactivationheight")}) {
         if (*height < 0 || *height > std::numeric_limits<int32_t>::max()) throw std::runtime_error("Invalid -sidechainactivationheight");
         options.sidechain_activation_height = static_cast<int>(*height);
@@ -214,6 +218,13 @@ std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, c
         auto opts = CChainParams::RegTestOptions{};
         ReadRegTestArgs(args, opts);
         return CChainParams::RegTest(opts);
+    }
+    case ChainType::ECASH:
+    case ChainType::ECASH_BETANET:
+    case ChainType::ECASH_TESTNET: {
+        auto opts = CChainParams::MainNetOptions{};
+        ReadMainNetArgs(args, opts);
+        return CChainParams::Ecash(chain, opts);
     }
     }
     assert(false);

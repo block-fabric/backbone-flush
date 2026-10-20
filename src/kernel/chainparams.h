@@ -172,6 +172,9 @@ public:
         std::optional<uint32_t> sidechain_slot{};
         //! With sidechain_slot: SidechainParams::main_activation_height.
         int sidechain_activation_height{0};
+        //! With sidechain_slot (-testmainenforcer): the mainchain has the rules of the bip300301_enforcer, as
+        //! Backbone on eCash (backboned -testecash): no single payout (SidechainParams::main_single_payout).
+        bool main_enforcer{false};
         //! Drivechain parameters to set, by the name of their field in Consensus::DrivechainParams.
         std::vector<std::pair<std::string, int>> drivechain_params{};
         //! FastBlocks: the fixed validator set of a regtest sidechain (-posvalidators).
@@ -205,6 +208,9 @@ public:
     static std::unique_ptr<const CChainParams> Main() { const MainNetOptions opts{}; return Main(opts); }
     static std::unique_ptr<const CChainParams> TestNet(const TestNetOptions& options);
     static std::unique_ptr<const CChainParams> TestNet() { const TestNetOptions opts{}; return TestNet(opts); }
+    /** A network of a sidechain of Backbone on eCash: `chain` is ChainType::ECASH, ECASH_BETANET or ECASH_TESTNET. */
+    static std::unique_ptr<const CChainParams> Ecash(ChainType chain, const MainNetOptions& options);
+    static std::unique_ptr<const CChainParams> Ecash(ChainType chain) { const MainNetOptions opts{}; return Ecash(chain, opts); }
 
 protected:
     CChainParams() = default;

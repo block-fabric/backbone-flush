@@ -70,7 +70,7 @@ inline constexpr size_t MAX_PAYOUTS_PER_BLOCK{1000};
 inline constexpr size_t MAX_REFUNDS_PER_BLOCK{MAX_PAYOUTS_PER_BLOCK / 10};
 /**
  * Blocks during which a new withdrawal can still be taken back ahead of a bundle that would take it
- * (block assembly policy, not a rule): after that, a bundle goes before refund requests.
+ * (block assembly policy, not a rule), on the Chains networks: SidechainParams::refund_grace_blocks, per network.
  */
 inline constexpr int REFUND_GRACE_BLOCKS{6};
 /**
@@ -78,7 +78,7 @@ inline constexpr int REFUND_GRACE_BLOCKS{6};
  * score while it rose by PENDING_TREND_MIN_RISE or more over the last PENDING_TREND_BLOCKS mainchain
  * blocks (see SidechainParams::pending_min_score): net upvotes in a quarter of the
  * blocks, half the pace at which a bundle reaches the mainchain's withdrawal_min_score in its
- * withdrawal_period. Slower, it is on its way to failing; keeping it at that pace against the
+ * withdrawal_period (the same on the enforcer: 13,150 in 26,300). Slower, it is on its way to failing; keeping it at that pace against the
  * downvotes of the miners who vouch for this chain takes a good share of the hashrate, block after block.
  */
 inline constexpr int PENDING_TREND_BLOCKS{12};
@@ -205,17 +205,21 @@ public:
                                        std::vector<CTxOut>& payouts, std::string& reject_reason);
     /**
      * The bundle a block at `height`, on top of the block `prev`, may commit to: empty if no bundle can
-     * be made now. A bundle of another branch pending on the mainchain does not hold it back. (`height`
-     * is the one the peg actions count as at: PegStep::peg_height if the block's step sets it.)
+     * be made now. A bundle of another branch pending on the mainchain does not hold it back where the
+     * mainchain pays one bundle per slot (SidechainParams::main_single_payout): one of the two is paid and
+     * the other fails. Where it does not (Backbone on eCash), one with support (`main_pending`, see
+     * MainPending) does: both could be paid, and the withdrawals they share paid twice. (`height` is the
+     * one the peg actions count as at: PegStep::peg_height if the block's step sets it.)
      */
     std::optional<CMutableTransaction> NextBundle(int height, const uint256& prev, const Consensus::SidechainParams& params, std::vector<COutPoint>* withdrawals = nullptr,
-                                                  std::optional<int32_t> max_withdrawal_height = std::nullopt) const;
+                                                  std::optional<int32_t> max_withdrawal_height = std::nullopt, bool main_pending = false) const;
     /**
      * Make the bundle with the hash `hash` the pending one.
      * @param[in] max_withdrawal_height  if set, the bundle takes only withdrawals made at this height or below (PegStep)
+     * @param[in] main_pending           see MainPending, as of the block's peg actions (NextBundle)
      */
     [[nodiscard]] bool StartBundle(const uint256& hash, int height, const uint256& prev, const Consensus::SidechainParams& params, std::string& reject_reason,
-                                   std::optional<int32_t> max_withdrawal_height = std::nullopt);
+                                   std::optional<int32_t> max_withdrawal_height = std::nullopt, bool main_pending = false);
     /**
      * Whether a bundle of this sidechain other than its own, pending on the mainchain with support
      * (see SidechainParams::pending_min_score), holds refunds back for a block with this state: as

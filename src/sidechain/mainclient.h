@@ -6,6 +6,7 @@
 #define BITCOIN_SIDECHAIN_MAINCLIENT_H
 
 #include <univalue.h>
+#include <util/chaintype.h>
 #include <util/fs.h>
 #include <util/result.h>
 
@@ -27,6 +28,19 @@ public:
     explicit MainClientError(const std::string& message, bool rpc_error_in, std::string rpc_message_in = {})
         : std::runtime_error{message}, rpc_error{rpc_error_in}, rpc_message{std::move(rpc_message_in)} {}
 };
+
+/**
+ * The mainchain node of a sidechain network: Chains (chainsd, chains-cli) for the Chains networks (main,
+ * test, signet, regtest), Backbone (backboned, backbone-cli) on eCash for ecash, ecashbeta and ecashtest
+ * (the same network names as Backbone's -chain). Regtest follows either: a Backbone regtest node in its
+ * eCash mode (-testecash) answers as a Chains one does.
+ */
+//! The default JSON-RPC port of the mainchain node: Chains' (9554, 19554, 39554, 29554) or Backbone's (8532, 8532, 48532).
+uint16_t DefaultMainchainRPCPort(ChainType chain);
+//! The folder of the network in the data directory of the mainchain node ("" for the network at its root).
+std::string MainchainDataSubdir(ChainType chain);
+//! The name of the mainchain program, for messages: "Backbone" or "Chains".
+std::string MainchainName(ChainType chain);
 
 /** JSON-RPC client for the mainchain node that this sidechain node follows. */
 class MainClient

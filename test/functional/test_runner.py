@@ -195,6 +195,8 @@ BASE_SCRIPTS = [
     'feature_bitassets_transactions.py',
     'feature_bitassets_search.py',
     'feature_fastblocks_txindex.py',
+    'feature_sidechain_ecash.py',
+    'feature_layers_ecash.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',
     'feature_sidechain_catchup.py',

@@ -437,6 +437,12 @@ private:
             return " regtest";
         case ChainType::MAIN:
             return "";
+        case ChainType::ECASH:
+            return " ecash";
+        case ChainType::ECASH_BETANET:
+            return " ecashbeta";
+        case ChainType::ECASH_TESTNET:
+            return " ecashtest";
         }
         assert(false);
     }

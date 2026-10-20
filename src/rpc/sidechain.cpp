@@ -408,7 +408,7 @@ RPCMethod getwithdrawalbundle()
         {},
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
-            {RPCResult::Type::STR, "status", "\"pending\": the mainchain is voting on the bundle; \"next\": the next block can commit to it; \"none\": there is no bundle and none can be made now"},
+            {RPCResult::Type::STR, "status", "\"pending\": the mainchain is voting on the bundle; \"next\": the next block can commit to it; \"held\": one could be made, but a bundle of another branch with support is pending on a mainchain that does not pay one bundle per slot (Backbone on eCash), and holds it back; \"none\": there is no bundle and none can be made now"},
             {RPCResult::Type::STR_HEX, "hash", /*optional=*/true, "The hash of the bundle, which the mainchain votes on"},
             {RPCResult::Type::NUM, "height", /*optional=*/true, "The height of the block that committed to a pending bundle"},
             {RPCResult::Type::NUM, "withdrawals", /*optional=*/true, "The number of withdrawals in the bundle"},
@@ -432,8 +432,12 @@ RPCMethod getwithdrawalbundle()
         tx = side.BundleTx();
         withdrawals = pending->withdrawals;
         result.pushKV("height", pending->height);
-    } else if ((tx = side.NextBundle(snapshot.height + 1, snapshot.tip, chainman.GetConsensus().sidechain, &withdrawals))) {
+    } else if ((tx = side.NextBundle(snapshot.height + 1, snapshot.tip, chainman.GetConsensus().sidechain, &withdrawals,
+                                     std::nullopt, WITH_LOCK(::cs_main, return chainman.m_mainchain && side.MainPendingNext(*chainman.m_mainchain, chainman.GetConsensus().sidechain))))) {
         result.pushKV("status", "next");
+    } else if ((tx = side.NextBundle(snapshot.height + 1, snapshot.tip, chainman.GetConsensus().sidechain, &withdrawals))) {
+        // Where the mainchain does not pay one bundle per slot: a bundle of another branch with support holds it back.
+        result.pushKV("status", "held");
     } else {
         result.pushKV("status", "none");
     }

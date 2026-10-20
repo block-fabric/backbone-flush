@@ -65,6 +65,14 @@ struct PosParams {
      * unless -testactivationheight=feecurve2@<height>.
      */
     int fee_curve2_height{0};
+    /**
+     * The spacing of mainchain blocks the fee curves are drawn for (pos/feesplit.h): S is taken as
+     * S * FEE_SPLIT_TARGET_SPACING / fee_target_spacing, so that the split is 50/50 at this spacing and below
+     * and falls as there for slower blocks (the second curve: 5 points per fee_target_spacing above it, to 20 %
+     * at seven times it). 60 seconds on the Chains networks (the curves as they were); 600 on the eCash
+     * networks, whose blocks are ten minutes apart (at 60 every eCash block would put the bidder at the floor).
+     */
+    int64_t fee_target_spacing{60};
     //! A PoS block may be this far ahead of the node's clock, at most.
     int64_t max_future_seconds{2};
     //! Not consensus: wallets call a block final once this many anchors cover it.

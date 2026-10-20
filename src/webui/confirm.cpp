@@ -39,6 +39,9 @@ std::string NetworkName()
     case ChainType::TESTNET: return "Testnet";
     case ChainType::SIGNET: return "Signet";
     case ChainType::REGTEST: return "Regtest";
+    case ChainType::ECASH: return "eCash";
+    case ChainType::ECASH_BETANET: return "eCash Betanet";
+    case ChainType::ECASH_TESTNET: return "eCash Testnet";
     default: return ChainTypeToString(Params().GetChainType());
     }
 }

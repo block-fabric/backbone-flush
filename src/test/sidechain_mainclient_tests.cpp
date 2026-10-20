@@ -2,14 +2,22 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chainparams.h>
+#include <chainparamsbase.h>
+#include <kernel/chainparams.h>
 #include <sidechain/follower.h>
 #include <sidechain/mainclient.h>
 #include <test/util/setup_common.h>
+#include <univalue.h>
+#include <util/chaintype.h>
+#include <util/fs_helpers.h>
 #include <util/translation.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <fstream>
+#include <set>
+#include <vector>
 
 using namespace sidechain;
 
@@ -143,6 +151,95 @@ BOOST_AUTO_TEST_CASE(link_state_mapping)
     BOOST_CHECK_EQUAL(Follower::LinkStateName(S::OK), "ok");
     BOOST_CHECK_EQUAL(Follower::LinkStateName(S::SYNCING), "syncing");
     BOOST_CHECK_EQUAL(Follower::LinkStateName(S::DOWN), "down");
+}
+
+BOOST_AUTO_TEST_CASE(ecash_networks)
+{
+    // The networks of a sidechain of Backbone on eCash, beside those of a sidechain of Chains.
+    for (const auto& [name, type] : std::vector<std::pair<std::string, ChainType>>{{"ecash", ChainType::ECASH}, {"ecashbeta", ChainType::ECASH_BETANET}, {"ecashtest", ChainType::ECASH_TESTNET}}) {
+        BOOST_CHECK(ChainTypeFromString(name) == type);
+        BOOST_CHECK_EQUAL(ChainTypeToString(type), name);
+        BOOST_CHECK(IsEcashChain(type));
+    }
+    BOOST_CHECK(!IsEcashChain(ChainType::MAIN) && !IsEcashChain(ChainType::REGTEST));
+    // The mainchain node: Backbone's ports and folders for the eCash networks, Chains' for the others.
+    BOOST_CHECK_EQUAL(DefaultMainchainRPCPort(ChainType::ECASH), 8532);
+    BOOST_CHECK_EQUAL(DefaultMainchainRPCPort(ChainType::ECASH_BETANET), 8532);
+    BOOST_CHECK_EQUAL(DefaultMainchainRPCPort(ChainType::ECASH_TESTNET), 48532);
+    BOOST_CHECK_EQUAL(DefaultMainchainRPCPort(ChainType::MAIN), 9554);
+    BOOST_CHECK_EQUAL(DefaultMainchainRPCPort(ChainType::REGTEST), 29554);
+    BOOST_CHECK_EQUAL(MainchainDataSubdir(ChainType::ECASH), "");
+    BOOST_CHECK_EQUAL(MainchainDataSubdir(ChainType::ECASH_BETANET), "betanet");
+    BOOST_CHECK_EQUAL(MainchainDataSubdir(ChainType::ECASH_TESTNET), "testnet4");
+    BOOST_CHECK_EQUAL(MainchainName(ChainType::ECASH), "Backbone");
+    BOOST_CHECK_EQUAL(MainchainName(ChainType::TESTNET), "Chains");
+    // A data directory of its own for the eCash networks.
+    BOOST_CHECK(GetDefaultDataDir(/*ecash=*/true) != GetDefaultDataDir(/*ecash=*/false));
+    BOOST_CHECK(GetDefaultDataDir() == GetDefaultDataDir(/*ecash=*/false));
+    BOOST_CHECK(fs::PathToString(GetDefaultDataDir(/*ecash=*/true).filename()).find("ackbone-") != std::string::npos);
+
+    // Identities of their own: genesis, message start, ports, address prefix; no two networks alike.
+    std::set<uint256> genesis;
+    std::set<std::string> hrps;
+    std::set<uint16_t> ports;
+    for (const ChainType type : {ChainType::MAIN, ChainType::TESTNET, ChainType::SIGNET, ChainType::REGTEST, ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        const auto params{CreateChainParams(m_args, type)};
+        BOOST_CHECK(params->GetChainType() == type);
+        BOOST_CHECK(genesis.insert(params->GenesisBlock().GetHash()).second);
+        if (type != ChainType::SIGNET && type != ChainType::REGTEST) BOOST_CHECK(hrps.insert(params->Bech32HRP()).second);
+        BOOST_CHECK(ports.insert(params->GetDefaultPort()).second);
+        BOOST_CHECK(ports.insert(CreateBaseChainParams(type)->RPCPort()).second);
+        BOOST_CHECK(GetNetworkForMagic(params->MessageStart()) == type);
+        const Consensus::Params& consensus{params->GetConsensus()};
+        if (IsEcashChain(type)) {
+            BOOST_CHECK(consensus.sidechain.enabled);
+            // No single payout on the enforcer's eCash, and ten-minute mainchain blocks.
+            BOOST_CHECK(!consensus.sidechain.main_single_payout);
+            // Layers: a block a slot (15 s), the grace and retry in blocks of this chain as on Chains.
+            BOOST_CHECK_EQUAL(consensus.nPowTargetSpacing, consensus.pos.slot_seconds);
+            BOOST_CHECK_EQUAL(consensus.sidechain.refund_grace_blocks, 6);
+            BOOST_CHECK_EQUAL(consensus.sidechain.main_behind_margin, 2);
+            BOOST_CHECK_EQUAL(consensus.sidechain.pending_min_score, type == ChainType::ECASH_TESTNET ? 2U : 1315U);
+            BOOST_CHECK_EQUAL(consensus.sidechain.unproposed_expiry_blocks, type == ChainType::ECASH_TESTNET ? 12 : 144);
+            const auto base{CreateChainParams(m_args, type == ChainType::ECASH_TESTNET ? ChainType::TESTNET : ChainType::MAIN)};
+            BOOST_CHECK_EQUAL(consensus.sidechain.bundle_retry_delay, base->GetConsensus().sidechain.bundle_retry_delay);
+            // The anchoring of the blocks of stake, for ten-minute anchors.
+            BOOST_CHECK_EQUAL(consensus.pos.fee_target_spacing, 600);
+            BOOST_CHECK_EQUAL(base->GetConsensus().pos.fee_target_spacing, 60);
+            BOOST_CHECK_EQUAL(consensus.pos.max_unanchored_slots, 720);
+            BOOST_CHECK_EQUAL(consensus.pos.stall_seconds, 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.seed_lookahead_seconds, 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.final_anchors, 3);
+            BOOST_CHECK_EQUAL(consensus.pos.unbonding_anchors, type == ChainType::ECASH_TESTNET ? 12 : 288);
+            BOOST_CHECK_EQUAL(consensus.pos.evidence_window_anchors, type == ChainType::ECASH_TESTNET ? 6 : 144);
+            BOOST_CHECK_EQUAL(consensus.pos.pot_reserve_anchors, type == ChainType::ECASH_TESTNET ? 6 : 144);
+            BOOST_CHECK_EQUAL(consensus.pos.slot_seconds, base->GetConsensus().pos.slot_seconds);
+            BOOST_CHECK_EQUAL(consensus.pos.genesis_time, params->GenesisBlock().nTime);
+            BOOST_CHECK_EQUAL(consensus.coinbase_maturity, 0);
+        } else if (type != ChainType::REGTEST) {
+            BOOST_CHECK(consensus.sidechain.main_single_payout);
+        }
+    }
+
+    // The network of a mainchain node: Backbone's "network" (its "chain" is eCash's name), else Chains' "chain".
+    UniValue backbone{UniValue::VOBJ};
+    backbone.pushKV("chain", "main");
+    backbone.pushKV("network", "ecashbeta");
+    BOOST_CHECK_EQUAL(Follower::MainNetwork(backbone), "ecashbeta");
+    UniValue chains{UniValue::VOBJ};
+    chains.pushKV("chain", "test");
+    BOOST_CHECK_EQUAL(Follower::MainNetwork(chains), "test");
+    Follower::Status s;
+    s.connected = true;
+    s.main_chain = "main";
+    BOOST_CHECK(Follower::Link(s, "ecash").second == Follower::LinkError::WRONG_NETWORK);
+    s.main_chain = "ecash";
+    BOOST_CHECK(Follower::Link(s, "ecash").first == Follower::LinkState::OK);
+    // Two ten-minute blocks behind is syncing on eCash, not on Chains.
+    s.main_blocks = s.main_headers = 103;
+    s.followed_height = 100;
+    BOOST_CHECK(Follower::Link(s, "ecash", 2).first == Follower::LinkState::SYNCING);
+    BOOST_CHECK(Follower::Link(s, "ecash").first == Follower::LinkState::OK);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -77,7 +77,8 @@ public:
     static std::string LinkErrorName(LinkError kind);
     /** The kind of an error of following the mainchain node, from its message (those of MainClient and of the follower). */
     static LinkError ClassifyError(const std::string& message);
-    //! Mainchain blocks the record may be behind the mainchain node's headers before the link counts as syncing.
+    //! Mainchain blocks the record may be behind the mainchain node's headers before the link counts as syncing
+    //! (SidechainParams::main_behind_margin: 6 one-minute blocks of the Chains mainchain, 2 of eCash's ten-minute ones).
     static constexpr int BEHIND_MARGIN{6};
     //! Least time between two looks at the mainchain node's own sync (getblockchaininfo), while it answers.
     static constexpr auto PROBE_INTERVAL{std::chrono::seconds{5}};
@@ -89,7 +90,9 @@ public:
         int main_blocks{-1};
         int main_headers{-1};
         bool main_ibd{false};
-        //! Its network ("main", "test", "regtest"...), empty if not known.
+        //! Its network ("main", "test", "regtest", "ecash", "ecashbeta", "ecashtest"...), empty if not known: what
+        //! getblockchaininfo says as "network" (Backbone, whose "chain" is eCash's name: "main" on ecash and on
+        //! ecashbeta), else as "chain" (Chains).
         std::string main_chain;
         //! Height of the last mainchain block on record.
         int followed_height{-1};
@@ -105,10 +108,12 @@ public:
     /**
      * The state of the link and why, from what is known of it: down when the mainchain node does not answer
      * or is on another network than this node; syncing when it answers but is in initial block download, is
-     * behind the record, or the record is more than BEHIND_MARGIN blocks behind its headers.
+     * behind the record, or the record is more than `behind_margin` blocks behind its headers.
      * @param[in] own_chain  the network of this node, which the mainchain node's has to be
      */
-    static std::pair<LinkState, LinkError> Link(const Status& status, const std::string& own_chain);
+    static std::pair<LinkState, LinkError> Link(const Status& status, const std::string& own_chain, int behind_margin = BEHIND_MARGIN);
+    /** The network of a mainchain node, from its getblockchaininfo: "network" if it says (Backbone), else "chain". */
+    static std::string MainNetwork(const UniValue& blockchaininfo);
     Status GetStatus() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     /** A block of this chain waiting for the mainchain to commit to it. */

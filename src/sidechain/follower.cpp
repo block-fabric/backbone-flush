@@ -70,7 +70,7 @@ CAmount ParseAmount(const UniValue& value)
 std::vector<MainPendingBundle> ParsePending(const UniValue& obj)
 {
     if (!obj.exists("pending")) {
-        throw std::runtime_error("The mainchain node is too old: it does not report the withdrawal bundles pending after blocks, with their scores. Upgrade Chains");
+        throw std::runtime_error("The mainchain node is too old: it does not report the withdrawal bundles pending after blocks, with their scores. Upgrade the mainchain node (Backbone, or Chains)");
     }
     std::vector<MainPendingBundle> pending;
     for (const UniValue& entry : obj["pending"].getValues()) pending.push_back({Hash256(entry["hash"]), entry["score"].getInt<uint32_t>()});
@@ -82,7 +82,7 @@ std::vector<MainPendingBundle> ParsePending(const UniValue& obj)
 std::vector<uint256> ParseProposed(const UniValue& obj)
 {
     if (!obj.exists("proposed")) {
-        throw std::runtime_error("The mainchain node is too old: it does not report the withdrawal bundles that blocks propose. Upgrade Chains");
+        throw std::runtime_error("The mainchain node is too old: it does not report the withdrawal bundles that blocks propose. Upgrade the mainchain node (Backbone, or Chains)");
     }
     std::vector<uint256> proposed;
     for (const UniValue& hash : obj["proposed"].getValues()) proposed.push_back(Hash256(hash));
@@ -98,7 +98,7 @@ MainBlock ParseMainBlock(const UniValue& obj)
     // time of the block itself can be two hours ahead). Rules of sidechains depend on it: a node that
     // does not say is too old to follow, as nodes that took another time would disagree.
     if (!obj.exists("mediantime")) {
-        throw std::runtime_error("The mainchain node is too old: it does not report the median time of blocks. Upgrade Chains");
+        throw std::runtime_error("The mainchain node is too old: it does not report the median time of blocks. Upgrade the mainchain node (Backbone, or Chains)");
     }
     block.time = obj["mediantime"].getInt<int64_t>();
     if (obj.exists("bmm")) block.bmm = Hash256(obj["bmm"]);
@@ -209,7 +209,17 @@ Follower::LinkError Follower::ClassifyError(const std::string& message)
     return LinkError::OTHER;
 }
 
-std::pair<Follower::LinkState, Follower::LinkError> Follower::Link(const Status& status, const std::string& own_chain)
+std::string Follower::MainNetwork(const UniValue& info)
+{
+    // Backbone says "chain" as eCash's own node does (main on ecash and ecashbeta, testnet4 on ecashtest), for
+    // the pools and the enforcer, and its own name of the network as "network". Chains has "chain" only.
+    const UniValue& network{info.find_value("network")};
+    if (network.isStr()) return network.get_str();
+    const UniValue& chain{info.find_value("chain")};
+    return chain.isStr() ? chain.get_str() : "";
+}
+
+std::pair<Follower::LinkState, Follower::LinkError> Follower::Link(const Status& status, const std::string& own_chain, int behind_margin)
 {
     if (!status.connected) {
         const LinkError kind{ClassifyError(status.error)};
@@ -218,7 +228,7 @@ std::pair<Follower::LinkState, Follower::LinkError> Follower::Link(const Status&
         return {LinkState::DOWN, kind == LinkError::NONE ? LinkError::OTHER : kind};
     }
     if (!status.main_chain.empty() && !own_chain.empty() && status.main_chain != own_chain) return {LinkState::DOWN, LinkError::WRONG_NETWORK};
-    if (status.main_ibd || status.Behind() > BEHIND_MARGIN) return {LinkState::SYNCING, LinkError::NOT_SYNCED};
+    if (status.main_ibd || status.Behind() > behind_margin) return {LinkState::SYNCING, LinkError::NOT_SYNCED};
     return {LinkState::OK, LinkError::NONE};
 }
 
@@ -236,7 +246,7 @@ void Follower::Probe()
         m_status.main_blocks = info["blocks"].isNum() ? info["blocks"].getInt<int>() : -1;
         m_status.main_headers = info["headers"].isNum() ? info["headers"].getInt<int>() : -1;
         m_status.main_ibd = info["initialblockdownload"].isTrue();
-        m_status.main_chain = info["chain"].isStr() ? info["chain"].get_str() : "";
+        m_status.main_chain = MainNetwork(info);
     } catch (const std::exception&) {
         // Sync just reached it: the next round says if it no longer answers.
     }
@@ -264,7 +274,7 @@ void Follower::NoteLink(bool ok, const std::string& error)
         m_last_probe = {};
     }
     m_status.followed_height = m_node.chainman->m_mainchain ? m_node.chainman->m_mainchain->Height() : -1;
-    const auto [state, kind]{Link(m_status, m_node.chainman->GetParams().GetChainTypeString())};
+    const auto [state, kind]{Link(m_status, m_node.chainman->GetParams().GetChainTypeString(), m_node.chainman->GetConsensus().sidechain.main_behind_margin)};
     if (state != m_status.state || m_status.state_since == 0) {
         if (m_status.state_since != 0) LogInfo("The link to the mainchain node is now %s%s", LinkStateName(state), kind == LinkError::NONE ? "" : " (" + LinkErrorName(kind) + ")");
         m_status.state = state;
