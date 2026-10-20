@@ -776,8 +776,10 @@ void Interrupt()
     {
         LOCK(g_host_mutex);
         g_interrupted = true;
-        host = std::move(g_host);
+        host = g_host;
     }
+    // Stopped, not destroyed: what it scheduled on the node's scheduler may still run until the node stops that (in
+    // Shutdown), and finds it stopped. It goes with the program.
     if (host) host->Stop();
 }
 
