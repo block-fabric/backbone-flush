@@ -284,6 +284,7 @@ MAIN_FUNCTION
     // The host of the pages of this chain over RPC, for the Chains app that runs this daemon (webui/remotehost.h).
     rpc_extra::g_register = webui::remote::RegisterRpcCommands;
     rpc_extra::g_interrupt = webui::remote::Interrupt;
+    rpc_extra::g_shutdown = webui::remote::Shutdown;
 #endif
 
     // Interpret command line arguments

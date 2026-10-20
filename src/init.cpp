@@ -366,6 +366,7 @@ void Shutdown(NodeContext& node)
     // the scheduler. After this point, SyncWithValidationInterfaceQueue() should not be called anymore
     // as this would prevent the shutdown from completing.
     if (node.scheduler) node.scheduler->stop();
+    if (rpc_extra::g_shutdown) rpc_extra::g_shutdown();
 
     // After the threads that potentially access these pointers have been stopped,
     // destruct and reset all to nullptr.

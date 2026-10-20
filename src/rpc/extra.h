@@ -18,6 +18,8 @@ namespace rpc_extra {
 inline std::function<void(CRPCTable&)> g_register;
 //! Called first when the node is interrupted (shutdown): what waits in those methods returns, what they hold goes.
 inline std::function<void()> g_interrupt;
+//! Called in Shutdown once the scheduler stopped, before the node's parts go: what those methods hold is freed.
+inline std::function<void()> g_shutdown;
 } // namespace rpc_extra
 
 #endif // BITCOIN_RPC_EXTRA_H

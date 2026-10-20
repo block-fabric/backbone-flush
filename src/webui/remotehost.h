@@ -149,6 +149,8 @@ private:
 void RegisterRpcCommands(CRPCTable& table);
 /** The node is shutting down: the host stops (the waits return, its handlers go). */
 void Interrupt();
+/** The node's scheduler stopped: the host goes (rpc_extra::g_shutdown), before the parts of the node it used. */
+void Shutdown();
 
 } // namespace webui::remote
 
