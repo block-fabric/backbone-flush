@@ -987,13 +987,15 @@ bool CheckSidechainActivation(const CChainParams& chainparams)
     // nothing more. The template's own networks, which no slot activated, are left out: their first
     // block says so, and a sidechain made from the template has a first block of its own.
     const auto is_template_chain{[&] {
-        static constexpr std::string_view tag{"Sidechain template, "};
+        // ("Sidechain template, main network" and the others; "Sidechain template on Backbone, ..." on eCash.)
+        static constexpr std::string_view tag{"Sidechain template"};
         const CScript& script{chainparams.GenesisBlock().vtx[0]->vin[0].scriptSig};
         return std::search(script.begin(), script.end(), tag.begin(), tag.end()) != script.end();
     }};
     if (const Consensus::SidechainParams& side{chainparams.GetConsensus().sidechain};
         side.enabled && side.main_activation_height == 0 && chainparams.GetChainType() != ChainType::REGTEST && !is_template_chain()) {
-        if (chainparams.GetChainType() == ChainType::MAIN) {
+        // The main networks: Chains', and eCash's (betanet, a rehearsal, is a test network here).
+        if (chainparams.GetChainType() == ChainType::MAIN || chainparams.GetChainType() == ChainType::ECASH) {
             return InitError(Untranslated(strprintf("This release names slot %u of the mainchain but not the height of the block that activated the sidechain there "
                                                     "(SidechainParams::main_activation_height): it must not run on the main network.", side.slot)));
         }
