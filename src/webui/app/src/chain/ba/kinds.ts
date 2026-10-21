@@ -6,10 +6,14 @@
 // Pure: no state, no calls (tested in chain/ba/kinds.test.ts).
 import { approx, assetArg, isChn, unitsOf, type Amount } from './model';
 
-/** The curves of pools; 'launch' is a launch's bonding curve (ba/launch.ts), which nobody makes or puts liquidity into. */
-export type Curve = 'constant_product' | 'stable' | 'weighted' | 'launch';
+/**
+ * The curves of pools; 'concentrated' takes its liquidity by positions between two prices (ba/cl.ts); 'launch' is a launch's
+ * bonding curve (ba/launch.ts), which nobody makes or puts liquidity into.
+ */
+export type Curve = 'constant_product' | 'stable' | 'weighted' | 'concentrated' | 'launch';
 /** The curves a pool is made with (createpool). */
-export const CURVES: readonly Exclude<Curve, 'launch'>[] = ['constant_product', 'stable', 'weighted'];
+export type MadeCurve = Exclude<Curve, 'launch'>;
+export const CURVES: readonly MadeCurve[] = ['constant_product', 'stable', 'weighted', 'concentrated'];
 
 /** The fee of the kind addliquidity makes (constant product), in percent; and that of a stable pool by default. */
 export const DEFAULT_FEE = 0.3;
@@ -35,6 +39,9 @@ export interface PoolKind {
   weight_b?: number;
   /** Whether it is the kind addliquidity makes (constant product, 0.3%): the pool swapasset, swaproute's path and addliquidity name. */
   default_kind: boolean;
+  /** Whether its fee rises with its volatility (at most 2% above its tier), and that fee for the next block, in percent. */
+  dynamic_fee?: boolean;
+  fee_now?: number;
 }
 
 /** What getdexinfo says of the pool kinds (and of the DEX). */
@@ -54,18 +61,22 @@ export interface DexInfo {
 }
 
 export function isCurve(value: unknown): value is Curve {
-  return value === 'constant_product' || value === 'stable' || value === 'weighted' || value === 'launch';
+  return value === 'constant_product' || value === 'stable' || value === 'weighted' || value === 'concentrated' || value === 'launch';
 }
 
 /**
  * The kind of a pool as the node gives it. A node from before the pool kinds gives none: its pools are all of the kind
  * addliquidity makes, constant product at 0.3%.
  */
-export function kindOf(p: { curve?: unknown; fee?: unknown; fee_millionths?: unknown; amp?: unknown; weight_a?: unknown; weight_b?: unknown; default_kind?: unknown }): PoolKind {
+export function kindOf(p: { curve?: unknown; fee?: unknown; fee_millionths?: unknown; amp?: unknown; weight_a?: unknown; weight_b?: unknown; default_kind?: unknown; dynamic_fee?: unknown; fee_now?: unknown }): PoolKind {
   const curve: Curve = isCurve(p.curve) ? p.curve : 'constant_product';
   const fee = typeof p.fee === 'number' || typeof p.fee === 'string' ? approx(p.fee) : DEFAULT_FEE;
   const out: PoolKind = { curve, fee, default_kind: typeof p.default_kind === 'boolean' ? p.default_kind : curve === 'constant_product' && fee === DEFAULT_FEE };
   if (typeof p.fee_millionths === 'number') out.fee_millionths = p.fee_millionths;
+  if (p.dynamic_fee === true) {
+    out.dynamic_fee = true;
+    if (typeof p.fee_now === 'number' || typeof p.fee_now === 'string') out.fee_now = approx(p.fee_now);
+  }
   if (curve === 'stable' && (typeof p.amp === 'number' || typeof p.amp === 'string')) out.amp = approx(p.amp);
   if (curve === 'weighted' && (typeof p.weight_a === 'number' || typeof p.weight_a === 'string')) {
     out.weight_a = approx(p.weight_a);
@@ -81,15 +92,24 @@ export function flipKind(k: PoolKind): PoolKind {
 }
 
 /** The words of a curve (shown with t()). */
-export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted', launch: 'Launch curve' };
+export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted', concentrated: 'Concentrated', launch: 'Launch curve' };
 
 /** When to choose each curve, in a line (shown with t()). */
 export const CURVE_HELP: Record<Curve, string> = {
   constant_product: 'For two assets whose prices move freely against each other: liquidity at every price. The usual kind, and the one Add liquidity makes (at 0.3%).',
   stable: 'For two assets meant to be worth about the same (two stablecoins, a token and its wrapped twin): far less slippage near the balance; A sets how flat it is there.',
   weighted: 'For a pool that holds more of one asset than of the other (such as 80/20): less exposure to the price of the lighter one, and more slippage.',
+  concentrated: 'Liquidity between two prices you choose (positions), as Uniswap v3: far deeper where the price trades, and earning only while the price is in your range. Made at a price, empty: positions bring its liquidity.',
   launch: 'The bonding curve of a launched token: it sells the token for CHN until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.',
 };
+
+/** The fee a pool charges now: a dynamic fee's value for the next block, else its tier. */
+export function feeNow(k: Pick<PoolKind, 'fee' | 'dynamic_fee' | 'fee_now'>): number {
+  return k.dynamic_fee && k.fee_now !== undefined ? k.fee_now : k.fee;
+}
+
+/** What a dynamic fee does, in a line (shown with t()). */
+export const DYNAMIC_FEE_HELP = 'The fee rises with the pool\'s volatility: its tier plus half the recent change of its price per block, at most 2% more; quiet, it returns to its tier.';
 
 /** A fee in percent, as the node writes it: "0.01%", "0.05%", "0.3%", "1%". */
 export function feePercent(fee: number): string {
@@ -111,16 +131,17 @@ export function clampAmp(value: number, min = MIN_AMP, max = MAX_AMP): number {
 }
 
 /** The kind of a pool to make, as createpool and previewpool take it: the curve, the fee, and A or asset_a's weight. */
-export function kindParam(curve: Curve, fee: number, amp: number, weightA: number): Record<string, string | number> {
-  const out: Record<string, string | number> = { curve, fee };
+export function kindParam(curve: Curve, fee: number, amp: number, weightA: number, dynamic = false): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = { curve, fee };
   if (curve === 'stable') out.amp = amp;
   if (curve === 'weighted') out.weight_a = weightA;
+  if (dynamic) out.dynamic_fee = true;
   return out;
 }
 
 /** Whether a kind is the one addliquidity makes. */
-export function isDefaultKind(curve: Curve, fee: number): boolean {
-  return curve === 'constant_product' && fee === DEFAULT_FEE;
+export function isDefaultKind(curve: Curve, fee: number, dynamic = false): boolean {
+  return curve === 'constant_product' && fee === DEFAULT_FEE && !dynamic;
 }
 
 // --- Trades over every pool of a pair, and routes ---

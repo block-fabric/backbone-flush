@@ -3,7 +3,8 @@
 // pools of every kind made by RPC (a default GOLD/CHN pool, a stable USDX/USDY at A = 200 and 0.05 %, a weighted GOLD/CHN at
 // 80/20, a constant-product GOLD/SILVER at 1 %); the pool wizard at its review for each curve, typed through the page so that
 // the node previews it; the pages of the stable and the weighted pools with their depth; a swap whose best route mixes the
-// 1 % pool and the weighted one; the launch wizard at its review; then two tokens launched by RPC (MOON, with a display name,
+// 1 % pool and the weighted one; a concentrated USDX/USDY pool with three positions (one out of range) and a pool with a
+// dynamic fee, a few trades, the range picker with a preview and the positions; the launch wizard at its review; then two tokens launched by RPC (MOON, with a display name,
 // a description, an allocation and a first buy; STAR, with a few buys), the list of launches, MOON's page on its curve with
 // a buy quoted, and once a buy of 600 CHN takes it past the curve's end, its page graduated. Pictures in Midnight, Advanced.
 (async () => {
@@ -145,6 +146,38 @@
     await waitFor('the route panel', () => $('ol[aria-label="Route"]'), 20000);
     await check('the route goes through the 1 % pool and the weighted one', /1%/.test(text('ol[aria-label="Route"]')) && /Weighted/.test(text('ol[aria-label="Route"]')), text('ol[aria-label="Route"]'));
     await shot('trade-mixed-route');
+
+    // --- Concentrated liquidity and a dynamic fee: a concentrated USDX/USDY pool at 1 with three positions (one out of
+    // range), a constant-product GOLD/SILVER pool with a dynamic fee, a few trades through both ---
+    const made = await rpc('createpool', ['USDX', 1, 'USDY', 1, { curve: 'concentrated', fee: 0.05 }], W);
+    const dyn = await rpc('createpool', ['GOLD', 1000, 'SILVER', 1000, { curve: 'constant_product', fee: 0.3, dynamic_fee: true }], W);
+    const clPool = await waitFor('the concentrated pool in a block', async () => rpc('getpool', [made.pool]), 300000);
+    await waitFor('the dynamic pool in a block', async () => rpc('getpool', [dyn.pool]), 300000);
+    const both = (x, y) => ({ [`0x${ids.USDX}`]: x, [`0x${ids.USDY}`]: y });
+    await rpc('openposition', [made.pool, 0.98, 1.02, both(500, 500)], W);
+    await rpc('openposition', [made.pool, 0.9, 1.1, both(300, 300)], W);
+    // Above the price (the node's prices are of the pool's lower id in the other): out of range, one asset alone.
+    await rpc('openposition', [made.pool, 1.1, 1.2, both(200, 200)], W);
+    await waitFor('the three positions in a block', async () => (await rpc('listpositions', [], W)).length >= 3, 300000);
+    for (const [asset, amount, pool] of [['USDX', 40, made.pool], ['USDY', 30, made.pool], ['USDX', 25, made.pool], ['GOLD', 60, dyn.pool], ['SILVER', 40, dyn.pool]]) {
+      await rpc('swappools', [asset, amount, [pool]], W);
+    }
+    await waitFor('fees earned in range', async () => (await rpc('listpositions', [], W)).some((p) => Number(p.fees0) > 0 || Number(p.fees1) > 0), 300000);
+    await check('the concentrated pool says its state', !!clPool.concentrated && clPool.curve === 'concentrated', JSON.stringify(clPool.concentrated));
+
+    await go('trade', 'swap');
+    await go('trade', 'pools');
+    const clRow = await waitFor('the concentrated pool in the list', () => $$('table[aria-label="Pools"] tbody tr').find((r) => r.textContent.includes('Concentrated')), 60000);
+    clRow.click();
+    await waitFor('the liquidity by price', () => $('#cl-lower') && $$('rect.bar').length > 0, 60000);
+    await click('±1%', () => $('[aria-label="Range presets"]'));
+    set($('#cl-amount-a'), '100');
+    await waitFor('the preview of the position', () => $('[data-testid="position-preview"]'), 60000);
+    await shot('cl-range-picker');
+
+    await go('trade', 'positions');
+    await waitFor('the positions, in range and out of it', () => $('[data-testid="in-range"]') && $('[data-testid="out-of-range"]'), 60000);
+    await shot('cl-positions');
 
     // --- The launch wizard, at its review ---
     await go('trade', 'launch');

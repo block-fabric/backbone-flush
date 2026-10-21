@@ -23,7 +23,7 @@
   import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolOf, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import { nav } from '../../lib/nav.svelte';
   import PoolKind from './PoolKind.svelte';
-  import { chooseOption, CURVE_NAMES, executionOf, feePercent, flipKind, kindOf, tradeOptions, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
+  import { chooseOption, CURVE_NAMES, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
@@ -255,7 +255,7 @@
     }
     const sPlain = sChosen.pools.length === 1 && sChosen.defaultPools;
     // The way it goes, hop by hop, each pool by its kind (a route, or a pool of another kind).
-    const along = sHops.map((h) => t('%1 to %2 in a %3 pool at %4', nameOf(h.from), nameOf(h.to), t(CURVE_NAMES[h.kind.curve]), feePercent(h.kind.fee))).join('; ');
+    const along = sHops.map((h) => t('%1 to %2 in a %3 pool at %4', nameOf(h.from), nameOf(h.to), t(CURVE_NAMES[h.kind.curve]), feePercent(feeNow(h.kind)))).join('; ');
     const r = await ask({
       title: t('Swap'),
       message: t('Pay %1 %2 for about %3 %4?', formatUnits(sAmount, sPayDecimals), payLabel, formatUnits(sOut, sGetDecimals), getLabel),
@@ -333,9 +333,9 @@
         {#if chosen.impact !== undefined}<dt>Price impact</dt><dd class:ba-good={impact <= 1} class:ba-warn={impact > 1 && impact <= 5} class:ba-bad={impact > 5}>{impact.toFixed(2)}%</dd>{/if}
         <dt>At least</dt><dd class="strong">{formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /></dd>
         {#if chosen && chosen.pools.length === 1}
-          <dt>Pool fee ({feePercent(chosen.hops[0].kind.fee)})</dt><dd>{formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /></dd>
+          <dt>Pool fee ({feePercent(feeNow(chosen.hops[0].kind))})</dt><dd>{formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /></dd>
         {:else if chosen}
-          <dt>Fees</dt><dd>{chosen.hops.map((h) => feePercent(h.kind.fee)).join(' + ')}, one per pool</dd>
+          <dt>Fees</dt><dd>{chosen.hops.map((h) => feePercent(feeNow(h.kind))).join(' + ')}, one per pool</dd>
         {/if}
       </dl>
     {:else if pool && !pool.abandoned && reserves}

@@ -103,6 +103,7 @@ export const LOCAL_COMMANDS = [
   { id: 'ba.issue', label: 'Register new asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
   { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
+  { id: 'ba.positions', label: 'Positions', page: 'trade', tab: 'positions', tip: 'Your positions of concentrated liquidity: in range or not, fees earned; collect, add, remove, close', keywords: 'concentrated liquidity position range ticks uniswap v3 fees collect' },
   { id: 'ba.launches', label: 'Launches', page: 'trade', tab: 'launches', tip: 'Tokens sold from a bonding curve until they graduate into a locked pool', keywords: 'launch bonding curve token new graduate pump fair' },
   { id: 'ba.launch', label: 'Launch a token…', page: 'trade', tab: 'launch', tip: 'Launch a token of your own on a bonding curve', keywords: 'launch bonding curve token create new ticker' },
   { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable or weighted, at a fee tier', keywords: 'pool curve stable weighted stableswap amplification weights fee tier' },

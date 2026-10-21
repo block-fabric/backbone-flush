@@ -19,9 +19,10 @@
   import Chart from './Chart.svelte';
   import DepthChart from './DepthChart.svelte';
   import PoolKind from './PoolKind.svelte';
+  import RangePicker from './RangePicker.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
-  import { alignDepth, CURVE_HELP, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
+  import { alignDepth, CURVE_HELP, DYNAMIC_FEE_HELP, feeNow, feePercent, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
   import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
   import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, tradeIntent } from './store.svelte';
 
@@ -33,7 +34,7 @@
   const position = $derived(ba.mine?.liquidity.find((l) => l.pool === pool.pool) ?? null);
   const series = $derived(priceSeries(pool, pool.asset_a_id).map((p) => ({ x: p.h, y: p.p })));
   /** The pool kinds apply from the next block: liquidity by the pool's id (getdexinfo). */
-  const curves = $derived(ba.dex?.curves_active === true && kind.curve !== 'launch');
+  const curves = $derived(ba.dex?.curves_active === true && kind.curve !== 'launch' && kind.curve !== 'concentrated');
 
   // --- Its depth (getpoolcurve), again with each block ---
   let depth = $state<PoolCurve | null>(null);
@@ -147,7 +148,7 @@
     const r = await ask({
       title: t('Add liquidity'),
       message: t('Put %1 into this pool?', what),
-      informative: sShares > 0n ? t('About %1 shares; at least %2% fewer should the pool move first. Out of the pool\'s proportions, the part a swap would trade pays the pool\'s fee (%3).', sShares.toString(), String(sSlippage), String(kind.fee) + '%') : undefined,
+      informative: sShares > 0n ? t('About %1 shares; at least %2% fewer should the pool move first. Out of the pool\'s proportions, the part a swap would trade pays the pool\'s fee (%3).', sShares.toString(), String(sSlippage), feePercent(feeNow(kind))) : undefined,
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -272,7 +273,7 @@
   <section class="panel kind-panel" aria-label="Its kind">
     <dl class="ba-lines">
       <dt>Kind</dt><dd><PoolKind {kind} showDefault /></dd>
-      <dt>Fee</dt><dd>{kind.fee}% of what goes in, to its providers</dd>
+      <dt>Fee</dt><dd>{feeNow(kind)}% of what goes in, to its providers{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>
       {#if kind.curve === 'stable' && kind.amp !== undefined}<dt>Amplification</dt><dd>A = {kind.amp}: the higher, the flatter its price near the balance</dd>{/if}
       {#if kind.curve === 'weighted' && kind.weight_a !== undefined}<dt>Weights</dt><dd>{kind.weight_a}% <SafeText text={pool.asset_a} /> · {kind.weight_b ?? 100 - kind.weight_a}% <SafeText text={pool.asset_b} /></dd>{/if}
       <dt>Pool id</dt><dd class="id"><span class="mono break" translate="no">{pool.pool}</span> <CopyButton text={pool.pool} label="Copy the pool id" /></dd>
@@ -309,7 +310,11 @@
     {/if}
   </div>
 
-  {#if curves}
+  {#if kind.curve === 'concentrated'}
+    <div class="ba-cols">
+      <RangePicker {pool} />
+    </div>
+  {:else if curves}
     <div class="ba-cols">
       <form class="panel ba-form card" aria-label="Add liquidity to this pool" onsubmit={(e) => { e.preventDefault(); void addLiquidity(); }}>
         <h3>Add liquidity</h3>
@@ -327,7 +332,7 @@
             <dt>Shares</dt><dd class="strong">{addShares.toString()}</dd>
             <dt>Share of the pool</dt><dd>{formatPercent(approx(addQuote.share_of_pool))}</dd>
           </dl>
-          {#if oneSided}<p class="ba-help">One asset alone: the part a swap would trade to the pool's proportions pays its fee ({kind.fee}%), included above.</p>{/if}
+          {#if oneSided}<p class="ba-help">One asset alone: the part a swap would trade to the pool's proportions pays its fee ({feeNow(kind)}%), included above.</p>{/if}
         {/if}
         <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || ((addA ?? 0n) === 0n && (addB ?? 0n) === 0n) || !!addProblem}><Icon name="pool" size={16} /> {busy ? 'Adding…' : 'Add liquidity'}</button></div>
       </form>

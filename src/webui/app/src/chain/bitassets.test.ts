@@ -151,7 +151,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'openposition', 'changeposition'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -287,6 +287,20 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     }
     case 'createpool':
       return { txid: id('7'), pool: id('n'), shares: 999000 };
+    // Concentrated liquidity: the node's own order (CHN first in a pool with CHN): CHN in GOLD at 10.
+    case 'getpoolticks':
+      return { tick: 23027, price: 10, liquidity: '5000000', tick_spacing: 60, ticks: [{ tick: 20820, price: 8, liquidity_net: '5000000', liquidity_gross: '5000000', liquidity_above: '5000000' }, { tick: 24840, price: 12, liquidity_net: '-5000000', liquidity_gross: '5000000', liquidity_above: '0' }] };
+    case 'previewposition':
+      return { tick_lower: 22500, tick_upper: 23520, price_lower: Number(p[1]), price_upper: Number(p[2]), liquidity: '12345', amount0: 0.5, amount1: 5, in_range: true };
+    case 'openposition':
+      return { txid: id('7'), position: id('o'), tick_lower: 22500, tick_upper: 23520, liquidity: '12345' };
+    case 'changeposition':
+      return { txid: id('7') };
+    case 'listpositions':
+      return [
+        { position: id('o'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 22500, tick_upper: 23520, price_lower: 9.5, price_upper: 10.5, liquidity: '12345', in_range: true, amount0: 0.5, amount1: 5, fees0: 0.01, fees1: 0.25 },
+        { position: id('u'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 24000, tick_upper: 24840, price_lower: 11, price_upper: 12, liquidity: '999', in_range: false, amount0: 0.3, amount1: 0, fees0: 0, fees1: 0 },
+      ];
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
@@ -1221,6 +1235,107 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
     await answer('yes');
     await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 50, null, 1]));
     expect(called('removeliquidity')).toEqual([]);
+  });
+});
+
+describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: concentrated liquidity and dynamic fees", () => {
+  /** A concentrated GOLD/CHN pool with a dynamic fee: 1 GOLD = 0.1 CHN (the node: 1 CHN = 10 GOLD). */
+  function clPool() {
+    pools.push({ ...pools[0], pool: id('k'), reserve_a: 50, reserve_b: 5, price: 0.1, shares: 0, swaps: 3, curve: 'concentrated', fee: 0.3, fee_millionths: 3000, default_kind: false, dynamic_fee: true, fee_now: 0.8, concentrated: { sqrt_price_x96: 'ab', tick: 23027, liquidity: '5000000', tick_spacing: 60 } });
+  }
+
+  it('Create pool: a concentrated pool with a dynamic fee, made at a price, then a way to open a position', async () => {
+    dexOn = true;
+    nav.tab = 'create';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#cp-a')).not.toBeNull());
+    await pickAsset('cp-a', SILVER);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('radio', { name: /Concentrated/ }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Dynamic fee/ }));
+    await waitFor(() => expect(screen.getAllByText('dynamic').length).toBeGreaterThan(0));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // Its price in place of a deposit.
+    expect(document.querySelector('#cp-amount-a')).toBeNull();
+    await fireEvent.input(document.querySelector('#cp-price')!, { target: { value: '2.5' } });
+    await waitFor(() => expect(screen.getByTestId('pool-preview')).toBeTruthy());
+    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '1', 'CHN', '2.5', { curve: 'concentrated', fee: 0.3, dynamic_fee: true }]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the pool/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(SILVER), '1', 'CHN', '2.5', { curve: 'concentrated', fee: 0.3, dynamic_fee: true }, 1]));
+    await waitFor(() => expect(screen.getByTestId('pool-made')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /Open a position/ }));
+    expect(nav.tab).toBe('pools');
+  });
+
+  it('a concentrated pool\'s page: its fee now, its liquidity by price, a range picked, previewed in the node\'s order, opened', async () => {
+    dexOn = true;
+    clPool();
+    nav.tab = 'pools';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((r) => /Concentrated/.test(r.textContent ?? ''))!);
+    // The fee for the next block, tagged dynamic.
+    expect(row.textContent).toMatch(/0\.8%\s*dynamic/);
+    await fireEvent.click(row);
+    await waitFor(() => expect(called('getpoolticks')[0]?.params).toEqual([id('k'), 500]));
+    await waitFor(() => expect(screen.getByRole('img', { name: /The liquidity of the pool by price/ }).querySelectorAll('rect.bar').length).toBe(1));
+    // ±5% around 0.1 CHN for 1 GOLD at first.
+    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.095');
+    expect((document.querySelector('#cl-upper') as HTMLInputElement).value).toBe('0.105');
+    await fireEvent.click(screen.getByRole('button', { name: '±20%' }));
+    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.08');
+    await fireEvent.input(document.querySelector('#cl-amount-a')!, { target: { value: '5' } });
+    await waitFor(() => expect(screen.getByTestId('position-preview').textContent).toContain('In range'));
+    // To the node: CHN in GOLD, the bounds turned over (1/0.12 to 1/0.08).
+    const asked = called('previewposition').at(-1)?.params as unknown[];
+    expect(asked[0]).toBe(id('k'));
+    expect(asked[1] as number).toBeCloseTo(1 / 0.12, 9);
+    expect(asked[2] as number).toBeCloseTo(12.5, 9);
+    expect(asked[3]).toEqual({ [assetArg(GOLD)]: '5' });
+    // What goes in, in the page's order: 5 GOLD and 0.5 CHN.
+    expect(screen.getByTestId('position-preview').textContent).toMatch(/Goes in\s*5\s*GOLD\s*0\.5\s*CHN/);
+    await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), asked[1], asked[2], { [assetArg(GOLD)]: '5' }, 1]));
+    // A range above the price: GOLD alone, CHN's field off.
+    await fireEvent.input(document.querySelector('#cl-lower')!, { target: { value: '0.2' } });
+    await fireEvent.input(document.querySelector('#cl-upper')!, { target: { value: '0.3' } });
+    await waitFor(() => expect((document.querySelector('#cl-amount-b') as HTMLInputElement).disabled).toBe(true));
+  });
+
+  it('Positions: in range or not, their fees, collected, part taken out, one closed', async () => {
+    dexOn = true;
+    clPool();
+    nav.tab = 'positions';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('in-range')).toBeTruthy());
+    expect(screen.getByTestId('out-of-range')).toBeTruthy();
+    // In the page's order: the fees of GOLD first (0.25), then of CHN (0.01).
+    const first = screen.getByRole('region', { name: `Position ${id('o').slice(0, 8)}` });
+    expect(within(first).getByTestId('fees').textContent).toMatch(/0\.25\s*GOLD/);
+    expect(within(first).getByRole('img', { name: /Its range, 0\.0952381 to 0\.105263, and the price, 0\.1/ })).toBeTruthy();
+    await fireEvent.click(within(first).getByRole('button', { name: 'Collect' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[0]?.params).toEqual([id('o'), { collect: true }]));
+    // Once the collect is done.
+    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
+    await fireEvent.click(within(first).getByRole('button', { name: 'Remove' }));
+    await fireEvent.click(within(first).getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[1]?.params).toEqual([id('o'), { remove: 50, collect: true }]));
+    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
+    const second = screen.getByRole('region', { name: `Position ${id('u').slice(0, 8)}` });
+    expect(within(second).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', true);
+    await fireEvent.click(within(second).getByRole('button', { name: 'Close' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[2]?.params).toEqual([id('u'), { close: true }]));
   });
 });
 
