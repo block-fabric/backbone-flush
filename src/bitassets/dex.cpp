@@ -100,6 +100,8 @@ std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time, 
 
 uint32_t PoolFee(const PoolParams& params) { return params.fee; }
 
+std::string VerificationEvent(const AssetId& asset, int round) { return "Layers verification " + asset.GetHex() + " #" + std::to_string(round); }
+
 double AveragePrice(const uint256& delta, uint32_t seconds)
 {
     if (seconds == 0) return 0;

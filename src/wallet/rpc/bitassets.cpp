@@ -1439,6 +1439,64 @@ RPCMethod publishoracle()
     };
 }
 
+RPCMethod verifyasset()
+{
+    return RPCMethod{
+        "verifyasset",
+        "Verified issuers: as a curator (an oracle of this wallet), verify an asset, or take a verification back: an attestation of "
+        "\"Layers verification <asset id> #<next round>\" with 1 or 0 (publishoracle). Not a rule: wallets that trust the curator show it."
+        + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"curator", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its id, or its key"},
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"verified", RPCArg::Type::BOOL, RPCArg::Default{true}, "Verify (true) or take back (false)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::NUM, "round", "The round attested"},
+            {RPCResult::Type::STR, "event", "The event's text"},
+        }},
+        RPCExamples{HelpExampleCli("verifyasset", "\"<curator>\" \"GOLD\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    if (!pwallet->chain().getBitAssetsDexActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's rules do not apply yet (getdexinfo)");
+    const uint256 oracle{ParseOracleArg(*pwallet, request.params[0])};
+    const AssetInfo asset{ParseAsset(*pwallet, request.params[1])};
+    if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "CHN needs no verification");
+    const bool verified{request.params[2].isNull() || request.params[2].get_bool()};
+    int round{1};
+    std::optional<bitassets::Attestation> last;
+    for (; round <= bitassets::dex::MAX_VERIFICATION_ROUNDS; ++round) {
+        const auto a{pwallet->chain().getBitAssetsAttestation(oracle, bitassets::dex::EventId(bitassets::dex::VerificationEvent(asset.id, round)))};
+        if (!a) break;
+        last = a;
+    }
+    if (round > bitassets::dex::MAX_VERIFICATION_ROUNDS) throw JSONRPCError(RPC_INVALID_PARAMETER, "No rounds left for this asset");
+    if ((last && last->value > 0) == verified) throw JSONRPCError(RPC_INVALID_PARAMETER, verified ? "Verified already" : "Not verified");
+    const std::string text{bitassets::dex::VerificationEvent(asset.id, round)};
+    const uint256 event{bitassets::dex::EventId(text)};
+    const int64_t value{verified ? 1 : 0};
+    const int32_t height{pwallet->chain().getBitAssetsHeight()};
+    const auto record{*Assert(pwallet->chain().getBitAssetsOracle(oracle))};
+    const auto key{KeyOfXOnly(*pwallet, record.pubkey)};
+    if (!key) throw JSONRPCError(RPC_WALLET_ERROR, "This wallet does not have the curator's key");
+    std::array<unsigned char, 64> signature{};
+    if (!key->SignSchnorr(bitassets::dex::AttestationHash(oracle, event, value, height), signature, /*merkle_root=*/nullptr, GetRandHash())) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Cannot sign");
+    }
+    const CTransactionRef tx{Send(*pwallet, bitassets::Attest{oracle, event, value, height, signature}, {}, {})};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("round", round);
+    result.pushKV("event", text);
+    return result;
+},
+    };
+}
+
 RPCMethod createoraclecontract()
 {
     return RPCMethod{
@@ -2684,7 +2742,12 @@ RPCMethod placeorder()
     if (num > bitassets::MAX_AMOUNT || den > bitassets::MAX_AMOUNT) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price has too many digits");
     const int blocks{request.params[4].isNull() ? 40320 : request.params[4].getInt<int>()};
     if (blocks < 1 || blocks > bitassets::MAX_ORDER_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, "blocks is 1 to about a year");
-    bitassets::PlaceOrder place{sell.id, buy.id, amount, static_cast<uint64_t>(num), static_cast<uint64_t>(den), pwallet->chain().getBitAssetsHeight() + blocks};
+    // Its last block: the one asked for, or the next with room (at most MAX_BOOK_SWEEP orders expire at a height).
+    int32_t expiry{pwallet->chain().getBitAssetsHeight() + blocks};
+    for (int tries{0}; pwallet->chain().getBitAssetsExpiringAt(expiry) >= bitassets::MAX_BOOK_SWEEP; ++tries, ++expiry) {
+        if (tries >= 1000 || expiry - pwallet->chain().getBitAssetsHeight() >= bitassets::MAX_ORDER_DURATION) throw JSONRPCError(RPC_MISC_ERROR, "No height near it has room for another order to expire");
+    }
+    bitassets::PlaceOrder place{sell.id, buy.id, amount, static_cast<uint64_t>(num), static_cast<uint64_t>(den), expiry};
     std::vector<COutPoint> inputs;
     std::vector<Out> outs;
     CAmount chn_in{0};
@@ -2724,7 +2787,7 @@ RPCMethod settleorder()
     const auto book{pwallet->chain().getBitAssetsPool(order->book)};
     if (!book) throw JSONRPCError(RPC_MISC_ERROR, "Its book is gone");
     const AssetId sold{order->sells0 ? book->asset0 : book->asset1}, bought{order->sells0 ? book->asset1 : book->asset0};
-    const bool closes{cancel || order->expiry < pwallet->chain().getBitAssetsHeight() || order->remaining == 0};
+    const bool closes{cancel || order->expiry < pwallet->chain().getBitAssetsHeight() || order->remaining == 0 || order->evicted != 0};
     const uint64_t proceeds{bought.IsNull() && order->proceeds < bitassets::MIN_CHN_PAYOUT ? 0 : order->proceeds};
     const uint64_t left{closes ? (sold.IsNull() && order->remaining < bitassets::MIN_CHN_PAYOUT ? 0 : order->remaining) : 0};
     if (!closes && proceeds == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to collect yet");
@@ -2759,6 +2822,7 @@ RPCMethod listorders()
             {RPCResult::Type::NUM, "to_collect", ""},
             {RPCResult::Type::NUM, "expiry", ""},
             {RPCResult::Type::BOOL, "expired", ""},
+            {RPCResult::Type::BOOL, "evicted", "A better and no smaller order took its place in a full book: it trades no more; settle it to take all it holds back"},
         }}}},
         RPCExamples{HelpExampleCli("listorders", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -2783,6 +2847,7 @@ RPCMethod listorders()
         obj.pushKV("to_collect", bitassets::AmountToJSON(order->proceeds, DecimalsOf(*pwallet, bought)));
         obj.pushKV("expiry", order->expiry);
         obj.pushKV("expired", order->expiry < next);
+        obj.pushKV("evicted", order->evicted != 0);
         list.push_back(std::move(obj));
     }
     return list;

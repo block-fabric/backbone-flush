@@ -142,7 +142,7 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // searches, searchmyassets), two of which sign with the wallet's keys, and the 7 of the DEX (its info, routes, TWAP,
     // the pool kinds' quotes, simulation, preview, depth); the 23 that pay or sign (setassetlogo and setassetdisplayname,
     // routes and the pool kinds' among them) are confirmed by the host; no bond among any of them.
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 3U);
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 4U);
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};

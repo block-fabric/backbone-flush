@@ -284,6 +284,7 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"getbook", Bridge::Thread::WORKER},
         {"getorder", Bridge::Thread::WORKER},
         {"listorders", Bridge::Thread::WORKER},
+        {"getverifications", Bridge::Thread::WORKER},
         // Searches of the node, a page at a time (cursor; the pages never read a whole list: user feedback 2026-10-19).
         // A node without them answers "method not found", and the pages ask the list methods above instead.
         {"searchassets", Bridge::Thread::WORKER},

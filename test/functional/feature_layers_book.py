@@ -9,7 +9,8 @@
   - a taker through the book (swappools), what getswapquote said; one larger than the book: refused by the wallet;
   - a route through a pool and the book;
   - settleorder: collecting, cancelling; an expired order back to its holder;
-  - a reorganisation across a crossing takes the book back, and forward again; the peg balance throughout.
+  - a reorganisation across a crossing takes the book back, and forward again; the peg balance throughout;
+  - verified issuers: a curator verifies an asset (verifyasset) and takes it back; getverifications.
 """
 
 from decimal import Decimal
@@ -142,6 +143,25 @@ class LayersBookTest(LayersTest):
         assert_equal(self.holding(n1, "GOLD") - before, Decimal("500"))
         assert_equal(n1.listorders(), [])
         assert_peg_balance(main, self.nodes)
+
+        self.log.info("Verified issuers: a curator (an oracle) verifies GOLD, then takes it back")
+        curator = n0.registeroracle("curator")["oracle"]
+        self.bmm()
+        assert_equal(n2.getverifications("GOLD")["verified"], False)
+        done = n0.verifyasset(curator, "GOLD")
+        assert_equal(done["round"], 1)
+        self.bmm()
+        seen = n2.getverifications("GOLD", [curator])
+        assert seen["verified"]
+        assert_equal(seen["curators"][0]["round"], 1)
+        assert_equal(n2.getverifications("GOLD")["curators"][0]["curator"], curator)
+        assert_raises_rpc_error(-8, "Verified already", n0.verifyasset, curator, "GOLD")
+        n0.verifyasset(curator, "GOLD", False)
+        self.bmm()
+        seen = n2.getverifications("GOLD", [curator])
+        assert not seen["verified"]
+        assert_equal(seen["curators"][0]["round"], 2)
+        assert_equal(n2.getverifications("USDX")["curators"], [])
 
 
 if __name__ == "__main__":

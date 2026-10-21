@@ -1333,6 +1333,80 @@ RPCMethod getoraclevalue()
     };
 }
 
+RPCMethod getverifications()
+{
+    return RPCMethod{
+        "getverifications",
+        "Verified issuers (not a rule: what wallets show): what curators say of an asset. A curator is an oracle that attests "
+        "\"Layers verification <asset id> #<round>\" with 1 (verified) or 0 (taken back); its word is that of its last round. "
+        "Of the curators named, or of every oracle registered (at most 200) that ever verified it.",
+        {
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"curators", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "The curators to ask (ids or keys of oracles)", {{"curator", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "asset", "The asset's id"},
+            {RPCResult::Type::BOOL, "verified", "Whether any of them verifies it now"},
+            {RPCResult::Type::ARR, "curators", "", {{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "curator", "The oracle's id"},
+                {RPCResult::Type::STR, "name", "Its name (a label)"},
+                {RPCResult::Type::BOOL, "verified", "Its word now"},
+                {RPCResult::Type::NUM, "round", "Its last round attested (0: none)"},
+                {RPCResult::Type::NUM, "height", /*optional=*/true, "The block of that attestation"},
+            }}}},
+        }},
+        RPCExamples{HelpExampleCli("getverifications", "\"GOLD\"") + HelpExampleCli("getverifications", "\"GOLD\" '[\"<curator>\"]'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId asset{ParseAsset(request.params[0], state)};
+    std::vector<uint256> curators;
+    const bool named{!request.params[1].isNull()};
+    if (named) {
+        if (request.params[1].size() > 200) throw JSONRPCError(RPC_INVALID_PARAMETER, "At most 200 curators");
+        for (const UniValue& c : request.params[1].getValues()) curators.push_back(ParseOracle(c, state));
+    } else {
+        state.ForEachOracle([&](const uint256& id, const bitassets::OracleRecord&) {
+            curators.push_back(id);
+            return curators.size() < 200;
+        });
+    }
+    UniValue list(UniValue::VARR);
+    bool any{false};
+    for (const uint256& curator : curators) {
+        int round{0};
+        std::optional<bitassets::Attestation> last;
+        for (int r{1}; r <= bitassets::dex::MAX_VERIFICATION_ROUNDS; ++r) {
+            const auto a{state.GetAttestation(curator, bitassets::dex::EventId(bitassets::dex::VerificationEvent(asset, r)))};
+            if (!a) break;
+            round = r;
+            last = a;
+        }
+        if (!named && round == 0) continue;
+        const bool verified{last && last->value > 0};
+        any = any || verified;
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("curator", curator.GetHex());
+        const auto record{state.GetOracle(curator)};
+        obj.pushKV("name", record ? record->name : "");
+        obj.pushKV("verified", verified);
+        obj.pushKV("round", round);
+        if (last) obj.pushKV("height", last->height);
+        list.push_back(std::move(obj));
+    }
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("asset", asset.GetHex());
+    result.pushKV("verified", any);
+    result.pushKV("curators", std::move(list));
+    return result;
+},
+    };
+}
+
 RPCMethod getoraclecontract()
 {
     return RPCMethod{
@@ -3352,6 +3426,7 @@ UniValue OrderToJSON(const bitassets::State& state, const uint256& id, const bit
     obj.pushKV("expiry", o.expiry);
     obj.pushKV("txid", o.txid.GetHex());
     obj.pushKV("height", o.height);
+    if (o.evicted != 0) obj.pushKV("evicted_height", o.evicted);
     return obj;
 }
 
@@ -3370,6 +3445,7 @@ const std::vector<RPCResult> ORDER_RESULTS{
     {RPCResult::Type::NUM, "expiry", "The last block it trades in"},
     {RPCResult::Type::STR_HEX, "txid", "The transaction that placed it"},
     {RPCResult::Type::NUM, "height", "Its block"},
+    {RPCResult::Type::NUM, "evicted_height", /*optional=*/true, "The block in which a better and no smaller order took its place in a full book (it trades no more; settle it to take all it holds back)"},
 };
 
 RPCMethod getorder()
@@ -3515,6 +3591,7 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &previewposition},
         {"bitassets", &getorder},
         {"bitassets", &getbook},
+        {"bitassets", &getverifications},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

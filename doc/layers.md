@@ -537,16 +537,22 @@ At a block's end, the books it placed orders in clear once more without takers: 
 cancelled, expired or filled, what is left of what it sells comes back too and the order is gone; else its token comes
 back. CHN goes by the coinbase (`MIN_CHN_PAYOUT` at least; less waits).
 
-**Security.** (1) *Expired orders never crowd out live ones*: a side is read with expired and filled entries skipped
-before the round's limit counts them (`BookSide`, at most `MAX_BOOK_SCAN` entries read), and the end of each block
-sweeps the orders that expired out of their books' indexes, oldest first, at most `MAX_BOOK_SWEEP` (5000) a block, the
-rest at the next (`SweepBooks`; the order stays, its holder's to settle). (2) *A full side is no lock*: a side holds
-at most `MAX_BOOK_SIDE` (1000) live orders, expired ones not counted; full, an order with a better limit than its
-worst takes that one's place (the worst: the highest limit, then the highest id; it leaves the book as expired, its
-holder takes all it is owed back), and one no better is refused (`bad-ba-book-full`). (3) *No dust*: an order buys
-something at its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair,
-it sells a whole unit (10^decimals) at least (`bad-ba-order-dust`). Tests: `stuffed_with_expiring_orders`,
-`dust_refused`, `full_side_evicts_its_worst`, `sweep_bounded`, `worst_round`.
+**Security.** (1) *Expired orders never crowd out live ones*: at most `MAX_BOOK_SWEEP` (5000) orders, of all books,
+may expire at one height (`bad-ba-expiry-full`; the wallet takes the next height with room), and the end of each block
+sweeps all those that expired in it out of their books' indexes (`SweepBooks`; the order stays, its holder's to
+settle): no dead entry stays in an index. A side is read with expired, filled and evicted entries skipped before the
+round's limit counts them (`BookSide`, at most `MAX_BOOK_SCAN` entries read, a guard). (2) *The side limit is a count*:
+each side's live orders are counted in the state (table `0x9c`: one more when placed, one less when filled, settled,
+swept or evicted, undone with a block like the rest), and `MAX_BOOK_SIDE` (1000) holds against that count; should the
+side not show as many live orders as counted, a placement is refused (fail closed). (3) *A full side is no lock, and no
+cheap grief*: full, an order takes the place of the side's worst (the highest limit, then the highest id) only if its
+limit is better and it sells at least what the worst has left (the same asset: worth as much at least); the worst
+leaves the book flagged `evicted` (`getorder`'s `evicted_height`, `listorders`' `evicted`) and its holder settles it for
+all it holds, nothing lost; anything else is refused (`bad-ba-book-full`). (4) *No dust*: an order buys something at
+its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair, it sells a
+whole unit (10^decimals) at least (`bad-ba-order-dust`). Tests: `stuffed_with_expiring_orders`, `dust_refused`,
+`full_side_evicts_its_worst` (with the block undone: the eviction, the counts and the shares back),
+`expiry_height_capped`, `sweep_bounded`, `worst_round`.
 
 RPCs: `getbook a b (levels)` (the ladder of each side, best bid and ask), `getorder order`; wallet `placeorder sell
 amount buy price (blocks)`, `settleorder order (cancel)`, `listorders`.

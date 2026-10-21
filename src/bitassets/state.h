@@ -1105,7 +1105,9 @@ struct BookOrder {
     uint64_t got{0};
     Txid txid;
     int32_t height{0};
-    SERIALIZE_METHODS(BookOrder, obj) { READWRITE(obj.book, obj.sells0, obj.amount, obj.remaining, obj.price_num, obj.price_den, obj.expiry, obj.proceeds, obj.got, obj.txid, obj.height); }
+    //! The block in which a better and no smaller order took its place in a full side (0: never); it trades no more.
+    int32_t evicted{0};
+    SERIALIZE_METHODS(BookOrder, obj) { READWRITE(obj.book, obj.sells0, obj.amount, obj.remaining, obj.price_num, obj.price_den, obj.expiry, obj.proceeds, obj.got, obj.txid, obj.height, obj.evicted); }
     friend bool operator==(const BookOrder&, const BookOrder&) = default;
 };
 
@@ -1119,7 +1121,10 @@ inline constexpr size_t MAX_BOOK_ROUND{256};
 inline constexpr int32_t MAX_ORDER_DURATION{2'102'400};
 /** Index entries a look at a side reads at most (live orders and expired ones not swept yet). */
 inline constexpr size_t MAX_BOOK_SCAN{8192};
-/** Expired orders a block's end takes out of their books' indexes at most (the rest at the next blocks', oldest first). */
+/**
+ * Orders that may expire at one height, at most (all books): what a block's end sweeps at most, so that each sweeps all
+ * that expired in it and no dead entry stays in a book's index.
+ */
 inline constexpr size_t MAX_BOOK_SWEEP{5000};
 /** The least an order of a pair with CHN is worth, in CHN (satoshis), on its CHN side: 0.01 CHN. */
 inline constexpr uint64_t MIN_BOOK_CHN{1'000'000};
@@ -1507,6 +1512,10 @@ public:
     std::vector<std::pair<uint256, BookOrder>> BookSide(const uint256& book, bool asks, size_t max, int height) const;
     /** Takes the orders that expired at or before `height` out of their books' indexes, at most `budget`; how many. */
     size_t SweepBooks(int height, size_t budget = MAX_BOOK_SWEEP);
+    /** The live orders of a side of a book (in its index), as counted. */
+    uint32_t BookCount(const uint256& book, bool asks) const;
+    /** Orders placed to expire at a height (at most MAX_BOOK_SWEEP). */
+    uint32_t ExpiringAt(int32_t height) const;
     /**
      * A round of a book (doc/layers.md "Order books"): the takers `orders` (each all or nothing) and the book's best
      * resting orders (`resting`: those the round changed, by id, which it updates) at one uniform price; nullopt as

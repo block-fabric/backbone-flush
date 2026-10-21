@@ -213,6 +213,8 @@ public:
     virtual std::optional<bitassets::ClPosition> getBitAssetsPosition(const uint256& id) = 0;
     //! Order books: a limit order.
     virtual std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) = 0;
+    //! Orders placed to expire at a height (bitassets::MAX_BOOK_SWEEP at most).
+    virtual uint32_t getBitAssetsExpiringAt(int32_t height) = 0;
     //! Concentrated liquidity: what a position is owed in fees now (its record's and those earned since).
     virtual std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) = 0;
     //! Layers' launches: a launch, by its token.

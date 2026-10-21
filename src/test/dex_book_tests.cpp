@@ -327,16 +327,28 @@ namespace {
 /** `parts` coins of `each` of an asset, issued and split (at most 32 outputs a transaction). */
 std::vector<COutPoint> Coins(Chain& chain, const std::string& name, uint64_t each, size_t parts)
 {
+    // One coin of it all, split as a tree (at most 32 outputs a transaction) into coins of `each`.
     const AssetId id{HashName(name)};
-    const size_t batches{(parts + 31) / 32};
-    const auto big{chain.Issue(name, std::vector<uint64_t>(batches, each * 32))};
+    std::vector<std::pair<COutPoint, size_t>> level{{chain.Issue(name, {each * parts})[0], parts}};
     std::vector<COutPoint> out;
-    for (const COutPoint& coin : big) {
-        const CTransaction tx{MakeTx({coin}, std::nullopt, std::vector<std::optional<Token>>(32, AssetToken(id, each)))};
-        chain.Require(tx);
-        for (uint32_t i{0}; i < 32; ++i) out.emplace_back(tx.GetHash(), i);
+    while (!level.empty()) {
+        std::vector<std::pair<COutPoint, size_t>> next;
+        for (const auto& [coin, n] : level) {
+            if (n == 1) {
+                out.push_back(coin);
+                continue;
+            }
+            const size_t pieces{std::min<size_t>(32, n)};
+            std::vector<size_t> sizes(pieces, n / pieces);
+            for (size_t i{0}; i < n % pieces; ++i) ++sizes[i];
+            std::vector<std::optional<Token>> outs;
+            for (size_t k : sizes) outs.push_back(AssetToken(id, each * k));
+            const CTransaction tx{MakeTx({coin}, std::nullopt, outs)};
+            chain.Require(tx);
+            for (uint32_t i{0}; i < pieces; ++i) next.emplace_back(COutPoint{tx.GetHash(), i}, sizes[i]);
+        }
+        level = std::move(next);
     }
-    out.resize(parts);
     return out;
 }
 } // namespace
@@ -362,6 +374,7 @@ BOOST_AUTO_TEST_CASE(stuffed_with_expiring_orders)
     // Expired and swept: out of the index, not counted; the book's open orders back to none.
     BOOST_CHECK(chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE, chain.height).empty());
     BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, MIN_LIQUIDITY);
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), 0U);
     BOOST_CHECK_EQUAL(bitassets::State{chain.store}.SweepBooks(chain.height), 0U);
     const CTransaction ask{chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 6, 1)};
     const CTransaction bid{chain.Place(y[0], Y, 100, X, 1, 10)};
@@ -401,28 +414,74 @@ BOOST_AUTO_TEST_CASE(full_side_evicts_its_worst)
     for (size_t i{0}; i < MAX_BOOK_SIDE; ++i) placed.push_back(chain.Place(x[i], X, 10, Y, 2 + i / 10, 1));
     const uint256 book{BookId(X, Y)};
     const bool x0{X < Y};
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE);
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, !x0), 0U);
+    chain.EndBlock();
     const auto live{chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE, chain.height)};
     const uint256 worst{live.back().first};
     const uint64_t shares{chain.Assets().GetPool(book)->shares};
-    // No better than the worst: refused.
+    // No better than the worst: refused. Better but smaller than what the worst has left: refused too (no cheap griefing).
     BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SIDE]}, PlaceOrder{X, Y, 10, 2 + (MAX_BOOK_SIDE - 1) / 10, 1, chain.height + 100}, {std::nullopt})), "bad-ba-book-full");
-    // Better: placed; the worst out of the book (as expired), the count the same.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SIDE]}, PlaceOrder{X, Y, 9, 1, 1, chain.height + 100}, {std::nullopt, AssetToken(X, 1)})), "bad-ba-book-full");
+    // Better and no smaller: placed; the worst out of the book, flagged, the count the same. The block undone: all back.
+    chain.store.TakeUndo();
     const CTransaction better{chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 1, 1)};
     BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares);
-    const auto out{*chain.Assets().GetOrder(worst)};
-    BOOST_CHECK_LT(out.expiry, chain.height);
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE);
+    BOOST_CHECK_EQUAL(chain.Assets().GetOrder(worst)->evicted, chain.height);
     const auto after{chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE + 1, chain.height)};
     BOOST_CHECK_EQUAL(after.size(), MAX_BOOK_SIDE);
     BOOST_CHECK(after.front().first == OrderId(better.GetHash()));
     BOOST_CHECK(std::none_of(after.begin(), after.end(), [&](const auto& o) { return o.first == worst; }));
     chain.EndBlock();
-    // Its holder takes it all back.
+    {
+        const sidechain::StoreUndo undo{chain.store.TakeUndo()};
+        chain.store.Revert(undo);
+        BOOST_CHECK(!chain.Assets().GetOrder(OrderId(better.GetHash())));
+        BOOST_CHECK_EQUAL(chain.Assets().GetOrder(worst)->evicted, 0);
+        BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE);
+        BOOST_CHECK(chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE + 1, chain.height - 1).back().first == worst);
+        BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares);
+    }
+    // Again, and on: its holder takes it all back.
+    chain.height -= 1;
+    chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 1, 1);
+    chain.EndBlock();
     const auto it{std::find_if(placed.begin(), placed.end(), [&](const CTransaction& tx) { return OrderId(tx.GetHash()) == worst; })};
     BOOST_REQUIRE(it != placed.end());
     const CTransaction back{MakeTx({COutPoint{it->GetHash(), 0}}, SettleOrder{worst, false, PAYEE}, {std::nullopt})};
     chain.Require(back);
     BOOST_CHECK(chain.TokenAt(COutPoint{back.GetHash(), 0}) == AssetToken(X, 10));
+    BOOST_CHECK(!chain.Assets().GetOrder(worst));
     BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares);
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE);
+    // Cancelling a live one: one less.
+    const CTransaction cancel{MakeTx({COutPoint{placed[0].GetHash(), 0}}, SettleOrder{OrderId(placed[0].GetHash()), true, PAYEE}, {std::nullopt})};
+    chain.Require(cancel);
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE - 1);
+}
+
+BOOST_AUTO_TEST_CASE(expiry_height_capped)
+{
+    // At most MAX_BOOK_SWEEP orders expire at one height (five full books' worth here): the next is refused; the block's
+    // end sweeps them all, and the counts of the books come back to none.
+    Chain chain;
+    const AssetId X{HashName("XXX")};
+    const auto x{Coins(chain, "XXX", 10, MAX_BOOK_SWEEP + 1)};
+    std::vector<AssetId> ys;
+    for (int k{0}; k < 5; ++k) {
+        const std::string name{"YY" + std::to_string(k)};
+        chain.Issue(name, {1});
+        ys.push_back(HashName(name));
+    }
+    const int32_t expiry{chain.height + 3};
+    for (size_t i{0}; i < MAX_BOOK_SWEEP; ++i) chain.Place(x[i], X, 10, ys[i / MAX_BOOK_SIDE], 2, 1, expiry);
+    BOOST_CHECK_EQUAL(chain.Assets().ExpiringAt(expiry), MAX_BOOK_SWEEP);
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SWEEP]}, PlaceOrder{X, ys[0], 10, 1, 1, expiry}, {std::nullopt})), "bad-ba-expiry-full");
+    chain.Place(x[MAX_BOOK_SWEEP], X, 10, ys[0], 1, 1, expiry + 1);
+    while (chain.height <= expiry) chain.EndBlock();
+    for (const AssetId& y : ys) BOOST_CHECK_EQUAL(chain.Assets().BookCount(BookId(X, y), X < y), y == ys[0] ? 1U : 0U);
+    BOOST_CHECK_EQUAL(chain.Assets().ExpiringAt(expiry), 0U);
 }
 
 BOOST_AUTO_TEST_CASE(sweep_bounded)

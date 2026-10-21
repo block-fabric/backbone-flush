@@ -117,6 +117,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "placeorder", 4, "blocks" },
     { "settleorder", 1, "cancel" },
     { "getbook", 2, "levels" },
+    { "getverifications", 1, "curators" },
+    { "verifyasset", 2, "verified" },
     { "openposition", 1, "price_lower" },
     { "openposition", 2, "price_upper" },
     { "openposition", 3, "amounts" },
