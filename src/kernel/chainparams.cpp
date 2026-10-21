@@ -721,6 +721,27 @@ public:
             // tests mine it; the seed is then known for every slot (-posseedlookahead to change it).
             consensus.pos.seed_lookahead_seconds = opts.pos_seed_lookahead.value_or(3600);
             consensus.pos.pot_reserve_anchors = 5;
+            // -testposparam=name@value: eCash's anchoring scaled down (a mainchain gap, a week of unbonding).
+            for (const auto& [name, value] : opts.pos_params) {
+                auto& pos{consensus.pos};
+                if (name == "max_unanchored_slots" && value >= 1) {
+                    pos.max_unanchored_slots = value;
+                } else if (name == "stall_seconds") {
+                    pos.stall_seconds = value;
+                } else if (name == "slots_per_epoch" && value >= 1) {
+                    pos.slots_per_epoch = value;
+                } else if (name == "set_lead_seconds") {
+                    pos.set_lead_seconds = value;
+                } else if (name == "unbonding_anchors" && value >= 1) {
+                    pos.unbonding_anchors = value;
+                } else if (name == "evidence_window_anchors" && value >= 1) {
+                    pos.evidence_window_anchors = value;
+                } else if (name == "pot_reserve_anchors" && value >= 1) {
+                    pos.pot_reserve_anchors = value;
+                } else {
+                    throw std::runtime_error(strprintf("Invalid name or value (%s@%d) for -testposparam=name@value.", name, value));
+                }
+            }
         }
         m_assumed_blockchain_size = 0;
         m_assumed_chain_state_size = 0;
@@ -871,19 +892,36 @@ public:
         // what counts time with room for eCash's gaps between blocks (an hour without one is not rare) and
         // for its median time, which lags the clock by about 50 minutes (5 minutes on Chains).
         consensus.pos.fee_target_spacing = 600; // the bidder's share 50/50 at ten-minute blocks
-        consensus.pos.max_unanchored_slots = 720; // three hours of 15-second slots (an hour on Chains)
-        consensus.pos.stall_seconds = 3600;       // BMM blocks carry transactions after an hour without blocks of stake (30 min)
-        consensus.pos.seed_lookahead_seconds = 3600; // six eCash blocks (twenty on Chains)
-        consensus.pos.final_anchors = 3;          // half an hour (6 minutes on Chains); not consensus
+        // Blocks of stake go on through a gap of the mainchain of up to six hours (user requirement), with room: no new
+        // eCash block, so no anchor and no new seed. Three things bound how long, all set for it
+        // (doc/ecash-sidechains.md, "A mainchain gap"):
+        // - max_unanchored_slots: 8 hours of 15-second slots after the first block of stake no anchor covers (that
+        //   block comes about a block before the gap: the last ticket anchors the chain up to it);
+        // - seed_lookahead_seconds: an epoch has a leader once the mainchain record has a block whose median time
+        //   is past its start less this; in a gap the median time stops about 50 minutes behind the last block, so
+        //   9 hours lets epochs start up to about 8 hours after it (an hour, the earlier value, stopped blocks of
+        //   stake 10 to 70 minutes into a gap);
+        // - set_lead_seconds: as long, so that the validator set of an epoch is fixed before its seed's block can
+        //   exist (no key or stake picked for a known seed). Bonds and jails take effect about ten hours later.
+        // stall_seconds stays an hour: it compares the mainchain's median time with the last block of stake, which a
+        // gap does not stall (BMM blocks carry transactions only when blocks of stake stop).
+        consensus.pos.max_unanchored_slots = 1920;       // 8 hours of 15-second slots (an hour on Chains)
+        consensus.pos.stall_seconds = 3600;              // BMM blocks carry transactions after an hour without blocks of stake (30 min)
+        consensus.pos.seed_lookahead_seconds = 9 * 3600; // nine hours (twenty minutes on Chains)
+        consensus.pos.set_lead_seconds = 9 * 3600;       // as long: the set fixed before the seed (an epoch on Chains)
+        consensus.pos.final_anchors = 3;                 // half an hour (6 minutes on Chains); not consensus
+        // Unbonding: a week on ecash and ecashbeta (user requirement), a day on ecashtest; a proof of double signing is
+        // taken until the stake it slashes is paid back: the window one anchor less than unbonding (an unbond of a set's
+        // stake is made at that set's anchor or later, so its coins stay until that anchor's count plus the unbonding).
+        // Both well past the ten hours a validator still leads after it unbonds (set_lead_seconds and an epoch).
         if (chain == ChainType::ECASH_TESTNET) {
-            // As the test network of Chains in time: unbonding 2 hours, evidence and reserve an hour.
-            consensus.pos.unbonding_anchors = 12;
-            consensus.pos.evidence_window_anchors = 6;
-            consensus.pos.pot_reserve_anchors = 6;
+            consensus.pos.unbonding_anchors = 144;       // a day of ten-minute anchors (2 hours before: no longer past the set lead)
+            consensus.pos.evidence_window_anchors = 143; // until the stake is paid back
+            consensus.pos.pot_reserve_anchors = 6;       // an hour
         } else {
-            consensus.pos.unbonding_anchors = 288;      // two days (2,880 one-minute anchors on Chains)
-            consensus.pos.evidence_window_anchors = 144; // a day (1,440)
-            consensus.pos.pot_reserve_anchors = 144;     // a day (1,440): each anchor pays 1/144 of the reserve
+            consensus.pos.unbonding_anchors = 1008;       // seven days of ten-minute anchors
+            consensus.pos.evidence_window_anchors = 1007; // until the stake is paid back
+            consensus.pos.pot_reserve_anchors = 144;      // a day: each anchor pays 1/144 of the reserve
         }
     }
 };

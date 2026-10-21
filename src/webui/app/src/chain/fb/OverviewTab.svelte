@@ -115,7 +115,7 @@
             <dt><i class="soft"></i><span>Soft</span></dt><dd><Amount sats={coinsToSats(finality.soft)} /></dd>
           </dl>
           <p class="side-note fb-small">
-            Soft: only blocks of stake are on it, like an unconfirmed payment with slashing behind it. BMM-confirmed: a BMM commitment on the mainchain covers it; undoing it takes the mainchain's merged miners, not stake. Final: enough BMM commitments cover it.
+            Soft: only blocks of stake are on it, like an unconfirmed payment with slashing behind it, until the next mainchain block anchors it (through a gap of the mainchain, blocks stay soft until its blocks come again). BMM-confirmed: a BMM commitment on the mainchain covers it; undoing it takes the mainchain's merged miners, not stake. Final: enough BMM commitments cover it.
             <button type="button" class="link" onclick={() => go('staking', 'finality')}>{t('How far the chain is final: Network, Finality & BMM')}</button>
           </p>
         </div>

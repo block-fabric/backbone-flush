@@ -19,6 +19,7 @@
 #include <addresstype.h>
 #include <bitassets/logo.h>
 #include <bitassets/state.h>
+#include <chainparams.h>
 #include <common/args.h>
 #include <consensus/amount.h>
 #include <crypto/sha256.h>
@@ -35,6 +36,7 @@
 #include <univalue.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
+#include <util/chaintype.h>
 #include <util/moneystr.h>
 #include <util/strencodings.h>
 #include <webui/chainconfig.h>
@@ -355,6 +357,15 @@ int UnbondingAnchors(interfaces::Node& node)
     return anchors.isNum() ? anchors.getInt<int>() : 0;
 }
 
+//! About how long `anchors` BMM commitments take: one a mainchain block, ten minutes on the eCash networks, a minute on Chains'.
+std::string AnchorsTime(int anchors)
+{
+    const int64_t seconds{int64_t{anchors} * (IsEcashChain(Params().GetChainType()) ? 600 : 60)};
+    if (seconds >= 2 * 86400) return strprintf("about %d days", (seconds + 43200) / 86400);
+    if (seconds >= 2 * 3600) return strprintf("about %d hours", (seconds + 1800) / 3600);
+    return strprintf("about %d minutes", (seconds + 30) / 60);
+}
+
 void Ask(const guard::ConfirmFn& confirm, const Window::ConfirmDialog& dialog, const std::string& declined)
 {
     if (!confirm || !confirm(dialog)) throw HostError(BRIDGE_CANCELLED, declined);
@@ -374,9 +385,8 @@ Window::ConfirmDialog BondConfirmation(const std::string& wallet, const std::str
                                       strprintf("Bond %s of this wallet to the validator key", Shown(amount))};
     dialog.message = strprintf("Wallet: %s\n\n%s\n\n%s\n\n"
                                "The coins leave this wallet now. The key takes part in the validator sets from the epoch after next, while its "
-                               "bond is at least the minimum stake. Taking them back (unbonding) pays them %d BMM commitments later (about two "
-                               "days on the main network).%s",
-                               guard::OneLine(wallet, 64), what, Grouped(key), unbonding_anchors,
+                               "bond is at least the minimum stake. Taking them back (unbonding) pays them %d BMM commitments later (%s).%s",
+                               guard::OneLine(wallet, 64), what, Grouped(key), unbonding_anchors, AnchorsTime(unbonding_anchors),
                                other_node ? "\n\nThe key is not one of this node's: its own node signed the proof of possession given." : "");
     dialog.accept = existing ? "Add to the bond" : "Bond";
     return dialog;
@@ -399,9 +409,9 @@ Window::ConfirmDialog UnbondConfirmation(const std::string& wallet, const std::s
     const UniValue& owner{bond.find_value("owner")};
     dialog.message = strprintf("Wallet: %s\n\n%s\n\n%s\n\n"
                                "The coins leave the validator's stake at once. They are paid back to the bond's owner, %s, %d BMM commitments "
-                               "later (about two days on the main network); until then a proof that the validator signed two blocks for one "
+                               "later (%s); until then a proof that the validator signed two blocks for one "
                                "slot can still take a share of them.",
-                               guard::OneLine(wallet, 64), what, Grouped(key), owner.isStr() ? guard::OneLine(owner.get_str(), 90) : std::string{"this wallet"}, unbonding_anchors);
+                               guard::OneLine(wallet, 64), what, Grouped(key), owner.isStr() ? guard::OneLine(owner.get_str(), 90) : std::string{"this wallet"}, unbonding_anchors, AnchorsTime(unbonding_anchors));
     dialog.accept = "Unbond";
     // The stake leaves the validator at once and earns nothing until it is paid back (user decision: danger).
     dialog.level = dialog::Level::DANGER;

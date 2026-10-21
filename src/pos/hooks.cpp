@@ -167,7 +167,7 @@ bool FastBlocksHooks::CheckHeader(const CBlockHeader& header, const CBlockIndex&
     const bool future{header.Time() > NodeClock::now() + std::chrono::seconds{m_params.max_future_seconds}};
     // The signature before anything that reads more of the chain, or keeps the header to try again
     // later: only a leader makes the node look further. The leader is that of the validator set of the
-    // slot's epoch, which an anchor before the epoch before it made, and of the epoch's seed, which the
+    // slot's epoch, which an anchor before the epoch before it (and before its seed, SetBoundary) made, and of the epoch's seed, which the
     // record of the mainchain gives.
     const SlotLeader leader{LeaderOf(prev, slot)};
     // A header HeaderSpare just found spare (from a peer; its signer has two headers of the slot in the
@@ -1185,9 +1185,9 @@ std::shared_ptr<const ValidatorSet> FastBlocksHooks::SetFor(const CBlockIndex& p
                                                             const CBlockIndex** anchor_out, std::optional<uint64_t> within) const
 {
     AssertLockHeld(::cs_main);
-    // The newest anchor at or below prev whose slot is before the epoch before: the stake was fixed an
-    // epoch before the seed of the epoch exists.
-    const int64_t boundary{(epoch - 1) * m_params.slots_per_epoch};
+    // The newest anchor at or below prev whose slot is before the epoch before (and before the time the seed is
+    // taken at, set_lead_seconds): the stake was fixed before the seed of the epoch exists (SetBoundary).
+    const int64_t boundary{SetBoundary(epoch, m_params)};
     uint64_t passed{0};
     for (const CBlockIndex* index{&prev}; index; index = index->pprev) {
         ++m_index_walks;

@@ -744,11 +744,15 @@ is later (a block's time can be set back as far as the median time of the chain
 before it, which a merged miner that makes every block after a stall controls:
 it could otherwise fix the set of an epoch whose seed is known): the stake
 is fixed at least an epoch before the epoch's seed exists, and a bond counts
-from the epoch after the next anchor's next. The set has blocks of stake if it
+from the epoch after the next anchor's next. Where the seed is taken more than an
+epoch ahead (the eCash networks: `seed_lookahead_seconds` 9 h, for blocks of stake
+through a gap of the mainchain, doc/ecash-sidechains.md), the anchor must also be
+before the seed's time (`set_lead_seconds`, `pos::SetBoundary`): a bond then counts
+about that much later. The set has blocks of stake if it
 has `min_active_validators`. Sets are kept by version, with each anchor's
 (table `0x5a`, `0x5b`, `0x5c`), and pruned once no block to come can need them
-(older than the window for proofs, and followed by an anchor before the epoch
-before the current one). A node keeps the sets it read in memory too (4096): a
+(older than the window for proofs, and followed by an anchor before the current
+epoch's boundary, `pos::SetBoundary`). A node keeps the sets it read in memory too (4096): a
 header of a branch whose anchor's set it never had is taken (within the bounds
 of "Headers the node cannot check yet"), and its leader checked when its block
 is connected.

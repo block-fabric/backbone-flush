@@ -9,6 +9,7 @@
   import { t, tn } from '../../lib/i18n.svelte';
   import { go } from '../../lib/nav.svelte';
   import { node, wallets } from '../../lib/state.svelte';
+  import { CHAIN } from '../config';
   import { coinsToSats } from '../../lib/units';
   import { current, refreshRecords } from '../../lib/walletdata.svelte';
   import Card from '../../views/home/Card.svelte';
@@ -59,7 +60,15 @@
     error: 'Paused: the block maker stopped',
     nokey: 'Not set up',
   };
+  const mainName = CHAIN.mainchain?.name ?? 'mainchain';
   const sinceSlots = $derived(pos && pos.firstunanchoredslot >= 0 ? pos.slot - pos.firstunanchoredslot : null);
+  // No mainchain block anchoring this chain for half an hour or more (a gap of the mainchain, up to hours on eCash):
+  // the blocks of stake go on, soft until an anchor comes, for max_unanchored_slots (getposinfo) at most.
+  const gap = $derived(
+    pos && sinceSlots !== null && pos.maxunanchoredslots && sinceSlots * pos.slotseconds >= 1800
+      ? { since: sinceSlots * pos.slotseconds, left: Math.max(0, pos.maxunanchoredslots - sinceSlots) * pos.slotseconds }
+      : null,
+  );
 </script>
 
 {#if fb.loaded && !fb.error && pos && simple}
@@ -100,6 +109,9 @@
         <dt>Slots since</dt><dd class="num">{sinceSlots !== null ? formatCount(sinceSlots) : '0'}</dd>
         <dt>Final up to</dt><dd class="num">{anchors && anchors.finalheight >= 0 ? t('block %1', formatCount(anchors.finalheight)) : '–'}</dd>
       </dl>
+      {#if gap}
+        <p class="gap small" role="status">{t('No %1 block for %2: the new blocks stay soft until one anchors them. Blocks of stake go on for %3 more.', mainName, untilText(gap.since), untilText(gap.left))}</p>
+      {/if}
       {#snippet actions()}
         <button type="button" class="btn grow" onclick={() => go('staking', 'finality')}>BMM blocks</button>
         <button type="button" class="btn ghost" onclick={() => go('staking', 'slashing')}>Slashing</button>
@@ -182,6 +194,10 @@
     justify-content: space-between;
     gap: 0.8rem;
     min-width: 0;
+  }
+  .gap {
+    margin: 0.4rem 0 0;
+    color: var(--warning);
   }
   .small {
     font-size: 0.82rem;

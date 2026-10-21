@@ -2148,6 +2148,28 @@ BOOST_FIXTURE_TEST_CASE(bundle_fixed_by_anchored_block, FastBlocksSetup)
     BOOST_CHECK(WITH_LOCK(::cs_main, return Chain().SideState().Bundle()->hash) == *bundle1);
 }
 
+BOOST_AUTO_TEST_CASE(set_boundary_and_lead)
+{
+    // Without a set lead (the Chains networks): the first slot of the epoch before.
+    Consensus::PosParams p{CChainParams::Main()->GetConsensus().pos};
+    BOOST_REQUIRE_EQUAL(p.set_lead_seconds, 0);
+    for (const int64_t epoch : {1, 2, 10, 1000}) BOOST_CHECK_EQUAL(pos::SetBoundary(epoch, p), (epoch - 1) * p.slots_per_epoch);
+    // With one (the eCash networks): also before the time the seed is taken at, so that no anchor at or after the slot
+    // of the seed's time fixes the set; never higher for a later epoch (the pruning of the sets counts on it).
+    for (const ChainType type : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        const Consensus::PosParams e{CChainParams::Ecash(type)->GetConsensus().pos};
+        BOOST_CHECK_EQUAL(e.set_lead_seconds, e.seed_lookahead_seconds);
+        int64_t last{std::numeric_limits<int64_t>::min()};
+        for (int64_t epoch{0}; epoch < 400; ++epoch) {
+            const int64_t boundary{pos::SetBoundary(epoch, e)};
+            BOOST_CHECK_LE(boundary, std::max<int64_t>(0, (epoch - 1) * e.slots_per_epoch));
+            if (boundary > 0) BOOST_CHECK_LE(pos::SlotTime(boundary, e), pos::SeedTime(epoch, e));
+            BOOST_CHECK_GE(boundary, last);
+            last = boundary;
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(staking_parameters)
 {
     // The user's decisions (design, section 13): a minimum stake of 1 CHN (0.01 on the test networks,
@@ -2169,7 +2191,7 @@ BOOST_AUTO_TEST_CASE(staking_parameters)
         BOOST_CHECK(!pos::ValidatorSet{pos}.Active());
         BOOST_CHECK_EQUAL(pos.slash_bps, 1000);
         BOOST_CHECK_EQUAL(pos.reporter_share_divisor, 8);
-        // A proof lands while the stake is still bonded or unbonding.
+        // A proof lands while the stake is still bonded or unbonding (the eCash networks: sidechain_mainclient_tests).
         BOOST_CHECK_GE(pos.unbonding_anchors, 2 * pos.evidence_window_anchors);
         // The stake is fixed an epoch before the seed exists (the seed block is mined some minutes after
         // its median time, which is at most an epoch before the epoch starts).

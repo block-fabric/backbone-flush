@@ -139,16 +139,57 @@ Chains) is scaled (`Consensus::PosParams`, `CEcashSidechainParams`):
 | Parameter | What | Chains main | eCash `ecash`, `ecashbeta` | `ecashtest` (Chains test) |
 |---|---|---|---|---|
 | `fee_target_spacing` (new) | the mainchain spacing the fee curves are drawn for: S taken as 60 × S / target, so 50/50 at the target and below, the second curve 5 points less per target above it, 20 % from 7 × target | 60 s | 600 s | 600 s (60) |
-| `max_unanchored_slots` | blocks of stake halt this many slots after the first one no anchor covers | 240 (1 h) | 720 (3 h: an hour without an eCash block is not rare) | 720 (240) |
+| `max_unanchored_slots` | blocks of stake halt this many slots after the first one no anchor covers | 240 (1 h) | 1920 (8 h: a gap of the mainchain of 6 h with room) | 1920 (240) |
 | `stall_seconds` | BMM blocks carry transactions after so long without blocks of stake, by the mainchain's median time (which lags the clock about 50 min on eCash, 5 on Chains) | 1800 | 3600 | 3600 (600) |
-| `seed_lookahead_seconds` | the leader seed of an epoch: the highest mainchain block at least so long (median time) before it | 1200 (20 blocks) | 3600 (6 blocks) | 3600 (600) |
-| `unbonding_anchors` | unbonded coins are paid so many anchors later | 2880 (2 days) | 288 (2 days) | 12 (120: 2 hours) |
-| `evidence_window_anchors` (slashing) | a double-signing proof is valid this many anchors after its epoch's set | 1440 (1 day) | 144 (1 day) | 6 (60: 1 hour) |
+| `seed_lookahead_seconds` | the leader seed of an epoch: the highest mainchain block at least so long (median time) before it; an epoch has a leader once the record has a block with a later median time | 1200 (20 blocks) | 32400 (9 h: epochs seeded through a 6 h gap, the median time ~50 min behind) | 32400 (600) |
+| `set_lead_seconds` (new) | the validator set of an epoch: the newest anchor before the epoch before it and at least so long before it starts (`pos::SetBoundary`): fixed before its seed's block can exist | 0 (an epoch) | 32400 (as the seed) | 32400 (0) |
+| `unbonding_anchors` | unbonded coins are paid so many anchors later | 2880 (2 days) | 1008 (7 days) | 144 (1 day; 120: 2 hours) |
+| `evidence_window_anchors` (slashing) | a double-signing proof is valid this many anchors after its epoch's set | 1440 (1 day) | 1007 (until the stake is paid back) | 143 (60: 1 hour) |
 | `pot_reserve_anchors` | each anchor pays 1/this of the pot's reserve | 1440 | 144 | 6 (60) |
 | `final_anchors` (not consensus) | wallets call a block final under so many anchors | 6 (6 min) | 3 (30 min) | 3 (3) |
 | `slot_seconds`, `slots_per_epoch` | blocks of stake | 15, 240 | 15, 240 | 15, 40 |
 | `nPowTargetSpacing` | Bitcoin's heuristics: a block a slot | 15 s | 15 s | 15 s |
 | `refund_grace_blocks`, `bundle_retry_delay` | in blocks of this chain (blocks of stake), as on Chains | 6, 144 | 6, 144 | 6, 20 |
+
+### A gap of the mainchain
+
+Blocks of stake go on through a gap of the mainchain (no eCash block, so no anchor and no new seed) of up to six
+hours with room (user requirement, 2026-10-21). Three limits bound how long, from the last eCash block t0:
+
+- **The seed.** An epoch has a leader once the mainchain record has a block whose median time is later than its start
+  less `seed_lookahead_seconds` (`pos::SeedHeight`). In a gap the median time stops about 50 minutes before t0
+  (eCash's median of 11 blocks), so epochs starting up to t0 + 9 h − 50 min − an epoch (about t0 + 7 h) are led. With
+  the earlier hour, blocks of stake stopped 10 to 70 minutes into a gap, long before `max_unanchored_slots`.
+- **The anchors.** The first block of stake no anchor covers is about one eCash block before t0 (the last ticket
+  anchors the chain up to there); blocks of stake go on 8 hours after it. When eCash comes back, its first block
+  commits to the ticket made before the gap, which is acknowledged if still within the 8 hours (a gap of up to about
+  7 h 40 min), the next to a ticket of the newest block: the blocks of the gap are anchored, then final (3 anchors).
+  The work of an anchor is a walk over the run it covers (at most 1920 blocks), as before.
+- **The set.** With the seed 9 hours ahead, the set an anchor an epoch before made (the Chains rule) would be fixed
+  after the seed's block exists: a validator could pick a key or a stake for a known seed. `set_lead_seconds` (9 h)
+  fixes it before: an anchor whose slot, and whose commitment's median time, are before the seed's time, so the
+  seed's block is at or above the block that committed the anchor (only the mainchain's miner can bias a seed, as
+  before). Bonds, unbonds and jails therefore take effect about ten hours later than they are mined; during a gap
+  every epoch's set is the last anchor's before it.
+
+What a gap does not stall: `stall_seconds` (BMM blocks take transactions when blocks of stake stop) compares the
+mainchain's median time with the last block of stake, which a gap leaves fresh; the fee split's spacing S (a median of
+11 spacings) takes a gap as one long spacing; the mainchain link (`main_behind_margin`, IBD) sees a quiet mainchain,
+not a lagging one; unbonding and the reserve's payouts count anchors, so they pause. The leader schedule is known
+about 8 hours ahead (an hour before). In the app, the Finality card says when no eCash block came for half an hour:
+the new blocks stay soft until one anchors them, and how long blocks of stake go on.
+
+**Unbonding and proofs.** A week of anchors (1008; a day, 144, on `ecashtest`, which must outlast the set lead), and
+a proof of double signing is taken until the stake it slashes is paid back: an unbond of a set's stake is mined at
+that set's anchor or later, so its coins stay at least until that anchor's count plus `unbonding_anchors`; the window
+is one less (1007, 143). Both are far past the ~60 anchors a validator still leads after it unbonds (the set lead and
+two epochs). `pot_reserve_anchors` only smooths the payouts of penalties (unchanged).
+
+Regtest scales these with `-testposparam=name@value` (`max_unanchored_slots`, `slots_per_epoch`, `set_lead_seconds`,
+`unbonding_anchors`, `evidence_window_anchors`, `pot_reserve_anchors`, `stall_seconds`) and `-posseedlookahead`;
+`test/functional/feature_layers_ecash_gap.py` runs a gap of six hours' worth (a mainchain block every 4 s for ten
+minutes: 144 s), the anchors' catch-up, finality, a week of unbonding (80 anchors) and a proof one anchor before its
+window closes. `getposinfo` says `maxunanchoredslots`, `setleadseconds`, `seedlookaheadseconds`.
 
 Regtest `-testmainenforcer` adds `fee_target_spacing` 600 to the template's (the PoS test values are regtest's).
 `getposinfo`'s and `getstakinginfo`'s `feesplit` say `targetspacing`, and `spacing` as the curves take it.

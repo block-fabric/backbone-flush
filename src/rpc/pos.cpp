@@ -357,6 +357,9 @@ RPCMethod getposinfo()
             {RPCResult::Type::STR_HEX, "anchorpoint", /*optional=*/true, "The last block that took the peg actions: the next ticket anchors it or a block after it"},
             {RPCResult::Type::NUM, "lastposslot", "Slot of the last block of stake on the active chain, -1 if none"},
             {RPCResult::Type::NUM, "firstunanchoredslot", "Slot of the first block of stake no anchor covers, -1 if none"},
+            {RPCResult::Type::NUM, "maxunanchoredslots", "Blocks of stake go on for this many slots after the first one no anchor covers (max_unanchored_slots): how long the chain runs without a mainchain block"},
+            {RPCResult::Type::NUM, "setleadseconds", "The validator set of an epoch is fixed by an anchor at least an epoch, and at least this long, before it starts (set_lead_seconds)"},
+            {RPCResult::Type::NUM, "seedlookaheadseconds", "The seed of an epoch is the mainchain block this long before it starts (seed_lookahead_seconds)"},
             {RPCResult::Type::BOOL, "stalled", "Whether a BMM block built now may carry transactions (blocks of stake stalled)"},
             {RPCResult::Type::OBJ, "pot", "The fee pot",
             {
@@ -432,6 +435,9 @@ RPCMethod getposinfo()
     if (fast.anchor_point_height >= 0) result.pushKV("anchorpoint", fast.anchor_point.GetHex());
     result.pushKV("lastposslot", fast.last_pos_slot);
     result.pushKV("firstunanchoredslot", fast.first_unanchored_slot);
+    result.pushKV("maxunanchoredslots", params.max_unanchored_slots);
+    result.pushKV("setleadseconds", params.set_lead_seconds);
+    result.pushKV("seedlookaheadseconds", params.seed_lookahead_seconds);
     const auto main_tip{chainman.m_mainchain ? chainman.m_mainchain->GetBlock(chainman.m_mainchain->Height()) : std::nullopt};
     result.pushKV("stalled", hooks->Stalled(fast, main_tip ? main_tip->time : now, active));
     UniValue pot(UniValue::VOBJ);

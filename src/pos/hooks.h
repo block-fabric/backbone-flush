@@ -158,7 +158,7 @@ public:
     int64_t AnchorSlot(const CBlockIndex& anchor) const;
     /**
      * The validator set of `epoch` for a block on top of `prev`: the one the newest anchor at or below
-     * `prev` whose slot (AnchorSlot) is before the epoch before `epoch` made (none: the genesis set). nullptr if this
+     * `prev` whose slot (AnchorSlot) is before pos::SetBoundary(`epoch`) made (none: the genesis set). nullptr if this
      * node does not know it: the anchor is on a branch whose blocks it has not connected. `view`: the
      * state of the chain of `prev`, to read the set from (that state alone); none: the sets this node
      * read before, or else the active chain's state (for headers). `anchor`: set to the anchor that made

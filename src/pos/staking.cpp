@@ -391,7 +391,8 @@ Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint
 
     // Sets no block to come can need: of an anchor older than the window for proofs, followed by one
     // that is older than the epoch before this one (which fixes the sets from this epoch on).
-    const int64_t boundary{(epoch - 1) * m_params.slots_per_epoch};
+    // (As SetFor: SetBoundary of this epoch, the lowest of every epoch to come.)
+    const int64_t boundary{SetBoundary(epoch, m_params)};
     for (int pruned{0}; pruned < MAX_PRUNED_PER_STEP; ++pruned) {
         std::vector<std::pair<uint64_t, uint256>> oldest;
         ANCHOR_ORDER.ForEach(out, [&](const uint64_t& count, const uint256& hash) {

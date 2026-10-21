@@ -18,7 +18,7 @@
   import { coinsToSats, formatAmount, satsToCoins } from '../../lib/units';
   import { setUiMode } from '../../lib/uimode.svelte';
   import { clock } from './clock.svelte';
-  import { anchorsTime, incomeTotal, bondProblem, dailyEstimate, nodeState, secondsUntilEpoch, simpleState, simpleTone, stakeSats, untilText, type Income } from './model';
+  import { anchorsTime, incomeTotal, bondProblem, dailyEstimate, joinEpoch, nodeState, secondsUntilEpoch, simpleState, simpleTone, stakeSats, untilText, type Income } from './model';
   import { fb, refreshFb } from './store.svelte';
 
   let { income }: { income: Income | null } = $props();
@@ -72,7 +72,7 @@
   const perDayNow = $derived(dailyEstimate(ownStake, others, pos?.slotseconds ?? 0, avgFee));
   const perDayWith = $derived(amount !== null && amount > 0n ? dailyEstimate(ownStake + amount, others, pos?.slotseconds ?? 0, avgFee) : null);
 
-  const joinIn = $derived(pos && fb.set ? secondsUntilEpoch(pos.epoch + 2, fb.set, epochSlots, pos.slot, pos.slotseconds) : 0);
+  const joinIn = $derived(pos && fb.set ? secondsUntilEpoch(joinEpoch(pos.slot, epochSlots, pos.slotseconds, pos.setleadseconds ?? 0), fb.set, epochSlots, pos.slot, pos.slotseconds) : 0);
   const jailIn = $derived(pos && fb.set && keyBond ? secondsUntilEpoch(keyBond.jaileduntilepoch, fb.set, epochSlots, pos.slot, pos.slotseconds) : 0);
   const backIn = $derived(anchorsTime(pos?.staking.unbondinganchors ?? 0));
 

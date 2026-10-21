@@ -38,6 +38,11 @@ export interface PosInfo {
   anchorpoint?: string;
   lastposslot: number;
   firstunanchoredslot: number;
+  /** Blocks of stake go on this many slots past the first one no anchor covers (a mainchain gap); older nodes: absent. */
+  maxunanchoredslots?: number;
+  /** The set of an epoch is fixed at least this long before it (the eCash networks); older nodes: absent. */
+  setleadseconds?: number;
+  seedlookaheadseconds?: number;
   stalled: boolean;
   pot: { accrued: number; paid: number; reserve: number };
   staking: { bonded: number; unbonding: number; rewardsowed: number; slashed: number; minstake: number; unbondinganchors: number };
@@ -231,7 +236,7 @@ export function stateTip(state: ValidatorState): string {
     case 'active':
       return t('In the validator set of this epoch: it leads slots, in proportion to its stake.');
     case 'joining':
-      return t('Enough is bonded: it takes part in the validator sets from the epoch after next.');
+      return t('Enough is bonded: it takes part in the validator sets from the epoch after next (on eCash, about ten hours later: a set is fixed before its seed is known).');
     case 'unbonding':
       return t('All of its bond is on its way back to the owner.');
     case 'low':
@@ -461,6 +466,16 @@ export function simpleTone(s: SimpleState): 'ok' | 'wait' | 'bad' {
  * Seconds until a slot of an epoch to come, from the set of the current epoch (its first slot) and the length
  * of an epoch in slots: when a key that is waiting joins (the epoch after next), when a jail ends.
  */
+export function joinEpoch(slot: number, epochSlots: number, slotSeconds: number, setLeadSeconds = 0): number {
+  // The first epoch whose set an anchor after `slot` fixes (pos::SetBoundary): an epoch before it starts, and
+  // set_lead_seconds before it (the eCash networks).
+  if (epochSlots <= 0) return 0;
+  const lead = slotSeconds > 0 ? Math.ceil(setLeadSeconds / slotSeconds) : 0;
+  let e = Math.floor(slot / epochSlots) + 2;
+  while (Math.min((e - 1) * epochSlots, e * epochSlots - lead) <= slot) e++;
+  return e;
+}
+
 export function secondsUntilEpoch(epoch: number, current: { epoch: number; firstslot: number }, epochSlots: number, slot: number, slotSeconds: number): number {
   if (epochSlots <= 0 || epoch <= current.epoch) return 0;
   const first = current.firstslot + (epoch - current.epoch) * epochSlots;

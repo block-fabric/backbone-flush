@@ -180,6 +180,8 @@ public:
         //! FastBlocks: the fixed validator set of a regtest sidechain (-posvalidators).
         std::vector<Consensus::PosValidator> pos_validators{};
         std::optional<int64_t> pos_seed_lookahead{};
+        //! -testposparam=name@value: a FastBlocks parameter of regtest (PosParams), for tests of eCash's values scaled.
+        std::vector<std::pair<std::string, int64_t>> pos_params{};
         //! FastBlocks: how many anchors make a block final (-posfinalanchors; not consensus).
         std::optional<int> pos_final_anchors{};
         //! FastBlocks: the length of a slot in seconds (-posslotseconds; 1 by default), and of a stall (30 slots).

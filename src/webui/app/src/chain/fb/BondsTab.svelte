@@ -21,7 +21,7 @@
   import { fb, refreshFb } from './store.svelte';
 
   const ACTIONS: { id: BondAction; label: string; tip: string }[] = [
-    { id: 'bond', label: 'Bond', tip: 'Bond coins of this wallet to a validator key: they leave the wallet, and the key takes part in the validator sets from the epoch after next' },
+    { id: 'bond', label: 'Bond', tip: 'Bond coins of this wallet to a validator key: they leave the wallet, and the key takes part in the validator sets from the epoch after next (on eCash, about ten hours later)' },
     { id: 'add', label: 'Add to bond', tip: "Add coins to this wallet's bond to the key" },
     { id: 'unbond', label: 'Unbond', tip: 'Take the amount back from the bond: paid to this wallet some BMM commitments later' },
     { id: 'unbondAll', label: 'Unbond all', tip: 'Take all of the bond back (all that is bonded when the unbond is mined)' },
@@ -86,7 +86,7 @@
       if (unbond) {
         toast('success', t('Unbond sent'), t('%1 is paid back to %2 at BMM commitment %3 or so.', String(result.amount), String(result.owner), String(result.releaseanchor)));
       } else {
-        const short = result.eligible === false ? t('That is less than the minimum stake: the key takes part once it has that much.') : t('The key takes part from the epoch after next.');
+        const short = result.eligible === false ? t('That is less than the minimum stake: the key takes part once it has that much.') : t('The key takes part from the epoch after next (on eCash, about ten hours later).');
         toast('success', t('Bond sent'), `${t('The key has %1 bonded once it is mined.', String(result.bonded))} ${short}`);
       }
       await refreshFb();

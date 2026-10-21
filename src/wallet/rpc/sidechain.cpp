@@ -304,7 +304,7 @@ RPCMethod createbond()
     return RPCMethod{
         "createbond",
         "Bond coins of this wallet to a validator key of FastBlocks: the coins leave the wallet into the chain's state, and the key\n"
-        "takes part in the validator sets made at the anchors after (from the epoch after next) while its bond is at least the\n"
+        "takes part in the validator sets made at the anchors after (from the epoch after next; on the eCash networks, whose sets are fixed set_lead_seconds before their epoch, about ten hours later) while its bond is at least the\n"
         "minimum stake. The wallet owns the bond: it alone can unbond it (createunbond), and is paid what it unbonds. The validator\n"
         "key signs the bond (a proof of possession): by the node's block producer if it holds the key, or given as pop." +
         HELP_REQUIRING_PASSPHRASE,

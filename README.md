@@ -199,8 +199,10 @@ A validator runs its node with `-validatorkeyfile=<file>` and bonds ECX to its k
 **Bonds** tab of Staking); once enough stake is bonded, blocks of stake start, a slot every 15 seconds, each
 led by a validator picked by stake. Fees of a block of stake are shared between its producer and the fee pot,
 which BMM bidders win. Coins are *soft* in blocks of stake, *BMM-confirmed* once an eCash block commits to
-them, and *final* after three anchors (half an hour). Unbonded coins come back after 288 anchors (two days;
-12 on `ecashtest`). See [doc/fastblocks.md](doc/fastblocks.md) and, for the eCash values,
+them, and *final* after three anchors (half an hour). If eCash stalls, blocks of stake go on (soft) for up to
+8 hours, and its next blocks anchor them. A bond counts in the validator sets about ten hours after it is mined
+(the sets are fixed before their seeds). Unbonded coins come back after 1008 anchors (seven days; 144 on
+`ecashtest`); a proof of double signing slashes them until then. See [doc/fastblocks.md](doc/fastblocks.md) and, for the eCash values,
 [doc/ecash-sidechains.md](doc/ecash-sidechains.md).
 
 ## Commands

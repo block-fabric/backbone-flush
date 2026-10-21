@@ -17,6 +17,7 @@
 #include <test/util/setup_common.h>
 #include <univalue.h>
 #include <util/chaintype.h>
+#include <validation.h>
 #include <util/fs_helpers.h>
 #include <util/translation.h>
 
@@ -216,12 +217,23 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
             // The anchoring of the blocks of stake, for ten-minute anchors.
             BOOST_CHECK_EQUAL(consensus.pos.fee_target_spacing, 600);
             BOOST_CHECK_EQUAL(base->GetConsensus().pos.fee_target_spacing, 60);
-            BOOST_CHECK_EQUAL(consensus.pos.max_unanchored_slots, 720);
+            // Blocks of stake through a mainchain gap of six hours with room (user requirement): 8 hours of slots without
+            // an anchor, the seed nine hours ahead, the set fixed as long before (no grinding of keys for a known seed).
+            BOOST_CHECK_EQUAL(consensus.pos.max_unanchored_slots, 1920);
             BOOST_CHECK_EQUAL(consensus.pos.stall_seconds, 3600);
-            BOOST_CHECK_EQUAL(consensus.pos.seed_lookahead_seconds, 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.seed_lookahead_seconds, 9 * 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.set_lead_seconds, consensus.pos.seed_lookahead_seconds);
+            BOOST_CHECK_EQUAL(base->GetConsensus().pos.set_lead_seconds, 0);
+            // A gap of six hours, the median time ~50 minutes behind the last block, and an epoch: still seeded.
+            BOOST_CHECK_GE(consensus.pos.seed_lookahead_seconds, 6 * 3600 + 3000 + consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
+            BOOST_CHECK_GE(consensus.pos.max_unanchored_slots * consensus.pos.slot_seconds, 6 * 3600 + 2 * 600);
+            BOOST_CHECK_LE(consensus.pos.max_unanchored_slots, DRIVECHAIN_UNDO_DEPTH);
             BOOST_CHECK_EQUAL(consensus.pos.final_anchors, 3);
-            BOOST_CHECK_EQUAL(consensus.pos.unbonding_anchors, type == ChainType::ECASH_TESTNET ? 12 : 288);
-            BOOST_CHECK_EQUAL(consensus.pos.evidence_window_anchors, type == ChainType::ECASH_TESTNET ? 6 : 144);
+            // Unbonding: a week (a day on ecashtest); proofs taken until the stake is paid back.
+            BOOST_CHECK_EQUAL(consensus.pos.unbonding_anchors, type == ChainType::ECASH_TESTNET ? 144 : 7 * 24 * 6);
+            BOOST_CHECK_EQUAL(consensus.pos.evidence_window_anchors, consensus.pos.unbonding_anchors - 1);
+            // Both past the time a validator still leads after it unbonds (the set lead and two epochs), in anchors.
+            BOOST_CHECK_GT(consensus.pos.evidence_window_anchors * 600, consensus.pos.set_lead_seconds + 2 * consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
             BOOST_CHECK_EQUAL(consensus.pos.pot_reserve_anchors, type == ChainType::ECASH_TESTNET ? 6 : 144);
             BOOST_CHECK_EQUAL(consensus.pos.slot_seconds, base->GetConsensus().pos.slot_seconds);
             BOOST_CHECK_EQUAL(consensus.pos.genesis_time, params->GenesisBlock().nTime);

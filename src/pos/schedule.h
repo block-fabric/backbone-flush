@@ -54,6 +54,12 @@ private:
 /** The time the seed of an epoch is taken at: the start of the epoch, less seed_lookahead_seconds. */
 int64_t SeedTime(int64_t epoch, const Consensus::PosParams& params);
 /**
+ * The slot the anchor that fixes the validator set of `epoch` comes before: the first slot of the epoch before it,
+ * or, with set_lead_seconds, the slot of the time that long before the epoch starts, if earlier. Never higher for a
+ * later epoch (the sets of the anchors below the boundary of the current epoch are those blocks to come can need).
+ */
+int64_t SetBoundary(int64_t epoch, const Consensus::PosParams& params);
+/**
  * The mainchain block whose hash seeds an epoch: the highest whose median time is at or before
  * SeedTime. Known once the record has a block with a later median time (median times never go down):
  * nothing before. -1 if every block on record is later (its hash is then taken as null).

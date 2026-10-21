@@ -117,6 +117,15 @@ struct PosParams {
      * least this long before the epoch starts.
      */
     int64_t seed_lookahead_seconds{1200};
+    /**
+     * The validator set of an epoch is the one the newest anchor made whose slot is before the epoch before it, and
+     * at least this long before the epoch starts (pos::SetBoundary). 0: an epoch before only, which keeps the set
+     * fixed before the seed's block can exist as long as seed_lookahead_seconds is at most an epoch (the Chains
+     * networks). Where the seed is taken longer before (the eCash networks: blocks of stake go on through hours
+     * without a mainchain block, doc/ecash-sidechains.md), this is seed_lookahead_seconds: no bond made once the
+     * seed's block is known counts in its epoch's set, so a validator cannot pick a key or a stake for a seed.
+     */
+    int64_t set_lead_seconds{0};
     //! Signing two blocks for one slot costs this share of the stake (bonded and unbonding), in basis points.
     int64_t slash_bps{1000};
     //! The block that carries the proof is paid 1/reporter_share_divisor of the penalty; the rest goes to the pot's reserve.
