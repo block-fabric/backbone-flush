@@ -302,6 +302,11 @@
     panel.open = true;
     set(await waitFor('the curator field', () => $('#curator-id'), 10000), curator.oracle);
     await click('Trust', () => panel);
+    // Every trust is confirmed, the whole id shown (a name is a label anyone may give an oracle).
+    const confirmBox = await waitFor('the confirmation of the curator', () => $('[data-testid="curator-confirm"]'), 30000);
+    await check('the confirmation shows the whole id', confirmBox.textContent.includes(curator.oracle), confirmBox.textContent);
+    await shot('curator-confirm');
+    await click('Trust this id', () => confirmBox);
     await waitFor('the curator trusted', () => $('ul[aria-label="Curators trusted"]') && text('ul[aria-label="Curators trusted"]').includes('curator'), 30000);
     set($('select[aria-label="Sort pairs"]'), 'newest');
     await waitFor('the Verified badge', () => $('table[aria-label="Markets"] [data-testid="verified-badge"]'), 60000);
