@@ -52,6 +52,7 @@
     fill: none;
     stroke: var(--brand, var(--accent));
     stroke-width: 2.4;
+    stroke-linecap: round;
     stroke-linejoin: round;
   }
   .name {

@@ -94,8 +94,9 @@
     width: 6rem;
     fill: none;
     stroke: var(--text);
-    stroke-width: 1.6;
-    stroke-linecap: square;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .sky {
     position: absolute;
