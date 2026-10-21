@@ -1339,15 +1339,15 @@ RPCMethod getverifications()
         "getverifications",
         "Verified issuers (not a rule: what wallets show): what curators say of an asset. A curator is an oracle that attests "
         "\"Layers verification <asset id> #<round>\" with 1 (verified) or 0 (taken back); its word is that of its last round. "
-        "Of the curators named, or of every oracle registered (at most 200) that ever verified it.",
+        "Only the curators named count (the ones the user trusts: anyone can register an oracle, so no list means no verification).",
         {
             {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
-            {"curators", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "The curators to ask (ids or keys of oracles)", {{"curator", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
+            {"curators", RPCArg::Type::ARR, RPCArg::Optional::NO, "The curators the user trusts (ids or keys of oracles; 1 to 200)", {{"curator", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
             {RPCResult::Type::STR_HEX, "asset", "The asset's id"},
-            {RPCResult::Type::BOOL, "verified", "Whether any of them verifies it now"},
+            {RPCResult::Type::BOOL, "verified", "Whether one of the curators named verifies it now"},
             {RPCResult::Type::ARR, "curators", "", {{RPCResult::Type::OBJ, "", "",
             {
                 {RPCResult::Type::STR_HEX, "curator", "The oracle's id"},
@@ -1357,7 +1357,7 @@ RPCMethod getverifications()
                 {RPCResult::Type::NUM, "height", /*optional=*/true, "The block of that attestation"},
             }}}},
         }},
-        RPCExamples{HelpExampleCli("getverifications", "\"GOLD\"") + HelpExampleCli("getverifications", "\"GOLD\" '[\"<curator>\"]'")},
+        RPCExamples{HelpExampleCli("getverifications", "\"GOLD\" '[\"<curator>\"]'")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
@@ -1365,16 +1365,9 @@ RPCMethod getverifications()
     const bitassets::State state{StateOf(chainman)};
     const AssetId asset{ParseAsset(request.params[0], state)};
     std::vector<uint256> curators;
-    const bool named{!request.params[1].isNull()};
-    if (named) {
-        if (request.params[1].size() > 200) throw JSONRPCError(RPC_INVALID_PARAMETER, "At most 200 curators");
-        for (const UniValue& c : request.params[1].getValues()) curators.push_back(ParseOracle(c, state));
-    } else {
-        state.ForEachOracle([&](const uint256& id, const bitassets::OracleRecord&) {
-            curators.push_back(id);
-            return curators.size() < 200;
-        });
-    }
+    const UniValue& named{request.params[1]};
+    if (named.empty() || named.size() > 200) throw JSONRPCError(RPC_INVALID_PARAMETER, "Name 1 to 200 curators (the ones you trust)");
+    for (const UniValue& c : named.getValues()) curators.push_back(ParseOracle(c, state));
     UniValue list(UniValue::VARR);
     bool any{false};
     for (const uint256& curator : curators) {
@@ -1386,7 +1379,6 @@ RPCMethod getverifications()
             round = r;
             last = a;
         }
-        if (!named && round == 0) continue;
         const bool verified{last && last->value > 0};
         any = any || verified;
         UniValue obj(UniValue::VOBJ);

@@ -923,6 +923,8 @@ struct State::Plan {
     std::optional<std::pair<uint256, std::optional<BookOrder>>> book_order;
     //! The worst order of a full side, out of its book for a better one.
     std::optional<std::pair<uint256, BookOrder>> evicted;
+    //! Expired entries of a full side, taken out of its index by the order placed there.
+    std::vector<uint256> swept;
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -1018,9 +1020,11 @@ constexpr uint8_t BOOK_INDEX{0x99};
 const sidechain::Table<uint256, uint8_t> BOOKS_TOUCHED{0x9a};
 //! Orders by expiry (big-endian), then id: the end of each block takes those expired out of their books (SweepBooks).
 constexpr uint8_t BOOK_EXPIRY{0x9b};
-//! The live orders of each side of each book (book, side), and the orders placed to expire at each height.
+//! The entries of each side of each book's index (book, side).
 constexpr uint8_t BOOK_COUNTS{0x9c};
-const sidechain::Table<uint32_t, uint32_t> EXPIRING{0x9d};
+//! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent).
+const sidechain::Cell<uint32_t> BOOKS_LAYOUT{0x9d, 0};
+constexpr uint32_t BOOKS_LAYOUT_CURRENT{1};
 const sidechain::TableId BOOK_INDEXES_TAKEN[]{sidechain::TableId{BOOK_INDEX}, sidechain::TableId{BOOK_EXPIRY}, sidechain::TableId{BOOK_COUNTS}};
 sidechain::StoreBytes CountKey(const uint256& book, bool asks)
 {
@@ -1235,6 +1239,8 @@ std::optional<AssetData> State::DataAt(const AssetId& asset, int height) const
 
 bool StoreLayoutCurrent(const sidechain::StoreView& view)
 {
+    // Orders without the books' layout: written before their counts (a development build): derived again.
+    if (const sidechain::StoreBytes prefix{0x98}; view.Next(prefix, prefix) && BOOKS_LAYOUT.Get(view) != BOOKS_LAYOUT_CURRENT) return false;
     if (LAYOUT.Get(view) == STORE_LAYOUT) return true;
     // Written with the first change to the assets: a store without it has none, or has them in an earlier layout.
     for (uint8_t table{0x30}; table <= 0x3e; ++table) {
@@ -2392,24 +2398,36 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         order.expiry = place->expiry;
         order.txid = txid;
         order.height = height;
-        // At most MAX_BOOK_SWEEP orders expire at a height: each block's end sweeps all that expire in it.
-        if (ExpiringAt(place->expiry) >= MAX_BOOK_SWEEP) return invalid("bad-ba-expiry-full");
-        // A side holds at most MAX_BOOK_SIDE live orders, as counted (BOOK_COUNTS: placed, less those filled, settled,
-        // swept or evicted). Full, an order takes the place of the side's worst only if it is better (a lower limit; the
-        // same is not) and no smaller (it sells at least what the worst has left: the same asset, so worth as much at
-        // least); the worst leaves the book, all it holds its holder's to settle. Anything else, or a count the side does
-        // not show, is refused.
+        // A side's index holds at most MAX_BOOK_SIDE entries, as counted (BOOK_COUNTS: placed, less those filled, settled,
+        // swept or evicted). Full: first its own expired entries go (swept here, so no other book's backlog of expired
+        // orders can keep it full); still full, an order takes the place of the side's worst live order only if it is
+        // better (a lower limit; the same is not) and no smaller (it sells at least what the worst has left: the same asset,
+        // so worth as much at least); the worst leaves the book, all it holds its holder's to settle. Anything else, or a
+        // count the index does not show, is refused.
         bool evicts{false};
-        if (BookCount(book_id, order.sells0) >= MAX_BOOK_SIDE) {
-            const auto live{BookSide(book_id, order.sells0, MAX_BOOK_SIDE, height)};
-            if (live.size() < MAX_BOOK_SIDE) return invalid("bad-ba-book-full");
-            const auto& [worst_id, worst]{live.back()};
-            const bool better{curves::BigUint{order.price_num} * curves::BigUint{worst.price_den} < curves::BigUint{worst.price_num} * curves::BigUint{order.price_den}};
-            if (!better || place->amount < worst.remaining) return invalid("bad-ba-book-full");
-            BookOrder out{worst};
-            out.evicted = height;
-            plan.evicted = std::make_pair(worst_id, out);
-            evicts = true;
+        uint32_t count{BookCount(book_id, order.sells0)};
+        if (count >= MAX_BOOK_SIDE) {
+            const auto entries{BookEntries(book_id, order.sells0)};
+            if (entries.size() != count) return invalid("bad-ba-book-full");
+            std::vector<std::pair<uint256, BookOrder>> live;
+            for (const auto& [eid, e] : entries) {
+                if (e.remaining > 0 && e.expiry >= height && e.evicted == 0) {
+                    live.emplace_back(eid, e);
+                } else {
+                    plan.swept.push_back(eid);
+                }
+            }
+            count -= plan.swept.size();
+            if (count >= MAX_BOOK_SIDE) {
+                const auto& [worst_id, worst]{live.back()};
+                const bool better{curves::BigUint{order.price_num} * curves::BigUint{worst.price_den} < curves::BigUint{worst.price_num} * curves::BigUint{order.price_den}};
+                if (!better || place->amount < worst.remaining) return invalid("bad-ba-book-full");
+                BookOrder out{worst};
+                out.evicted = height;
+                plan.evicted = std::make_pair(worst_id, out);
+                evicts = true;
+            }
+            book.shares -= std::min<uint64_t>(book.shares - std::min<uint64_t>(book.shares, MIN_LIQUIDITY), plan.swept.size());
         }
         uint64_t& reserve{order.sells0 ? book.reserve0 : book.reserve1};
         if (place->amount > MAX_AMOUNT - reserve) return invalid("bad-ba-order");
@@ -2692,7 +2710,7 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
                 if (!plan->evicted) AddCount(out, order->book, order->sells0, +1);
                 BOOKS_TOUCHED.Put(out, order->book, 1);
                 out.Put(ExpiryKey(id, order->expiry), {});
-                EXPIRING.Put(out, static_cast<uint32_t>(order->expiry), ExpiringAt(order->expiry) + 1);
+                if (BOOKS_LAYOUT.Get(out) != BOOKS_LAYOUT_CURRENT) BOOKS_LAYOUT.Put(out, BOOKS_LAYOUT_CURRENT);
             }
         } else {
             // Settled and gone: out of its book's index and count, if it was still there.
@@ -2701,6 +2719,13 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
                 AddCount(out, before->book, before->sells0, -1);
             }
             BOOK_ORDERS.Erase(out, id);
+        }
+    }
+    for (const uint256& id : plan->swept) {
+        // Its expiry entry stays until the global sweep reaches it (which then finds it out of the index).
+        if (const auto order{GetOrder(id)}; order && out.Get(BookKey(id, *order))) {
+            out.Erase(BookKey(id, *order));
+            AddCount(out, order->book, order->sells0, -1);
         }
     }
     if (plan->evicted) {
@@ -3778,7 +3803,21 @@ std::vector<std::pair<uint256, BookOrder>> State::BookSide(const uint256& book, 
     return side;
 }
 uint32_t State::BookCount(const uint256& book, bool asks) const { return ReadCount(*m_view, book, asks); }
-uint32_t State::ExpiringAt(int32_t height) const { return height < 0 ? 0 : EXPIRING.Get(*m_view, static_cast<uint32_t>(height)).value_or(0); }
+std::vector<std::pair<uint256, BookOrder>> State::BookEntries(const uint256& book, bool asks) const
+{
+    std::vector<std::pair<uint256, BookOrder>> side;
+    sidechain::StoreBytes prefix{BOOK_INDEX};
+    sidechain::KeyCodec<uint256>::Encode(prefix, book);
+    prefix.push_back(asks ? 0 : 1);
+    m_view->ForEach(prefix, [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
+        std::span<const unsigned char> in{key};
+        in = in.subspan(key.size() - 32);
+        const uint256 id{sidechain::KeyCodec<uint256>::Decode(in)};
+        if (const auto order{GetOrder(id)}) side.emplace_back(id, *order);
+        return side.size() < MAX_BOOK_SCAN;
+    });
+    return side;
+}
 size_t State::SweepBooks(int height, size_t budget)
 {
     sidechain::StoreOverlay& out{Writable()};
@@ -3806,8 +3845,6 @@ size_t State::SweepBooks(int height, size_t budget)
             }
         }
     }
-    // The counts of heights gone by: no order is placed to expire at one again.
-    if (height >= 0 && EXPIRING.Get(out, static_cast<uint32_t>(height))) EXPIRING.Erase(out, static_cast<uint32_t>(height));
     return due.size();
 }
 uint32_t State::FeeOf(const uint256& pool, const PoolParams& params, int height) const

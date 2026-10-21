@@ -144,25 +144,31 @@ class LayersBookTest(LayersTest):
         assert_equal(n1.listorders(), [])
         assert_peg_balance(main, self.nodes)
 
-        self.log.info("Verified issuers: a curator (an oracle) verifies GOLD, then takes it back")
+        self.log.info("Verified issuers: only the curators named count; a curator verifies GOLD, then takes it back")
         curator = n0.registeroracle("curator")["oracle"]
+        spoof = n1.registeroracle("spoof")["oracle"]
         self.bmm()
-        assert_equal(n2.getverifications("GOLD")["verified"], False)
+        assert_equal(n2.getverifications("GOLD", [curator])["verified"], False)
+        # Anyone can register an oracle and "verify": it counts only for those who name it.
+        n1.verifyasset(spoof, "GOLD")
+        self.bmm()
+        assert_equal(n2.getverifications("GOLD", [curator])["verified"], False)
+        assert n2.getverifications("GOLD", [spoof])["verified"]
+        assert_raises_rpc_error(-8, "Name 1 to 200 curators", n2.getverifications, "GOLD", [])
         done = n0.verifyasset(curator, "GOLD")
         assert_equal(done["round"], 1)
         self.bmm()
         seen = n2.getverifications("GOLD", [curator])
         assert seen["verified"]
         assert_equal(seen["curators"][0]["round"], 1)
-        assert_equal(n2.getverifications("GOLD")["curators"][0]["curator"], curator)
+        assert_equal(seen["curators"][0]["name"], "curator")
         assert_raises_rpc_error(-8, "Verified already", n0.verifyasset, curator, "GOLD")
         n0.verifyasset(curator, "GOLD", False)
         self.bmm()
         seen = n2.getverifications("GOLD", [curator])
         assert not seen["verified"]
         assert_equal(seen["curators"][0]["round"], 2)
-        assert_equal(n2.getverifications("USDX")["curators"], [])
-
+        assert_equal(n2.getverifications("USDX", [curator])["verified"], False)
 
 if __name__ == "__main__":
     LayersBookTest(__file__).main()

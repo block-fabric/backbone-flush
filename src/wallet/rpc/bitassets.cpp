@@ -2742,11 +2742,7 @@ RPCMethod placeorder()
     if (num > bitassets::MAX_AMOUNT || den > bitassets::MAX_AMOUNT) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price has too many digits");
     const int blocks{request.params[4].isNull() ? 40320 : request.params[4].getInt<int>()};
     if (blocks < 1 || blocks > bitassets::MAX_ORDER_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, "blocks is 1 to about a year");
-    // Its last block: the one asked for, or the next with room (at most MAX_BOOK_SWEEP orders expire at a height).
-    int32_t expiry{pwallet->chain().getBitAssetsHeight() + blocks};
-    for (int tries{0}; pwallet->chain().getBitAssetsExpiringAt(expiry) >= bitassets::MAX_BOOK_SWEEP; ++tries, ++expiry) {
-        if (tries >= 1000 || expiry - pwallet->chain().getBitAssetsHeight() >= bitassets::MAX_ORDER_DURATION) throw JSONRPCError(RPC_MISC_ERROR, "No height near it has room for another order to expire");
-    }
+    const int32_t expiry{pwallet->chain().getBitAssetsHeight() + blocks};
     bitassets::PlaceOrder place{sell.id, buy.id, amount, static_cast<uint64_t>(num), static_cast<uint64_t>(den), expiry};
     std::vector<COutPoint> inputs;
     std::vector<Out> outs;
@@ -2818,6 +2814,9 @@ RPCMethod listorders()
             {RPCResult::Type::STR_HEX, "book", ""},
             {RPCResult::Type::STR, "sells", ""},
             {RPCResult::Type::STR, "buys", ""},
+            {RPCResult::Type::STR_HEX, "sells_id", "Its hash (null for CHN)"},
+            {RPCResult::Type::STR_HEX, "buys_id", "Its hash (null for CHN)"},
+            {RPCResult::Type::NUM, "price", "Its limit: whole units bought per whole unit sold, at least"},
             {RPCResult::Type::NUM, "remaining", ""},
             {RPCResult::Type::NUM, "to_collect", ""},
             {RPCResult::Type::NUM, "expiry", ""},
@@ -2843,6 +2842,11 @@ RPCMethod listorders()
         obj.pushKV("book", order->book.GetHex());
         obj.pushKV("sells", LabelOfAsset(*pwallet, sold));
         obj.pushKV("buys", LabelOfAsset(*pwallet, bought));
+        obj.pushKV("sells_id", sold.GetHex());
+        obj.pushKV("buys_id", bought.GetHex());
+        UniValue price;
+        price.setNumStr(strprintf("%.12g", static_cast<double>(order->price_num) / order->price_den * std::pow(10.0, int{DecimalsOf(*pwallet, sold)} - int{DecimalsOf(*pwallet, bought)})));
+        obj.pushKV("price", std::move(price));
         obj.pushKV("remaining", bitassets::AmountToJSON(order->remaining, DecimalsOf(*pwallet, sold)));
         obj.pushKV("to_collect", bitassets::AmountToJSON(order->proceeds, DecimalsOf(*pwallet, bought)));
         obj.pushKV("expiry", order->expiry);

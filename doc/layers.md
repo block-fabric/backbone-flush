@@ -537,25 +537,54 @@ At a block's end, the books it placed orders in clear once more without takers: 
 cancelled, expired or filled, what is left of what it sells comes back too and the order is gone; else its token comes
 back. CHN goes by the coinbase (`MIN_CHN_PAYOUT` at least; less waits).
 
-**Security.** (1) *Expired orders never crowd out live ones*: at most `MAX_BOOK_SWEEP` (5000) orders, of all books,
-may expire at one height (`bad-ba-expiry-full`; the wallet takes the next height with room), and the end of each block
-sweeps all those that expired in it out of their books' indexes (`SweepBooks`; the order stays, its holder's to
-settle): no dead entry stays in an index. A side is read with expired, filled and evicted entries skipped before the
-round's limit counts them (`BookSide`, at most `MAX_BOOK_SCAN` entries read, a guard). (2) *The side limit is a count*:
-each side's live orders are counted in the state (table `0x9c`: one more when placed, one less when filled, settled,
-swept or evicted, undone with a block like the rest), and `MAX_BOOK_SIDE` (1000) holds against that count; should the
-side not show as many live orders as counted, a placement is refused (fail closed). (3) *A full side is no lock, and no
-cheap grief*: full, an order takes the place of the side's worst (the highest limit, then the highest id) only if its
-limit is better and it sells at least what the worst has left (the same asset: worth as much at least); the worst
-leaves the book flagged `evicted` (`getorder`'s `evicted_height`, `listorders`' `evicted`) and its holder settles it for
-all it holds, nothing lost; anything else is refused (`bad-ba-book-full`). (4) *No dust*: an order buys something at
-its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair, it sells a
-whole unit (10^decimals) at least (`bad-ba-order-dust`). Tests: `stuffed_with_expiring_orders`, `dust_refused`,
-`full_side_evicts_its_worst` (with the block undone: the eviction, the counts and the shares back),
-`expiry_height_capped`, `sweep_bounded`, `worst_round`.
+**Security.** (1) *A side's limit is a count of its index*: each side's entries are counted in the state (table
+`0x9c`: one more when placed, one less when filled, settled, swept or evicted; undone with a block like the rest), and a
+side never holds more than `MAX_BOOK_SIDE` (1000) entries, live or expired. Should the index not show as many entries as
+counted, a placement is refused (fail closed). (2) *Expired orders never crowd out live ones, nor lock a book*: the end
+of each block sweeps expired orders out of their books' indexes, oldest first, at most `MAX_BOOK_SWEEP` (5000) a
+block, the rest at the next (a backlog; no cap on how many may expire at a height, so nobody can fill a height for
+others); and an order placed on a full side first takes that side's own expired entries out itself, so no backlog
+elsewhere can keep a book full. A side is read with expired, filled and evicted entries skipped before a round's limit
+counts them (`BookSide`; a side has at most 1000 entries, within `MAX_BOOK_SCAN`). (3) *A full side is no lock, and
+no cheap grief*: full of live orders, an order takes the place of the side's worst (the highest limit, then the highest
+id) only if its limit is better and it sells at least what the worst has left (the same asset: worth as much at least);
+the worst leaves the book flagged `evicted` (`getorder`'s `evicted_height`, `listorders`' `evicted`) and its holder
+settles it for all it holds, nothing lost; anything else is refused (`bad-ba-book-full`). (4) *No dust*: an order buys
+something at its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair,
+it sells a whole unit (10^decimals) at least (`bad-ba-order-dust`). (5) *State written before the counts*: orders can
+exist only from the pool kinds' height, which no running network has reached; a store with orders and without the
+books' layout marker (`0x9d`, written with the first order: a development build) is not current
+(`StoreLayoutCurrent`), so the node derives it again from the blocks, counts included; an order record without its
+`evicted` field reads as never evicted. Tests: `stuffed_with_expiring_orders`, `full_of_unswept_expired_orders`,
+`dust_refused`, `full_side_evicts_its_worst` (with the block undone: the eviction, the counts and the shares back),
+`layout_of_books`, `sweep_bounded`, `worst_round`.
 
 RPCs: `getbook a b (levels)` (the ladder of each side, best bid and ask), `getorder order`; wallet `placeorder sell
 amount buy price (blocks)`, `settleorder order (cancel)`, `listorders`.
+
+## Verified issuers
+
+Not a rule: what wallets show. A *curator* is an oracle (above): it verifies an asset by attesting the event
+`Layers verification <asset id> #<round>` (rounds from 1) with 1, and takes the verification back with 0 at the next
+round; its word on an asset is that of its last round attested (rounds read in order until one is not, at most
+`dex::MAX_VERIFICATION_ROUNDS`, 64). Nobody can verify in a curator's name (the attestation is its key's signature),
+and a curator can only say yes or no of an asset id (not of a ticker or a look-alike). Each wallet chooses the curators
+it trusts (none by default: no badges); the app shows a badge on an asset that one of them verifies now. RPCs:
+`getverifications asset curators` (only the curators named count, 1 to 200: anyone can register an oracle, so there is
+no verification without the user's own list; the result says which of them verify it); wallet `verifyasset curator asset (verified)` (the next round, signed with the wallet's key of the oracle).
+
+## The market index
+
+The search index (`src/bitassets/index.{h,cpp}`, derived data kept with the state, not a rule) keeps a row per pool:
+its reserves, the reserves at the start of the volume window (`asset_volume_window` blocks, about a day), its volume in
+the window and its last block; `searchpools text filters sort cursor limit` pages through them sorted by depth (the CHN
+it holds), volume (CHN traded in the window), `price_change` (over the window) or newest, with each pool's state as
+`getpool` gives it. The price change is the change of reserve0/reserve1, so for a pool of another curve than constant
+product the index keeps the second reserve as the first times its spot price (`PricedReserve1`: the curve's slope; a
+concentrated pool's square root price squared; 0 for a book, which has no price of its own): the ratio is then its
+price, as for the others, and the rows of constant-product pools are what they always were. Volumes are counted in CHN,
+so for pools with CHN only (a pair without CHN shows 0; its all-time volumes are `getpool`'s `volume_a`/`volume_b`). The
+app's Markets tab is this index: price, 24-hour change, volume and liquidity, searchable and sortable.
 
 ## Logos of assets
 

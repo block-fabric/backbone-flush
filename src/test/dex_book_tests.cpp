@@ -13,6 +13,7 @@
 #include <consensus/params.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <streams.h>
 #include <sidechain/state.h>
 #include <sidechain/store.h>
 #include <test/util/random.h>
@@ -461,27 +462,60 @@ BOOST_AUTO_TEST_CASE(full_side_evicts_its_worst)
     BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE - 1);
 }
 
-BOOST_AUTO_TEST_CASE(expiry_height_capped)
+BOOST_AUTO_TEST_CASE(full_of_unswept_expired_orders)
 {
-    // At most MAX_BOOK_SWEEP orders expire at one height (five full books' worth here): the next is refused; the block's
-    // end sweeps them all, and the counts of the books come back to none.
+    // A side full of orders that expired but are not swept yet (a backlog: more expired at once than a block's end sweeps,
+    // in other books too): an order placed there takes them out itself, and is placed. No other book's orders keep it full.
     Chain chain;
-    const AssetId X{HashName("XXX")};
-    const auto x{Coins(chain, "XXX", 10, MAX_BOOK_SWEEP + 1)};
-    std::vector<AssetId> ys;
-    for (int k{0}; k < 5; ++k) {
-        const std::string name{"YY" + std::to_string(k)};
-        chain.Issue(name, {1});
-        ys.push_back(HashName(name));
+    const AssetId X{HashName("XXX")}, Y{HashName("YYY")};
+    const auto x{Coins(chain, "XXX", 10, MAX_BOOK_SIDE + 1)};
+    chain.Issue("YYY", {1});
+    for (size_t i{0}; i < MAX_BOOK_SIDE; ++i) chain.Place(x[i], X, 10, Y, 2, 1, chain.height);
+    const uint256 book{BookId(X, Y)};
+    const bool x0{X < Y};
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), MAX_BOOK_SIDE);
+    const uint64_t shares{chain.Assets().GetPool(book)->shares};
+    // The next block, before any sweep: all of them expired, all still in the index.
+    chain.height += 1;
+    BOOST_CHECK(chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE, chain.height).empty());
+    BOOST_CHECK_EQUAL(chain.Assets().BookEntries(book, x0).size(), MAX_BOOK_SIDE);
+    const CTransaction placed{chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 3, 1)};
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), 1U);
+    BOOST_CHECK_EQUAL(chain.Assets().BookEntries(book, x0).size(), 1U);
+    BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares - MAX_BOOK_SIDE + 1);
+    // The block's end: the global sweep finds them out of the index already; the count stays right.
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.Assets().BookCount(book, x0), 1U);
+    BOOST_CHECK(chain.Assets().GetOrder(OrderId(placed.GetHash())));
+}
+
+BOOST_AUTO_TEST_CASE(layout_of_books)
+{
+    // A store with orders written before the books' counts (no layout marker) is not current: the node derives it again
+    // from the blocks, which rebuilds the counts exactly. One with the marker, or without orders, is current.
+    {
+        Chain chain;
+        BOOST_CHECK(StoreLayoutCurrent(chain.store));
+        const auto x{chain.Issue("XXX", {10})};
+        chain.Issue("YYY", {1});
+        chain.Place(x[0], HashName("XXX"), 10, HashName("YYY"), 2, 1);
+        BOOST_CHECK(StoreLayoutCurrent(chain.store));
+        chain.store.Erase(sidechain::StoreBytes{0x9d});
+        BOOST_CHECK(!StoreLayoutCurrent(chain.store));
     }
-    const int32_t expiry{chain.height + 3};
-    for (size_t i{0}; i < MAX_BOOK_SWEEP; ++i) chain.Place(x[i], X, 10, ys[i / MAX_BOOK_SIDE], 2, 1, expiry);
-    BOOST_CHECK_EQUAL(chain.Assets().ExpiringAt(expiry), MAX_BOOK_SWEEP);
-    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SWEEP]}, PlaceOrder{X, ys[0], 10, 1, 1, expiry}, {std::nullopt})), "bad-ba-expiry-full");
-    chain.Place(x[MAX_BOOK_SWEEP], X, 10, ys[0], 1, 1, expiry + 1);
-    while (chain.height <= expiry) chain.EndBlock();
-    for (const AssetId& y : ys) BOOST_CHECK_EQUAL(chain.Assets().BookCount(BookId(X, y), X < y), y == ys[0] ? 1U : 0U);
-    BOOST_CHECK_EQUAL(chain.Assets().ExpiringAt(expiry), 0U);
+    // A record without `evicted` (written before it) reads as never evicted.
+    BookOrder order;
+    order.amount = 5;
+    order.evicted = 7;
+    DataStream full{};
+    full << order;
+    std::vector<std::byte> bytes{full.begin(), full.end()};
+    bytes.resize(bytes.size() - 4);
+    DataStream old{bytes};
+    BookOrder read;
+    old >> read;
+    BOOST_CHECK_EQUAL(read.amount, 5U);
+    BOOST_CHECK_EQUAL(read.evicted, 0);
 }
 
 BOOST_AUTO_TEST_CASE(sweep_bounded)

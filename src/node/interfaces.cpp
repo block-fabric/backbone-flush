@@ -801,11 +801,6 @@ public:
         LOCK(::cs_main);
         return chainman().ActiveChainstate().SideState().BitAssets().GetPosition(id);
     }
-    uint32_t getBitAssetsExpiringAt(int32_t height) override
-    {
-        LOCK(::cs_main);
-        return chainman().ActiveChainstate().SideState().BitAssets().ExpiringAt(height);
-    }
     std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) override
     {
         LOCK(::cs_main);
