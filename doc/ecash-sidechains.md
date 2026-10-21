@@ -125,11 +125,14 @@ betanet more than 1,008 in 2,016: a two-week commitment of a hashrate majority.
   failed, the withdrawal paid once. `feature_sidechain_enforcer.py`: the same through the enforcer's interface
   alone (`-mainchaingrpc`), with reorgs.
 
-## Layers
+## Starbase (Layers on eCash)
 
-Layers on eCash: slot **46** on `ecash`, `ecashbeta` and `ecashtest`; RPC/P2P ports 8254/8255, 38254/38255,
-48254/48255; message starts `6c797221`, `6c797222`, `6c797223`; address prefixes `lyx`, `blyx`, `tlyx`; data in
-`~/.backbone-layers`. Its rules are those of its main network (`ecashtest`: of its test network), its blocks of
+Layers on eCash is its own product, **Starbase** (this repository): slot **46** on `ecash`, `ecashbeta` (the
+default network) and `ecashtest`; RPC/P2P ports 8254/8255, 38254/38255, 48254/48255; message starts `73627321`,
+`73627322`, `73627323`; address prefixes `sbx`, `bsbx`, `tsbx`; first blocks `7c873d949d0cac915173259dd7312ae7dc075438f8be5a0da459c6632bf0d2e0`, `122710c06ae769c8d18a7ad8038a345173cfbf6b3d720fcbad9a7ac28a8afebc`,
+`5a463afcefde5455ddd78498cd139fe2f4e8f216d28710912d126d0f9d941d22`; data in `~/.starbase` (`betanet/`, `testnet4/`; Windows `%LOCALAPPDATA%\Starbase`), the
+Chains networks (development only, `-chainsnetworks`) in `~/.starbase/chains`. Its coin is shown as eCash's,
+ECX. (Before the rename: `lyx`, `blyx`, `tlyx`, `6c79722x`, `~/.backbone-layers`; never launched.) Its rules are those of its main network (`ecashtest`: of its test network), its blocks of
 stake every 15-second slot; what counts its anchors (one per mainchain block: ten minutes on eCash, one on
 Chains) is scaled (`Consensus::PosParams`, `CEcashSidechainParams`):
 
