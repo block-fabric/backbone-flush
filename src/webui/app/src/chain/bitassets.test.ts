@@ -102,6 +102,14 @@ let activityCount = 1;
 let tickersOn = false;
 /** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
 let dexOn = false;
+/** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
+let launchCount = 2;
+const MOON = id('m');
+const STAR = id('t');
+function launchOf(token: string, i = 0): Record<string, unknown> {
+  const star = token === STAR;
+  return { token, ticker: token === MOON ? 'MOON' : star ? 'STAR' : `L${i}`, display_name: token === MOON ? 'To the moon' : undefined, info: token === MOON ? 'A token for the moon.\nhttps://example.org' : undefined, has_logo: false, creator: ME, txid: id('8'), height: 12, status: star ? 'graduated' : 'curve', pool: star ? id('g') : id('c'), raised: star ? '500.00000003' : '200.00000000', graduation: '500.00000000', progress: star ? 100 : 40, price: star ? 0.000002 : 0.00000081, market_cap: star ? '2000.00000000' : '810.00000000', supply: star ? '1020000000.000000' : '1000000000.000000', curve_tokens_left: star ? 0 : 400000000, fee: 1, creator_share: 30, creator_fees_owed: token === MOON ? '0.01000000' : '0.00000000', creator_fees_paid: '0.00000000', allocation: 2, allocation_claimed: false, min_buy: '0.00000000', max_buy: '0.00000000', volume: '210.00000000', trades: 5, ...(star ? { graduated_height: 18 } : {}) };
+}
 const calls: BridgeRequest[] = [];
 
 function fresh() {
@@ -143,7 +151,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -263,15 +271,58 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       // The pool's own order: CHN, the null hash, first.
       const x = pools.find((q) => q.pool === p[0]);
       if (!x) fail('No such pool');
-      return { pool: p[0], asset_a: 'CHN', asset_b: x!.asset_a, price: 10, curve: x!.curve, fee: x!.fee, amp: x!.amp, default_kind: x!.default_kind, depth: [
+      return { pool: p[0], asset_a: 'CHN', asset_b: x!.asset_a, asset_a_id: CHN_ID, asset_b_id: x!.asset_a_id, price: 10, curve: x!.curve, fee: x!.fee, amp: x!.amp, default_kind: x!.default_kind, depth: [
         { side: 'sell_a', size_percent: 0.1, amount_in: 0.05, amount_out: 0.49, avg_price: 9.8, price_after: 9.9, price_impact: 0.2 },
         { side: 'sell_b', size_percent: 0.1, amount_in: 0.5, amount_out: 0.0499, avg_price: 0.0998, price_after: 0.0997, price_impact: 0.2 },
         { side: 'sell_a', size_percent: 50, amount_in: 25, amount_out: 160, avg_price: 6.4, price_after: 4.4, price_impact: 36 },
         { side: 'sell_b', size_percent: 50, amount_in: 250, amount_out: 16, avg_price: 0.064, price_after: 0.044, price_impact: 36 },
       ] };
     }
+    case 'quotepoolliquidity': {
+      // [pool, amounts] or [pool, null, shares, only]: by label, in the pool's own order (CHN first).
+      const x = pools.find((q) => q.pool === p[0]);
+      if (!x) fail('No such pool');
+      if (p[1]) return { shares: 4321, opens: false, amounts: { CHN: 0, [x!.asset_a]: 10 }, share_of_pool: 0.34 };
+      return { shares: p[2], opens: false, amounts: p[3] ? { CHN: 0, [x!.asset_a]: 2.5 } : { CHN: 0.12, [x!.asset_a]: 1.25 }, share_of_pool: 7.9 };
+    }
     case 'createpool':
       return { txid: id('7'), pool: id('n'), shares: 999000 };
+    // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
+    case 'getlaunchstats':
+      if (!dexOn) fail('Method not found', -32601);
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1, creator_share: 30, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true } };
+    case 'listlaunches': {
+      const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
+      const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
+      const list = all.filter((l) => (o.status === 'graduated' ? l.status === 'graduated' : o.status === 'curve' || o.status === 'new' ? l.status === 'curve' : true) && Number(l.progress) >= (o.min_progress ?? 0));
+      const from = Number(o.cursor || 0);
+      const limit = o.limit ?? 50;
+      return { launches: list.slice(from, from + limit), total: list.length, ...(from + limit < list.length ? { next_cursor: String(from + limit) } : {}) };
+    }
+    case 'getlaunch':
+      if (p[0] === assetArg(MOON)) return launchOf(MOON);
+      if (p[0] === assetArg(STAR)) return launchOf(STAR);
+      return fail('Not a launched token');
+    case 'quotelaunch': {
+      // [token, amount, side]: a buy of more than 300 CHN passes the curve's end.
+      const amount = Number(p[1]);
+      const past = p[2] === 'buy' && amount > 300;
+      return p[2] === 'buy'
+        ? { amount_in: amount, amount_out: past ? 400000000 : 2469135.802469, back: past ? '100.00000000' : '0.00000000', fee: '0.02000000', price: 0.00000081, spot_price: 0.0000008, price_after: 0.00000082, price_impact: 1.2, progress_after: past ? 100 : 40.4, graduates: past }
+        : { amount_in: amount, amount_out: 0.79, back: '0.00000000', fee: '0.00800000', price: 0.00000079, spot_price: 0.0000008, price_after: 0.00000079, price_impact: 1.3, progress_after: 39.8, graduates: false };
+    }
+    case 'getlaunchlog':
+      return [{ height: 15, token: MOON, created: false, graduated: false, orders: 2, coin_in: '10.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 12000000, fees: '0.10000000', reserve_coin: '450.00000000', reserve_tokens: 625000000 }, { height: 12, token: MOON, created: true, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 4000000, fees: '0.01000000', reserve_coin: '251.00000000', reserve_tokens: 1120000000 }, { height: 13, token: STAR, created: false, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 1, fees: '0.01000000', reserve_coin: '1.00000000', reserve_tokens: 1 }];
+    case 'launchtoken':
+      return { txid: id('7'), token: MOON, ticker: p[0], pool: id('c') };
+    case 'buyfromlaunch':
+      return { txid: id('7'), quote: 2469135.802469, min_out: 2444444.444444, back: '0.00000000' };
+    case 'selltolaunch':
+      return { txid: id('7'), quote: '0.79000000', min_out: '0.78210000' };
+    case 'claimlaunch':
+      return { txid: id('7'), fees: '0.01000000', allocation: 0 };
+    case 'getaddressinfo':
+      return { ismine: p[0] === ME };
     case 'addpoolliquidity':
       return { txid: id('7'), shares: 1234 };
     case 'removepoolliquidity':
@@ -377,6 +428,7 @@ beforeEach(() => {
   activityCount = 1;
   tickersOn = false;
   dexOn = false;
+  launchCount = 2;
   store = null;
   locked = false;
   calls.length = 0;
@@ -1138,12 +1190,17 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
 
     await fireEvent.input(document.querySelector('#pv-add-a')!, { target: { value: '10' } });
     await waitFor(() => expect(screen.getByText(/One asset alone/)).toBeTruthy());
+    // The node's quote of the shares (quotepoolliquidity), by asset id.
+    expect(called('quotepoolliquidity').at(-1)?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }]);
+    expect(screen.getByText('4321')).toBeTruthy();
     await fireEvent.click(within(screen.getByRole('form', { name: 'Add liquidity to this pool' })).getByRole('button', { name: /Add liquidity/ }));
     await answer('yes');
     await waitFor(() => expect(called('addpoolliquidity')[0]?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }, 1]));
 
     await fireEvent.click(screen.getByRole('button', { name: /GOLD alone/ }));
-    await waitFor(() => expect(called('getswapquote').some((c) => (c.params as unknown[])[2] === assetArg(GOLD))).toBe(true));
+    await waitFor(() => expect(called('quotepoolliquidity').some((c) => (c.params as unknown[])[3] === assetArg(GOLD))).toBe(true));
+    // The quote's amounts by label, CHN first in the node's order: 2.5 GOLD.
+    await waitFor(() => expect(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByText(/^2\.5/)).toBeTruthy());
     await fireEvent.click(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByRole('button', { name: 'Take out' }));
     await answer('yes');
     await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 100, assetArg(GOLD), 1]));
@@ -1164,6 +1221,118 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
     await answer('yes');
     await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 50, null, 1]));
     expect(called('removeliquidity')).toEqual([]);
+  });
+});
+
+describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
+  it('Launches: the counts, the list filtered and sorted, a page at a time', async () => {
+    dexOn = true;
+    launchCount = 60;
+    nav.tab = 'launches';
+    render(Trade);
+    await loaded();
+    const rows = () => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(rows().length).toBe(50));
+    expect(rows()[0].textContent).toMatch(/MOON.*To the moon.*40/s);
+    expect(rows()[1].textContent).toContain('graduated');
+    expect(screen.getByText(/Showing 50 of 60 launches/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(rows().length).toBe(60));
+    expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'all', sort: 'newest', limit: 50, cursor: '50' }]);
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Graduated' }));
+    await waitFor(() => expect(rows().length).toBe(1));
+    expect(rows()[0].textContent).toContain('STAR');
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Near graduation' }));
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Sort launches' }), { target: { value: 'progress' } });
+    await waitFor(() => expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'curve', sort: 'progress', min_progress: 80, limit: 50 }]));
+  });
+
+  it('a launch on its curve: progress, the curve, a buy quoted and sent, one passing the end, the recent blocks, the creator paid', async () => {
+    dexOn = true;
+    nav.tab = 'launches';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('MOON'))!);
+    await fireEvent.click(row);
+    await waitFor(() => expect(screen.getByRole('img', { name: /The bonding curve of the launch/ })).toBeTruthy());
+    expect(screen.getByText(/200 of 500 CHN raised/)).toBeTruthy();
+    expect(screen.getByText('Creator allocation 2%')).toBeTruthy();
+    // The recent blocks of this launch only, newest first.
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Recent blocks' })).getAllByRole('row').length).toBe(3));
+    await waitFor(() => expect(screen.getByText('this wallet')).toBeTruthy());
+
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toContain('2,469,135.802469'));
+    expect(called('quotelaunch').at(-1)?.params).toEqual([assetArg(MOON), '2', 'buy']);
+    await fireEvent.click(screen.getByRole('form', { name: 'Trade on the curve' }).querySelector('button[type="submit"]')!);
+    await answer('yes');
+    // The least confirmed is the least signed: the quote less 1%.
+    await waitFor(() => expect(called('buyfromlaunch')[0]?.params).toEqual([assetArg(MOON), '2', 1, '2444444.444444']));
+
+    await waitFor(() => expect((document.querySelector('#launch-amount') as HTMLInputElement).value).toBe(''));
+    // 400 CHN (more than the 10 the wallet held).
+    wallets.balances.w = { trusted: 1000_00000000n, untrustedPending: 0n, immature: 0n };
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '400' } });
+    await waitFor(() => expect(screen.getByTestId('launch-graduates')).toBeTruthy());
+    expect(screen.getByTestId('launch-quote').textContent).toMatch(/100 CHN: the buy passes the curve's end/);
+
+    await fireEvent.click(screen.getByRole('button', { name: /Pay the creator/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('claimlaunch')[0]?.params).toEqual([assetArg(MOON)]));
+  });
+
+  it('a graduated launch: trades in its pool, no curve to buy from', async () => {
+    dexOn = true;
+    nav.tab = 'launches';
+    render(Trade);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('STAR'))!);
+    await fireEvent.click(row);
+    await waitFor(() => expect(screen.getByTestId('launch-graduated').textContent).toContain('Graduated — trades in its pool'));
+    expect(screen.queryByRole('form', { name: 'Trade on the curve' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /Its pool/ }));
+    expect(nav.tab).toBe('pools');
+  });
+
+  it('Launch a token: a ticker reserved, then a reservation launched with what it is and its options, the allocation flagged', async () => {
+    dexOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#launch-ticker')).not.toBeNull());
+    await fireEvent.input(document.querySelector('#launch-ticker')!, { target: { value: 'MOON' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    // The host asks (one question: the launch is asked when the reservation is deep enough).
+    await fireEvent.click(screen.getByRole('button', { name: 'Reserve the ticker' }));
+    await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['MOON']));
+    cleanup();
+
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    // A reservation of this wallet (IRON, deep enough), not one a registration uses.
+    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
+    await waitFor(() => expect(screen.getByText(/ready to launch/)).toBeTruthy());
+    await fireEvent.input(document.querySelector('#launch-display')!, { target: { value: 'Iron age' } });
+    await fireEvent.input(document.querySelector('#launch-info')!, { target: { value: 'An iron token.' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#launch-first')!, { target: { value: '1' } });
+    await fireEvent.input(document.querySelector('#launch-allocation')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByText(/Dilution\./)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    const review = await screen.findByTestId('launch-review');
+    expect(review.textContent).toMatch(/at 500 CHN raised/);
+    expect(review.textContent).toMatch(/20M \(2%\), minted at graduation/);
+    expect(review.textContent).toMatch(/0\.3% to you, 0\.7% into the pool/);
+    await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron token.', allocation: 2, first_buy: '1' }]));
+    // Then its page.
+    await waitFor(() => expect(nav.tab).toBe('launches'));
   });
 });
 

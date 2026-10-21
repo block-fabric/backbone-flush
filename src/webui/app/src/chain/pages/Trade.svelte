@@ -1,13 +1,16 @@
 <script lang="ts">
   // Trade: swap one asset for another in their pool, or along a route (ba/SwapPanel.svelte), the pools
   // (ba/PoolsPanel.svelte), putting liquidity in them (ba/LiquidityPanel.svelte), and creating a pool of a kind
-  // (Layers' DEX: ba/CreatePool.svelte). The Trade tab of the Qt window of BitAssets.
+  // (Layers' DEX: ba/CreatePool.svelte); the launches of tokens on bonding curves (ba/LaunchList.svelte, a launch's page
+  // ba/LaunchView.svelte) and launching one (ba/LaunchWizard.svelte). The Trade tab of the Qt window of BitAssets.
   import SafeText from '../../components/SafeText.svelte';
   import TabRow from '../../components/TabRow.svelte';
   import { tn } from '../../lib/i18n.svelte';
   import { nav } from '../../lib/nav.svelte';
   import '../ba/ba.css';
   import CreatePool from '../ba/CreatePool.svelte';
+  import LaunchList from '../ba/LaunchList.svelte';
+  import LaunchWizard from '../ba/LaunchWizard.svelte';
   import LiquidityPanel from '../ba/LiquidityPanel.svelte';
   import PoolsPanel from '../ba/PoolsPanel.svelte';
   import SwapPanel from '../ba/SwapPanel.svelte';
@@ -18,12 +21,14 @@
 
   $effect(() => startBitAssets());
 
-  type Tab = 'swap' | 'pools' | 'liquidity' | 'create';
+  type Tab = 'swap' | 'pools' | 'liquidity' | 'create' | 'launches' | 'launch';
   const TABS: { id: Tab; label: string }[] = [
     { id: 'swap', label: 'Swap' },
     { id: 'pools', label: 'Pools' },
     { id: 'liquidity', label: 'Add liquidity' },
     { id: 'create', label: 'Create pool' },
+    { id: 'launches', label: 'Launches' },
+    { id: 'launch', label: 'Launch a token' },
   ];
   const tab = $derived<Tab>(TABS.some((x) => x.id === nav.tab) ? (nav.tab as Tab) : 'swap');
   const open = $derived(ba.pools.filter((p) => !p.abandoned).length);
@@ -51,6 +56,10 @@
     <PoolsPanel />
   {:else if tab === 'create'}
     <CreatePool />
+  {:else if tab === 'launches'}
+    <LaunchList />
+  {:else if tab === 'launch'}
+    <LaunchWizard />
   {:else}
     <LiquidityPanel />
   {/if}

@@ -199,8 +199,8 @@ export const ba = $state({
 
 /** What another page asks the Send page to send (an asset, by id). */
 export const sendIntent = $state({ asset: '' });
-/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool to open (by id). */
-export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '' });
+/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id). */
+export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '' });
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
 
@@ -697,7 +697,7 @@ export function resetBitAssets(): void {
   saveTimer = null;
   Object.assign(ba, { info: null, dex: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
-  Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '', pool: '' });
+  Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '', pool: '', launch: '' });
   sellIntent.asset = '';
 }
 

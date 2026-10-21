@@ -7,6 +7,7 @@
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
   import { nav } from '../../lib/nav.svelte';
+  import { rpc } from '../../lib/rpc';
   import AssetBadge from './AssetBadge.svelte';
   import PoolKind from './PoolKind.svelte';
   import PoolView from './PoolView.svelte';
@@ -46,7 +47,20 @@
   const hiddenCount = $derived(showHidden ? 0 : matching.filter(isHidden).length);
   const list = $derived((showHidden ? matching : matching.filter((p) => !isHidden(p))).sort(SORTS[sort]));
   const closed = $derived(ba.pools.filter((p) => p.abandoned).length);
-  const pool = $derived(ba.pools.find((p) => p.pool === open) ?? null);
+  // A pool opened that is not among those read (a launch's pool, a page not read): asked of the node by its id.
+  let fetched = $state<Pool | null>(null);
+  $effect(() => {
+    const id = open;
+    void ba.version;
+    if (!id || ba.pools.some((p) => p.pool === id)) return;
+    rpc
+      .raw<Pool>('getpool', [id])
+      .then((p) => {
+        if (open === id && p && typeof p === 'object') fetched = p;
+      })
+      .catch(() => undefined);
+  });
+  const pool = $derived(ba.pools.find((p) => p.pool === open) ?? (fetched && fetched.pool === open ? fetched : null));
   /** Whether the chain has pools of other kinds (getdexinfo): then their filter, and a way to make one. */
   const kinds = $derived(ba.dex?.curves_active === true || ba.pools.some((p) => p.default_kind === false));
 

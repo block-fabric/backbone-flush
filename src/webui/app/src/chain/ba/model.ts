@@ -68,7 +68,8 @@ export type Amount = number | string;
 /** The RPC methods of BitAssets whose results carry amounts: read exactly (audit 7 E-BA6). */
 export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'listassettransactions', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid', 'swapasset', 'addliquidity', 'removeliquidity', 'bidauction',
   // Layers' DEX: the pool kinds' quotes, previews and depth, and what the wallet does with them.
-  'searchpools', 'getswapquote', 'quoteroute', 'previewpool', 'getpoolcurve', 'simulateclearing', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute'];
+  'searchpools', 'getswapquote', 'quoteroute', 'previewpool', 'getpoolcurve', 'simulateclearing', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute',
+  'quotepoolliquidity', 'getlaunch', 'listlaunches', 'quotelaunch', 'getlaunchstats', 'getlaunchlog', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch'];
 
 /** An amount as a double: for a ratio, a chart, an order; never for what is shown or sent. */
 export function approx(value: Amount | undefined | null): number {
@@ -819,6 +820,8 @@ export const OPERATIONS: Record<string, string> = {
   'remove liquidity': 'Remove liquidity',
   'create pool': 'Create pool',
   route: 'Trade along a route',
+  launch: 'Launch a token',
+  'claim launch': 'Pay a launch\'s creator',
   auction: 'Auction',
   bid: 'Bid',
   collect: 'Collect',

@@ -57,11 +57,11 @@
   const pairPools = $derived(a && b && a !== b ? poolsOf(a, b) : []);
 
   // --- The kind ---
-  let curve = $state<Curve>('constant_product');
+  let curve = $state<Exclude<Curve, 'launch'>>('constant_product');
   let fee = $state(0.3);
   let amp = $state(DEFAULT_AMP);
   let weightA = $state(80);
-  function pickCurve(c: Curve) {
+  function pickCurve(c: Exclude<Curve, 'launch'>) {
     curve = c;
     fee = defaultFee(c, tiers);
     if (c === 'weighted' && !weights.includes(weightA)) weightA = weights.includes(80) ? 80 : weights[0];
