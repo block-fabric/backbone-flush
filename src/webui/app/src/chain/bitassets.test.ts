@@ -100,6 +100,8 @@ let history: string[] = [];
 let hidden: Asset[] = [];
 let activityCount = 1;
 let tickersOn = false;
+/** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
+let dexOn = false;
 const calls: BridgeRequest[] = [];
 
 function fresh() {
@@ -141,7 +143,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -229,6 +231,55 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       const aout = swapOut(rin, rout, ain.ok ? ain.units : 0n);
       return { amount_in: Number(formatUnits(ain.ok ? ain.units : 0n, din, { group: false })), amount_out: Number(formatUnits(aout, dout, { group: false })), price: 1, spot_price: 1, price_impact: priceImpact(rin, rout, ain.ok ? ain.units : 0n, aout), fee: 0.003, abandoned: false };
     }
+    // Layers' DEX: its pool kinds (src/rpc/bitassets.cpp), as the node answers them.
+    case 'getdexinfo':
+      if (!dexOn) fail('Method not found', -32601);
+      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], protocol_fee_share: 0 };
+    case 'getswapquote': {
+      // [asset_in, amount, asset_out, {max_hops}]: the pair's pools of every kind, best first.
+      if (!dexOn) fail('Method not found', -32601);
+      const pair = pools.filter((x) => [assetArg(x.asset_a_id), assetArg(x.asset_b_id)].sort().join() === [p[0], p[2]].sort().join() && !x.abandoned);
+      const gives: Record<string, number> = { [id('s')]: 5.2, [id('p')]: 4.9 };
+      const list = pair.map((x) => ({ pool: x.pool, curve: x.curve ?? 'constant_product', fee: x.fee ?? 0.3, amp: x.amp, default_kind: x.default_kind ?? true, amount_in: Number(p[1]), amount_out: gives[x.pool] ?? 1, price: 0.1, spot_price: 0.1, price_impact: x.pool === id('p') ? 1 : 0.5, fee_paid: 0.001, abandoned: false }));
+      list.sort((x, y) => y.amount_out - x.amount_out);
+      return { pools: list, best_pool: list[0]?.pool };
+    }
+    case 'quoteroute':
+      // A route through SILVER, of a weighted pool and a stable one, that gives more than either pool of the pair.
+      if (!dexOn) fail('Method not found', -32601);
+      return p[0] === 'CHN' && p[2] === assetArg(GOLD)
+        ? { amount_in: Number(p[1]), amount_out: 5.5, path: ['CHN', 'SILVER', 'GOLD'], pools: [id('q'), id('r')], routes: [{ path: ['CHN', 'SILVER', 'GOLD'], path_ids: [CHN_ID, SILVER, GOLD], amount_out: 5.5, pools: [id('q'), id('r')], default_pools: false, hops: [{ pool: id('q'), curve: 'weighted', fee: 0.3, amount_out: 3 }, { pool: id('r'), curve: 'stable', fee: 0.05, amount_out: 5.5 }] }] }
+        : { amount_in: Number(p[1]), amount_out: 0, path: [], pools: [], routes: [] };
+    case 'previewpool': {
+      const kind = (p[4] ?? {}) as { curve?: string; fee?: number; amp?: number; weight_a?: number };
+      return { pool: id('n'), exists: false, open: false, shares: 999000, price: Number(p[3]) / Number(p[1]), curve: kind.curve, fee: kind.fee, amp: kind.amp, default_kind: false, depth: [
+        { side: 'sell_a', size_percent: 1, amount_in: 0.1, amount_out: 0.0099, avg_price: 0.099, price_after: 0.098, price_impact: 0.4 },
+        { side: 'sell_b', size_percent: 1, amount_in: 0.01, amount_out: 0.099, avg_price: 0.101, price_after: 0.102, price_impact: 0.4 },
+        { side: 'sell_a', size_percent: 10, amount_in: 1, amount_out: 0.09, avg_price: 0.09, price_after: 0.08, price_impact: 9 },
+        { side: 'sell_b', size_percent: 10, amount_in: 0.1, amount_out: 0.9, avg_price: 0.11, price_after: 0.12, price_impact: 9 },
+      ] };
+    }
+    case 'getpoolcurve': {
+      // The pool's own order: CHN, the null hash, first.
+      const x = pools.find((q) => q.pool === p[0]);
+      if (!x) fail('No such pool');
+      return { pool: p[0], asset_a: 'CHN', asset_b: x!.asset_a, price: 10, curve: x!.curve, fee: x!.fee, amp: x!.amp, default_kind: x!.default_kind, depth: [
+        { side: 'sell_a', size_percent: 0.1, amount_in: 0.05, amount_out: 0.49, avg_price: 9.8, price_after: 9.9, price_impact: 0.2 },
+        { side: 'sell_b', size_percent: 0.1, amount_in: 0.5, amount_out: 0.0499, avg_price: 0.0998, price_after: 0.0997, price_impact: 0.2 },
+        { side: 'sell_a', size_percent: 50, amount_in: 25, amount_out: 160, avg_price: 6.4, price_after: 4.4, price_impact: 36 },
+        { side: 'sell_b', size_percent: 50, amount_in: 250, amount_out: 16, avg_price: 0.064, price_after: 0.044, price_impact: 36 },
+      ] };
+    }
+    case 'createpool':
+      return { txid: id('7'), pool: id('n'), shares: 999000 };
+    case 'addpoolliquidity':
+      return { txid: id('7'), shares: 1234 };
+    case 'removepoolliquidity':
+      return { txid: id('7'), shares: 500, amounts: { GOLD: 1, CHN: 0 } };
+    case 'swappools':
+      return { txid: id('7'), asset_out: 'GOLD', quote: 5.2, min_out: 5.17 };
+    case 'swaproute':
+      return { txid: id('7'), quote: 5.5, min_out: 5.47 };
     case 'listauctions': {
       // [include_closed, count, skip, asset].
       const list = (p[0] ? [...auctions, { ...auctions[0], auction: id('f'), status: 'closed', remaining: 0 }] : auctions).filter((a) => p[3] == null || assetArg(a.base_id) === p[3] || assetArg(a.quote_id) === p[3]);
@@ -325,6 +376,7 @@ beforeEach(() => {
   resetHiding();
   activityCount = 1;
   tickersOn = false;
+  dexOn = false;
   store = null;
   locked = false;
   calls.length = 0;
@@ -978,6 +1030,143 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
 
 // Simple mode (lib/uimode.svelte.ts, user decision 2026-10-16): Swap with a plain quote, My assets, Create a
 // token; pools, liquidity and auctions in Advanced. The same calls as Advanced.
+describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
+  /** A stable pool of GOLD and CHN beside the default one, and shares of it. */
+  function stablePool() {
+    pools.push({ ...pools[0], pool: id('s'), reserve_a: 400, reserve_b: 40, shares: 1264911, swaps: 1, curve: 'stable', fee: 0.05, fee_millionths: 500, amp: 100, default_kind: false });
+    mine.liquidity.push({ pool: id('s'), asset_a: 'GOLD', asset_b: 'CHN', asset_a_id: GOLD, asset_b_id: CHN_ID, shares: 100000, percent: 7.9, value_a: 31.6, value_b: 3.16 });
+  }
+
+  it('Swap: every pool of the pair and a route compared; the best route sent by swaproute with its pools, another pool by swappools, the default one by swapasset', async () => {
+    dexOn = true;
+    stablePool();
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(ba.dex?.curves_active).toBe(true));
+    await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(GOLD));
+    const ways = () => within(screen.getByRole('list', { name: 'Ways to trade' })).getAllByRole('button');
+    const swapFor = async (amount: string) => {
+      await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: amount } });
+      await waitFor(() => expect(ways().length).toBe(3));
+    };
+    await swapFor('0.5');
+    // Best first: the route through SILVER (a weighted pool, then a stable one), then the stable pool, then the default one.
+    expect(ways()[0].textContent).toMatch(/Weighted.*Stable/s);
+    expect(ways()[0].getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'The route' })).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Route' })).getAllByRole('listitem').length).toBe(2);
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('in a Weighted pool at 0.3%'));
+    await answer('yes');
+    await waitFor(() => expect(called('swaproute')[0]?.params).toEqual([['CHN', assetArg(SILVER), assetArg(GOLD)], '0.5', 0.5, '5.47', [id('q'), id('r')]]));
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
+
+    // The stable pool of the pair, picked: by its id.
+    await swapFor('0.5');
+    await fireEvent.click(ways().find((b) => /Stable/.test(b.textContent ?? '') && !/Weighted/.test(b.textContent ?? ''))!);
+    await waitFor(() => expect(screen.getByText('Pool fee (0.05%)')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('swappools')[0]?.params).toEqual(['CHN', '0.5', [id('s')], 0.5, '5.17']));
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
+
+    // The default pool, picked: swapasset as before the pool kinds.
+    await swapFor('0.5');
+    await fireEvent.click(ways().find((b) => /Constant product/.test(b.textContent ?? ''))!);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'The pool' })).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 0.5, 10, '4.87']));
+  });
+
+  it('Create pool: a stable pool, its kind chosen, previewed by the node, created with its kind', async () => {
+    dexOn = true;
+    nav.tab = 'create';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#cp-a')).not.toBeNull());
+    await pickAsset('cp-a', SILVER);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('radio', { name: /Stable/ }));
+    // A stable pool starts at the 0.05% tier, A at 100.
+    await waitFor(() => expect(within(screen.getByRole('group', { name: 'Fee tier' })).getByRole('button', { name: '0.05%' }).getAttribute('aria-pressed')).toBe('true'));
+    expect((document.querySelector('#cp-amp') as HTMLInputElement).value).toBe('100');
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#cp-amount-a')!, { target: { value: '10' } });
+    await fireEvent.input(document.querySelector('#cp-amount-b')!, { target: { value: '1' } });
+    await waitFor(() => expect(screen.getByTestId('pool-preview').textContent).toContain(id('n')));
+    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '10', 'CHN', '1', { curve: 'stable', fee: 0.05, amp: 100 }]);
+    expect(screen.getByRole('img', { name: 'Price impact by the size of a trade, each way' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the pool/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(SILVER), '10', 'CHN', '1', { curve: 'stable', fee: 0.05, amp: 100 }, 1]));
+  });
+
+  it('Create pool: before the pool kinds, the page says so and offers Add liquidity', async () => {
+    nav.tab = 'create';
+    render(Trade);
+    await loaded();
+    await waitFor(() => expect(screen.getByText(/This node says nothing of pool kinds/)).toBeTruthy());
+    expect(document.querySelector('#cp-a')).toBeNull();
+  });
+
+  it('a pool of another kind: its kind in the list, its page with its depth, one asset put in and one taken out by its id', async () => {
+    dexOn = true;
+    stablePool();
+    nav.tab = 'pools';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => {
+      const r = within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((x) => /Stable/.test(x.textContent ?? ''));
+      if (!r) throw new Error('no stable pool');
+      return r;
+    });
+    expect(row.textContent).toContain('0.05%');
+    expect(row.textContent).toContain('A 100');
+    await fireEvent.click(row);
+    await waitFor(() => expect(called('getpoolcurve')[0]?.params).toEqual([id('s'), 16]));
+    await waitFor(() => expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy());
+    // getpoolcurve's order (CHN first) turned into the page's (GOLD first): selling GOLD at 0.1% gets about 0.0499 CHN.
+    const first = within(screen.getByRole('table', { name: 'Slippage' })).getAllByRole('row')[1];
+    expect(first.textContent).toContain('0.0499');
+    expect(screen.getByText(id('s'))).toBeTruthy();
+
+    await fireEvent.input(document.querySelector('#pv-add-a')!, { target: { value: '10' } });
+    await waitFor(() => expect(screen.getByText(/One asset alone/)).toBeTruthy());
+    await fireEvent.click(within(screen.getByRole('form', { name: 'Add liquidity to this pool' })).getByRole('button', { name: /Add liquidity/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('addpoolliquidity')[0]?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }, 1]));
+
+    await fireEvent.click(screen.getByRole('button', { name: /GOLD alone/ }));
+    await waitFor(() => expect(called('getswapquote').some((c) => (c.params as unknown[])[2] === assetArg(GOLD))).toBe(true));
+    await fireEvent.click(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 100, assetArg(GOLD), 1]));
+  });
+
+  it('My assets: shares of a pool of another kind, with its kind, taken out by its id', async () => {
+    dexOn = true;
+    stablePool();
+    mine.liquidity = mine.liquidity.filter((l) => l.pool === id('s'));
+    nav.tab = 'liquidity';
+    render(MyAssets);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('.position .pool-kind')?.textContent).toMatch(/Stable/));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Take out…' }));
+    await fireEvent.click(screen.getByRole('button', { name: '50%' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 50, null, 1]));
+    expect(called('removeliquidity')).toEqual([]);
+  });
+});
+
 describe('Simple mode', () => {
   beforeEach(() => {
     prefs.uiMode = 'simple';

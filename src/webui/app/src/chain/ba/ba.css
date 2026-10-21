@@ -101,6 +101,30 @@
   background: var(--danger-soft);
 }
 
+/* The curve of a pool (Layers' DEX: ba/PoolKind.svelte): a tag of its own colour per curve. */
+.ba-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.74rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.ba-kind.constant_product {
+  background: var(--raised);
+}
+.ba-kind.stable {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ba-kind.weighted {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+
 /* Two columns that fall to one in a narrow window. */
 .ba-cols {
   display: grid;

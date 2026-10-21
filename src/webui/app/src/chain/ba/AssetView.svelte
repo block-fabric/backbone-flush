@@ -15,6 +15,8 @@
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
   import Chart from './Chart.svelte';
+  import PoolKind from './PoolKind.svelte';
+  import { flipKind, kindOf } from './kinds';
   import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
   import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
   import { ignoreAsset, ignoreName, unignoreAsset, unignoreName } from './hide.svelte';
@@ -70,7 +72,8 @@
   const price = $derived(chnPrice(id));
   let ownAuctions = $state<Auction[] | null>(null);
   const auctions = $derived(ownAuctions ?? ba.auctions.filter((a) => a.base_id === id || a.quote_id === id));
-  const chnPool = $derived(pools.find((p) => isChn(p.asset_b_id) || isChn(p.asset_a_id)));
+  // Its pool with CHN of the default kind (constant product, 0.3%) first: the price the pages show (store chnPrice).
+  const chnPool = $derived(pools.find((p) => (isChn(p.asset_b_id) || isChn(p.asset_a_id)) && p.default_kind !== false) ?? pools.find((p) => isChn(p.asset_b_id) || isChn(p.asset_a_id)));
   const series = $derived(chnPool ? priceSeries(chnPool, id).map((p) => ({ x: p.h, y: p.p })) : []);
   const supplyUnits = $derived(asset ? asset.minted : 0);
   const burnedShare = $derived(asset && approx(asset.minted) > 0 ? approx(asset.burned) / approx(asset.minted) : 0);
@@ -212,6 +215,7 @@
                     <AssetBadge id={other} label={p.asset_a_id === id ? p.asset_b : p.asset_a} size="s" showLabel={false} />
                     <span class="main">
                       <span>1 <SafeText text={asset.label} /> = {#if up.kind === 'each'}{up.price}{:else if up.kind === 'buys'}1/{up.amount}{:else}–{/if} <SafeText text={p.asset_a_id === id ? p.asset_b : p.asset_a} /></span>
+                      <PoolKind kind={p.asset_a_id === id ? kindOf(p) : flipKind(kindOf(p))} />
                       <span class="faint small">
                         {#if p.abandoned}No liquidity: closed until someone adds some.{:else}{formatAmount(p.asset_a_id === id ? p.reserve_a : p.reserve_b, asset.decimals)} <SafeText text={asset.label} /> · {formatCount(p.swaps)} trades{/if}
                       </span>

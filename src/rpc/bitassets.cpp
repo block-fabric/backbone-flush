@@ -14,6 +14,7 @@
 #include <core_io.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/transaction.h>
 #include <rpc/bitassets.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
@@ -2302,6 +2303,8 @@ RPCMethod getpoolcurve()
             {RPCResult::Type::STR_HEX, "pool", "The pool"},
             {RPCResult::Type::STR, "asset_a", "Its first asset"},
             {RPCResult::Type::STR, "asset_b", "Its second"},
+            {RPCResult::Type::STR_HEX, "asset_a_id", "The first asset's id (the lower; null for CHN)"},
+            {RPCResult::Type::STR_HEX, "asset_b_id", "The second's"},
             {RPCResult::Type::NUM, "price", "A whole asset_a in asset_b now"},
             DEPTH_RESULT,
         })},
@@ -2325,9 +2328,181 @@ RPCMethod getpoolcurve()
     result.pushKV("pool", id.GetHex());
     result.pushKV("asset_a", LabelOf(state, pool->asset0));
     result.pushKV("asset_b", LabelOf(state, pool->asset1));
+    result.pushKV("asset_a_id", pool->asset0.GetHex());
+    result.pushKV("asset_b_id", pool->asset1.GetHex());
     result.pushKV("price", DecimalToJSON(WholeSpotPrice(kind, *pool, true, d0, d1)));
     PushKind(result, kind, false);
     result.pushKV("depth", DepthToJSON(kind, *pool, d0, d1, fractions));
+    return result;
+},
+    };
+}
+
+/** An operation as an explorer shows it: its kind, and its fields (assets by id, amounts in units). */
+UniValue OperationToJSON(const bitassets::Operation& operation)
+{
+    UniValue obj(UniValue::VOBJ);
+    const auto asset{[](const AssetId& id) { return id.GetHex(); }};
+    std::visit([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        obj.pushKV("kind", static_cast<int>(T::KIND));
+        if constexpr (std::is_same_v<T, bitassets::Reserve>) {
+            obj.pushKV("name", "reserve");
+        } else if constexpr (std::is_same_v<T, bitassets::Register>) {
+            obj.pushKV("name", "register");
+            obj.pushKV("asset", asset(op.name));
+            obj.pushKV("supply", op.supply);
+            obj.pushKV("decimals", op.decimals);
+            if (op.text) obj.pushKV("ticker", *op.text);
+            if (!op.display_name.empty()) obj.pushKV("display_name", op.display_name);
+            obj.pushKV("logo", !op.logo.empty());
+        } else if constexpr (std::is_same_v<T, bitassets::Mint>) {
+            obj.pushKV("name", "mint");
+            obj.pushKV("asset", asset(op.asset));
+            obj.pushKV("amount", op.amount);
+        } else if constexpr (std::is_same_v<T, bitassets::Swap>) {
+            obj.pushKV("name", "swap");
+            obj.pushKV("asset_in", asset(op.asset_in));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("asset_out", asset(op.asset_out));
+            obj.pushKV("min_out", op.min_out);
+        } else if constexpr (std::is_same_v<T, bitassets::AddLiquidity>) {
+            obj.pushKV("name", "add_liquidity");
+            obj.pushKV("asset_a", asset(op.asset_a));
+            obj.pushKV("amount_a", op.amount_a);
+            obj.pushKV("asset_b", asset(op.asset_b));
+            obj.pushKV("amount_b", op.amount_b);
+            obj.pushKV("pool", bitassets::PoolId(op.asset_a, op.asset_b).GetHex());
+        } else if constexpr (std::is_same_v<T, bitassets::RemoveLiquidity>) {
+            obj.pushKV("name", "remove_liquidity");
+            obj.pushKV("pool", bitassets::PoolId(op.asset_a, op.asset_b).GetHex());
+            obj.pushKV("shares", op.shares);
+        } else if constexpr (std::is_same_v<T, bitassets::Route>) {
+            obj.pushKV("name", "route");
+            UniValue path(UniValue::VARR);
+            for (const AssetId& a : op.path) path.push_back(asset(a));
+            obj.pushKV("path", std::move(path));
+            UniValue pools(UniValue::VARR);
+            for (size_t i{0}; i + 1 < op.path.size(); ++i) pools.push_back(bitassets::PoolId(op.path[i], op.path[i + 1]).GetHex());
+            obj.pushKV("pools", std::move(pools));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("min_out", op.min_out);
+        } else if constexpr (std::is_same_v<T, bitassets::CreatePool>) {
+            obj.pushKV("name", "create_pool");
+            obj.pushKV("asset_a", asset(op.asset_a));
+            obj.pushKV("amount_a", op.amount_a);
+            obj.pushKV("asset_b", asset(op.asset_b));
+            obj.pushKV("amount_b", op.amount_b);
+            obj.pushKV("curve", bitassets::curves::CurveName(static_cast<bitassets::Curve>(op.curve)));
+            obj.pushKV("fee_millionths", static_cast<uint64_t>(op.fee));
+            if (op.amp) obj.pushKV("amp", static_cast<uint64_t>(op.amp));
+            if (op.weight_a) obj.pushKV("weight_a", op.weight_a);
+            obj.pushKV("min_shares", op.min_shares);
+            bitassets::PoolParams params;
+            params.curve = op.curve;
+            params.fee = op.fee;
+            params.amp = op.amp;
+            params.flags = op.flags;
+            if (op.curve == static_cast<uint8_t>(bitassets::Curve::WEIGHTED)) params.weight0 = op.asset_a < op.asset_b ? op.weight_a : static_cast<uint8_t>(100 - op.weight_a);
+            obj.pushKV("pool", bitassets::PoolIdOf(op.asset_a, op.asset_b, params).GetHex());
+        } else if constexpr (std::is_same_v<T, bitassets::PoolDeposit>) {
+            obj.pushKV("name", "pool_deposit");
+            obj.pushKV("pool", op.pool.GetHex());
+            obj.pushKV("amount0", op.amount0);
+            obj.pushKV("amount1", op.amount1);
+            obj.pushKV("min_shares", op.min_shares);
+        } else if constexpr (std::is_same_v<T, bitassets::PoolWithdraw>) {
+            obj.pushKV("name", "pool_withdraw");
+            obj.pushKV("pool", op.pool.GetHex());
+            obj.pushKV("shares", op.shares);
+            obj.pushKV("only", op.only == 0 ? "both" : op.only == 1 ? "asset0" : "asset1");
+            obj.pushKV("min0", op.min0);
+            obj.pushKV("min1", op.min1);
+        } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
+            obj.pushKV("name", "swap_pools");
+            obj.pushKV("asset_in", asset(op.asset_in));
+            UniValue pools(UniValue::VARR);
+            for (const uint256& id : op.pools) pools.push_back(id.GetHex());
+            obj.pushKV("pools", std::move(pools));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("min_out", op.min_out);
+        } else {
+            static const std::map<int, std::string> names{{5, "burn"}, {4, "update"}, {9, "create_auction"}, {10, "bid"}, {11, "collect"}, {12, "release_asset"}, {14, "register_oracle"},
+                                                          {15, "attest"}, {16, "create_oracle_contract"}, {17, "settle_oracle_contract"}, {32, "set_logo"}, {34, "set_display_name"}};
+            const auto it{names.find(T::KIND)};
+            obj.pushKV("name", it == names.end() ? "operation" : it->second);
+        }
+    }, operation);
+    return obj;
+}
+
+RPCMethod decodeassettx()
+{
+    return RPCMethod{
+        "decodeassettx",
+        "What a transaction does to the assets, as its marker says (for explorers): the operation and its fields, every kind included "
+        "(the DEX's routes and pool kinds), and the outputs the marker lists. What it gave (an order's result) is in the chain's state, not here.",
+        {
+            {"tx", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "A transaction: its id (in the mempool, or a block with -txindex), or its hex"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::BOOL, "marker", "Whether it has a marker (an asset transaction)"},
+            {RPCResult::Type::STR, "error", /*optional=*/true, "Why its marker is not well formed"},
+            {RPCResult::Type::OBJ_DYN, "operation", /*optional=*/true, "The operation: kind (its marker byte), name, and its fields", {{RPCResult::Type::ANY, "", ""}}},
+            {RPCResult::Type::ARR, "outputs", /*optional=*/true, "The outputs the marker lists",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "n", "The output"},
+                    {RPCResult::Type::STR, "carries", "asset, control, reservation, lp, receipt, or result (what the operation gives)"},
+                    {RPCResult::Type::STR_HEX, "id", /*optional=*/true, "What the token is of"},
+                    {RPCResult::Type::NUM, "amount", /*optional=*/true, "In units"},
+                }},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("decodeassettx", "\"<txid>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node{EnsureAnyNodeContext(request.context)};
+    ChainstateManager& chainman{EnsureChainman(node)};
+    const std::string text{request.params[0].get_str()};
+    CTransactionRef tx;
+    if (text.size() == 64) {
+        const auto txid{Txid::FromHex(text)};
+        if (!txid) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a transaction id");
+        uint256 block;
+        tx = node::GetTransaction(nullptr, node.mempool.get(), *txid, chainman.m_blockman, block);
+        if (!tx) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No such transaction in the mempool or the transaction index (-txindex); give its hex");
+    } else {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, text)) throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Not a transaction");
+        tx = MakeTransactionRef(std::move(mtx));
+    }
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    std::string error;
+    const auto marker{bitassets::GetMarker(*tx, &error)};
+    result.pushKV("marker", marker.has_value() || !error.empty());
+    if (!error.empty()) result.pushKV("error", error);
+    if (!marker) return result;
+    if (marker->operation) result.pushKV("operation", OperationToJSON(*marker->operation));
+    UniValue outs(UniValue::VARR);
+    static const char* kinds[]{"asset", "control", "reservation", "lp", "receipt"};
+    for (const bitassets::MarkerOutput& out : marker->outputs) {
+        UniValue o(UniValue::VOBJ);
+        o.pushKV("n", out.n);
+        if (out.token) {
+            o.pushKV("carries", kinds[static_cast<int>(out.token->kind)]);
+            o.pushKV("id", out.token->id.GetHex());
+            o.pushKV("amount", out.token->amount);
+        } else {
+            o.pushKV("carries", "result");
+        }
+        outs.push_back(std::move(o));
+    }
+    result.pushKV("outputs", std::move(outs));
     return result;
 },
     };
@@ -2368,6 +2543,7 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &simulateclearing},
         {"bitassets", &previewpool},
         {"bitassets", &getpoolcurve},
+        {"bitassets", &decodeassettx},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

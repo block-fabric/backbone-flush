@@ -250,6 +250,127 @@ the pools the block changes as they were before it, `0x83` the orders, `0x84` th
 their result outputs. All of them through the store's journal: a block taken back takes its
 clearing, its accumulators, its observations and its oracles' records back.
 
+## Pool kinds
+
+Rules of the DEX from `dex_curves_height` (`Consensus::SidechainParams::dex_curves_height`, with the DEX's
+rules only; `src/bitassets/curves.{h,cpp}`): main network and signet from the first block (0); the running
+test network not until a deployment names `TESTNET_DEX_CURVES_HEIGHT` (`src/kernel/testnet_activation.h`;
+never until then, so a node of this release follows the test network exactly as one of before; the next
+restart of the test network from a new genesis takes them from its first block and the height goes); regtest
+from the DEX's height, or `-testactivationheight=dexcurves@<height>`. Before the height a marker of their
+kinds (18 to 21) is `bad-ba-marker`, as it always was. The height goes into the drivechain database's
+fingerprint once set. `getdexinfo` shows `curves_height` and `curves_active`. Nothing that exists changes:
+the pools AddLiquidity makes keep their id (`PoolId`), record, fee and arithmetic (the clearing calls
+`ClearPool` for them, bit for bit), and every transaction of before means what it meant.
+
+**Kinds.** A pool is made of a *curve*, a *fee tier* and the curve's parameter:
+
+| | Curve | Parameter | Use |
+|---|---|---|---|
+| Constant product | x·y = k | none | any pair (the kind of every pool AddLiquidity makes, at 0.30 %) |
+| StableSwap (Curve) | 4A(X+Y) + D = 4AD + D³/(4XY) | amplification A, 1 to 10000 | assets meant to trade near one for one |
+| Weighted (Balancer) | x^wa · y^wb = k | weight of an asset: 2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95 or 98 % | a pool that holds mostly one asset (80/20: less loss to price moves of the 80) |
+
+Fee tiers: 0.01 %, 0.05 %, 0.30 %, 1.00 % (`FEE_TIERS`, in millionths: 100, 500, 3000, 10000). Every fee stays
+in the pool, for its liquidity providers. `PROTOCOL_FEE_SHARE` is the protocol's part of the fees: 0 (a hook:
+the clearing works out that part, `dex::Clearing::protocol0/1`, always 0; a rule giving it a destination would
+be a change of the rules). A 50/50 weighted pool is the constant product: it is made as one.
+
+A pair has a pool of each kind. Its id is `PoolIdOf(a, b, kind)`: `PoolId(a, b)` for constant product at
+0.30 %, otherwise `SHA256(ser("Layers pool") ‖ asset0 ‖ asset1 ‖ curve ‖ fee ‖ amp ‖ weight of asset0 ‖ flags)`
+(the weight is asset0's whichever order the assets are named in). The kind of a pool other than the default is
+kept in table `0x8a` (`PoolParams`; a pool with none is the default kind). A stable pool counts the units of
+its two assets alike after their decimals: X = x·10^scale0, Y = y·10^scale1, the asset with fewer decimals
+scaled up to the other (CHN has 8); the scales follow from the assets' decimals, which never change.
+
+**Exact arithmetic.** Every number the rules take from a curve is the floor or ceiling of an exact quantity,
+compared exactly (`curves::BigUint`, integers of any size; no fixed point, no rounding but at the end, toward
+the pool):
+
+- Constant product and weighted: a point (x, y) *holds the level* of a pool at (x0, y0) if
+  x^wa · y^wb ≥ x0^wa · y0^wb, wa:wb the weights in lowest terms (80/20 is 4:1, 98/2 49:1, constant
+  product 1:1). With rational points, multiplied out: a^wa · b^wb · p0 ≥ k · p^wa · q^wb.
+- Stable: Φ(X, Y, D) = 16A·XY(X+Y) + 4XY·D − 16A·D·XY − D³ falls as D grows (∂Φ/∂D = 4XY(1−4A) − 3D² < 0),
+  so the pool's D is its one root. A pool's level is Dc, the ceiling of its D (the smallest integer with
+  Φ(X0, Y0, Dc) ≤ 0); a point holds it if Φ(X, Y, Dc) ≥ 0. Using the ceiling, the pool never takes less than
+  the exact curve gives it (by under one unit of D).
+
+A quantity is found by bisection over the integers (`SearchMax`, `SearchMin`), each step one exact
+comparison: the predicates are monotone, so the result is the unique extreme integer, whatever the
+iteration. Any implementation that computes the same floors agrees bit for bit; the vectors of
+`src/test/data/dex_curves.json` (138 cases over every kind, clearing, opening and deposit shares, withdrawals,
+prices) are checked by the node's unit tests and by an independent reference in Python
+(`contrib/dex-curves/reference.py src/test/data/dex_curves.json`, written from these definitions).
+
+**Batch clearing of every kind.** A pool's round (a hop of every order through it in a round of a pass, as
+above) has one uniform price. With A' and B' the round's inputs of asset0 and asset1 less the fee (exactly:
+Â = Σ a·(F − fee), B̂ = Σ b·(F − fee), F = 10^6):
+
+- Constant product (any tier): ClearPool's formula, P = (R1·F + B̂)/(R0·F + Â) (at 0.30 % it *is* ClearPool).
+- Stable and weighted: if asset0 comes in on balance, the pool pays out dy of asset1 net and every order gets
+  P = (dy + B')/A' of asset0 in asset1: one paying a of asset0 gets ⌊a·(F−fee)·(F·dy + B̂)/(Â·F)⌋ of asset1, one
+  paying b of asset1 ⌊b·(F−fee)·Â/((F·dy + B̂)·F)⌋ of asset0. The asset1 sellers then take at most
+  B'·A'/(dy + B') of asset0, so the pool gains at least g(dy) = A'·dy/(dy + B') of asset0 net for at most dy of
+  asset1. dy is the largest in [0, y0 − 1] for which the pool's worst point (x0 + g(dy), y0 − dy) holds its
+  level. As dy grows that point moves along a hyperbola centred on (x0 + A', y0 + B'), concave in x, which
+  meets the convex level curve once: the predicate is monotone and the bisection exact. If no dy > 0 holds,
+  asset1 comes in on balance (the same, sides swapped); if neither, the two sides cross at P = B'/A' and the
+  pool trades nothing. One order alone (B' = 0) gets dy itself: the most the curve gives for its input.
+- **Conservation and the pool's value.** Each order's output is a floor of its share of the price, so the
+  outputs of a side are at most its total at P: what the pool pays is at most dy of asset1 (plus the B' that
+  came in) and what it keeps of asset0 is at least g(dy) more than before; the fees (the inputs less A', B')
+  stay in it. The reserves after are the reserves before plus all that went in less all that came out
+  (exactly; tested), and they hold the level of before (the invariant never falls: the curve's point, the
+  rounding and the fees all raise it; property-tested over every kind, the extremes included).
+- Orders that miss, passes, the sequential fallback, payouts: as for every pool (above).
+
+**Routes across kinds.** `SwapPools` (kind 21) is an order through named pools of any kind, 1 to 4 (each
+holding what the hop before gave, no asset twice); `Route` and `Swap` name assets and so the default pool of
+each two, as before. Every hop clears in its pool's round at that pool's price. `quoteroute` and
+`getswapquote` search over all pools of every kind (the 16 deepest of each asset) and say each route's pools
+and whether the default pools alone make it (`default_pools`: then `swaproute`'s path alone names it).
+
+**Liquidity.** `CreatePool` (kind 18) makes a pool of a kind (refused while one of that kind of the pair has
+providers: `bad-ba-pool-exists`; one nobody provides for any more is opened again). Its shares are the floor of
+the invariant's first degree at the reserves after: isqrt(x·y) for constant product (as AddLiquidity), the
+floor of the weighted geometric mean (the largest v with v^(wa+wb) ≤ x^wa·y^wb), D for a stable pool (in units
+of the asset with more decimals); MIN_LIQUIDITY kept for good, MIN_OPEN_SHARES and MIN_OPEN_CHN as for any
+pool. `PoolDeposit` (19) puts any amounts into a pool by id, one side alone included: of the side out of the
+pool's proportions, the excess e pays the fee on φ·e (φ the part a swap to the proportions would trade: the
+other asset's weight, one half for constant product and stable; rounded up), and the deposit gets the most s
+shares for which the pool after holds its level times (S + s)/S (S the shares before). At the pool's
+proportions this is what AddLiquidity gives. `PoolWithdraw` (20): both sides, what the shares are worth
+(rounded down), or one side alone: its part plus what the other side's part buys of it in the pool after
+(the pool's fee paid). The single-sided parts trade at once, like a deposit, not in the batch.
+
+**Prices and TWAP.** A pool's price of asset0 in asset1 is its curve's slope at its point: the reserves'
+ratio y/x for constant product (as the accumulators always added), y·wa/(x·wb) weighted, and stable
+(s0·Y·(4A(2X+Y) + Dc − 4A·Dc)) / (s1·X·(4A(X+2Y) + Dc − 4A·Dc)); the price of asset1 in asset0 is the floor
+of the inverse quotient. The accumulators add these (UQ64.64) as before; `getpooltwap` extends an
+observation with the price of the pool's kind.
+
+**Bounds.** Reserves and amounts at most MAX_AMOUNT (2^63 − 1); every product is computed exactly, whatever its
+size (a weighted 98/2 pool compares numbers of about 6,000 bits). The work of searched curves is bounded per
+block: `MAX_BLOCK_CURVE_WORK` (200): each hop of an order through a stable or weighted pool, and each
+CreatePool, PoolDeposit and PoolWithdraw, counts one (constant product of any tier: none); a transaction beyond
+is not valid in that block (`bad-ba-block-curve-work-full`) and the miner leaves it for the next, so no valid
+block holds more and no miner makes one. The clearing does not search a round again in a later pass (same
+pool, reserves and orders). The slowest round measured (adversarial kinds, reserves and orders;
+`dex_curves_tests/worst_case_round`) takes about 0.4 ms here, so a block's clearing stays under about
+(MAX_CLEARING_PASSES + 1) · 200 · 0.4 ms ≈ 0.7 s; a typical round takes about 0.15 ms.
+
+**RPCs.** Node: `getpool` (by assets, or by id), every pool with `curve`, `fee`, `fee_millionths`, `amp`,
+`weight_a`/`weight_b`, `default_kind` (and `price` its curve's); `getswapquote` (every pool of a pair and the best
+route, exact in or out), `simulateclearing pool orders` (a round of a batch now), `previewpool` (a pool before
+it is made: id, shares, price, slippage), `getpoolcurve pool (points)` (depth), `decodeassettx` (what a
+transaction's marker does, every kind, for explorers). Wallet: `createpool a amount_a b amount_b {curve, fee,
+amp, weight_a}`, `addpoolliquidity pool {asset: amount}`, `removepoolliquidity pool (percent) (only)`,
+`swappools asset_in amount [pools]`, and `swaproute ... (pools)`. The app's confirmations resolve every asset
+(by id only) and pool they show.
+
+**Store keys:** `0x8a` the kind of each pool made by CreatePool (none for the default kind); during a block only
+`0x8b` the work of the pool kinds (`MAX_BLOCK_CURVE_WORK`).
+
 ## Logos of assets
 
 Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of exactly 256 x 256 pixels, at most
@@ -318,6 +439,11 @@ state back, finality with assets, and the peg balance with CHN in pools and auct
 `dex_tests` (the clearing's arithmetic: one order is the curve, one price, conservation, the
 product never falls; the accumulators' wrap; the oracles' signatures; routes, batches, refunds,
 the bound of orders, observations, oracles and contracts on a state) and
+`dex_curves_tests` (the pool kinds' arithmetic: properties, extremes, determinism vectors, the worst case) and
+`dex_pools_tests` (their activation, pools of every kind side by side, batches, routes across kinds, one-sided
+liquidity, retiring an asset, the per-block bound), `feature_layers_dex_curves.py` (before and after their
+height: pools of each kind, a swap and a batch against the Python reference, a route across kinds, one-sided
+liquidity, the TWAP, a reorganisation across a clearing).
 `feature_layers_dex.py` (before and after the DEX's height: routes of 2 and 4 hops, batches in a
 BMM block and in a block of stake, a missed `min_out`, the TWAP over windows and across a
 reorganisation, oracles with the wallet's key and an outside one, contracts to both outcomes and a

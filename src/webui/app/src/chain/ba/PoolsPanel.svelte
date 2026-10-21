@@ -1,27 +1,27 @@
 <script lang="ts">
-  // The pools: each pair, what it holds, its price, what it traded and how often; a pool opened: its curve,
-  // its price as this app saw it, the share of this wallet, and the ways in (swap, add). The Pools table of the
-  // Trade tab of the Qt window of BitAssets.
+  // The pools: each pair and its kind (Layers' DEX: a pair may have several, of other curves and fees), what it
+  // holds, its price, what it traded and how often; a pool opened: its page (PoolView.svelte). The Pools table of
+  // the Trade tab of the Qt window of BitAssets.
   import { selectable, stacked } from '../../lib/actions';
-  import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
   import { nav } from '../../lib/nav.svelte';
   import AssetBadge from './AssetBadge.svelte';
-  import Chart from './Chart.svelte';
-  import { approx, curvePoints, formatAmount, formatPercent, formatPrice, isChn, type Pool } from './model';
-  import { compactNumber } from './axis';
+  import PoolKind from './PoolKind.svelte';
+  import PoolView from './PoolView.svelte';
+  import { kindOf } from './kinds';
+  import { approx, formatAmount, formatPrice, isChn, type Pool } from './model';
   import HiddenToggle from './HiddenToggle.svelte';
   import { hiddenAsset } from './visible.svelte';
-  import { ba, decimalsOf, morePools, priceSeries, showMorePools, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, morePools, showMorePools, tradeIntent } from './store.svelte';
 
   let query = $state('');
   let showClosed = $state(false);
   let open = $state<string | null>(null);
   // Sorted and filtered as the user likes (user feedback 2026-10-19), without the pools of assets the wallet hides.
   type PoolSort = 'traded' | 'trades' | 'deepest' | 'newest' | 'name';
-  type PoolFilter = 'all' | 'chn' | 'mine';
+  type PoolFilter = 'all' | 'chn' | 'mine' | 'kinds';
   let sort = $state<PoolSort>('traded');
   let filter = $state<PoolFilter>('all');
   let showHidden = $state(false);
@@ -37,7 +37,7 @@
   const matching = $derived(
     ba.pools
       .filter((p) => showClosed || !p.abandoned)
-      .filter((p) => filter === 'all' || (filter === 'chn' && (isChn(p.asset_a_id) || isChn(p.asset_b_id))) || (filter === 'mine' && positions.has(p.pool)))
+      .filter((p) => filter === 'all' || (filter === 'chn' && (isChn(p.asset_a_id) || isChn(p.asset_b_id))) || (filter === 'mine' && positions.has(p.pool)) || (filter === 'kinds' && p.default_kind === false))
       .filter((p) => {
         const q = query.trim().toLowerCase();
         return !q || p.asset_a.toLowerCase().includes(q) || p.asset_b.toLowerCase().includes(q);
@@ -47,8 +47,15 @@
   const list = $derived((showHidden ? matching : matching.filter((p) => !isHidden(p))).sort(SORTS[sort]));
   const closed = $derived(ba.pools.filter((p) => p.abandoned).length);
   const pool = $derived(ba.pools.find((p) => p.pool === open) ?? null);
-  const position = $derived(pool ? (ba.mine?.liquidity.find((l) => l.pool === pool.pool) ?? null) : null);
-  const series = $derived(pool ? priceSeries(pool, pool.asset_a_id).map((p) => ({ x: p.h, y: p.p })) : []);
+  /** Whether the chain has pools of other kinds (getdexinfo): then their filter, and a way to make one. */
+  const kinds = $derived(ba.dex?.curves_active === true || ba.pools.some((p) => p.default_kind === false));
+
+  // A pool asked for by another page (My assets, a route's hop): opened.
+  $effect(() => {
+    if (!tradeIntent.pool) return;
+    open = tradeIntent.pool;
+    tradeIntent.pool = '';
+  });
 
   /** What a pool traded, in CHN where one side is CHN (else in trades). */
   function volumeChn(p: Pool): number {
@@ -56,51 +63,10 @@
     if (isChn(p.asset_b_id)) return approx(p.volume_b);
     return 0;
   }
-
-  function swapIn(p: Pool) {
-    tradeIntent.pay = p.asset_b_id;
-    tradeIntent.get = p.asset_a_id;
-    nav.tab = 'swap';
-  }
-  function addTo(p: Pool) {
-    tradeIntent.a = p.asset_a_id;
-    tradeIntent.b = p.asset_b_id;
-    nav.tab = 'liquidity';
-  }
 </script>
 
 {#if pool}
-  <div class="pool-view">
-    <button type="button" class="btn ghost small ba-back" onclick={() => (open = null)}><Icon name="back" size={15} /> All pools</button>
-    <header class="panel head">
-      <span class="pair"><AssetBadge id={pool.asset_a_id} label={pool.asset_a} /> <span class="faint">/</span> <AssetBadge id={pool.asset_b_id} label={pool.asset_b} /></span>
-      {#if pool.abandoned}<span class="ba-tag danger">Closed: no liquidity</span>{/if}
-      <span class="grow"></span>
-      <button type="button" class="btn primary" disabled={pool.abandoned} onclick={() => swapIn(pool)}><Icon name="swap" size={15} /> Swap</button>
-      <button type="button" class="btn" onclick={() => addTo(pool)}><Icon name="plus" size={15} /> {pool.abandoned ? 'Reopen it' : 'Add liquidity'}</button>
-    </header>
-    <section class="ba-figures">
-      <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(pool.price)}</strong><span class="faint"><SafeText text={pool.asset_b} /> for 1 <SafeText text={pool.asset_a} /></span></div>
-      <div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, decimalsOf(pool.asset_a_id), { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, decimalsOf(pool.asset_b_id), { max: 4 })} <SafeText text={pool.asset_b} /></span></div>
-      <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatCount(pool.swaps)}</strong><span class="faint">trades since block {formatCount(pool.created)}</span></div>
-      <div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>
-    </section>
-    <div class="ba-cols">
-      <section class="panel">
-        <div class="panel-head"><h3>Price</h3><span class="muted small">as this app saw it</span></div>
-        <div class="panel-body">
-          <Chart points={series.length ? series : [{ x: ba.height, y: pool.price ?? 0 }]} step label={t('The price of %1 in %2', pool.asset_a, pool.asset_b)} formatX={(x) => t('block %1', String(Math.round(x)))} />
-        </div>
-      </section>
-      <section class="panel">
-        <div class="panel-head"><h3>The curve</h3></div>
-        <div class="panel-body">
-          <Chart points={curvePoints(approx(pool.reserve_a), approx(pool.reserve_b))} marks={[{ x: approx(pool.reserve_a), y: approx(pool.reserve_b) }]} logX yZero area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => compactNumber(x, 4)} formatY={(y) => formatPrice(y, 4)} />
-          <p class="ba-help">Volume: {formatAmount(pool.volume_a, decimalsOf(pool.asset_a_id))} <SafeText text={pool.asset_a} /> and {formatAmount(pool.volume_b, decimalsOf(pool.asset_b_id))} <SafeText text={pool.asset_b} /> traded in.</p>
-        </div>
-      </section>
-    </div>
-  </div>
+  <PoolView {pool} back={() => (open = null)} />
 {:else}
   <section class="panel">
     <div class="panel-head">
@@ -115,23 +81,26 @@
         </select>
       </label>
       {#if closed}<label class="check"><input type="checkbox" bind:checked={showClosed} /> <span>Closed pools ({closed})</span></label>{/if}
+      {#if ba.dex?.curves_active}<button type="button" class="btn small" onclick={() => (nav.tab = 'create')}><Icon name="plus" size={14} /> Create pool</button>{/if}
     </div>
     <div class="ba-chips" role="group" aria-label="Filter pools">
       <button type="button" class="ba-chip" aria-pressed={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
       <button type="button" class="ba-chip" aria-pressed={filter === 'chn'} onclick={() => (filter = 'chn')}>With CHN</button>
       <button type="button" class="ba-chip" aria-pressed={filter === 'mine'} onclick={() => (filter = 'mine')}>Yours</button>
+      {#if kinds}<button type="button" class="ba-chip" aria-pressed={filter === 'kinds'} onclick={() => (filter = 'kinds')}>Other kinds</button>{/if}
     </div>
     <HiddenToggle count={hiddenCount} bind:show={showHidden} />
     {#if list.length === 0}
-      <p class="ba-empty">{ba.pools.length === 0 ? 'No pools yet: add liquidity to make the first.' : 'No pool matches.'}</p>
+      <p class="ba-empty">{ba.pools.length === 0 ? 'No pools yet: add liquidity, or create a pool, to make the first.' : 'No pool matches.'}</p>
     {:else}
       <div class="ba-wrap">
         <table class="ba-table" use:stacked aria-label="Pools">
-          <thead><tr><th>Pool</th><th class="end">Price</th><th class="end">Holds</th><th class="end">Traded in</th><th class="end">Trades</th></tr></thead>
+          <thead><tr><th>Pool</th><th>Kind</th><th class="end">Price</th><th class="end">Holds</th><th class="end">Traded in</th><th class="end">Trades</th></tr></thead>
           <tbody>
             {#each list as p (p.pool)}
               <tr class="pick" onclick={() => (open = p.pool)} use:selectable={() => (open = p.pool)}>
                 <td><span class="pair"><AssetBadge id={p.asset_a_id} label={p.asset_a} size="s" /> <span class="faint">/</span> <AssetBadge id={p.asset_b_id} label={p.asset_b} size="s" /></span>{#if p.abandoned} <span class="ba-tag danger">closed</span>{/if}</td>
+                <td><PoolKind kind={kindOf(p)} /></td>
                 <td class="end">{formatPrice(p.price)}</td>
                 <td class="end">{formatAmount(p.reserve_a, decimalsOf(p.asset_a_id), { max: 4 })} · {formatAmount(p.reserve_b, decimalsOf(p.asset_b_id), { max: 4 })}</td>
                 <td class="end">{formatAmount(p.volume_a, decimalsOf(p.asset_a_id), { max: 4 })} · {formatAmount(p.volume_b, decimalsOf(p.asset_b_id), { max: 4 })}</td>
@@ -154,18 +123,6 @@
     align-items: center;
     gap: 0.45rem;
   }
-  .pool-view {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-  }
-  .head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.7rem;
-    padding: 1rem 1.1rem;
-  }
   .pair {
     display: inline-flex;
     align-items: center;
@@ -175,8 +132,5 @@
   .search {
     flex: 1 1 14rem;
     max-width: 24rem;
-  }
-  .small {
-    font-size: 0.85rem;
   }
 </style>

@@ -16,6 +16,7 @@ import { rpc } from '../../lib/rpc';
 import { node, toast, wallets } from '../../lib/state.svelte';
 import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
+import type { DexInfo } from './kinds';
 import { EXACT_METHODS, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -166,6 +167,8 @@ export function showMorePools(): void {
 
 export const ba = $state({
   info: null as BitAssetsInfo | null,
+  /** Layers' DEX: its pool kinds, fee tiers and bounds (getdexinfo; null on a node without it). */
+  dex: null as DexInfo | null,
   assets: [] as Asset[],
   pools: [] as Pool[],
   /** The auctions not collected yet, newest first: the first baView.auctions of them. */
@@ -196,8 +199,8 @@ export const ba = $state({
 
 /** What another page asks the Send page to send (an asset, by id). */
 export const sendIntent = $state({ asset: '' });
-/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to. */
-export const tradeIntent = $state({ pay: '', get: '', a: '', b: '' });
+/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool to open (by id). */
+export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '' });
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
 
@@ -519,6 +522,8 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
       const wallet = wallets.current;
       // Every call goes out at once: the node's and the wallet's.
       const infoCall = rpc.raw<BitAssetsInfo>('getbitassetsinfo');
+      // Layers' DEX (its pool kinds): null from a node without getdexinfo.
+      const dexCall = askNode ? rpc.raw<DexInfo>('getdexinfo', []).catch(() => null) : null;
       const nodeCalls = askNode
         ? Promise.all([
             infoCall,
@@ -548,6 +553,8 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
           if (!same(ba.pools, pools ?? [])) ba.pools = pools ?? [];
           if (!same(ba.auctions, auctions ?? [])) ba.auctions = auctions ?? [];
           ba.height = info?.height ?? -1;
+          const dex = await dexCall;
+          if (!same(ba.dex, dex ?? null)) ba.dex = dex && typeof dex === 'object' ? dex : null;
           if (notePrices(ba.pools, ba.height, Math.floor(Date.now() / 1000))) saveJournal();
         } else {
           const info = await infoCall;
@@ -688,9 +695,9 @@ export function resetBitAssets(): void {
   recentDone.splice(0);
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
-  Object.assign(ba, { info: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
+  Object.assign(ba, { info: null, dex: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
-  Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '' });
+  Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '', pool: '' });
   sellIntent.asset = '';
 }
 
@@ -705,6 +712,7 @@ let heldMapOf: unknown = null;
 let poolMap = new Map<string, Pool>();
 let poolMapOf: unknown = null;
 let pooled = new Set<string>();
+let poolIds = new Map<string, Pool>();
 /** Assets the pages found apart from the list read (a search, a lookup): their names known everywhere. */
 const known = new Map<string, Asset>();
 
@@ -775,16 +783,26 @@ export function nameOf(id: string, label?: string): string {
   return text ? `${tag} · "${text}"` : tag;
 }
 
-/** The pool of two assets, either way round. */
+/**
+ * The pool of two assets, either way round: the one of the kind addliquidity makes (constant product, 0.3%), which
+ * swapasset, addliquidity and removeliquidity name; a pair may have pools of other kinds besides (Layers' DEX: poolById,
+ * poolsOf).
+ */
 export function poolOf(a: string, b: string): Pool | undefined {
   const list = ba.pools;
   if (poolMapOf !== list) {
     poolMap = new Map();
     pooled = new Set();
-    // The first of the list either way round, as a search of it found.
+    poolIds = new Map();
+    // The first of the list either way round, as a search of it found; the default kind before any other.
+    const better = (key: string, p: Pool) => {
+      const had = poolMap.get(key);
+      if (!had || (had.default_kind === false && p.default_kind !== false)) poolMap.set(key, p);
+    };
     for (const p of list) {
-      if (!poolMap.has(`${p.asset_a_id}:${p.asset_b_id}`)) poolMap.set(`${p.asset_a_id}:${p.asset_b_id}`, p);
-      if (!poolMap.has(`${p.asset_b_id}:${p.asset_a_id}`)) poolMap.set(`${p.asset_b_id}:${p.asset_a_id}`, p);
+      poolIds.set(p.pool, p);
+      better(`${p.asset_a_id}:${p.asset_b_id}`, p);
+      better(`${p.asset_b_id}:${p.asset_a_id}`, p);
       if (!p.abandoned) {
         pooled.add(p.asset_a_id);
         pooled.add(p.asset_b_id);
@@ -793,6 +811,19 @@ export function poolOf(a: string, b: string): Pool | undefined {
     poolMapOf = list;
   }
   return poolMap.get(`${a}:${b}`);
+}
+
+/** A pool by its id, among those read. */
+export function poolById(id: string): Pool | undefined {
+  void poolOf('', '');
+  return poolIds.get(id);
+}
+
+/** The pools of two assets read, of every kind, either way round: the default kind first. */
+export function poolsOf(a: string, b: string): Pool[] {
+  return ba.pools
+    .filter((p) => (p.asset_a_id === a && p.asset_b_id === b) || (p.asset_a_id === b && p.asset_b_id === a))
+    .sort((x, y) => Number(y.default_kind !== false) - Number(x.default_kind !== false));
 }
 
 /** Whether an asset has a pool not abandoned (a market). */
