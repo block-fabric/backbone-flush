@@ -7,6 +7,12 @@
 #include <kernel/chainparams.h>
 #include <sidechain/follower.h>
 #include <sidechain/mainclient.h>
+#include <base58.h>
+#include <bech32.h>
+#include <core_io.h>
+#include <primitives/transaction.h>
+#include <script/script.h>
+#include <util/strencodings.h>
 #include <test/util/setup_common.h>
 #include <univalue.h>
 #include <util/chaintype.h>
@@ -216,8 +222,12 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
             BOOST_CHECK_EQUAL(consensus.pos.slot_seconds, base->GetConsensus().pos.slot_seconds);
             BOOST_CHECK_EQUAL(consensus.pos.genesis_time, params->GenesisBlock().nTime);
             BOOST_CHECK_EQUAL(consensus.coinbase_maturity, 0);
+            // The rules of what the enforcer reports alone, and the hand-off of bundles a day deep (two hours on the test network).
+            BOOST_CHECK(consensus.sidechain.main_events_only);
+            BOOST_CHECK_EQUAL(consensus.sidechain.bundle_handoff_depth, type == ChainType::ECASH_TESTNET ? 12 : 144);
         } else if (type != ChainType::REGTEST) {
             BOOST_CHECK(consensus.sidechain.main_single_payout);
+            BOOST_CHECK(!consensus.sidechain.main_events_only);
         }
     }
 
@@ -240,6 +250,128 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
     s.followed_height = 100;
     BOOST_CHECK(Follower::Link(s, "ecash", 2).first == Follower::LinkState::SYNCING);
     BOOST_CHECK(Follower::Link(s, "ecash").first == Follower::LinkState::OK);
+}
+
+BOOST_AUTO_TEST_CASE(enforcer_block_events)
+{
+    // A GetBlockInfo entry (proto3 JSON, as the enforcer and Backbone write it) as Backbone's getsidechainevents
+    // entry: hashes as ReverseHex are GetHex, as ConsensusHex (m6id, the BMM commitment) their bytes in order.
+    const uint256 block{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000b1").value()};
+    const uint256 prev{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000a0").value()};
+    const uint256 side{uint256::FromHex("5100000000000000000000000000000000000000000000000000000000000052").value()};
+    const uint256 x{uint256::FromHex("1100000000000000000000000000000000000000000000000000000000000022").value()};
+    const uint256 y{uint256::FromHex("3300000000000000000000000000000000000000000000000000000000000044").value()};
+    const uint256 z{uint256::FromHex("5500000000000000000000000000000000000000000000000000000000000066").value()};
+    const uint256 deposit_txid{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000d1").value()};
+    // The payout: the new treasury, two payouts, and the bundle's zero-value OP_RETURN.
+    CMutableTransaction m6;
+    m6.version = 2;
+    m6.vin.resize(1);
+    m6.vout.emplace_back(10 * COIN, CScript() << OP_NOP8 << std::vector<unsigned char>{3} << OP_TRUE);
+    m6.vout.emplace_back(3 * COIN, CScript() << OP_0 << std::vector<unsigned char>(20, 0x01));
+    m6.vout.emplace_back(0, CScript() << OP_RETURN << std::vector<unsigned char>(32, 0x02));
+    m6.vout.emplace_back(COIN / 2, CScript() << OP_1 << std::vector<unsigned char>(32, 0x03));
+    const std::string json{strprintf(R"({"headerInfo":{"blockHash":{"hex":"%s"},"prevBlockHash":{"hex":"%s"},"height":7,"work":{"hex":"00"},"timestamp":"1700000000"},)"
+                                     R"("blockInfo":{"bmmCommitment":{"hex":"%s"},"events":[)"
+                                     R"({"withdrawalBundle":{"m6id":{"hex":"%s"},"event":{"submitted":{}}}},)"
+                                     R"({"withdrawalBundle":{"m6id":{"hex":"%s"},"event":{"failed":{}}}},)"
+                                     R"({"deposit":{"sequenceNumber":"4","outpoint":{"txid":{"hex":"%s"},"vout":1},"output":{"address":{"hex":"%s"},"valueSats":"150000000"}}},)"
+                                     R"({"withdrawalBundle":{"m6id":{"hex":"%s"},"event":{"succeeded":{"sequenceNumber":"5","transaction":{"hex":"%s"}}}}}]}})",
+                                     block.GetHex(), prev.GetHex(), HexStr(side), HexStr(x), HexStr(y), deposit_txid.GetHex(), HexStr(std::string{"s3_abc_def"}), HexStr(z),
+                                     EncodeHexTx(CTransaction{m6}))};
+    UniValue info;
+    BOOST_REQUIRE(info.read(json));
+    const UniValue out{EnforcerBlockEvents(info, 1699999000)};
+    BOOST_CHECK_EQUAL(out["height"].getInt<int>(), 7);
+    BOOST_CHECK_EQUAL(out["hash"].get_str(), block.GetHex());
+    BOOST_CHECK_EQUAL(out["previousblockhash"].get_str(), prev.GetHex());
+    BOOST_CHECK_EQUAL(out["mediantime"].getInt<int64_t>(), 1699999000);
+    BOOST_CHECK_EQUAL(out["bmm"].get_str(), side.GetHex());
+    BOOST_CHECK_EQUAL(out["proposed"].write(), strprintf(R"(["%s"])", x.GetHex()));
+    BOOST_CHECK_EQUAL(out["bundles"].write(), strprintf(R"([{"hash":"%s","paid":false},{"hash":"%s","paid":true}])", y.GetHex(), z.GetHex()));
+    BOOST_CHECK_EQUAL(out["pending"].size(), 0U);
+    const UniValue& deposits{out["deposits"]};
+    BOOST_REQUIRE_EQUAL(deposits.size(), 2U);
+    BOOST_CHECK_EQUAL(deposits[0]["destination"].get_str(), "s3_abc_def");
+    BOOST_CHECK_EQUAL(deposits[0]["amount"].getValStr(), "1.50000000");
+    BOOST_CHECK_EQUAL(deposits[0]["txid"].get_str(), deposit_txid.GetHex());
+    BOOST_CHECK_EQUAL(deposits[0]["burnindex"].getInt<int>(), 1);
+    // The change of the payout: the bundle, and what it paid (not the treasury output, not the zero-value one).
+    BOOST_CHECK_EQUAL(deposits[1]["destination"].get_str(), "D");
+    BOOST_CHECK_EQUAL(deposits[1]["bundle"].get_str(), z.GetHex());
+    BOOST_CHECK_EQUAL(deposits[1]["txid"].get_str(), m6.GetHash().GetHex());
+    BOOST_CHECK_EQUAL(deposits[1]["burnindex"].getInt<int>(), 0);
+    BOOST_CHECK_EQUAL(deposits[1]["payouts"].write(), strprintf(R"([{"amount":3.00000000,"script":"%s"},{"amount":0.50000000,"script":"%s"}])",
+                                                                HexStr(m6.vout[1].scriptPubKey), HexStr(m6.vout[3].scriptPubKey)));
+    // The genesis block has no previous block; an event of a kind not known is refused, not left out.
+    UniValue genesis;
+    BOOST_REQUIRE(genesis.read(strprintf(R"({"headerInfo":{"blockHash":{"hex":"%s"},"prevBlockHash":{"hex":"%s"}},"blockInfo":{}})", block.GetHex(), uint256{}.GetHex())));
+    const UniValue first{EnforcerBlockEvents(genesis, 5)};
+    BOOST_CHECK(!first.exists("previousblockhash"));
+    BOOST_CHECK(!first.exists("bmm"));
+    BOOST_CHECK_EQUAL(first["deposits"].size(), 0U);
+    UniValue odd;
+    BOOST_REQUIRE(odd.read(strprintf(R"({"headerInfo":{"blockHash":{"hex":"%s"}},"blockInfo":{"events":[{"somethingNew":{}}]}})", block.GetHex())));
+    BOOST_CHECK_THROW(EnforcerBlockEvents(odd, 0), std::runtime_error);
+    UniValue bad_m6id;
+    BOOST_REQUIRE(bad_m6id.read(strprintf(R"({"headerInfo":{"blockHash":{"hex":"%s"}},"blockInfo":{"events":[{"withdrawalBundle":{"m6id":{"hex":"11"},"event":{"submitted":{}}}}]}})", block.GetHex())));
+    BOOST_CHECK_THROW(EnforcerBlockEvents(bad_m6id, 0), std::runtime_error);
+
+    // The median time of a block and the 10 before it (fewer near the genesis block), as GetMedianTimePast.
+    BOOST_CHECK_EQUAL(MedianTime({5}), 5);
+    BOOST_CHECK_EQUAL(MedianTime({3, 1}), 3);
+    BOOST_CHECK_EQUAL(MedianTime({9, 1, 8, 2, 7, 3, 6, 4, 5, 10, 11}), 6);
+}
+
+BOOST_AUTO_TEST_CASE(mainchain_addresses)
+{
+    // eCash's node takes Bitcoin's address formats; validateaddress without it, for withdrawals (-mainchaingrpc).
+    const auto hex{[](const std::optional<CScript>& script) { return script ? HexStr(*script) : std::string{"none"}; }};
+    // BIP173/BIP350 test vectors.
+    BOOST_CHECK_EQUAL(hex(MainchainScript("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", ChainType::ECASH)), "0014751e76e8199196d454941c45d1b3a323f1433bd6");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4", ChainType::ECASH_BETANET)), "0014751e76e8199196d454941c45d1b3a323f1433bd6");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", ChainType::ECASH)), "512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7", ChainType::ECASH_TESTNET)), "00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262");
+    // A version 1 address checksummed as bech32 (not bech32m) is no address; nor one of another network.
+    BOOST_CHECK_EQUAL(hex(MainchainScript("bc1pw508d6qejxtdg4y5r3zarvary0c5xw7kw508d6qejxtdg4y5r3zarvary0c5xw7k7grplx", ChainType::ECASH)), "none");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", ChainType::ECASH_TESTNET)), "none");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7", ChainType::ECASH)), "none");
+    // Base58: P2PKH and P2SH of the main network; the test networks' prefixes elsewhere.
+    BOOST_CHECK_EQUAL(hex(MainchainScript("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", ChainType::ECASH)), "76a91477bff20c60e522dfaa3350c39b030a5d004e839a88ac");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", ChainType::ECASH)), "a914b472a266d0bd89c13706a4132ccfb16f7c3b9fcb87");
+    BOOST_CHECK_EQUAL(hex(MainchainScript("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", ChainType::ECASH_TESTNET)), "none");
+    std::vector<unsigned char> regtest_p2sh{196};
+    regtest_p2sh.insert(regtest_p2sh.end(), 20, 0x42);
+    BOOST_CHECK_EQUAL(hex(MainchainScript(EncodeBase58Check(regtest_p2sh), ChainType::REGTEST)), "a914" + HexStr(std::vector<unsigned char>(20, 0x42)) + "87");
+    // Backbone's regtest addresses (rchn1) and a bitcoind's (bcrt1).
+    for (const std::string hrp : {"rchn", "bcrt"}) {
+        std::vector<unsigned char> data{0};
+        const std::vector<unsigned char> program(20, 0x07);
+        ConvertBits<8, 5, true>([&](unsigned char c) { data.push_back(c); }, program.begin(), program.end());
+        BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, hrp, data), ChainType::REGTEST)), "0014" + HexStr(std::vector<unsigned char>(20, 0x07)));
+    }
+    BOOST_CHECK_EQUAL(hex(MainchainScript("not an address", ChainType::ECASH)), "none");
+    // Not for the Chains networks, whose node is asked.
+    BOOST_CHECK_EQUAL(hex(MainchainScript("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", ChainType::MAIN)), "none");
+}
+
+BOOST_AUTO_TEST_CASE(chunked_replies)
+{
+    // The chunked coding of a Connect reply (MainClient::CallEnforcer): put back together, or refused.
+    std::string error;
+    BOOST_CHECK_EQUAL(*DecodeChunked("3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n", 100, error), "abcde");
+    BOOST_CHECK_EQUAL(*DecodeChunked("0\r\n\r\n", 100, error), "");
+    // A size beyond the reply (or one that would wrap around): refused, not skipped over.
+    BOOST_CHECK(!DecodeChunked("ff\r\nabc\r\n0\r\n\r\n", 100, error));
+    BOOST_CHECK(!DecodeChunked("ffffffffffffffff\r\nabc\r\n", 100, error));
+    // No CRLF after the chunk, a size that is no number, a truncated reply.
+    BOOST_CHECK(!DecodeChunked("3\r\nabcXY0\r\n\r\n", 100, error));
+    BOOST_CHECK(!DecodeChunked("zz\r\nabc\r\n", 100, error));
+    BOOST_CHECK(!DecodeChunked("3\r\nabc\r\n", 100, error));
+    BOOST_CHECK_EQUAL(error, "a truncated chunked reply");
+    // Over the cap.
+    BOOST_CHECK(!DecodeChunked("3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n", 5, error));
+    BOOST_CHECK_EQUAL(error, "a reply too large");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

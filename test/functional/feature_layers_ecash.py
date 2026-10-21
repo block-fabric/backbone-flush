@@ -75,9 +75,17 @@ class LayersEcashTest(SidechainEcashTest):
     def anchor(self):
         """One more anchor: wait for the merged miner's ticket request, mine it, wait for its acknowledgement."""
         before = [n.getposinfo()["anchors"] for n in self.nodes]
-        self.wait_until(lambda: len(self.main.getrawmempool()) > 0, timeout=60)
-        self.mine_main()
-        self.wait_until(lambda: all(n.getposinfo()["anchors"] > b for n, b in zip(self.nodes, before)), timeout=60)
+        # A mainchain block may have no commitment of this chain (Backbone left the ticket out of the block
+        # that paid a withdrawal bundle): then the next one anchors.
+        for _ in range(3):
+            self.wait_until(lambda: len(self.main.getrawmempool()) > 0, timeout=60)
+            self.mine_main()
+            try:
+                self.wait_until(lambda: all(n.getposinfo()["anchors"] > b for n, b in zip(self.nodes, before)), timeout=30)
+                return
+            except AssertionError:
+                self.log.debug("No anchor in that mainchain block; one more")
+        raise AssertionError("no anchor in three mainchain blocks")
 
     def run_test(self):
         super().run_test()

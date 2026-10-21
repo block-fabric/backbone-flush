@@ -88,7 +88,8 @@ RPCMethod getmainchaininfo()
             {RPCResult::Type::NUM, "slot", "The slot of this sidechain on the mainchain"},
             {RPCResult::Type::BOOL, "connected", "Whether the mainchain node answered the last time it was asked"},
             {RPCResult::Type::STR, "error", /*optional=*/true, "Why the mainchain node could not be asked"},
-            {RPCResult::Type::STR, "node", "Address of the mainchain node"},
+            {RPCResult::Type::STR, "node", "Address of the mainchain node (of its enforcer interface, with -mainchaingrpc)"},
+            {RPCResult::Type::STR, "via", "How this node reaches it: \"json-rpc\"; \"json-rpc+enforcer\" (requests through the enforcer's interface, -mainchaingrpcport); \"enforcer\" (everything through it, -mainchaingrpc)"},
             {RPCResult::Type::NUM, "height", "Height of the last mainchain block on record, -1 if there is none"},
             {RPCResult::Type::STR_HEX, "bestblockhash", /*optional=*/true, "Hash of the last mainchain block on record"},
             {RPCResult::Type::NUM, "tipheight", "Height of the last mainchain block that the tip of this chain has acted on"},
@@ -117,7 +118,8 @@ RPCMethod getmainchaininfo()
     result.pushKV("slot", chainman.GetConsensus().sidechain.slot);
     result.pushKV("connected", status.connected);
     if (!status.connected) result.pushKV("error", status.error);
-    result.pushKV("node", strprintf("%s:%u", follower.Client().GetOptions().host, follower.Client().GetOptions().port));
+    result.pushKV("node", follower.Client().Address());
+    result.pushKV("via", follower.Client().EnforcerOnly() ? "enforcer" : follower.Client().HasEnforcer() ? "json-rpc+enforcer" : "json-rpc");
     result.pushKV("height", chainman.m_mainchain->Height());
     if (chainman.m_mainchain->Height() >= 0) result.pushKV("bestblockhash", chainman.m_mainchain->TipHash().GetHex());
     result.pushKV("tipheight", WITH_LOCK(::cs_main, return chainman.ActiveChainstate().SideState().MainHeight()));
@@ -408,7 +410,7 @@ RPCMethod getwithdrawalbundle()
         {},
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
-            {RPCResult::Type::STR, "status", "\"pending\": the mainchain is voting on the bundle; \"next\": the next block can commit to it; \"held\": one could be made, but a bundle of another branch with support is pending on a mainchain that does not pay one bundle per slot (Backbone on eCash), and holds it back; \"none\": there is no bundle and none can be made now"},
+            {RPCResult::Type::STR, "status", "\"pending\": the mainchain is voting on the bundle; \"next\": the next block can commit to it; \"held\": one could be made, but a bundle of another branch with support is pending on a mainchain that does not pay one bundle per slot, and holds it back (not on the eCash networks, whose rules take no scores); \"none\": there is no bundle and none can be made now"},
             {RPCResult::Type::STR_HEX, "hash", /*optional=*/true, "The hash of the bundle, which the mainchain votes on"},
             {RPCResult::Type::NUM, "height", /*optional=*/true, "The height of the block that committed to a pending bundle"},
             {RPCResult::Type::NUM, "withdrawals", /*optional=*/true, "The number of withdrawals in the bundle"},
@@ -456,12 +458,15 @@ RPCMethod getwithdrawalbundle()
         blind << TX_NO_WITNESS(CTransaction{*tx});
         result.pushKV("hex", HexStr(blind));
     }
-    size_t total{0};
-    side.ForEachWithdrawal([&](const sidechain::Withdrawal&) {
-        ++total;
+    // (Not "all less those of the bundle": a pending bundle may name a withdrawal a payout of another bundle
+    // was matched to, which is gone, SidechainParams::main_events_only.)
+    const std::set<COutPoint> in_bundle{withdrawals.begin(), withdrawals.end()};
+    size_t waiting{0};
+    side.ForEachWithdrawal([&](const sidechain::Withdrawal& w) {
+        waiting += !in_bundle.contains(w.outpoint);
         return true;
     });
-    result.pushKV("waiting", total - withdrawals.size());
+    result.pushKV("waiting", waiting);
     if (side.LastFailureHeight() >= 0) result.pushKV("lastfailureheight", side.LastFailureHeight());
     return result;
 },

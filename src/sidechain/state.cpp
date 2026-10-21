@@ -297,8 +297,23 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
                     // The oldest by height, then by outpoint, so that every node takes the same one:
                     // the first in the index of what withdrawals pay.
                     const StoreBytes prefix{PayoutPrefix(paid.scriptPubKey, paid.nValue)};
-                    const auto first{m_view->Next(prefix, prefix)};
+                    auto first{m_view->Next(prefix, prefix)};
                     if (!first) continue;
+                    if (params.main_events_only) {
+                        // This chain's bundle stays pending on the mainchain, and payable, whatever is
+                        // matched here (an enforcer's block producer keeps it until the mainchain closes
+                        // it): it is kept, and the payout matched first to a withdrawal it does not pay,
+                        // which then is not paid a second time. (Only if there is none, to one it pays.)
+                        // (At most max_bundle_withdrawals entries in the bundle to step over.)
+                        for (auto next{first}; next && InBundle(OutpointOf(first->first));) {
+                            StoreBytes after{next->first};
+                            after.push_back(0);
+                            next = m_view->Next(after, prefix);
+                            if (next && !InBundle(OutpointOf(next->first))) first = next;
+                        }
+                        Remove(OutpointOf(first->first));
+                        continue;
+                    }
                     const COutPoint outpoint{OutpointOf(first->first)};
                     // A bundle of ours that pays it can no longer be paid as it is.
                     if (InBundle(outpoint)) SetBundle(std::nullopt);
@@ -318,8 +333,11 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
         // take back while it is pending, would wait for ever. A proposal made before the commitment,
         // by someone who worked the hash out ahead, counts if the bundle is still pending then: the
         // mainchain would refuse it a second proposal, and the bundle would fail although pending.
+        // (Not where the rules take only the enforcer's events: a bundle handed to an enforcer's block
+        // producer stays there, to be proposed whenever it mines, until the mainchain closes it. Failed
+        // here, its withdrawals could go in another bundle, and both be paid.)
         const int32_t committed{BUNDLE_MAIN_HEIGHT.Get(*m_view)};
-        if (const auto bundle{Bundle()}; bundle && committed >= 0 && int64_t{h} - committed >= params.unproposed_expiry_blocks &&
+        if (const auto bundle{Bundle()}; bundle && committed >= 0 && !params.main_events_only && int64_t{h} - committed >= params.unproposed_expiry_blocks &&
                                          !mainchain.ProposedSince(bundle->hash, committed, h)) {
             LAST_FAILURE.Put(Writable(), height);
             SetBundle(std::nullopt);
@@ -335,6 +353,9 @@ bool State::MainPending(const Mainchain& mainchain, const Consensus::SidechainPa
     // refunds. Support is a score of pending_min_score, or the lead of the slot with a score on
     // the rise (see SidechainParams::pending_min_score). This chain's own holds back only its
     // withdrawals (InBundle).
+    // Without scores (the enforcer's events alone), no bundle of another can be told to have support; and
+    // any miner could freeze refunds with a bare proposal. None holds them back (SidechainParams::main_events_only).
+    if (params.main_events_only) return false;
     const auto bundle{Bundle()};
     const uint256 ours{bundle ? bundle->hash : uint256{}};
     return mainchain.SupportedPending(MainHeight(), params.pending_min_score, ours) ||
@@ -343,6 +364,7 @@ bool State::MainPending(const Mainchain& mainchain, const Consensus::SidechainPa
 
 bool State::MainPendingNext(const Mainchain& mainchain, const Consensus::SidechainParams& params) const
 {
+    if (params.main_events_only) return false;
     const auto bundle{Bundle()};
     const uint256 ours{bundle ? bundle->hash : uint256{}};
     return mainchain.SupportedPending(MainHeight(), params.pending_min_score, ours) ||

@@ -35,24 +35,22 @@ uses `OP_NOP8` as `OP_DRIVECHAIN` and, above all, **does not pay one bundle per 
   networks (`webui/sidechainnodes.cpp`). The app's own network list (`chain.json`) has the Chains networks only
   so far (follow-up).
 
-## Single payout, kept by the sidechain
+## Without single payout: rules from the enforcer's events
 
 The Chains mainchain fails a slot's other pending bundles when it pays one, and never lets a paid bundle be
 proposed again. The enforcer does neither, until it adopts our safety rules at a height
-(`getdrivechaininfo`'s `singlepayout`, Backbone's `safety_activation_height`): a bundle of another branch of the
-sidechain (one a reorg left behind) and a bundle of this branch holding the same withdrawals can both be paid.
-`SidechainParams::main_single_payout` (false on the eCash networks and with `-testmainenforcer`) makes the
-sidechain keep the rule on its side:
+(`getdrivechaininfo`'s `singlepayout`, Backbone's `safety_activation_height`). On the eCash networks the
+sidechain's peg rules take only what the enforcer reports per block (`SidechainParams::main_events_only`), so
+that a node can follow an eCash node and the enforcer through its interface alone (`-mainchaingrpc`):
+no scores, no hold for another branch's bundle, this chain's bundle kept until the mainchain closes it, a
+foreign payout matched outside it first, and bundles handed to an enforcer only once their commitment is a day
+deep. Everything, with the safety argument: `doc/ecash-enforcer.md`.
 
-- **No new bundle while another one of the slot has support** (`State::NextBundle`, consensus of the sidechain,
-  from the deterministic record of pending bundles and scores): a score of `pending_min_score`, or the lead of
-  the slot on the rise, as for refunds. It waits until that bundle is paid (its payouts are then matched to the
-  withdrawals, which are paid once) or fails. `getwithdrawalbundle` says `held` meanwhile. A bundle nobody
-  supports (a bare M3, downvoted by the miners who vouch for this chain) holds nothing back.
-- **Refunds** wait for such a bundle, as on Chains.
-- **Votes.** The sidechain node tells its mainchain node to upvote its bundle and downvote every other one of the
-  slot (`vouchwithdrawalbundle`); Backbone's block template never votes for, proposes or pays a bundle that was
-  paid, or pending at a payout of its slot, and does not broadcast its withdrawal (`sendwithdrawalbundle`).
+- `getwithdrawalbundle` never says `held` on the eCash networks.
+- **Votes.** Over JSON-RPC the sidechain node tells Backbone to upvote its bundle and downvote every other one of
+  the slot (`vouchwithdrawalbundle`); Backbone's block template never votes for, proposes or pays a bundle that was
+  paid, or pending at a payout of its slot, and does not broadcast its withdrawal (`sendwithdrawalbundle`). Through
+  the enforcer alone there is no vouching: its block producer upvotes the bundles handed to it.
 - The warning "paid a withdrawal bundle of this sidechain and left another one pending" is said only where the
   mainchain is meant to pay one bundle per slot.
 
@@ -68,9 +66,11 @@ block. Per network (`Consensus::SidechainParams`, `nPowTargetSpacing`):
 
 | Parameter | What | Chains main (test) | eCash `ecash`, `ecashbeta` | `ecashtest` | regtest `-testmainenforcer` |
 |---|---|---|---|---|---|
-| `pending_min_score` | score with which a foreign bundle holds refunds (and, without single payout, new bundles) back: a tenth of the payout threshold | 6480 (30) | 1315 (of 13,150) | 2 (of 5) | 2 (of 5) |
+| `pending_min_score` | score with which a foreign bundle holds refunds back: a tenth of the payout threshold (not used where `main_events_only`) | 6480 (30) | 1315 (of 13,150), unused | 2 (of 5), unused | 2 (of 5), unused |
 | `bundle_retry_delay` | sidechain blocks after a failed bundle before the next | 144 = 2.4 h (20) | 15 = 2.5 h | 3 = 0.5 h | 5 |
-| `unproposed_expiry_blocks` | mainchain blocks in which the mainchain must propose a committed bundle | 1440 = 1 day (60) | 144 = 1 day | 12 = 2 h | 20 |
+| `unproposed_expiry_blocks` | mainchain blocks in which the mainchain must propose a committed bundle (not used where `main_events_only`) | 1440 = 1 day (60) | unused | unused | unused |
+| `main_events_only` | the rules take only the enforcer's events (`doc/ecash-enforcer.md`) | false | true | true | true |
+| `bundle_handoff_depth` (policy) | mainchain blocks deep a bundle's commitment is before it is handed to an enforcer (`-mainchaingrpc`) | (6, unused) | 144 = 1 day | 12 = 2 h | 2 |
 | `main_single_payout` | the mainchain pays one bundle per slot | true | false | false | false |
 | `refund_grace_blocks` (policy) | blocks in which a new withdrawal can still be refunded ahead of a bundle | 6 | 1 | 1 | 6 |
 | `main_behind_margin` (policy) | mainchain blocks behind its headers before the link is "syncing" | 6 | 2 | 2 | 6 |
@@ -113,16 +113,17 @@ betanet more than 1,008 in 2,016: a two-week commitment of a hashrate majority.
 
 ## Tests
 
-- `src/test/drivechain_tests.cpp` `without_main_single_payout_a_supported_bundle_holds_new_ones_back`: with and
-  without single payout on the mainchain; a block committing to a bundle while a supported foreign one is
-  pending is invalid without it.
+- `src/test/drivechain_tests.cpp` `without_main_single_payout_a_supported_bundle_holds_new_ones_back` (the rules
+  with scores, kept for a mainchain without single payout that reports them) and the `events_only_*` tests (the
+  rules of the eCash networks, `doc/ecash-enforcer.md`).
 - `src/test/sidechain_mainclient_tests.cpp` `ecash_networks`: names, ports, folders, data directory, identities
   (no two networks alike), the per-network parameters, the network check of the link.
 - `test/functional/feature_sidechain_ecash.py`: against backboned `-regtest -testecash` (`MAINCHAIN_BIN_DIR`,
   default `../chains-ecash/build_node/bin`): proposal and acks to activation, the OP_NOP8 treasury, BMM, a deposit,
   a withdrawal bundle voted and paid (M3, M4, M6), a bundle failing at its maximum age and its withdrawal
-  refunded, and a leftover bundle of another branch holding a new one back ("held") until it is paid, the
-  withdrawal paid once.
+  refunded, and a leftover bundle of another branch holding nothing back, the new one paid and the other
+  failed, the withdrawal paid once. `feature_sidechain_enforcer.py`: the same through the enforcer's interface
+  alone (`-mainchaingrpc`), with reorgs.
 
 ## Layers
 
@@ -150,4 +151,7 @@ Regtest `-testmainenforcer` adds `fee_target_spacing` 600 to the template's (the
 `getposinfo`'s and `getstakinginfo`'s `feesplit` say `targetspacing`, and `spacing` as the curves take it.
 Test: `test/functional/feature_layers_ecash.py` (three validators against backboned `-regtest -testecash`:
 activation, the OP_NOP8 treasury, a deposit, blocks of stake, anchors, anchors 40 slots apart with blocks of
-stake going on between them, a withdrawal from a block of stake bundled, voted and paid out, the peg balance).
+stake going on between them, a withdrawal from a block of stake bundled, voted and paid out, the peg balance);
+`test/functional/feature_layers_enforcer.py`: the same three validators following the mainchain through the
+enforcer's interface alone (`-mainchaingrpc`, no JSON-RPC: `doc/ecash-enforcer.md`), the anchors' tickets
+through `CreateBmmCriticalDataTransaction`, the bundle handed over at depth 2 and paid.

@@ -5,15 +5,20 @@
 #ifndef BITCOIN_SIDECHAIN_MAINCLIENT_H
 #define BITCOIN_SIDECHAIN_MAINCLIENT_H
 
+#include <script/script.h>
+#include <sync.h>
+#include <uint256.h>
 #include <univalue.h>
 #include <util/chaintype.h>
 #include <util/fs.h>
 #include <util/result.h>
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace sidechain {
 
@@ -55,6 +60,19 @@ public:
         //! Name of the mainchain wallet that pays for merged mining; unset to use the only loaded wallet.
         std::string wallet;
         bool wallet_set{false};
+        //! Port of the bip300301_enforcer's interface (Backbone's -grpcport, or an enforcer's) on `host`, for
+        //! the requests of this node (BMM requests, withdrawal bundles, its word on them); 0: JSON-RPC for them.
+        uint16_t enforcer_port{0};
+        //! Its token (Backbone's -grpcauth), if it has one.
+        std::string enforcer_token;
+        //! The host of that interface, if not `host` (-mainchaingrpc).
+        std::string enforcer_host;
+        //! Everything through that interface, following the mainchain too: no JSON-RPC at all (-mainchaingrpc),
+        //! for a mainchain that is an eCash node and a bip300301_enforcer (or Backbone's interface alone). The
+        //! JSON-RPC methods this node calls are answered from the interface (Call); others are refused.
+        bool enforcer_only{false};
+        //! The network of this node (enforcer_only: the mainchain addresses of withdrawals, the network check).
+        std::optional<ChainType> chain;
     };
 
     explicit MainClient(Options options) : m_options{std::move(options)} {}
@@ -66,11 +84,67 @@ public:
      */
     UniValue Call(const std::string& method, const UniValue& params, bool wallet = false) const;
 
+    /**
+     * Call a method of the bip300301_enforcer's interface ("cusf.mainchain.v1.WalletService/CreateNewAddress")
+     * with the Connect protocol (JSON over HTTP/1.1, which the enforcer and Backbone serve beside gRPC), at
+     * Options::enforcer_port. Requests and replies are in the proto3 JSON mapping.
+     * @throws MainClientError (rpc_error: the interface answered with an error; rpc_message its code and message)
+     */
+    UniValue CallEnforcer(const std::string& procedure, const UniValue& request) const;
+    bool HasEnforcer() const { return m_options.enforcer_port != 0; }
+    bool EnforcerOnly() const { return m_options.enforcer_only; }
+    //! host:port of the mainchain node as this node reaches it: the enforcer's interface if enforcer_only, else JSON-RPC.
+    std::string Address() const;
+
     const Options& GetOptions() const { return m_options; }
 
 private:
+    /** Send an HTTP/1.1 request to `port` of `host` and return the whole reply. */
+    std::string Exchange(const std::string& host, uint16_t port, const std::string& request) const;
+    const std::string& EnforcerHost() const { return m_options.enforcer_host.empty() ? m_options.host : m_options.enforcer_host; }
+
+    /** A JSON-RPC method of the mainchain node, answered from the enforcer's interface (enforcer_only). */
+    UniValue CallAsEnforcer(const std::string& method, const UniValue& params) const;
+    /** getsidechainevents, from the enforcer's interface: GetChainTip, GetBlockHeaderInfo, GetBlockInfo. */
+    UniValue EnforcerEvents(uint32_t slot, int first, int count) const;
+    /** The tip of the enforcer (GetChainTip): its height and hash. */
+    std::pair<int, uint256> EnforcerTip() const;
+    /**
+     * The headers of the enforcer's chain from `low` up to its tip (`tip`, at `tip_height`), kept from call to
+     * call (GetBlockHeaderInfo, 2000 at a time, newest first): only what is new is asked for.
+     */
+    struct Header {
+        uint256 hash;
+        uint256 prev;
+        int64_t time{0};
+    };
+    std::vector<Header> EnforcerHeaders(const uint256& tip, int tip_height, int low) const EXCLUSIVE_LOCKS_REQUIRED(!m_headers_mutex);
+
     const Options m_options;
+    mutable Mutex m_headers_mutex;
+    //! The headers known of the enforcer's chain, from height m_headers_base on, its tip last.
+    mutable std::vector<Header> m_headers GUARDED_BY(m_headers_mutex);
+    mutable int m_headers_base GUARDED_BY(m_headers_mutex){0};
+    //! The enforcer's network (GetChainInfo), once asked; and whether its health was checked.
+    mutable std::string m_enforcer_network GUARDED_BY(m_headers_mutex);
 };
+
+/**
+ * One block of the enforcer's GetBlockInfo (an Info: header_info and block_info, the proto3 JSON mapping) as an
+ * entry of Backbone's getsidechainevents, which the follower reads: hash, previous hash, the median time given
+ * (`median_time`: of the block and the 10 before it, from their headers), the BMM commitment, deposits (and the
+ * change of a payout: its treasury output, the bundle, what it paid), the bundles closed (Succeeded, Failed) and
+ * proposed (Submitted). No "pending" scores: the interface has none (SidechainParams::main_events_only).
+ * @throws std::runtime_error for an entry that cannot be read
+ */
+UniValue EnforcerBlockEvents(const UniValue& info, int64_t median_time);
+/** The median of the times of a block and of the (up to) 10 before it, as a node computes it (GetMedianTimePast). */
+int64_t MedianTime(std::vector<int64_t> times);
+/**
+ * The output script of a mainchain address of the eCash networks (eCash's node uses Bitcoin's formats: bc1/1/3,
+ * tb1/m/n/2 on its test network; on regtest bcrt1 and Backbone's rchn1), for validateaddress without the node.
+ */
+std::optional<CScript> MainchainScript(const std::string& address, ChainType chain);
 
 /**
  * Read the password for the mainchain node from a file (-mainchainrpcpasswordfile), so that it is never
@@ -82,6 +156,13 @@ private:
  * directory is). Errors name the file but never contain what it holds.
  */
 util::Result<std::string> ReadPasswordFile(const fs::path& path);
+
+/**
+ * The body of an HTTP/1.1 reply in the chunked transfer coding, put back together; nullopt (with `error`)
+ * if a chunk is malformed (its size beyond the reply, no CRLF after it), the reply is truncated, or it is
+ * larger than `max_size`.
+ */
+std::optional<std::string> DecodeChunked(const std::string& body, size_t max_size, std::string& error);
 
 } // namespace sidechain
 

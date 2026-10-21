@@ -40,6 +40,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // Every field: a parameter added later has to be added here as well.
     // BitAssets' own rules (the reveal depth) count as well.
     // (Not asset_volume_window: no rule, only the search index of the assets, which has a layout of its own.)
+    // (refund_grace_blocks, main_behind_margin and bundle_handoff_depth are policy, and not in it.)
     static_assert(sizeof(Consensus::SidechainParams) == 72, "a new sidechain parameter goes into the fingerprint");
     HashWriter hasher{};
     hasher << std::string{"Sidechain parameters"} << ParamsFingerprint(params) << sidechain.slot << sidechain.min_withdrawal
@@ -54,8 +55,9 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // Tickers and display names, the same way.
     if (sidechain.ticker_height != std::numeric_limits<int>::max()) hasher << std::string{"ticker"} << sidechain.ticker_height;
     // Without single payout on the mainchain (Backbone on eCash); with it, the fingerprint is the one it was.
-    // (refund_grace_blocks and main_behind_margin are policy, and not in it.)
     if (!sidechain.main_single_payout) hasher << std::string{"no main single payout"};
+    // The rules of the eCash networks, from what the enforcer reports alone; the others keep the fingerprint they had.
+    if (sidechain.main_events_only) hasher << std::string{"main events only"};
     return hasher.GetHash();
 }
 

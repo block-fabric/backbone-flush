@@ -109,7 +109,7 @@ UniValue SidechainApi::Call(const std::string& method, const UniValue& params)
         UniValue out{UniValue::VOBJ};
         out.pushKV("connected", status.connected);
         if (!status.connected) out.pushKV("error", status.error);
-        out.pushKV("node", strprintf("%s:%u", options.host, options.port));
+        out.pushKV("node", f.Client().Address());
         out.pushKV("slot", static_cast<int64_t>(slot));
         out.pushKV("walletSet", options.wallet_set);
         out.pushKV("wallet", options.wallet);

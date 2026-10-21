@@ -1504,6 +1504,243 @@ BOOST_AUTO_TEST_CASE(without_main_single_payout_a_supported_bundle_holds_new_one
     }
 }
 
+BOOST_AUTO_TEST_CASE(events_only_rules_need_no_scores)
+{
+    // The rules of the eCash networks take from the mainchain only what the enforcer reports per block
+    // (SidechainParams::main_events_only): the scores of pending bundles change nothing. A bundle of another
+    // branch, however upvoted, holds back neither a refund nor a new bundle, and a node that follows a record
+    // with scores (JSON-RPC, Backbone) ends with the state of one that follows a record without (the enforcer).
+    Consensus::SidechainParams params;
+    params.main_single_payout = false;
+    params.main_events_only = true;
+    params.pending_min_score = 3;
+    const uint256 foreign{0xf0};
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+    std::vector<uint256> hashes;
+    for (const bool scores : {true, false}) {
+        SideStore side;
+        sidechain::State& state{side.state};
+        const COutPoint withdrawal{MakeWithdrawal(state, key, pay, 1, params)};
+        MakeWithdrawal(state, key, pay, 1, params, /*salt=*/1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        // Proposed, then upvoted far past pending_min_score, leading and rising.
+        for (uint32_t score{1}; score <= 20; ++score) Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+            if (score == 1) b.proposed.push_back(foreign);
+            if (scores) b.pending.push_back({foreign, score});
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(20, mainchain, 2, params, payouts, reason), reason);
+        BOOST_CHECK(!state.MainPending(mainchain, params));
+        BOOST_CHECK(!state.MainPendingNext(mainchain, params));
+        BOOST_CHECK(state.CheckRefund(SignRefund(key, withdrawal), reason, state.MainPending(mainchain, params)));
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params, nullptr, std::nullopt, state.MainPending(mainchain, params))};
+        BOOST_REQUIRE(bundle);
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(bundle->GetHash().ToUint256(), 2, uint256{0xa}, params, reason, std::nullopt, state.MainPending(mainchain, params)), reason);
+        hashes.push_back(state.Hash());
+        // The record's own words on scores are of no matter to it either.
+        BOOST_CHECK_EQUAL(mainchain.SupportedPending(20, params.pending_min_score, uint256{}), scores);
+    }
+    BOOST_CHECK(hashes[0] == hashes[1]);
+}
+
+BOOST_AUTO_TEST_CASE(events_only_bundle_stays_until_closed)
+{
+    // An enforcer's block producer keeps a bundle handed to it, and proposes it whenever it mines, until the
+    // mainchain closes it. Under the rules of the eCash networks, a bundle never proposed does not fail on this
+    // side (no unproposed_expiry_blocks): its withdrawals cannot be refunded or bundled again. It goes when the
+    // mainchain says Failed (the withdrawals then wait again: refundable, and in a bundle after the retry delay)
+    // or Succeeded (paid).
+    for (const bool paid : {false, true}) {
+        Consensus::SidechainParams params;
+        params.main_single_payout = false;
+        params.main_events_only = true;
+        params.unproposed_expiry_blocks = 3;
+        params.bundle_retry_delay = 2;
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        const COutPoint withdrawal{MakeWithdrawal(state, key, pay, 1, params)};
+        const auto refund{SignRefund(key, withdrawal)};
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(0, mainchain, 2, params, payouts, reason), reason);
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params)};
+        BOOST_REQUIRE(bundle);
+        const uint256 hash{bundle->GetHash().ToUint256()};
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(hash, 2, uint256{0xa}, params, reason), reason);
+        // Far past unproposed_expiry_blocks, never proposed: still this chain's bundle.
+        Extend(mainchain, 50);
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(50, mainchain, 3, params, payouts, reason), reason);
+        BOOST_CHECK(state.Bundle());
+        BOOST_CHECK_EQUAL(state.LastFailureHeight(), -1);
+        BOOST_CHECK(!state.CheckRefund(refund, reason, state.MainPending(mainchain, params)));
+        BOOST_CHECK_EQUAL(reason, "bad-sc-refund-in-bundle");
+        BOOST_CHECK(!state.NextBundle(4, uint256{0xb}, params));
+        // Proposed (Submitted), then closed.
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { b.proposed.push_back(hash); });
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+            b.bundles.push_back({hash, paid});
+            if (paid) {
+                sidechain::MainDeposit change;
+                change.destination = WITHDRAWAL_RETURN_DEST;
+                change.bundle = hash;
+                change.payouts.emplace_back(COIN - 1000, pay);
+                b.deposits.push_back(change);
+            }
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(52, mainchain, 5, params, payouts, reason), reason);
+        BOOST_CHECK(!state.Bundle());
+        BOOST_CHECK_EQUAL(state.GetWithdrawal(withdrawal).has_value(), !paid);
+        BOOST_CHECK_EQUAL(state.LastFailureHeight(), paid ? -1 : 5);
+        if (!paid) {
+            // Failed: the owner may take it back, or it waits for the next bundle, after the retry delay.
+            BOOST_CHECK(state.CheckRefund(refund, reason, state.MainPending(mainchain, params)));
+            BOOST_CHECK(!state.NextBundle(6, uint256{0xc}, params));
+            BOOST_CHECK(state.NextBundle(7, uint256{0xc}, params));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(events_only_foreign_payout_spares_the_bundle)
+{
+    // Another bundle of the slot -- one a reorg left behind on another branch of this chain -- is paid while
+    // this chain's is pending. Under the rules of the eCash networks this chain's bundle stays (it is still
+    // pending and payable on the mainchain), and the payout is matched first to a withdrawal it does not pay:
+    // each output paid twice to the same script and amount then answers to two withdrawals of it.
+    for (const bool spare : {true, false}) {
+        Consensus::SidechainParams params;
+        params.main_single_payout = false;
+        params.main_events_only = true;
+        params.max_bundle_withdrawals = 1;
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        // Two withdrawals alike (pay, COIN less 1000); the bundle takes one.
+        const COutPoint first{MakeWithdrawal(state, key, pay, 1, params)};
+        const COutPoint second{spare ? MakeWithdrawal(state, key, pay, 1, params, /*salt=*/1) : COutPoint{}};
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(0, mainchain, 2, params, payouts, reason), reason);
+        std::vector<COutPoint> taken;
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params, &taken)};
+        BOOST_REQUIRE(bundle);
+        BOOST_REQUIRE_EQUAL(taken.size(), 1U);
+        const uint256 hash{bundle->GetHash().ToUint256()};
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(hash, 2, uint256{0xa}, params, reason), reason);
+        const COutPoint other{taken[0] == first ? second : first};
+        // The foreign bundle pays one such withdrawal.
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+            sidechain::MainDeposit change;
+            change.destination = WITHDRAWAL_RETURN_DEST;
+            change.bundle = uint256{0xf0};
+            change.payouts.emplace_back(COIN - 1000, pay);
+            b.deposits.push_back(change);
+            b.bundles.push_back({uint256{0xf0}, true});
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(1, mainchain, 3, params, payouts, reason), reason);
+        // This chain's bundle stays, with the withdrawal it pays.
+        BOOST_REQUIRE(state.Bundle());
+        BOOST_CHECK(state.Bundle()->hash == hash);
+        if (spare) {
+            BOOST_CHECK(state.GetWithdrawal(taken[0]).has_value());
+            BOOST_CHECK(!state.GetWithdrawal(other).has_value());
+            BOOST_CHECK(state.BundleTx().has_value());
+        } else {
+            // The only one is that of the bundle: matched to it (paid; never refunded nor bundled again).
+            BOOST_CHECK(!state.GetWithdrawal(taken[0]).has_value());
+            BOOST_CHECK(!state.BundleTx().has_value());
+        }
+        // This chain's bundle is paid too: nothing is left of either withdrawal.
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { b.bundles.push_back({hash, true}); });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(2, mainchain, 4, params, payouts, reason), reason);
+        BOOST_CHECK(!state.Bundle());
+        BOOST_CHECK_EQUAL(side.Withdrawals(), 0U);
+    }
+    // Without the rules of the eCash networks, the bundle is dropped as before.
+    {
+        Consensus::SidechainParams params;
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        MakeWithdrawal(state, key, pay, 1, params);
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(0, mainchain, 2, params, payouts, reason), reason);
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params)};
+        BOOST_REQUIRE(bundle);
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(bundle->GetHash().ToUint256(), 2, uint256{0xa}, params, reason), reason);
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+            sidechain::MainDeposit change;
+            change.destination = WITHDRAWAL_RETURN_DEST;
+            change.bundle = uint256{0xf0};
+            change.payouts.emplace_back(COIN - 1000, pay);
+            b.deposits.push_back(change);
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(1, mainchain, 3, params, payouts, reason), reason);
+        BOOST_CHECK(!state.Bundle());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(events_only_reorg_of_the_record)
+{
+    // A reorg of the mainchain: the record drops blocks, and the state built on them is taken back with the
+    // blocks of this chain (undo data); the state of a block depends only on it, the blocks before, and the
+    // record up to its peg height. Here: what the events of a dropped branch did (a Submitted, a Failed, a
+    // deposit) is not on the new branch, and the state over the new branch is the one of a node that never saw
+    // the old one.
+    Consensus::SidechainParams params;
+    params.main_single_payout = false;
+    params.main_events_only = true;
+    params.bundle_retry_delay = 0;
+    CKey key;
+    key.MakeNewKey(/*fCompressed=*/true);
+    const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+    const auto build{[&](sidechain::Mainchain& mainchain, bool old_branch) {
+        Extend(mainchain, 1);
+        if (old_branch) {
+            Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+                b.hash.data()[29] = 0x01;
+                sidechain::MainDeposit deposit;
+                deposit.destination = "anything";
+                deposit.amount = 5 * COIN;
+                b.deposits.push_back(deposit);
+            });
+            mainchain.Truncate(0);
+        }
+        Extend(mainchain, 2);
+    }};
+    std::vector<uint256> hashes;
+    for (const bool old_branch : {true, false}) {
+        SideStore side;
+        sidechain::State& state{side.state};
+        MakeWithdrawal(state, key, pay, 1, params);
+        sidechain::Mainchain mainchain;
+        build(mainchain, old_branch);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(2, mainchain, 2, params, payouts, reason), reason);
+        BOOST_CHECK(payouts.empty());
+        hashes.push_back(state.Hash());
+    }
+    BOOST_CHECK(hashes[0] == hashes[1]);
+}
+
 BOOST_AUTO_TEST_CASE(rising_leader_holds_refunds_back)
 {
     // Mainchain miners in follow mode upvote whichever bundle leads its slot, so a

@@ -197,6 +197,8 @@ BASE_SCRIPTS = [
     'feature_fastblocks_txindex.py',
     'feature_sidechain_ecash.py',
     'feature_layers_ecash.py',
+    'feature_layers_enforcer.py',
+    'feature_sidechain_enforcer.py',
     'feature_sidechain_network.py',
     'feature_sidechain_headers.py',
     'feature_sidechain_catchup.py',

@@ -169,9 +169,28 @@ struct SidechainParams {
      * the rules of this chain keep single payout on its side: no bundle of this chain is made while another
      * one of the slot is pending on the mainchain with support (see State::NextBundle), so that never two
      * bundles holding the same withdrawals can both be paid; and the mainchain is told to downvote every
-     * bundle but this chain's (as with it).
+     * bundle but this chain's (as with it). Where the rules take the enforcer's events alone
+     * (main_events_only: the eCash networks), support cannot be told, and the hand-off of bundles takes its
+     * place (doc/ecash-enforcer.md).
      */
     bool main_single_payout{true};
+    /**
+     * Whether the peg rules of this chain take from the mainchain only what the bip300301_enforcer reports
+     * of each block (its interface's BlockInfo: deposits, the BMM commitment, withdrawal bundles Submitted,
+     * Failed and Succeeded), and nothing it does not (the scores of pending bundles): the rules of the eCash
+     * networks, which a node can follow through an enforcer alone (-mainchaingrpc). Then
+     *  - a bundle of this chain stays its bundle until the mainchain closes it (no unproposed_expiry_blocks):
+     *    an enforcer's block producer keeps a bundle handed to it, and proposes and upvotes it, until then;
+     *  - a bundle of the slot other than this chain's holds back neither a new bundle nor a refund
+     *    (pending_min_score is not used): without scores, any miner could freeze both for the bundles' whole
+     *    life with one bare proposal. What keeps two bundles with the same withdrawals from both being paid
+     *    is that a bundle is handed to the mainchain only once its commitment is bundle_handoff_depth blocks
+     *    deep (doc/ecash-enforcer.md);
+     *  - a payout of another bundle is matched first to withdrawals not in this chain's bundle, which it
+     *    does not drop.
+     * The Chains networks keep the rules with scores (false).
+     */
+    bool main_events_only{false};
     /**
      * Block assembly policy, not a rule: blocks during which a new withdrawal can still be taken back ahead of
      * a bundle that would take it (sidechain::REFUND_GRACE_BLOCKS on the Chains networks: 6 one-minute blocks).
@@ -179,6 +198,12 @@ struct SidechainParams {
     int refund_grace_blocks{6};
     /** Mainchain blocks the record may be behind the mainchain node's headers before the link counts as syncing. */
     int main_behind_margin{6};
+    /**
+     * Policy, not a rule (with main_events_only): mainchain blocks deep the commitment of this chain's bundle has
+     * to be before the bundle is handed to an enforcer (-mainchaingrpc), which cannot be told to drop it. A
+     * reorg of the mainchain shallower than this cannot leave a bundle handed over on a branch this chain left.
+     */
+    int bundle_handoff_depth{6};
 };
 
 /**

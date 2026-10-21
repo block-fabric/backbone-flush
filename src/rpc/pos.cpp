@@ -1191,8 +1191,39 @@ RPCMethod checkpegbalance()
     // The escrow after the block main_height: the total after the last escrow change at or below it
     // (listsidechaindeposits, oldest first, by pages; heights from confirmations, as of one tip).
     std::optional<CAmount> escrow;
+    const sidechain::MainClient& client{node.follower->Client()};
+    if (client.EnforcerOnly()) {
+        // Through the enforcer's interface alone (-mainchaingrpc) the escrow is known at the mainchain tip only
+        // (GetCtip: the treasury output's value), not after an earlier block.
+        try {
+            for (int attempt{0}; attempt < 3 && !escrow; ++attempt) {
+                const int tip_before{client.Call("getblockcount", UniValue{UniValue::VARR}).getInt<int>()};
+                if (tip_before != main_height) {
+                    throw JSONRPCError(RPC_MISC_ERROR, strprintf("Through the enforcer's interface the escrow is known at the mainchain tip only (height %d); "
+                                                                 "the chain has acted on the mainchain up to height %d: ask again once it acted on the tip", tip_before, main_height));
+                }
+                UniValue request(UniValue::VOBJ);
+                request.pushKV("sidechainNumber", slot);
+                const UniValue reply{client.CallEnforcer("cusf.mainchain.v1.ValidatorService/GetCtip", request)};
+                const UniValue& ctip{reply.find_value("ctip")};
+                const UniValue& value{ctip.isObject() ? ctip.find_value("value") : NullUniValue};
+                CAmount found{0};
+                if (value.isStr()) {
+                    found = ToIntegral<int64_t>(value.get_str()).value_or(-1);
+                } else if (value.isNum()) {
+                    found = value.getInt<int64_t>();
+                }
+                if (found < 0 || !MoneyRange(found)) throw JSONRPCError(RPC_MISC_ERROR, "The enforcer sent a treasury value that is not an amount");
+                if (client.Call("getblockcount", UniValue{UniValue::VARR}).getInt<int>() == tip_before) escrow = found;
+            }
+        } catch (const sidechain::MainClientError& e) {
+            throw JSONRPCError(RPC_MISC_ERROR, strprintf("The mainchain node did not answer: %s", e.what()));
+        } catch (const std::runtime_error& e) {
+            throw JSONRPCError(RPC_MISC_ERROR, strprintf("The mainchain node did not answer: %s", e.what()));
+        }
+    }
     try {
-        for (int attempt{0}; attempt < 3 && !escrow; ++attempt) {
+        for (int attempt{0}; attempt < 3 && !escrow && !client.EnforcerOnly(); ++attempt) {
             const int tip_before{node.follower->Client().Call("getblockcount", UniValue{UniValue::VARR}).getInt<int>()};
             CAmount found{0};
             std::optional<std::string> after;
