@@ -111,10 +111,13 @@ UniValue SidechainApi::Call(const std::string& method, const UniValue& params)
         if (!status.connected) out.pushKV("error", status.error);
         out.pushKV("node", f.Client().Address());
         out.pushKV("slot", static_cast<int64_t>(slot));
-        out.pushKV("walletSet", options.wallet_set);
-        out.pushKV("wallet", options.wallet);
-        out.pushKV("auth", options.credentials.empty() ? "cookie" : "password");
-        if (options.credentials.empty()) out.pushKV("cookieFile", fs::PathToString(options.cookie_file));
+        // Through the enforcer's interface alone (-mainchaingrpc): its wallet pays, and a token is the only credential.
+        const bool enforcer{f.Client().EnforcerOnly()};
+        out.pushKV("via", enforcer ? "enforcer" : f.Client().HasEnforcer() ? "json-rpc+enforcer" : "json-rpc");
+        out.pushKV("walletSet", !enforcer && options.wallet_set);
+        out.pushKV("wallet", enforcer ? std::string{} : options.wallet);
+        out.pushKV("auth", enforcer ? (options.enforcer_token.empty() ? "none" : "token") : options.credentials.empty() ? "cookie" : "password");
+        if (!enforcer && options.credentials.empty()) out.pushKV("cookieFile", fs::PathToString(options.cookie_file));
         return out;
     }
     if (method == "peg.call") {
@@ -137,13 +140,15 @@ UniValue SidechainApi::Call(const std::string& method, const UniValue& params)
         const auto amount{ParseMoney(amount_text)};
         if (!amount || *amount <= 0) throw HostError(BRIDGE_INVALID_REQUEST, "The amount is a positive number of coins, like 1.5");
         // The wallet of the mainchain node pays: on the user's word, given to the desktop, the amount first.
-        const auto& options{follower().Client().GetOptions()};
+        const sidechain::MainClient& client{follower().Client()};
         Window::ConfirmDialog dialog;
         dialog.title = strprintf("Deposit from the wallet of %s", chain::MAINCHAIN_NAME);
+        // (Through the enforcer's interface alone: the wallet behind it, the enforcer's.)
         dialog.message = strprintf("Amount: %s coins of %s, and the fee of the transaction\n\n"
-                                   "The wallet of the %s node at %s:%u pays it to this sidechain (slot %u), to be credited to:\n%s\n\n"
+                                   "The wallet of the %s %s at %s pays it to this sidechain (slot %u), to be credited to:\n%s\n\n"
                                    "Accept only if you asked for this deposit.",
-                                   FormatMoney(*amount), chain::MAINCHAIN_NAME, chain::MAINCHAIN_NAME, guard::OneLine(options.host, 64), options.port, slot, deposit_address.address);
+                                   FormatMoney(*amount), chain::MAINCHAIN_NAME, chain::MAINCHAIN_NAME, client.EnforcerOnly() ? "enforcer interface" : "node",
+                                   guard::OneLine(client.Address(), 80), slot, deposit_address.address);
         dialog.accept = "Deposit";
         if (!m_confirm || !m_confirm(dialog)) throw HostError(BRIDGE_CANCELLED, "The deposit was declined.");
         UniValue args{UniValue::VARR};

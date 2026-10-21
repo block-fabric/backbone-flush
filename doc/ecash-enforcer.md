@@ -100,6 +100,8 @@ HTTP/1.1, `src/sidechain/mainclient.cpp`):
 | `createsidechaindeposit` (the app's deposit button) | `WalletService.CreateDepositTransaction` (fee 10,000 sats) |
 | BMM request | `GetChainTip`, `WalletService.CreateBmmCriticalDataTransaction` (already in `ecash-grpc`) |
 | withdrawal bundle | `BlockProducerService.ProposeWithdrawalBundle` (legacy serialization), after the hand-off depth |
+| `getbestblockhash` | `GetChainTip` |
+| `getbalances`, `getnewaddress` (the app's deposit helper, "an address of the wallet" for a withdrawal) | `WalletService.GetBalance` (confirmed as trusted, pending as untrusted_pending), `WalletService.CreateNewAddress`: the wallet behind the interface, the one that pays deposits and BMM requests |
 | anything else | refused: "reached through the enforcer's interface alone" |
 
 The follower is unchanged otherwise: it polls every second (`SubscribeEvents` is not needed: a reorg shows as
@@ -114,6 +116,29 @@ enforcer has none). Refused with `-mainchaingrpcport`, and on the Chains network
 nor Backbone serve it, and this node has no TLS library; an `https://` address is refused. Reach a remote
 interface through a tunnel (`ssh -L 50051:127.0.0.1:50051 host`, stunnel) as `http://127.0.0.1:50051`.
 `getmainchaininfo` says `"via": "enforcer"`.
+
+### What the app shows of the peg: `getpeginfo`
+
+The app's pages (Home's Drivechains card, Drivechains: Deposit, Withdraw, Bundle, Merged mining) read the peg from the
+node's `getpeginfo`, the same in every mode, and never ask the mainchain node for `getdrivechaininfo` or
+`listwithdrawalbundles` themselves (`peg.call`, which the enforcer's interface refuses):
+
+| `getpeginfo` | Over JSON-RPC (Backbone) | Through the enforcer's interface |
+|---|---|---|
+| `height`, `rules` | `getdrivechaininfo` | `GetChainTip`; `enforcer` |
+| `withdrawalperiod`, `withdrawalminscore` (votes a bundle needs) | `bundlemaxage`, `bundlethreshold` + 1 with the enforcer's rules; `withdrawalperiod`, `withdrawalminscore` with the Chains rules | `GetChainInfo.bip300_constants`: `withdrawal_bundle_max_age`, `withdrawal_bundle_inclusion_threshold` + 1 (left out by an enforcer without them) |
+| `activesidechains`, `proposals` | `getdrivechaininfo` | `GetSidechains`, `GetSidechainProposals` |
+| `sidechain` (active, activation height, proposal hash, title) | `getsidechain` | `GetSidechains` |
+| `escrow` | `getsidechain` | `GetCtip` |
+| `bundles` (hash, height, score, blocks left, payable) | `listwithdrawalbundles`, and how the node votes (`vote`) | `GetWithdrawalBundleProposals` (vote count, proposal height); blocks left and payable from the constants |
+| `votehistory` (the score of each pending bundle at each block, in `getsidechainevents`) | true | false: the interface reports the votes as they are now only |
+
+What the enforcer does not report is left out quietly: the last score of a bundle already closed shows as "–"
+("not reported by the enforcer's interface"), and Merged mining's node panel names the interface and its wallet
+instead of a cookie file. Code: `MainClient::PegInfo`, `PegInfoFromRpc`, `PegInfoFromEnforcer`; the app's
+`lib/sidestate.svelte.ts` (`loadPegInfo`: a node without `getpeginfo`, over JSON-RPC only, falls back to the two
+calls). Tests: `peg_info_both_ways` (unit), `feature_sidechain_enforcer.py` and `feature_sidechain_ecash.py`
+(`getpeginfo` against Backbone's own answers), `src/webui/app/src/test/sidechain.test.ts` (the pages in each mode).
 
 ## 4. Safety
 

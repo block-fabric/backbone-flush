@@ -492,7 +492,7 @@ The host side (src/webui/sidechainapi.cpp) reaches the mainchain node on the nod
 
 | Host method | What |
 |---|---|
-| `peg.connection` | How the node reaches its mainchain node: connected or why not, host:port, the slot, the wallet, cookie or password (never the password) |
+| `peg.connection` | How the node reaches its mainchain node: connected or why not, host:port, the slot, `via` (`json-rpc`, `json-rpc+enforcer`, `enforcer`), the wallet, cookie or password, or through the enforcer's interface none or a token (never the password) |
 | `peg.call {method, params}` | A method of the mainchain node, from a list that only reads (`getdrivechaininfo`, `listwithdrawalbundles`, `getsidechainevents`, `listsidechaindeposits`...) and of its wallet (`getbalances`, `getwalletinfo`, `getnewaddress`) |
 | `peg.deposit {destination, amount}` | The deposit helper: `createsidechaindeposit` of the mainchain wallet, only to a deposit address of this sidechain (its slot, its checksum, a valid address of this chain), on the user's word given to the desktop |
 | `bmm.set {mine, address?, always?, amount?}` | Merged mining on (`setbmm`: the address of the fees, an address of this chain; with `always`, the offer for every block of the mainchain, at most 0.01) on the user's word given to the desktop; off at once |
@@ -507,7 +507,11 @@ The address of the mainchain node (`mainchainConnect` in Settings) is another ma
 user's word too: the node sends that machine the credentials of the mainchain node, unencrypted.
 `setbmm`, `requestbmmblock` and `createsidechaindeposit` are not methods the page calls.
 
-The RPC policy of a sidechain (rpcpolicy.cpp) adds its methods (`getmainchaininfo`, `getbmminfo`,
+What the pages show of the peg (the votes a bundle needs, the bundles and their votes, the escrow) comes from the
+node's `getpeginfo`, the same over JSON-RPC and through the enforcer's interface alone (`-mainchaingrpc`), which has
+no `getdrivechaininfo` nor `listwithdrawalbundles`: the pages do not ask the mainchain node for those (doc/ecash-enforcer.md).
+
+The RPC policy of a sidechain (rpcpolicy.cpp) adds its methods (`getmainchaininfo`, `getpeginfo`, `getbmminfo`,
 `syncmainchain`, `listwithdrawals`, `getwithdrawalbundle`, `getdepositaddress`, and
 `createwithdrawal` and `refundwithdrawal`, which need the keys) and has none of the drivechain methods
 of the mainchain. `test/rpcpolicy.test.ts` reads it as this chain builds it (the branch of `#if

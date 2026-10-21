@@ -39,6 +39,8 @@
 
   const bmm = $derived(side.bmm);
   const info = $derived(side.info);
+  /** Through the enforcer's interface alone: its wallet pays, a token at most is its credential. */
+  const viaEnforcer = $derived(side.connection?.via === 'enforcer');
   const connected = $derived(!!info?.connected);
   const mining = $derived(!!bmm?.mining);
 
@@ -264,8 +266,9 @@
         <dl class="facts panel-body">
           <dt>Node</dt><dd class="mono"><span translate="no">{side.connection?.node ?? info?.node ?? '–'}</span></dd>
           <dt>Block</dt><dd class="num">{info && info.height >= 0 ? formatCount(info.height) : '–'}</dd>
-          <dt>Wallet that pays</dt><dd><span translate="no">{side.connection ? (side.connection.walletSet ? side.connection.wallet || '(default wallet)' : 'its only wallet loaded') : '–'}</span></dd>
-          <dt>Credentials</dt><dd>{side.connection ? (side.connection.auth === 'cookie' ? 'its cookie file' : 'a user name and password') : '–'}</dd>
+          {#if side.connection}<dt>Interface</dt><dd>{viaEnforcer ? "the bip300301_enforcer's interface (gRPC)" : side.connection.via === 'json-rpc+enforcer' ? "JSON-RPC, requests through the enforcer's interface" : 'JSON-RPC'}</dd>{/if}
+          <dt>Wallet that pays</dt><dd><span translate="no">{side.connection ? (viaEnforcer ? 'the wallet of its enforcer interface' : side.connection.walletSet ? side.connection.wallet || '(default wallet)' : 'its only wallet loaded') : '–'}</span></dd>
+          <dt>Credentials</dt><dd>{side.connection ? ({ cookie: 'its cookie file', password: 'a user name and password', none: 'none (the interface asks for none)', token: 'a token (-mainchaingrpcauth)' } as const)[side.connection.auth] ?? '–' : '–'}</dd>
           {#if side.connection?.cookieFile}<dt>Cookie file</dt><dd class="mono"><span translate="no">{side.connection.cookieFile}</span></dd>{/if}
           {#if info && !connected}<dt>Error</dt><dd class="side-bad"><SafeText text={info.error ?? ''} /></dd>{/if}
         </dl>

@@ -262,6 +262,19 @@ class SidechainEcashTest(BitcoinTestFramework):
         pending = main.listwithdrawalbundles(SLOT)
         assert_equal([b["hash"] for b in pending], [bundle["hash"]])
         assert_equal(pending[0]["vote"], "upvote")
+        # getpeginfo over JSON-RPC (or -mainchaingrpcport, the same): what the pages read of the peg, the enforcer's rules
+        # (more votes than the threshold, within the maximum age), the bundle as Backbone has it, and how it votes.
+        drivechain = self.main_node.getdrivechaininfo()
+        sidechain = main.getsidechain(SLOT)
+        peg = side.getpeginfo()
+        assert_equal(peg["via"], "json-rpc+enforcer" if self.options.mainchaingrpc else "json-rpc")
+        assert_equal((peg["height"], peg["rules"], peg["withdrawalperiod"], peg["withdrawalminscore"]),
+                     (main.getblockcount(), "enforcer", drivechain["bundlemaxage"], drivechain["bundlethreshold"] + 1))
+        assert_equal(peg["sidechain"], {"slot": SLOT, "active": True, "activationheight": sidechain["activationheight"],
+                                        "proposalhash": sidechain["proposalhash"], "title": "Testchain"})
+        assert_equal(peg["escrow"]["amount"], Decimal(sidechain["escrow"]["amount"]))
+        assert_equal(peg["bundles"], [{k: b[k] for k in ("hash", "height", "score", "blocksleft", "payable", "vote")} for b in pending])
+        assert_equal(peg["votehistory"], True)
         # The bundle hash the sidechain computed is the one the mainchain votes on and pays (BIP300 M6id).
         escrow_before = self.escrow()
         for _ in range(BUNDLE_MAX_AGE):

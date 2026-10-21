@@ -9,7 +9,8 @@
   import Icon from './Icon.svelte';
   import { CHAIN } from '../chain/config';
   import { errorText } from '../lib/dialogs.svelte';
-  import { host, type NodeOptions, type NodeOptionValues } from '../lib/rpc';
+  import { host, rpc, type NodeOptions, type NodeOptionValues } from '../lib/rpc';
+  import type { MainchainInfo } from '../lib/side';
   import { toast } from '../lib/state.svelte';
 
   let {
@@ -38,6 +39,16 @@
   });
   let portError = $state('');
 
+  // Through the enforcer's interface alone (-mainchaingrpc, on the command line): no JSON-RPC, so the fields below
+  // are not used while it is set; said once, quietly.
+  let link = $state<Pick<MainchainInfo, 'via' | 'node'> | null>(null);
+  $effect(() => {
+    rpc
+      .raw<MainchainInfo>('getmainchaininfo')
+      .then((i) => (link = i && typeof i === 'object' ? { via: i.via, node: i.node } : null))
+      .catch(() => undefined);
+  });
+
   const fixed = (key: string) => options.mainchainIgnored?.[key];
 
   async function setPort() {
@@ -65,6 +76,11 @@
     <p class="hint">
       This node follows the {mainName} node below: it asks it for its blocks, which decide which blocks of this chain are valid, and its wallet pays for merged mining. The changes take effect after a restart.
     </p>
+    {#if link?.via === 'enforcer'}
+      <p class="hint" id="opt-main-enforcer">
+        <Icon name="info" size={14} /> This node follows {mainName} through the bip300301_enforcer's interface at <span class="mono" translate="no">{link.node}</span> (-mainchaingrpc, set on the command line or in the configuration file): its blocks, deposits and withdrawals, and the enforcer's wallet for deposits and merged mining. The JSON-RPC settings below are not used while it is set.
+      </p>
+    {/if}
 
     <div class="field-row" title={fixed('mainchainConnect') !== undefined ? t('Set on the command line or in the configuration file.') : undefined}>
       <label for="opt-main-connect">Address of the {mainName} node</label>

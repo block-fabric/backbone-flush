@@ -7,6 +7,7 @@
 #include <addresstype.h>
 #include <base58.h>
 #include <bech32.h>
+#include <consensus/amount.h>
 #include <core_io.h>
 #include <drivechain/sidechain.h>
 #include <hash.h>
@@ -349,6 +350,41 @@ UniValue Request(std::initializer_list<std::pair<std::string, UniValue>> fields)
     return obj;
 }
 UniValue HexValue(const std::string& hex) { return Request({{"hex", hex}}); }
+
+/** The proposal hash of a sidechain of GetSidechains: SHA256d of its description (with no compact size first). */
+uint256 EnforcerProposalHash(const UniValue& sidechain)
+{
+    const auto bytes{TryParseHex<unsigned char>(HexField(sidechain, "description", "description").value_or(""))};
+    if (!bytes) throw std::runtime_error("the enforcer sent a sidechain description that is not hex");
+    std::vector<unsigned char> description;
+    try {
+        SpanReader{*bytes} >> description;
+    } catch (const std::ios_base::failure&) {
+        throw std::runtime_error("the enforcer sent a malformed sidechain description");
+    }
+    return Hash(description);
+}
+
+/** An amount of coins of a JSON-RPC reply (a number, or a string as Backbone writes some), if it is one. */
+std::optional<CAmount> Coins(const UniValue& value)
+{
+    if (!value.isNum() && !value.isStr()) return std::nullopt;
+    const auto amount{ParseMoney(value.getValStr())};
+    if (!amount || *amount < 0 || !MoneyRange(*amount)) return std::nullopt;
+    return amount;
+}
+
+/** An integer of a JSON-RPC reply, if it is one. */
+std::optional<int64_t> Int(const UniValue& obj, const std::string& key)
+{
+    const UniValue& value{obj.isObject() ? obj.find_value(key) : NullUniValue};
+    if (!value.isNum()) return std::nullopt;
+    try {
+        return value.getInt<int64_t>();
+    } catch (const std::runtime_error&) {
+        return std::nullopt;
+    }
+}
 } // namespace
 
 int64_t MedianTime(std::vector<int64_t> times)
@@ -636,18 +672,10 @@ UniValue MainClient::CallAsEnforcer(const std::string& method, const UniValue& p
         for (const UniValue& sidechain : sidechains.isArray() ? sidechains.getValues() : std::vector<UniValue>{}) {
             if (UIntField(sidechain, "sidechainNumber", "sidechain_number") != slot) continue;
             // The proposal's hash: SHA256d of its description (ConsensusHex: with its compact size first).
-            const auto bytes{TryParseHex<unsigned char>(HexField(sidechain, "description", "description").value_or(""))};
-            if (!bytes) throw std::runtime_error("the enforcer sent a sidechain description that is not hex");
-            std::vector<unsigned char> description;
-            try {
-                SpanReader{*bytes} >> description;
-            } catch (const std::ios_base::failure&) {
-                throw std::runtime_error("the enforcer sent a malformed sidechain description");
-            }
             UniValue obj(UniValue::VOBJ);
             obj.pushKV("slot", slot);
             obj.pushKV("activationheight", UIntField(sidechain, "activationHeight", "activation_height"));
-            obj.pushKV("proposalhash", Hash(description).GetHex());
+            obj.pushKV("proposalhash", EnforcerProposalHash(sidechain).GetHex());
             return obj;
         }
         throw MainClientError{strprintf("No sidechain is active in slot %u", slot), /*rpc_error_in=*/true, "Sidechain not active"};
@@ -673,8 +701,192 @@ UniValue MainClient::CallAsEnforcer(const std::string& method, const UniValue& p
         obj.pushKV("txid", HexField(reply, "txid", "txid").value_or(""));
         return obj;
     }
+    if (method == "getbestblockhash") return EnforcerTip().second.GetHex();
+    // The wallet behind the interface (the enforcer's, or Backbone's -grpcwallet): the one that pays deposits and BMM
+    // requests here. Its balance (getbalances, as the deposit helper reads it) and a new address of it.
+    if (method == "getbalances") {
+        const UniValue reply{CallEnforcer(WALLET + "GetBalance", UniValue{UniValue::VOBJ})};
+        const auto coins{[&](const char* json_name, const char* name) {
+            const uint64_t sats{UIntField(reply, json_name, name)};
+            if (sats > static_cast<uint64_t>(MAX_MONEY)) throw std::runtime_error("the enforcer sent a balance of more than all the coins");
+            return ValueFromAmount(static_cast<CAmount>(sats));
+        }};
+        UniValue mine(UniValue::VOBJ);
+        mine.pushKV("trusted", coins("confirmedSats", "confirmed_sats"));
+        mine.pushKV("untrusted_pending", coins("pendingSats", "pending_sats"));
+        mine.pushKV("immature", ValueFromAmount(0));
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("mine", std::move(mine));
+        return obj;
+    }
+    if (method == "getnewaddress") {
+        const UniValue reply{CallEnforcer(WALLET + "CreateNewAddress", UniValue{UniValue::VOBJ})};
+        const UniValue& address{Field(reply, "address", "address")};
+        if (!address.isStr() || address.get_str().empty()) throw std::runtime_error("the enforcer sent no address");
+        return address.get_str();
+    }
     throw MainClientError{strprintf("The mainchain node is reached through the bip300301_enforcer's interface alone (-mainchaingrpc), which has no %s", method),
                           /*rpc_error_in=*/true, strprintf("%s is not available through the enforcer's interface", method)};
+}
+
+
+//
+// getpeginfo: what the pages show of the peg, the same over JSON-RPC and through the enforcer's interface.
+//
+
+UniValue PegInfoFromRpc(uint32_t slot, const UniValue& drivechain, const UniValue& sidechain, const UniValue& bundles)
+{
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("height", Int(drivechain, "height").value_or(-1));
+    const bool enforcer_rules{drivechain.find_value("rules").isStr() && drivechain.find_value("rules").get_str() == "enforcer"};
+    out.pushKV("rules", enforcer_rules ? "enforcer" : "chains");
+    // The votes a bundle needs, within how many blocks: the enforcer's rules pay it with more than the threshold.
+    const auto threshold{Int(drivechain, "bundlethreshold")};
+    const auto period{enforcer_rules ? Int(drivechain, "bundlemaxage") : Int(drivechain, "withdrawalperiod")};
+    const auto min_score{enforcer_rules ? (threshold ? std::optional<int64_t>{*threshold + 1} : std::nullopt) : Int(drivechain, "withdrawalminscore")};
+    if (period) out.pushKV("withdrawalperiod", *period);
+    if (min_score) out.pushKV("withdrawalminscore", *min_score);
+    if (const auto n{Int(drivechain, "activesidechains")}) out.pushKV("activesidechains", *n);
+    if (const auto n{Int(drivechain, "proposals")}) out.pushKV("proposals", *n);
+
+    UniValue side(UniValue::VOBJ);
+    side.pushKV("slot", slot);
+    side.pushKV("active", sidechain.isObject());
+    if (sidechain.isObject()) {
+        if (const auto h{Int(sidechain, "activationheight")}) side.pushKV("activationheight", *h);
+        if (sidechain.find_value("proposalhash").isStr()) side.pushKV("proposalhash", sidechain.find_value("proposalhash").get_str());
+        if (sidechain.find_value("title").isStr()) side.pushKV("title", sidechain.find_value("title").get_str());
+    }
+    out.pushKV("sidechain", std::move(side));
+    const UniValue& escrow{sidechain.isObject() ? sidechain.find_value("escrow") : NullUniValue};
+    if (escrow.isObject() && escrow.find_value("txid").isStr()) {
+        if (const auto amount{Coins(escrow.find_value("amount"))}) {
+            UniValue e(UniValue::VOBJ);
+            e.pushKV("txid", escrow.find_value("txid").get_str());
+            e.pushKV("n", Int(escrow, "n").value_or(0));
+            e.pushKV("amount", ValueFromAmount(*amount));
+            out.pushKV("escrow", std::move(e));
+        }
+    }
+
+    UniValue list(UniValue::VARR);
+    for (const UniValue& b : bundles.isArray() ? bundles.getValues() : std::vector<UniValue>{}) {
+        if (!b.isObject() || !b.find_value("hash").isStr()) continue;
+        if (const auto s{Int(b, "slot")}; s && *s != slot) continue;
+        UniValue entry(UniValue::VOBJ);
+        entry.pushKV("hash", b.find_value("hash").get_str());
+        entry.pushKV("height", Int(b, "height").value_or(-1));
+        entry.pushKV("score", Int(b, "score").value_or(0));
+        if (const auto left{Int(b, "blocksleft")}) entry.pushKV("blocksleft", std::max<int64_t>(0, *left));
+        if (b.find_value("payable").isBool()) entry.pushKV("payable", b.find_value("payable").get_bool());
+        if (b.find_value("vote").isStr()) entry.pushKV("vote", b.find_value("vote").get_str());
+        list.push_back(std::move(entry));
+    }
+    out.pushKV("bundles", std::move(list));
+    // getsidechainevents of a JSON-RPC node has the score of each pending bundle at each block.
+    out.pushKV("votehistory", true);
+    return out;
+}
+
+UniValue PegInfoFromEnforcer(uint32_t slot, const EnforcerPegReplies& replies)
+{
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("height", replies.tip_height);
+    out.pushKV("rules", "enforcer");
+    const UniValue& constants{Field(replies.chain_info, "bip300Constants", "bip300_constants")};
+    std::optional<int64_t> max_age, threshold;
+    if (constants.isObject()) {
+        if (const uint64_t n{UIntField(constants, "withdrawalBundleMaxAge", "withdrawal_bundle_max_age")}) max_age = n;
+        // (0 would be a threshold of no votes: proto3 leaves out a zero, so it is read as not reported.)
+        if (const uint64_t n{UIntField(constants, "withdrawalBundleInclusionThreshold", "withdrawal_bundle_inclusion_threshold")}) threshold = n;
+    }
+    if (max_age) out.pushKV("withdrawalperiod", *max_age);
+    if (threshold) out.pushKV("withdrawalminscore", *threshold + 1);
+
+    const UniValue& sidechains{Field(replies.sidechains, "sidechains", "sidechains")};
+    const std::vector<UniValue> active{sidechains.isArray() ? sidechains.getValues() : std::vector<UniValue>{}};
+    out.pushKV("activesidechains", static_cast<int64_t>(active.size()));
+    if (replies.proposals.isObject()) {
+        const UniValue& proposals{Field(replies.proposals, "sidechainProposals", "sidechain_proposals")};
+        out.pushKV("proposals", static_cast<int64_t>(proposals.isArray() ? proposals.size() : 0));
+    }
+    UniValue side(UniValue::VOBJ);
+    side.pushKV("slot", slot);
+    const UniValue* ours{nullptr};
+    for (const UniValue& s : active) {
+        if (UIntField(s, "sidechainNumber", "sidechain_number") == slot) ours = &s;
+    }
+    side.pushKV("active", ours != nullptr);
+    if (ours) {
+        side.pushKV("activationheight", UIntField(*ours, "activationHeight", "activation_height"));
+        side.pushKV("proposalhash", EnforcerProposalHash(*ours).GetHex());
+        const UniValue& title{Field(Field(Field(*ours, "declaration", "declaration"), "v0", "v0"), "title", "title")};
+        if (title.isStr()) side.pushKV("title", title.get_str());
+    }
+    out.pushKV("sidechain", std::move(side));
+    // The escrow (the Ctip): none before the first deposit.
+    const UniValue& ctip{Field(replies.ctip, "ctip", "ctip")};
+    if (ctip.isObject()) {
+        const uint64_t value{UIntField(ctip, "value", "value")};
+        if (value > static_cast<uint64_t>(MAX_MONEY)) throw std::runtime_error("the enforcer sent an escrow of more than all the coins");
+        UniValue e(UniValue::VOBJ);
+        e.pushKV("txid", ReverseHash(HexField(ctip, "txid", "txid"), "txid").GetHex());
+        e.pushKV("n", UIntField(ctip, "vout", "vout"));
+        e.pushKV("amount", ValueFromAmount(static_cast<CAmount>(value)));
+        out.pushKV("escrow", std::move(e));
+    }
+
+    UniValue list(UniValue::VARR);
+    const UniValue& proposals{Field(replies.bundles, "proposals", "proposals")};
+    for (const UniValue& p : proposals.isArray() ? proposals.getValues() : std::vector<UniValue>{}) {
+        UniValue entry(UniValue::VOBJ);
+        const int64_t height{static_cast<int64_t>(UIntField(p, "proposalHeight", "proposal_height"))};
+        const int64_t score{static_cast<int64_t>(UIntField(p, "voteCount", "vote_count"))};
+        entry.pushKV("hash", ConsensusHash(HexField(p, "m6id", "m6id"), "m6id").GetHex());
+        entry.pushKV("height", height);
+        entry.pushKV("score", score);
+        // Failed once older than the maximum age; paid with more votes than the threshold.
+        if (max_age && replies.tip_height >= 0) entry.pushKV("blocksleft", std::max<int64_t>(0, *max_age - (replies.tip_height - height)));
+        if (threshold) entry.pushKV("payable", score > *threshold);
+        list.push_back(std::move(entry));
+    }
+    out.pushKV("bundles", std::move(list));
+    // The interface reports the votes as they are now only: not those of each past block.
+    out.pushKV("votehistory", false);
+    return out;
+}
+
+UniValue MainClient::PegInfo(uint32_t slot) const
+{
+    if (!m_options.enforcer_only) {
+        UniValue args(UniValue::VARR);
+        args.push_back(static_cast<int64_t>(slot));
+        UniValue sidechain;
+        try {
+            sidechain = Call("getsidechain", args);
+        } catch (const MainClientError& e) {
+            // None active in the slot (yet): said so, not an error.
+            if (!e.rpc_error) throw;
+        }
+        return PegInfoFromRpc(slot, Call("getdrivechaininfo", UniValue{UniValue::VARR}), sidechain, Call("listwithdrawalbundles", args));
+    }
+    EnforcerPegReplies replies;
+    replies.tip_height = EnforcerTip().first;
+    replies.chain_info = CallEnforcer(VALIDATOR + "GetChainInfo", UniValue{UniValue::VOBJ});
+    replies.sidechains = CallEnforcer(VALIDATOR + "GetSidechains", UniValue{UniValue::VOBJ});
+    // Left out when refused, not an error: what an older interface does not serve, the bundles of a slot not active.
+    const auto served{[&](const std::string& procedure, const UniValue& request) {
+        try {
+            return CallEnforcer(VALIDATOR + procedure, request);
+        } catch (const MainClientError& e) {
+            if (!e.rpc_error) throw;
+            return UniValue{};
+        }
+    }};
+    replies.proposals = served("GetSidechainProposals", UniValue{UniValue::VOBJ});
+    replies.bundles = served("GetWithdrawalBundleProposals", Request({{"sidechainId", static_cast<uint64_t>(slot)}}));
+    replies.ctip = served("GetCtip", Request({{"sidechainNumber", static_cast<uint64_t>(slot)}}));
+    return PegInfoFromEnforcer(slot, replies);
 }
 
 } // namespace sidechain

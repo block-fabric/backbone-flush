@@ -91,6 +91,15 @@ public:
      * @throws MainClientError (rpc_error: the interface answered with an error; rpc_message its code and message)
      */
     UniValue CallEnforcer(const std::string& procedure, const UniValue& request) const;
+
+    /**
+     * What the pages show of the peg of the sidechain in `slot` (getpeginfo), the same whichever way this node
+     * reaches the mainchain: over JSON-RPC getdrivechaininfo, getsidechain and listwithdrawalbundles; through the
+     * enforcer's interface GetChainInfo, GetChainTip, GetSidechains, GetSidechainProposals, GetCtip and
+     * GetWithdrawalBundleProposals (PegInfoFromRpc, PegInfoFromEnforcer).
+     * @throws MainClientError, std::runtime_error
+     */
+    UniValue PegInfo(uint32_t slot) const;
     bool HasEnforcer() const { return m_options.enforcer_port != 0; }
     bool EnforcerOnly() const { return m_options.enforcer_only; }
     //! host:port of the mainchain node as this node reaches it: the enforcer's interface if enforcer_only, else JSON-RPC.
@@ -138,6 +147,28 @@ private:
  * @throws std::runtime_error for an entry that cannot be read
  */
 UniValue EnforcerBlockEvents(const UniValue& info, int64_t median_time);
+/**
+ * getpeginfo from the replies of a mainchain node over JSON-RPC: `drivechain` (getdrivechaininfo), `sidechain`
+ * (getsidechain of the slot; null if none is active in it) and `bundles` (listwithdrawalbundles of the slot). With
+ * the enforcer's rules (Backbone on eCash), the score a bundle needs and the blocks it has are those rules': more
+ * votes than bundlethreshold within bundlemaxage blocks.
+ */
+UniValue PegInfoFromRpc(uint32_t slot, const UniValue& drivechain, const UniValue& sidechain, const UniValue& bundles);
+/** The replies of the enforcer's interface getpeginfo is made of (proto3 JSON mapping); a reply not had is null. */
+struct EnforcerPegReplies {
+    UniValue chain_info;  //!< GetChainInfo (bip300_constants: not sent by an enforcer older than them)
+    int tip_height{-1};   //!< GetChainTip
+    UniValue sidechains;  //!< GetSidechains
+    UniValue proposals;   //!< GetSidechainProposals
+    UniValue ctip;        //!< GetCtip of the slot
+    UniValue bundles;     //!< GetWithdrawalBundleProposals of the slot
+};
+/**
+ * getpeginfo from the enforcer's interface: the votes of each bundle as they are now (vote_count), the blocks it has
+ * left and whether it is payable from the BIP300 constants (paid with more votes than the inclusion threshold, failed
+ * older than the maximum age). No vote of the node's own ("vote"), no score of past blocks ("votehistory": false).
+ */
+UniValue PegInfoFromEnforcer(uint32_t slot, const EnforcerPegReplies& replies);
 /** The median of the times of a block and of the (up to) 10 before it, as a node computes it (GetMedianTimePast). */
 int64_t MedianTime(std::vector<int64_t> times);
 /**

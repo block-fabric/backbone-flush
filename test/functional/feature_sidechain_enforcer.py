@@ -189,6 +189,29 @@ class SidechainEnforcerTest(BitcoinTestFramework):
     def pending_on_main(self):
         return [b["hash"] for b in self.main.listwithdrawalbundles(SLOT)]
 
+    def check_peg_info(self):
+        """getpeginfo through the enforcer's interface says what Backbone's JSON-RPC says of the peg (the pages read it)."""
+        main = self.main
+        drivechain = main.getdrivechaininfo()
+        sidechain = main.getsidechain(SLOT)
+        bundles = main.listwithdrawalbundles(SLOT)
+        for node in self.nodes:
+            info = node.getpeginfo()
+            assert_equal(info["via"], "enforcer")
+            assert_equal(info["height"], main.getblockcount())
+            assert_equal(info["rules"], "enforcer")
+            # The enforcer's rules: more votes than the threshold, within the maximum age.
+            assert_equal(info["withdrawalperiod"], drivechain["bundlemaxage"])
+            assert_equal(info["withdrawalminscore"], drivechain["bundlethreshold"] + 1)
+            assert_equal(info["activesidechains"], drivechain["activesidechains"])
+            assert_equal(info["proposals"], drivechain["proposals"])
+            assert_equal(info["sidechain"], {"slot": SLOT, "active": True, "activationheight": sidechain["activationheight"],
+                                             "proposalhash": sidechain["proposalhash"], "title": sidechain["title"]})
+            assert_equal(info["escrow"], {"txid": sidechain["escrow"]["txid"], "n": sidechain["escrow"]["n"], "amount": Decimal(sidechain["escrow"]["amount"])})
+            assert_equal(info["bundles"], [{k: b[k] for k in ("hash", "height", "score", "blocksleft", "payable")} for b in bundles])
+            # The votes of past blocks are not reported through the interface.
+            assert_equal(info["votehistory"], False)
+
     def run_test(self):
         try:
             self.run_enforcer_test()
@@ -229,6 +252,7 @@ class SidechainEnforcerTest(BitcoinTestFramework):
         self.bmm()
         assert_equal(side.getbalance(), 50)
         self.check_in_sync()
+        self.check_peg_info()
 
         self.log.info("A reorg of the mainchain across a deposit: credited once, on the branch that has it")
         main.createsidechaindeposit(SLOT, deposit["depositaddress"], 7)
@@ -268,6 +292,9 @@ class SidechainEnforcerTest(BitcoinTestFramework):
         assert bundle["hash"] not in self.pending_on_main()
         self.mine_main()
         assert_equal(self.pending_on_main(), [bundle["hash"]])
+        self.mine_main()
+        assert_greater_than(main.listwithdrawalbundles(SLOT)[0]["score"], 0)
+        self.check_peg_info()
         escrow_before = self.escrow()
         for _ in range(BUNDLE_MAX_AGE):
             if main.getwithdrawalbundle(SLOT, bundle["hash"])["status"] != "pending":

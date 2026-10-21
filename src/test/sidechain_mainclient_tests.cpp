@@ -10,6 +10,7 @@
 #include <base58.h>
 #include <bech32.h>
 #include <core_io.h>
+#include <hash.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <util/strencodings.h>
@@ -385,6 +386,91 @@ BOOST_AUTO_TEST_CASE(chunked_replies)
     // Over the cap.
     BOOST_CHECK(!DecodeChunked("3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n", 5, error));
     BOOST_CHECK_EQUAL(error, "a reply too large");
+}
+
+BOOST_AUTO_TEST_CASE(peg_info_both_ways)
+{
+    // getpeginfo over JSON-RPC (Backbone with the enforcer's rules) and through the enforcer's interface: the same
+    // fields, the same values, for the same mainchain (the votes needed: one more than the threshold; the blocks: its
+    // maximum age); what a way does not report is left out.
+    const auto read{[](const std::string& json) {
+        UniValue v;
+        BOOST_REQUIRE(v.read(json));
+        return v;
+    }};
+    const uint256 m6id{uint256::FromHex("1100000000000000000000000000000000000000000000000000000000000022").value()};
+    const uint256 ctip{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000c1").value()};
+    // The description of the slot (its compact size first, as GetSidechains sends it) and its hash.
+    const std::vector<unsigned char> description{'d', 'e', 's', 'c'};
+    const std::string proposal_hash{Hash(description).GetHex()};
+
+    const UniValue rpc{PegInfoFromRpc(46,
+        read(R"({"withdrawalperiod":60,"withdrawalminscore":30,"rules":"enforcer","bundlethreshold":5,"bundlemaxage":10,"height":211,"activesidechains":1,"proposals":0,"escrowtotal":"115.98000000"})"),
+        read(strprintf(R"({"slot":46,"title":"Starbase","proposalhash":"%s","activationheight":118,"escrow":{"txid":"%s","n":0,"amount":"115.98000000"}})", proposal_hash, ctip.GetHex())),
+        read(strprintf(R"([{"slot":46,"hash":"%s","index":0,"height":205,"score":3,"lastupvote":210,"blocksleft":4,"payable":false,"known":true,"vote":"upvote"}])", m6id.GetHex())))};
+    const UniValue grpc{PegInfoFromEnforcer(46, EnforcerPegReplies{
+        .chain_info = read(R"({"network":"NETWORK_REGTEST","bip300Constants":{"withdrawalBundleMaxAge":10,"withdrawalBundleInclusionThreshold":5}})"),
+        .tip_height = 211,
+        .sidechains = read(strprintf(R"({"sidechains":[{"sidechainNumber":46,"description":{"hex":"04%s"},"activationHeight":118,"declaration":{"v0":{"title":"Starbase"}}}]})", HexStr(description))),
+        .proposals = read(R"({})"),
+        .ctip = read(strprintf(R"({"ctip":{"txid":{"hex":"%s"},"value":"11598000000","sequenceNumber":"3"}})", ctip.GetHex())),
+        .bundles = read(strprintf(R"({"proposals":[{"m6id":{"hex":"%s"},"voteCount":3,"proposalHeight":205}]})", HexStr(m6id))),
+    })};
+    for (const UniValue* info : {&rpc, &grpc}) {
+        const UniValue& v{*info};
+        BOOST_CHECK_EQUAL(v["height"].getInt<int>(), 211);
+        BOOST_CHECK_EQUAL(v["rules"].get_str(), "enforcer");
+        BOOST_CHECK_EQUAL(v["withdrawalperiod"].getInt<int>(), 10);
+        BOOST_CHECK_EQUAL(v["withdrawalminscore"].getInt<int>(), 6);
+        BOOST_CHECK_EQUAL(v["activesidechains"].getInt<int>(), 1);
+        BOOST_CHECK_EQUAL(v["proposals"].getInt<int>(), 0);
+        BOOST_CHECK(v["sidechain"]["active"].get_bool());
+        BOOST_CHECK_EQUAL(v["sidechain"]["activationheight"].getInt<int>(), 118);
+        BOOST_CHECK_EQUAL(v["sidechain"]["proposalhash"].get_str(), proposal_hash);
+        BOOST_CHECK_EQUAL(v["sidechain"]["title"].get_str(), "Starbase");
+        BOOST_CHECK_EQUAL(v["escrow"]["txid"].get_str(), ctip.GetHex());
+        BOOST_CHECK_EQUAL(v["escrow"]["amount"].getValStr(), "115.98000000");
+        BOOST_REQUIRE_EQUAL(v["bundles"].size(), 1U);
+        const UniValue& b{v["bundles"][0]};
+        BOOST_CHECK_EQUAL(b["hash"].get_str(), m6id.GetHex());
+        BOOST_CHECK_EQUAL(b["height"].getInt<int>(), 205);
+        BOOST_CHECK_EQUAL(b["score"].getInt<int>(), 3);
+        BOOST_CHECK_EQUAL(b["blocksleft"].getInt<int>(), 4);
+        BOOST_CHECK(!b["payable"].get_bool());
+    }
+    // Only JSON-RPC says how the node votes, and has the votes of past blocks.
+    BOOST_CHECK_EQUAL(rpc["bundles"][0]["vote"].get_str(), "upvote");
+    BOOST_CHECK(grpc["bundles"][0].find_value("vote").isNull());
+    BOOST_CHECK(rpc["votehistory"].get_bool());
+    BOOST_CHECK(!grpc["votehistory"].get_bool());
+
+    // The Chains rules: the period and the score of getdrivechaininfo. No sidechain in the slot: not active, no escrow.
+    const UniValue chains{PegInfoFromRpc(5, read(R"({"withdrawalperiod":60,"withdrawalminscore":30,"height":12,"activesidechains":0,"proposals":1})"), NullUniValue, read("[]"))};
+    BOOST_CHECK_EQUAL(chains["rules"].get_str(), "chains");
+    BOOST_CHECK_EQUAL(chains["withdrawalperiod"].getInt<int>(), 60);
+    BOOST_CHECK_EQUAL(chains["withdrawalminscore"].getInt<int>(), 30);
+    BOOST_CHECK(!chains["sidechain"]["active"].get_bool());
+    BOOST_CHECK(chains.find_value("escrow").isNull());
+
+    // An enforcer without the BIP300 constants, GetSidechainProposals nor GetCtip (17eb2ce-like), and with a bundle
+    // past its threshold: no votes needed nor blocks left said, nothing made up; the rest as it is.
+    const UniValue old{PegInfoFromEnforcer(46, EnforcerPegReplies{
+        .chain_info = read(R"({"network":"NETWORK_MAINNET"})"),
+        .tip_height = 900,
+        .sidechains = read(R"({})"),
+        .proposals = NullUniValue,
+        .ctip = NullUniValue,
+        .bundles = read(strprintf(R"({"proposals":[{"m6id":{"hex":"%s"},"voteCount":13151,"proposalHeight":100}]})", HexStr(m6id))),
+    })};
+    BOOST_CHECK(old.find_value("withdrawalperiod").isNull());
+    BOOST_CHECK(old.find_value("withdrawalminscore").isNull());
+    BOOST_CHECK(old.find_value("proposals").isNull());
+    BOOST_CHECK(old.find_value("escrow").isNull());
+    BOOST_CHECK_EQUAL(old["activesidechains"].getInt<int>(), 0);
+    BOOST_CHECK(!old["sidechain"]["active"].get_bool());
+    BOOST_CHECK_EQUAL(old["bundles"][0]["score"].getInt<int>(), 13151);
+    BOOST_CHECK(old["bundles"][0].find_value("payable").isNull());
+    BOOST_CHECK(old["bundles"][0].find_value("blocksleft").isNull());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
