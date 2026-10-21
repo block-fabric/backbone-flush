@@ -127,7 +127,7 @@ std::vector<RPCResult> AssetResults()
         {RPCResult::Type::STR_HEX, "registration", "The transaction that registered it"},
         {RPCResult::Type::OBJ, "data", /*optional=*/true, "Its data; left out at a height before its registration", bitassets::DataResults()},
         {RPCResult::Type::BOOL, "releasable", "Whether it is dead and can be retired (releaseasset): fixed supply, every unit in pools nobody provides for"},
-        {RPCResult::Type::NUM, "release_fee", /*optional=*/true, "If releasable: the CHN its pools hold, which retiring it pays to mainchain miners"},
+        {RPCResult::Type::NUM, "release_fee", /*optional=*/true, "If releasable: the ECX its pools hold, which retiring it pays to mainchain miners"},
         {RPCResult::Type::OBJ, "control", /*optional=*/true, "The output that carries its control coin, unless burned",
         {
             {RPCResult::Type::STR_HEX, "txid", ""},
@@ -195,7 +195,7 @@ std::vector<RPCResult> PoolResults()
         {RPCResult::Type::STR_HEX, "pool", "The id of the pool, which its shares carry"},
         {RPCResult::Type::STR, "asset_a", "The first asset, as asked for (else the lower)"},
         {RPCResult::Type::STR, "asset_b", "The second asset"},
-        {RPCResult::Type::STR_HEX, "asset_a_id", "Its hash (null for CHN)"},
+        {RPCResult::Type::STR_HEX, "asset_a_id", "Its hash (null for ECX)"},
         {RPCResult::Type::STR_HEX, "asset_b_id", "Its hash"},
         {RPCResult::Type::NUM, "reserve_a", "What the pool holds of the first asset"},
         {RPCResult::Type::NUM, "reserve_b", "What it holds of the second"},
@@ -241,7 +241,7 @@ std::vector<RPCResult> AuctionResults()
         {RPCResult::Type::STR_HEX, "auction", "The transaction that made it, which names it"},
         {RPCResult::Type::STR, "base", "What it sells"},
         {RPCResult::Type::STR, "quote", "What it sells for"},
-        {RPCResult::Type::STR_HEX, "base_id", "The hash of what it sells (null for CHN)"},
+        {RPCResult::Type::STR_HEX, "base_id", "The hash of what it sells (null for ECX)"},
         {RPCResult::Type::STR_HEX, "quote_id", "The hash of what it sells for"},
         {RPCResult::Type::NUM, "amount", "How much it sells, in all"},
         {RPCResult::Type::NUM, "remaining", "How much is left"},
@@ -388,7 +388,7 @@ RPCMethod getasset()
     LOCK(::cs_main);
     const bitassets::State state{StateOf(chainman)};
     const AssetId asset{ParseAsset(request.params[0], state)};
-    if (asset.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "CHN is the coin of the chain, not a registered asset");
+    if (asset.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "ECX is the coin of the chain, not a registered asset");
     const auto& record{Registered(state, asset)};
     const std::optional<int> height{request.params[1].isNull() ? std::nullopt : std::optional<int>{request.params[1].getInt<int>()}};
     return AssetToJSON(chainman.ActiveChainstate(), state, asset, record, height);
@@ -640,7 +640,7 @@ RPCMethod getpool()
             {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
         },
         RPCResult{RPCResult::Type::OBJ, "", "", PoolResults()},
-        RPCExamples{HelpExampleCli("getpool", "\"GOLD\" \"CHN\"")},
+        RPCExamples{HelpExampleCli("getpool", "\"GOLD\" \"ECX\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
@@ -675,7 +675,7 @@ RPCMethod quoteswap()
             {RPCResult::Type::NUM, "fee", "What the pool keeps, in what goes in"},
             {RPCResult::Type::BOOL, "abandoned", "Whether nobody provides liquidity to the pool any more (see listpools)"},
         }},
-        RPCExamples{HelpExampleCli("quoteswap", "\"CHN\" 1 \"GOLD\"")},
+        RPCExamples{HelpExampleCli("quoteswap", "\"ECX\" 1 \"GOLD\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
@@ -903,7 +903,7 @@ RPCMethod getdexinfo()
 {
     return RPCMethod{
         "getdexinfo",
-        "Layers' DEX: whether its rules apply to the next block, and its bounds (doc/layers.md, \"The DEX\").",
+        "Starbase's DEX: whether its rules apply to the next block, and its bounds (doc/layers.md, \"The DEX\").",
         {},
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -961,7 +961,7 @@ RPCMethod quoteroute()
                 {RPCResult::Type::OBJ, "", "",
                 {
                     {RPCResult::Type::ARR, "path", "Its assets", {{RPCResult::Type::STR, "", "An asset's label"}}},
-                    {RPCResult::Type::ARR, "path_ids", "The same, by hash (null for CHN)", {{RPCResult::Type::STR_HEX, "", "An asset"}}},
+                    {RPCResult::Type::ARR, "path_ids", "The same, by hash (null for ECX)", {{RPCResult::Type::STR_HEX, "", "An asset"}}},
                     {RPCResult::Type::NUM, "amount_out", "What it gives"},
                     {RPCResult::Type::ARR, "hops", "Each pool's part",
                     {
@@ -1581,13 +1581,13 @@ RPCMethod searchpools()
             {"filters", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "(the filters of searchassets that are not these are taken and left aside)",
             {
                 {"exclude_abandoned", RPCArg::Type::BOOL, RPCArg::Default{true}, "Leave out those nobody provides liquidity to"},
-                {"chn_only", RPCArg::Type::BOOL, RPCArg::Default{false}, "Only pools with CHN"},
-                {"min_depth", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "At least this much CHN in the pool"},
+                {"chn_only", RPCArg::Type::BOOL, RPCArg::Default{false}, "Only pools with ECX"},
+                {"min_depth", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "At least this much ECX in the pool"},
                 {"exclude_keywords", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "Leave out those with an asset with any of these words in its name",
                     {{"keyword", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
             }},
-            {"sort", RPCArg::Type::STR, RPCArg::Default{"depth"}, "depth (CHN held; pools with CHN only), volume (CHN traded in the window; those traded only), "
-                "price_change (of the second asset in the first, CHN for a pool with CHN, over the window; largest rise first), newest. "
+            {"sort", RPCArg::Type::STR, RPCArg::Default{"depth"}, "depth (ECX held; pools with ECX only), volume (ECX traded in the window; those traded only), "
+                "price_change (of the second asset in the first, ECX for a pool with ECX, over the window; largest rise first), newest. "
                 "The sorts of searchassets map onto these: relevance, pool_depth, name, supply, oldest: depth; activity: volume"},
             {"cursor", RPCArg::Type::STR_HEX, RPCArg::Default{""}, "\"next_cursor\" of the page before"},
             {"limit", RPCArg::Type::NUM, RPCArg::Default{50}, strprintf("From 1 to %u", bitassets::index::MAX_PAGE)},
@@ -1596,8 +1596,8 @@ RPCMethod searchpools()
         {
             {RPCResult::Type::ARR, "pools", "", {{RPCResult::Type::OBJ, "", "", [] {
                 std::vector<RPCResult> results{PoolResults()};
-                results.push_back({RPCResult::Type::NUM, "depth", "The CHN it holds (0 for a pool without CHN)"});
-                results.push_back({RPCResult::Type::NUM, "volume_window", "CHN traded over the volume window"});
+                results.push_back({RPCResult::Type::NUM, "depth", "The ECX it holds (0 for a pool without ECX)"});
+                results.push_back({RPCResult::Type::NUM, "volume_window", "ECX traded over the volume window"});
                 results.push_back({RPCResult::Type::NUM, "price_change", "The change of the price of asset_b in asset_a over the window, in percent"});
                 results.push_back({RPCResult::Type::NUM, "last_activity", "The height of the last block that touched it"});
                 return results;

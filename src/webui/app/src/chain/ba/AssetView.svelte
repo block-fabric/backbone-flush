@@ -108,7 +108,7 @@
     if (!asset || wallet === null) return;
     const r = await ask({
       title: t('Retire %1', asset.label),
-      message: t('Retire %1 for good? It and its pools are deleted and its name is free again; the %2 CHN its pools hold go to mainchain miners, as a fee.', nameOf(asset.asset, asset.label), formatAmount(asset.release_fee ?? 0, 8)),
+      message: t('Retire %1 for good? It and its pools are deleted and its name is free again; the %2 ECX its pools hold go to mainchain miners, as a fee.', nameOf(asset.asset, asset.label), formatAmount(asset.release_fee ?? 0, 8)),
       informative: t('Anyone may retire a dead asset; this wallet pays the fee of the transaction.'),
       level: 'warning',
       choices: [
@@ -172,8 +172,8 @@
 
     <section class="ba-figures">
       <div class="panel ba-figure"><span class="muted">Supply</span><strong>{formatAmount(asset.supply, asset.decimals)}</strong><span class="faint">{asset.decimals} decimals</span></div>
-      <div class="panel ba-figure"><span class="muted">Price</span><strong>{price !== undefined ? formatPrice(price) : '–'}</strong><span class="faint">{price !== undefined ? 'CHN, in its pool' : 'No pool with CHN'}</span></div>
-      <div class="panel ba-figure"><span class="muted">Value of the supply</span><strong>{price !== undefined ? formatPrice(price * approx(asset.supply)) : '–'}</strong><span class="faint">CHN at that price</span></div>
+      <div class="panel ba-figure"><span class="muted">Price</span><strong>{price !== undefined ? formatPrice(price) : '–'}</strong><span class="faint">{price !== undefined ? 'ECX, in its pool' : 'No pool with ECX'}</span></div>
+      <div class="panel ba-figure"><span class="muted">Value of the supply</span><strong>{price !== undefined ? formatPrice(price * approx(asset.supply)) : '–'}</strong><span class="faint">ECX at that price</span></div>
       <div class="panel ba-figure"><span class="muted">You hold</span><strong>{holding ? formatAmount(holding.balance, asset.decimals) : '0'}</strong><span class="faint">{heldShare ? formatPercent(heldShare * 100) : '–'} of the supply</span></div>
     </section>
 
@@ -201,7 +201,7 @@
         <section class="panel">
           <div class="panel-head"><h3>Markets</h3>{#if pools.length === 0}<button type="button" class="btn small" onclick={makePool}><Icon name="plus" size={14} /> Make a pool</button>{/if}</div>
           {#if pools.length === 0}
-            <p class="ba-empty">No pool trades it yet. Make one with CHN, and set its first price.</p>
+            <p class="ba-empty">No pool trades it yet. Make one with ECX, and set its first price.</p>
           {:else}
             <ul class="ba-list">
               {#each pools as p (p.pool)}
@@ -226,12 +226,12 @@
 
         {#if chnPool && !chnPool.abandoned}
           <section class="panel">
-            <div class="panel-head"><h3>Price in CHN</h3><span class="muted small">as this app saw it, block by block</span></div>
+            <div class="panel-head"><h3>Price in ECX</h3><span class="muted small">as this app saw it, block by block</span></div>
             <div class="panel-body">
               {#if series.length < 2}
                 <p class="ba-help">The chain keeps no history of prices: the chart grows from the first trades this app sees.</p>
               {/if}
-              <Chart points={series.length ? series : [{ x: ba.height, y: price ?? 0 }]} step label={t('The price of %1 in CHN', asset.label)} formatX={(x) => t('block %1', String(Math.round(x)))} />
+              <Chart points={series.length ? series : [{ x: ba.height, y: price ?? 0 }]} step label={t('The price of %1 in ECX', asset.label)} formatX={(x) => t('block %1', String(Math.round(x)))} />
             </div>
           </section>
         {/if}
@@ -304,7 +304,7 @@
           <section class="panel dead">
             <div class="panel-head"><h3>This asset is dead</h3></div>
             <div class="panel-body stack">
-              <p class="ba-help">Its supply is fixed, nobody holds any of it, and its pools have no liquidity providers. Retiring it deletes it and its pools and frees its name; the {formatAmount(asset.release_fee ?? 0, 8)} CHN its pools hold go to mainchain miners, as a fee. Anyone may do it.</p>
+              <p class="ba-help">Its supply is fixed, nobody holds any of it, and its pools have no liquidity providers. Retiring it deletes it and its pools and frees its name; the {formatAmount(asset.release_fee ?? 0, 8)} ECX its pools hold go to mainchain miners, as a fee. Anyone may do it.</p>
               <div><button type="button" class="btn danger" disabled={wallets.current === null} onclick={retire}><Icon name="flame" size={15} /> Retire it</button></div>
             </div>
           </section>

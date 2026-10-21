@@ -1,5 +1,5 @@
 // The assets a wallet holds, as the Home and the Overview list them (HeldAssets.svelte): from the one listmyassets the
-// store reads (no call per asset), those with a balance by their worth in CHN (where a pool prices them), then by their
+// store reads (no call per asset), those with a balance by their worth in ECX (where a pool prices them), then by their
 // balance; those the wallet only controls (the control coin, no units) apart.
 import { approx, type Holding } from './model';
 
@@ -7,7 +7,7 @@ export interface HeldRow {
   holding: Holding;
   /** Its number, which names it whatever its label looks like (#1739-0029). */
   seq: string;
-  /** What it is worth in CHN, if a pool prices it. */
+  /** What it is worth in ECX, if a pool prices it. */
   value: number | undefined;
   /** Units not spendable yet (waiting for a block). */
   pending: boolean;

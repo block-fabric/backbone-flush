@@ -132,7 +132,7 @@ class LayersTest(SidechainTest):
 
         self.log.info("Activate the slot on the mainchain, deposits")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Layers", "Assets on a fast chain", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         assert_equal([s["slot"] for s in main.listactivesidechains()], [SLOT])
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 50)
@@ -145,7 +145,7 @@ class LayersTest(SidechainTest):
         self.bmm()
         assert_peg_balance(main, self.nodes)
 
-        self.log.info("An asset reserved, registered and pooled with CHN in BMM blocks")
+        self.log.info("An asset reserved, registered and pooled with ECX in BMM blocks")
         reserved = n0.reserveasset("GOLD")
         self.bmm()
         self.bmm()
@@ -154,7 +154,7 @@ class LayersTest(SidechainTest):
         block = self.bmm()
         assert not self.is_pos(n0, block)
         assert_equal(self.holding(n0, "GOLD"), Decimal("1000000.00"))
-        n0.addliquidity("GOLD", 10000, "CHN", 5)
+        n0.addliquidity("GOLD", 10000, "ECX", 5)
         block = self.bmm()
         assert not self.is_pos(n0, block)
         assert_equal(len(n0.listpools()), 1)
@@ -177,16 +177,16 @@ class LayersTest(SidechainTest):
         n0.setbmm(True, ticket_address, True, Decimal("0.0001"))
         self.anchor()
 
-        self.log.info("Swaps in blocks of stake: the asset at once, the CHN with the next anchor")
-        quote = n1.quoteswap("CHN", "0.1", "GOLD")
-        swap = n1.swapasset("CHN", "0.1", "GOLD")
+        self.log.info("Swaps in blocks of stake: the asset at once, the ECX with the next anchor")
+        quote = n1.quoteswap("ECX", "0.1", "GOLD")
+        swap = n1.swapasset("ECX", "0.1", "GOLD")
         swap_block = self.mined(n1, swap["txid"])
         assert self.is_pos(n1, swap_block)
         # The asset leg is in the block of stake.
         self.wait_until(lambda: self.holding(n1, "GOLD") == quote["amount_out"])
-        quote = n0.quoteswap("GOLD", 200, "CHN")
+        quote = n0.quoteswap("GOLD", 200, "ECX")
         before = n0.getblockcount()
-        swap = n0.swapasset("GOLD", 200, "CHN")
+        swap = n0.swapasset("GOLD", 200, "ECX")
         sold_block = self.mined(n0, swap["txid"])
         assert self.is_pos(n0, sold_block)
         sold_height = n0.getblockheader(sold_block)["height"]
@@ -209,7 +209,7 @@ class LayersTest(SidechainTest):
         self.wait_until(lambda: self.holding(n2, "GOLD") == Decimal("12.50"))
         # 100 GOLD from 10 CHN down to 1 over 600 blocks (ten minutes of 1-second slots on regtest).
         # (Starting 5 blocks on: a block of stake a second, the transaction may wait a slot or two to be mined.)
-        made = n0.createauction("GOLD", 100, "CHN", 10, 1, 600, 5)
+        made = n0.createauction("GOLD", 100, "ECX", 10, 1, 600, 5)
         assert self.is_pos(n0, self.mined(n0, made["txid"]))
         self.wait_until(lambda: len(n1.listauctions()) == 1 and n1.listauctions()[0]["status"] == "open")
         auction = n1.listauctions()[0]["auction"]
@@ -233,7 +233,7 @@ class LayersTest(SidechainTest):
         assert_peg_balance(main, self.nodes)
 
         self.log.info("Finality: the block of stake with a swap, soft, then final with the anchors")
-        fresh = n1.swapasset("CHN", "0.05", "GOLD")
+        fresh = n1.swapasset("ECX", "0.05", "GOLD")
         fresh_block = self.mined(n1, fresh["txid"])
         assert_equal(n1.getblock(fresh_block)["finality"]["status"], "soft")
         for _ in range(6):
@@ -258,18 +258,18 @@ class LayersTest(SidechainTest):
             time.sleep(1)
         state_before = self.asset_state(n0)
         # A BMM block with a swap...
-        swap = n1.swapasset("CHN", "0.2", "GOLD")
+        swap = n1.swapasset("ECX", "0.2", "GOLD")
         bmm_block = self.bmm()
         assert not self.is_pos(n0, bmm_block)
         assert swap["txid"] in n0.getblock(bmm_block)["tx"]
         # ... then blocks of stake with more: a pool share taken out, an asset burned, an auction made.
         for n in self.nodes:
             n.setstaking(True)
-        removed = n0.removeliquidity("GOLD", "CHN", 25)
+        removed = n0.removeliquidity("GOLD", "ECX", 25)
         burned = n0.burnasset("GOLD", 5)
         pos_blocks = {self.mined(n0, removed["txid"]), self.mined(n0, burned["txid"])}
         assert all(self.is_pos(n0, b) for b in pos_blocks)
-        auctioned = n0.createauction("GOLD", 10, "CHN", 2, 1, 600, 5)
+        auctioned = n0.createauction("GOLD", 10, "ECX", 2, 1, 600, 5)
         pos_blocks.add(self.mined(n0, auctioned["txid"]))
         for n in self.nodes:
             n.setstaking(False)

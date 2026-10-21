@@ -29,7 +29,7 @@ class BitAssetsTest(SidechainTest):
         return {"balance": Decimal(0), "control": False}
 
     def payouts_to(self, node, block):
-        """The CHN the coinbase of a block pays to addresses of the wallet of `node`, beyond the first output."""
+        """The ECX the coinbase of a block pays to addresses of the wallet of `node`, beyond the first output."""
         total = Decimal(0)
         for out in block["tx"][0]["vout"][1:]:
             address = out["scriptPubKey"].get("address")
@@ -103,7 +103,7 @@ class BitAssetsTest(SidechainTest):
         # Taken.
         assert_raises_rpc_error(-8, "is registered", other.reserveasset, "GOLD")
         # Names that read as another asset: CHN, a number, a hash.
-        for name in ["CHN", "chn", gold["seq"], "1739-0029", "0x" + gold["asset"][:16], "0xGOLD"]:
+        for name in ["ECX", "chn", gold["seq"], "1739-0029", "0x" + gold["asset"][:16], "0xGOLD"]:
             assert_raises_rpc_error(-8, "reads as another asset", other.reserveasset, name)
 
         self.log.info("An asset without supply yet, and a private one")
@@ -154,8 +154,8 @@ class BitAssetsTest(SidechainTest):
         assert_equal(self.holding(side, "GOLD")["control"], True)
         assert_equal(side.getasset("GOLD")["supply"], Decimal("1001005.00"))
         # Too little to open a pool: fewer shares than a pool opens with.
-        assert_raises_rpc_error(-8, "Too little to open a pool", side.addliquidity, "SILVER", 100, "CHN", "0.001")
-        assert_raises_rpc_error(-8, "it makes no shares", side.addliquidity, "SILVER", 1, "CHN", "0.000001")
+        assert_raises_rpc_error(-8, "Too little to open a pool", side.addliquidity, "SILVER", 100, "ECX", "0.001")
+        assert_raises_rpc_error(-8, "it makes no shares", side.addliquidity, "SILVER", 1, "ECX", "0.000001")
         side.burnasset("GOLD", 100)
         side.updateasset("GOLD", {"info": "One gram of gold, in Zurich"})
         self.mine_txs()
@@ -203,66 +203,66 @@ class BitAssetsTest(SidechainTest):
         assert "control" not in side.getasset("SILVER")
         assert_raises_rpc_error(-8, "fixed", other.mintasset, "SILVER", 1)
 
-        self.log.info("A pool of GOLD and CHN")
-        assert_raises_rpc_error(-8, "no pool yet", side.addliquidity, "GOLD", 10000, "CHN")
-        added = side.addliquidity("GOLD", 10000, "CHN", 5)
+        self.log.info("A pool of GOLD and ECX")
+        assert_raises_rpc_error(-8, "no pool yet", side.addliquidity, "GOLD", 10000, "ECX")
+        added = side.addliquidity("GOLD", 10000, "ECX", 5)
         self.mine_txs()
-        pool = side.getpool("GOLD", "CHN")
+        pool = side.getpool("GOLD", "ECX")
         assert_equal(pool["reserve_a"], Decimal("10000.00"))
         assert_equal(pool["reserve_b"], Decimal("5.00000000"))
         assert_equal(pool["price"], Decimal("0.0005"))
         assert_equal(side.listpools()[0]["asset_a"], "GOLD")
         # Those of an asset, which comes first.
         assert_equal(side.listpools("GOLD"), side.listpools())
-        assert_equal(side.listpools("CHN")[0]["asset_a"], "CHN")
-        assert_equal(side.listpools("CHN")[0]["reserve_a"], pool["reserve_b"])
+        assert_equal(side.listpools("ECX")[0]["asset_a"], "ECX")
+        assert_equal(side.listpools("ECX")[0]["reserve_a"], pool["reserve_b"])
         assert_equal(side.listpools("SILVER"), [])
         liquidity = side.listmyassets()["liquidity"]
         assert_equal(len(liquidity), 1)
         assert_equal(liquidity[0]["shares"], added["shares"])
         # A deposit that was to make the pool, which someone made meanwhile, is refused, not signed at
         # their price (and one that was to go in at the pool's price is refused for a pool there is not).
-        assert_raises_rpc_error(-8, "Someone opened this pool meanwhile", other.addliquidity, "GOLD", 100, "CHN", 1, 1, True)
+        assert_raises_rpc_error(-8, "Someone opened this pool meanwhile", other.addliquidity, "GOLD", 100, "ECX", 1, 1, True)
         assert_raises_rpc_error(-8, "which was not expected", other.addliquidity, "GOLD", 100, "SILVER", 1, 1, False)
         # More, at the pool's price.
-        more = other.addliquidity("GOLD", 100, "CHN", None, 1, False)
+        more = other.addliquidity("GOLD", 100, "ECX", None, 1, False)
         assert_equal(more["amount_b"], Decimal("0.05000000"))
         self.mine_txs()
         # Amounts off the pool's price: only what its price takes goes in, not the excess, which would
         # be given away to its providers.
-        clamped = other.addliquidity("GOLD", 10, "CHN", 1)
+        clamped = other.addliquidity("GOLD", 10, "ECX", 1)
         assert_equal(clamped["amount_a"], Decimal("10.00"))
         # What the shares 10 GOLD gives are worth: a few satoshis under 0.005 CHN, rounded down shares.
         assert Decimal("0.00499900") < clamped["amount_b"] <= Decimal("0.00500000")
         self.mine_txs()
-        clamped = other.addliquidity("GOLD", 1000, "CHN", "0.005")
+        clamped = other.addliquidity("GOLD", 1000, "ECX", "0.005")
         assert_equal((clamped["amount_a"], clamped["amount_b"]), (Decimal("10.00"), Decimal("0.00500000")))
         self.mine_txs()
 
         self.log.info("Trade in it")
         # Less CHN out than is paid out: refused.
-        assert_raises_rpc_error(-8, "the least CHN paid out is 0.0005", side.swapasset, "GOLD", "0.5", "CHN")
-        quote = other.quoteswap("CHN", "0.1", "GOLD")
+        assert_raises_rpc_error(-8, "the least ECX paid out is 0.0005", side.swapasset, "GOLD", "0.5", "ECX")
+        quote = other.quoteswap("ECX", "0.1", "GOLD")
         assert_greater_than(quote["amount_out"], 0)
         assert_greater_than(quote["price_impact"], 0)
         before = self.holding(other, "GOLD")["balance"]
         # The least the caller showed is what it signs, at the least: more than the quote, less the
         # slippage, gives is refused.
-        assert_raises_rpc_error(-8, "The pool moved", other.swapasset, "CHN", "0.1", "GOLD", 0.5, 10, quote["amount_out"])
+        assert_raises_rpc_error(-8, "The pool moved", other.swapasset, "ECX", "0.1", "GOLD", 0.5, 10, quote["amount_out"])
         least = (quote["amount_out"] * Decimal("0.995")).quantize(Decimal("0.01"), rounding="ROUND_DOWN")
-        swap = other.swapasset("CHN", "0.1", "GOLD", 0.5, 10, str(least))
+        swap = other.swapasset("ECX", "0.1", "GOLD", 0.5, 10, str(least))
         assert_equal(swap["quote"], quote["amount_out"])
         assert swap["min_out"] >= least
         self.mine_txs()
         assert_equal(self.holding(other, "GOLD")["balance"], before + quote["amount_out"])
         # GOLD for CHN: the coinbase pays.
-        quote = side.quoteswap("GOLD", 200, "CHN")
-        side.swapasset("GOLD", 200, "CHN")
+        quote = side.quoteswap("GOLD", 200, "ECX")
+        side.swapasset("GOLD", 200, "ECX")
         block = self.mine_txs()
         assert_equal(self.payouts_to(side, block), quote["amount_out"])
-        assert_equal(side.getpool("GOLD", "CHN")["swaps"], 2)
+        assert_equal(side.getpool("GOLD", "ECX")["swaps"], 2)
         # A trade the pool moved away from fails, and leaves the mempool.
-        exact = side.quoteswap("CHN", 1, "GOLD", True)
+        exact = side.quoteswap("ECX", 1, "GOLD", True)
         assert exact["amount_out"] >= Decimal("1.00")
 
         self.log.info("Pools are listed a page at a time")
@@ -274,7 +274,7 @@ class BitAssetsTest(SidechainTest):
 
         self.log.info("Take liquidity out")
         shares = side.listmyassets()["liquidity"][0]["shares"]
-        removed = side.removeliquidity("GOLD", "CHN", 50)
+        removed = side.removeliquidity("GOLD", "ECX", 50)
         assert_equal(removed["shares"], shares // 2)
         gold_before = self.holding(side, "GOLD")["balance"]
         block = self.mine_txs()
@@ -282,8 +282,8 @@ class BitAssetsTest(SidechainTest):
         assert_equal(self.holding(side, "GOLD")["balance"], gold_before + removed["amount_a"])
         assert_equal(side.listmyassets()["liquidity"][0]["shares"], shares - shares // 2)
 
-        self.log.info("A Dutch auction: 100 GOLD, from 10 CHN down to 1, over 5 blocks")
-        side.createauction("GOLD", 100, "CHN", 10, 1, 5)
+        self.log.info("A Dutch auction: 100 GOLD, from 10 ECX down to 1, over 5 blocks")
+        side.createauction("GOLD", 100, "ECX", 10, 1, 5)
         self.mine_txs()
         auction = side.listauctions()[0]
         assert_equal(auction["status"], "open")
@@ -325,7 +325,7 @@ class BitAssetsTest(SidechainTest):
 
         self.log.info("An auction without bids is canceled, everything back")
         before = self.holding(side, "GOLD")["balance"]
-        side.createauction("GOLD", 10, "CHN", 5, 5, 3, 2)
+        side.createauction("GOLD", 10, "ECX", 5, 5, 3, 2)
         self.mine_txs()
         auction = side.listauctions()[0]
         assert_equal(auction["status"], "upcoming")
@@ -336,7 +336,7 @@ class BitAssetsTest(SidechainTest):
 
         self.log.info("Buying all that is left pays what it costs, no more")
         # 1 SILVER (no decimals) for 1 CHN: the most that buys no more than 1 was 1.99999999 CHN.
-        side.createauction("SILVER", 1, "CHN", 1, 1, 5)
+        side.createauction("SILVER", 1, "ECX", 1, 1, 5)
         self.mine_txs()
         auction = side.listauctions()[0]
         assert_equal(auction["cost_of_remaining"], Decimal("1.00000000"))
@@ -363,7 +363,7 @@ class BitAssetsTest(SidechainTest):
         assert_equal(side.getauction(auction["auction"])["status"], "sold out")
         side.collectauction(auction["auction"])
         # A bid of more than all that is left costs pays only that.
-        side.createauction("SILVER", 10, "CHN", "0.5", "0.5", 5)
+        side.createauction("SILVER", 10, "ECX", "0.5", "0.5", 5)
         self.mine_txs()
         auction = side.listauctions()[0]
         overpaid = other.bidauction(auction["auction"], "0.52")
@@ -374,7 +374,7 @@ class BitAssetsTest(SidechainTest):
         self.mine_txs()
 
         self.log.info("A bid for all that is left, taken blocks later, pays what it costs then and gets the rest back")
-        side.createauction("SILVER", 10, "CHN", 1, "0.5", 5)
+        side.createauction("SILVER", 10, "ECX", 1, "0.5", 5)
         self.mine_txs()
         auction = side.listauctions()[0]
         late = other.bidauction(auction["auction"], None, True)
@@ -420,47 +420,47 @@ class BitAssetsTest(SidechainTest):
         assert "burn" in [a["operation"] for a in activity]
 
         self.log.info("Trades too large for a pool, and pools nobody provides for, are refused")
-        assert_raises_rpc_error(-8, "too large for this pool", side.swapasset, "CHN", 100, "GOLD")
-        assert side.quoteswap("CHN", 100, "GOLD")["price_impact"] > 10
-        assert_equal(side.getpool("GOLD", "CHN")["abandoned"], False)
-        side.removeliquidity("GOLD", "CHN")
-        other.removeliquidity("GOLD", "CHN")
+        assert_raises_rpc_error(-8, "too large for this pool", side.swapasset, "ECX", 100, "GOLD")
+        assert side.quoteswap("ECX", 100, "GOLD")["price_impact"] > 10
+        assert_equal(side.getpool("GOLD", "ECX")["abandoned"], False)
+        side.removeliquidity("GOLD", "ECX")
+        other.removeliquidity("GOLD", "ECX")
         self.mine_txs()
-        assert_equal(side.getpool("GOLD", "CHN")["abandoned"], True)
+        assert_equal(side.getpool("GOLD", "ECX")["abandoned"], True)
         assert_equal(side.listpools()[0]["abandoned"], True)
-        assert_raises_rpc_error(-8, "Nobody provides liquidity", side.swapasset, "CHN", "0.001", "GOLD")
+        assert_raises_rpc_error(-8, "Nobody provides liquidity", side.swapasset, "ECX", "0.001", "GOLD")
         # Reopened as a new pool is made: both amounts, which set its price, not the price it was left at.
-        assert_raises_rpc_error(-8, "Give both amounts", side.addliquidity, "GOLD", 100, "CHN")
-        reopened = side.addliquidity("GOLD", 1000, "CHN", 2)
+        assert_raises_rpc_error(-8, "Give both amounts", side.addliquidity, "GOLD", 100, "ECX")
+        reopened = side.addliquidity("GOLD", 1000, "ECX", 2)
         assert_equal(reopened["sets_price"], True)
         self.mine_txs()
-        assert_equal(side.getpool("GOLD", "CHN")["abandoned"], False)
-        assert_equal(other.addliquidity("GOLD", 10, "CHN")["sets_price"], False)
+        assert_equal(side.getpool("GOLD", "ECX")["abandoned"], False)
+        assert_equal(other.addliquidity("GOLD", 10, "ECX")["sets_price"], False)
         self.mine_txs()
-        side.removeliquidity("GOLD", "CHN")
-        other.removeliquidity("GOLD", "CHN")
+        side.removeliquidity("GOLD", "ECX")
+        other.removeliquidity("GOLD", "ECX")
         self.mine_txs()
-        assert_equal(side.getpool("GOLD", "CHN")["abandoned"], True)
+        assert_equal(side.getpool("GOLD", "ECX")["abandoned"], True)
 
         self.log.info("Reopening a pool cannot be front-run")
-        dust = side.getpool("GOLD", "CHN")
+        dust = side.getpool("GOLD", "ECX")
         assert_greater_than(dust["reserve_a"], 0)
         # The dust counts toward what the pool reopens with: amounts not above it are refused.
-        assert_raises_rpc_error(-8, "count toward what it reopens with", side.addliquidity, "GOLD", dust["reserve_a"], "CHN", 1)
+        assert_raises_rpc_error(-8, "count toward what it reopens with", side.addliquidity, "GOLD", dust["reserve_a"], "ECX", 1)
         gold_before = self.holding(side, "GOLD")["balance"]
         # Alice reopens it at 0.01 CHN a GOLD; her transaction waits while Mallory's, at the price of the
         # dust (0.002), is mined first.
-        alice = side.addliquidity("GOLD", 200, "CHN", 2)
+        alice = side.addliquidity("GOLD", 200, "ECX", 2)
         assert_equal(alice["sets_price"], True)
         assert_equal(alice["amount_a"], Decimal(200) - dust["reserve_a"])
         assert_equal(alice["amount_b"], Decimal(2) - dust["reserve_b"])
         side.prioritisetransaction(alice["txid"], 0, -100000000)
-        mallory = other.addliquidity("GOLD", 25, "CHN", "0.05")
+        mallory = other.addliquidity("GOLD", 25, "ECX", "0.05")
         self.sync_mempools()
         block = self.mine_txs()
         assert mallory["txid"] in [tx["txid"] for tx in block["tx"]]
         # Mallory's amounts, the dust merged in, are what the pool reopened with: her price.
-        pool = side.getpool("GOLD", "CHN")
+        pool = side.getpool("GOLD", "ECX")
         assert_equal((pool["reserve_a"], pool["reserve_b"]), (Decimal("25.00"), Decimal("0.05000000")))
         assert_equal(pool["price"], Decimal("0.002"))
         # Alice's deposit would now go in at Mallory's price, for far fewer shares than quoted: it
@@ -473,17 +473,17 @@ class BitAssetsTest(SidechainTest):
         mine = other.listmyassets()["liquidity"][0]
         assert mine["value_a"] <= Decimal("25.00") and mine["value_b"] <= Decimal("0.05000000")
 
-        self.log.info("A dead asset is retired: its pools' CHN go to mainchain miners")
+        self.log.info("A dead asset is retired: its pools' ECX go to mainchain miners")
         side.reserveasset("DEAD")
         self.mine_txs()
         self.mine_txs()
         side.registerasset("DEAD", 1000)
         self.mine_txs()
-        side.addliquidity("DEAD", 500, "CHN", 1)
+        side.addliquidity("DEAD", 500, "ECX", 1)
         self.mine_txs()
         assert_equal(side.getasset("DEAD")["releasable"], False)
         assert_raises_rpc_error(-8, "not dead", side.releaseasset, "DEAD")
-        side.removeliquidity("DEAD", "CHN")
+        side.removeliquidity("DEAD", "ECX")
         side.fixassetsupply("DEAD", True)
         self.mine_txs()
         side.burnasset("DEAD", self.holding(side, "DEAD")["balance"])
@@ -526,7 +526,7 @@ class BitAssetsTest(SidechainTest):
         # Its number names no asset now: never the asset whose name the number is.
         assert_raises_rpc_error(-8, "No asset has the number", side.getasset, dead_number)
         assert "DEAD" not in [a["label"] for a in side.listassets()]
-        assert_raises_rpc_error(-8, "no pool", side.getpool, "DEAD", "CHN")
+        assert_raises_rpc_error(-8, "no pool", side.getpool, "DEAD", "ECX")
         new = side.listwithdrawals()
         assert_equal(len(new), withdrawals + 1)
         payout = [w for w in new if w["mainchainfee"] == fee - Decimal("0.00000001")]
@@ -557,7 +557,7 @@ class BitAssetsTest(SidechainTest):
 
         self.log.info("Undoing blocks undoes the assets")
         tip = side.getbestblockhash()
-        pool = side.getpool("GOLD", "CHN")
+        pool = side.getpool("GOLD", "ECX")
         gold = side.getasset("GOLD")
         mine = side.listmyassets()
         first = side.getblockhash(gold["registered"])
@@ -565,24 +565,24 @@ class BitAssetsTest(SidechainTest):
         assert_raises_rpc_error(-8, "No such asset", side.getasset, "GOLD")
         side.reconsiderblock(first)
         assert_equal(side.getbestblockhash(), tip)
-        assert_equal(side.getpool("GOLD", "CHN"), pool)
+        assert_equal(side.getpool("GOLD", "ECX"), pool)
         assert_equal(side.getasset("GOLD"), gold)
         assert_equal(side.listmyassets(), mine)
         self.check_in_sync()
 
-        self.log.info("An auction selling CHN takes no bid that buys CHN dust")
-        sells_chn = other.createauction("CHN", "0.01", "GOLD", 10, 10, 5)["txid"]
+        self.log.info("An auction selling ECX takes no bid that buys ECX dust")
+        sells_chn = other.createauction("ECX", "0.01", "GOLD", 10, 10, 5)["txid"]
         self.mine_txs()
-        assert_raises_rpc_error(-8, "the least CHN paid out is 0.0005", side.bidauction, sells_chn, "0.1")
+        assert_raises_rpc_error(-8, "the least ECX paid out is 0.0005", side.bidauction, sells_chn, "0.1")
         assert_equal(side.quotebid(sells_chn, 1)["buys"], Decimal("0.00100000"))
         # Nor one that leaves CHN dust, which nobody could buy.
-        assert_raises_rpc_error(-8, "It would leave less than 0.0005 CHN", side.bidauction, sells_chn, "9.99")
+        assert_raises_rpc_error(-8, "It would leave less than 0.0005 ECX", side.bidauction, sells_chn, "9.99")
         other.collectauction(sells_chn)
         # An auction sells 0.0005 CHN at least; a bid in CHN pays 0.0005 CHN at least.
-        assert_raises_rpc_error(-8, "an auction sells 0.0005 CHN at least", other.createauction, "CHN", "0.0004", "GOLD", 10, 10, 5)
-        for_chn = side.createauction("GOLD", 1, "CHN", "0.001", "0.001", 5)["txid"]
+        assert_raises_rpc_error(-8, "an auction sells 0.0005 ECX at least", other.createauction, "ECX", "0.0004", "GOLD", 10, 10, 5)
+        for_chn = side.createauction("GOLD", 1, "ECX", "0.001", "0.001", 5)["txid"]
         self.mine_txs()
-        assert_raises_rpc_error(-8, "a bid pays 0.0005 CHN at least", other.bidauction, for_chn, "0.0004")
+        assert_raises_rpc_error(-8, "a bid pays 0.0005 ECX at least", other.bidauction, for_chn, "0.0004")
         side.collectauction(for_chn)
         self.mine_txs()
 
@@ -592,8 +592,8 @@ class BitAssetsTest(SidechainTest):
         for operation in ["bid", "release", "register", "auction", "collect", "add liquidity", "remove liquidity", "swap", "transfer"]:
             assert operation in operations, operation
         bids = [a["summary"] for a in activity if a["operation"] == "bid"]
-        assert "Bid 2.50000000 CHN for at least 25.00 GOLD" in bids, bids
-        assert_equal([a["summary"] for a in activity if a["operation"] == "release"], ["Retired a dead asset (its pools' CHN go to mainchain miners)"])
+        assert "Bid 2.50000000 ECX for at least 25.00 GOLD" in bids, bids
+        assert_equal([a["summary"] for a in activity if a["operation"] == "release"], ["Retired a dead asset (its pools' ECX go to mainchain miners)"])
         assert_equal(len(other.listassetactivity(2)), 2)
 
         self.log.info("sendall leaves the outputs that carry tokens alone")

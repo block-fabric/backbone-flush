@@ -372,6 +372,8 @@ bool ReadsAsAnotherAsset(const std::string& name)
 {
     const auto lower{[](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }};
     if (name.size() == 3 && lower(name[0]) == 'c' && lower(name[1]) == 'h' && lower(name[2]) == 'n') return true;
+    // Starbase: the coin of the chain is shown as ECX (eCash's ticker).
+    if (name.size() == 3 && lower(name[0]) == 'e' && lower(name[1]) == 'c' && lower(name[2]) == 'x') return true;
     if (name.size() >= 2 && name[0] == '0' && lower(name[1]) == 'x') return true;
     // Groups of four digits, two or three of them.
     if (name.size() != 9 && name.size() != 14) return false;
@@ -407,17 +409,19 @@ bool NameMimicsNumber(const std::string& name)
 }
 
 namespace {
-/** Whether an asset is CHN by name, in any case. */
+/** Whether an asset is the coin of the chain by name, in any case: ECX (Starbase, eCash's ticker) or CHN (Layers'). */
 bool IsChnName(const AssetId& asset)
 {
     static const std::set<AssetId> chn{[] {
         std::set<AssetId> names;
-        for (int mask{0}; mask < 8; ++mask) {
-            std::string name{"chn"};
-            for (int i{0}; i < 3; ++i) {
-                if (mask & (1 << i)) name[i] = static_cast<char>(name[i] - 'a' + 'A');
+        for (const char* coin : {"chn", "ecx"}) {
+            for (int mask{0}; mask < 8; ++mask) {
+                std::string name{coin};
+                for (int i{0}; i < 3; ++i) {
+                    if (mask & (1 << i)) name[i] = static_cast<char>(name[i] - 'a' + 'A');
+                }
+                names.insert(HashName(name));
             }
-            names.insert(HashName(name));
         }
         return names;
     }()};

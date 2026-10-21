@@ -33,7 +33,7 @@
   <header class="page-head">
     <h1>{simple ? 'Swap' : 'Trade'}</h1>
     {#if simple}
-      <span class="muted">Pay CHN, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
+      <span class="muted">Pay ECX, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
     {:else}
       <span class="muted">{tn('%n pool(s) with liquidity', open)} · 0.3% fee per trade, to their providers</span>
     {/if}

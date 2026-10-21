@@ -158,7 +158,7 @@
   </div>
   <div class="panel-body body">
     <p class="muted lead">
-      Lock some CHN so that your node takes turns making the blocks of this chain, and earns part of their fees. You can stop at any time; the coins then come back after a waiting time.
+      Lock some ECX so that your node takes turns making the blocks of this chain, and earns part of their fees. You can stop at any time; the coins then come back after a waiting time.
       <Term id="bond">stake</Term> · <Term id="validator">validator</Term> · <Term id="slot">slot</Term>
     </p>
 

@@ -1,4 +1,4 @@
-// What BitAssets knows of a transaction of the wallet beyond CHN, for the Transactions page (pages/Transactions.svelte):
+// What BitAssets knows of a transaction of the wallet beyond ECX, for the Transactions page (pages/Transactions.svelte):
 // the assets it moved (listassettransactions, read with the store's refresh: one call for the wallet, never one per row),
 // what kind of move, how much, and the other side: where a send went, who paid what came in.
 import { t } from '../lib/i18n.svelte';
@@ -95,7 +95,7 @@ export function middleAddress(address: string, keep = 6): string {
   return address.length > keep * 2 + 3 ? `${address.slice(0, keep)}…${address.slice(-keep)}` : address;
 }
 
-/** The roles of the wallet's own outputs in a move, as the details list them: what each address got of the asset, its CHN change. */
+/** The roles of the wallet's own outputs in a move, as the details list them: what each address got of the asset, its ECX change. */
 export function ownAddresses(e: AssetTx): { address: string; roles: string[] }[] {
   const out = new Map<string, Set<string>>();
   const add = (address: string, role: string) => {
@@ -173,12 +173,12 @@ export function chainTxHidden(txid: string): boolean {
 }
 
 /**
- * The CHN side of an asset operation in its details (user feedback 2026-10-19): no Debit or Credit of nothing, the output
- * index (of the CHN record, meaningless for the asset) under "Raw", and in Simple mode only the status and the fee.
+ * The ECX side of an asset operation in its details (user feedback 2026-10-19): no Debit or Credit of nothing, the output
+ * index (of the ECX record, meaningless for the asset) under "Raw", and in Simple mode only the status and the fee.
  */
 export function chainTxDetails(txid: string): { hideZero: boolean; raw: Record<string, string>; simpleRows?: string[] } | undefined {
   if (!assetMovesOf(txid).length) return undefined;
-  return { hideZero: true, raw: { 'Output index': 'Output index of the CHN record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] };
+  return { hideZero: true, raw: { 'Output index': 'Output index of the ECX record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] };
 }
 
 /** What the notice of an asset received offers (Ignore this asset) and warns of (a name like one the wallet holds). */

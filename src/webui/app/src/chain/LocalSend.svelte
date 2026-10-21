@@ -1,5 +1,5 @@
 <script lang="ts">
-  // What the Send page sends, beside the coin of the chain: an asset. A choice at the top of Send (CHN, or an
+  // What the Send page sends, beside the coin of the chain: an asset. A choice at the top of Send (ECX, or an
   // asset this wallet holds); with an asset chosen, this form takes the place of the kit's (`active`): the
   // address, the amount (checked with the decimals of the asset, at most what the wallet holds), and a
   // confirmation, then sendasset. The Send panel of My assets of the Qt window of BitAssets, in the Send page.
@@ -37,7 +37,7 @@
     active = what !== CHN_ID;
   });
 
-  // What to send, in the searchable picker (hundreds of assets): CHN first, then what the wallet holds, without what it
+  // What to send, in the searchable picker (hundreds of assets): ECX first, then what the wallet holds, without what it
   // hides (its asset filters) unless shown; two of one name marked, told apart by their numbers.
   let showHidden = $state(false);
   const visible = $derived(withoutHidden(holdings, (h) => h.asset, (h) => h.label, showHidden));
@@ -46,7 +46,7 @@
   const sendChoices: PickChoice[] = $derived.by(() => {
     const list: PickChoice[] = listed.map((h) => ({ id: h.asset, label: h.label, seq: assetById(h.asset)?.seq, held: formatAmount(h.balance, h.decimals, { max: 4 }) }));
     const twins = lookAlikes(list);
-    return [{ id: CHN_ID, label: 'CHN', seq: '' }, ...list.map((c) => (twins.has(c.id) ? { ...c, warn: t('Another asset you hold has this name: check its number') } : c))];
+    return [{ id: CHN_ID, label: 'ECX', seq: '' }, ...list.map((c) => (twins.has(c.id) ? { ...c, warn: t('Another asset you hold has this name: check its number') } : c))];
   });
   // The filters of Browse assets.
   const sendChips: PickChip[] = [
@@ -74,7 +74,7 @@
       title: t('Send %1', holding.label),
       message: t('Send %1 %2 to this address?', formatUnits(amount, decimals), nameOf(holding.asset, holding.label)),
       code: address,
-      informative: t('It arrives with the next block. The fee is paid in CHN by this wallet.'),
+      informative: t('It arrives with the next block. The fee is paid in ECX by this wallet.'),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -108,7 +108,7 @@
       {/if}
     </div>
     <HiddenToggle count={visible.hidden} bind:show={showHidden} />
-    {#if !active}<p class="ba-help">Sending CHN. Pick an asset above to send it instead: any address of this chain receives any asset.</p>{/if}
+    {#if !active}<p class="ba-help">Sending ECX. Pick an asset above to send it instead: any address of this chain receives any asset.</p>{/if}
   </section>
 
   {#if active && holding}
@@ -116,7 +116,7 @@
       <h2 class="title"><AssetBadge id={holding.asset} label={holding.label} /> </h2>
       {#key formKey}<AddressInput id="asset-to" label="Pay to" bind:value={to} bind:valid={toValid} />{/key}
       <UnitsInput id="asset-amount" label="Amount" {decimals} bind:units={amount} bind:text={amountText} max={held} unit={holding.label} hint={approx(holding.pending) > 0 ? t('%1 more on the way: spendable after the next block', formatAmount(holding.pending, decimals)) : ''} />
-      <p class="ba-help">You hold {formatAmount(holding.balance, decimals)} <SafeText text={holding.label} />. The fee of the transaction is paid in CHN.</p>
+      <p class="ba-help">You hold {formatAmount(holding.balance, decimals)} <SafeText text={holding.label} />. The fee of the transaction is paid in ECX.</p>
       <div class="row">
         <button type="submit" class="btn primary" disabled={busy || !toValid || amount === null}><Icon name="send" size={17} /> {busy ? 'Working…' : 'Send'}</button>
         <button type="button" class="btn ghost" onclick={() => go('my-assets')}>My assets</button>

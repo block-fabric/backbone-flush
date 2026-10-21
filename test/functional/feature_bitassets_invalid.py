@@ -193,7 +193,7 @@ class BitAssetsInvalidTest(BitAssetsTest):
             ("a marker of version 1", [(0, marker_script(TAG + b"\x01\x00\x00"))], (), "bad-ba-marker"),
             ("a marker with a byte too many", [(0, marker_script(marker() + b"\x00"))], (), "bad-ba-marker"),
             ("two markers", [(0, marker_script(marker())), (0, marker_script(marker()))], (), "bad-ba-markers"),
-            ("CHN burned without an operation", [(1000, marker_script(marker()))], (), "bad-ba-marker-value"),
+            ("ECX burned without an operation", [(1000, marker_script(marker()))], (), "bad-ba-marker-value"),
             ("an output past the end", [(0, marker_script(marker(outputs=[(5, token(ASSET, gold, 1))])))], (), "bad-ba-outputs"),
             ("a token output of value", [(1000, mine), (0, marker_script(marker(outputs=[(0, token(ASSET, gold, 1))])))], (), "bad-ba-token-output"),
             ("coins of no asset", [(0, mine), (0, marker_script(marker(outputs=[(0, token(ASSET, CHN, 1))])))], (), "bad-ba-token-id"),
@@ -319,10 +319,10 @@ class BitAssetsInvalidTest(BitAssetsTest):
         self.template([register])
 
         self.log.info("A pool and an auction, for what follows")
-        side.addliquidity("GOLD", 500, "CHN", 5)
+        side.addliquidity("GOLD", 500, "ECX", 5)
         self.mine_txs()
         before_auction = side.getbestblockhash()
-        made = side.createauction("GOLD", 100, "CHN", 10, 1, 5)["txid"]
+        made = side.createauction("GOLD", 100, "ECX", 10, 1, 5)["txid"]
         made_block = self.mine_txs()["hash"]
         bid = other.bidauction(made, 2)["txid"]
         self.mine_txs()

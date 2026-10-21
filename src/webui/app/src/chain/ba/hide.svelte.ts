@@ -1,7 +1,7 @@
 // The assets a wallet hides (user feedback 2026-10-19, item 19): assets it ignores (spam sent to it, many assets of one
 // name), names and words it ignores, and filters (dead assets: no activity for a while, assets burned to nothing, assets without a pool). Per
 // wallet, kept with the app's preferences (per network, as asset ids are), so that they survive a restart. Hiding is
-// display-only: the coins stay in the wallet, and an asset comes back when unignored. CHN is never hidden.
+// display-only: the coins stay in the wallet, and an asset comes back when unignored. ECX is never hidden.
 //
 // Every list of assets asks `assetHidden` (Browse assets, the Send picker, Trade, Auctions, My assets, the home's
 // "Your assets", the Transactions page through chainTxHidden, the notices), each with a "show hidden" toggle.
@@ -120,7 +120,7 @@ export function unignoreAsset(id: string, wallet: string | null = wallets.curren
 /** Ignore every asset of a name (any case). */
 export function ignoreName(name: string, wallet: string | null = wallets.current): void {
   const n = name.trim();
-  if (!n || n.toUpperCase() === 'CHN') return;
+  if (!n || n.toUpperCase() === 'ECX' || n.toUpperCase() === 'CHN') return;
   const f = filtersOf(wallet);
   if (!f.names.some((x) => x.toLowerCase() === n.toLowerCase())) setFilters({ names: [...f.names, n] }, wallet);
 }
@@ -141,7 +141,7 @@ export function assetIgnored(id: string, label = '', wallet: string | null = wal
   return f.names.some((n) => n.toLowerCase() === l) || f.keywords.some((k) => l.includes(k.toLowerCase()));
 }
 
-/** Whether the asset is hidden in the lists of the wallet: ignored, or left out by a filter. Never CHN. */
+/** Whether the asset is hidden in the lists of the wallet: ignored, or left out by a filter. Never ECX. */
 export function assetHidden(a: AssetFacts, wallet: string | null = wallets.current): boolean {
   if (isChn(a.id)) return false;
   if (assetIgnored(a.id, a.label ?? '', wallet)) return true;

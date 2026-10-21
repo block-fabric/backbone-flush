@@ -2,7 +2,7 @@
 import { assetHidden, assetIgnored, hiding } from './hide.svelte';
 import { assetById, ba, hasPool } from './store.svelte';
 
-/** Whether the wallet shown hides the asset (ignored, or left out by a filter). Never CHN. Reactive. */
+/** Whether the wallet shown hides the asset (ignored, or left out by a filter). Never ECX. Reactive. */
 export function hiddenAsset(id: string, label?: string): boolean {
   void hiding.version;
   const a = assetById(id);

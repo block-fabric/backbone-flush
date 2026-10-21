@@ -2,7 +2,7 @@
   // An asset as the pages show it: its logo from the chain (an <img> of a data: URL the host checked: logos.svelte.ts),
   // else a round mark in the hue of its hash (the same everywhere, so that two assets of names alike are told apart at a
   // glance), its label (its ticker), its display name after it, muted (not unique: never instead of the ticker), and its
-  // number. CHN in the colour of the chain.
+  // number. ECX in the colour of the chain.
   import SafeText from '../../components/SafeText.svelte';
   import { css } from '../../lib/actions';
   import { assetHue, initials, isChn } from './model';

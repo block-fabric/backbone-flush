@@ -1,7 +1,7 @@
 <script lang="ts">
-  // "Your assets": what the wallet holds beside CHN, on the Home and the Overview. Each asset by its logo (else its
+  // "Your assets": what the wallet holds beside ECX, on the Home and the Overview. Each asset by its logo (else its
   // initials), its label and its number, its balance in its decimals (exact: the store reads amounts exactly), its worth
-  // in CHN where a pool prices it, units on the way marked; the first HELD_SHOWN by worth, then balance, "View all" for
+  // in ECX where a pool prices it, units on the way marked; the first HELD_SHOWN by worth, then balance, "View all" for
   // My assets; the assets only controlled below. From the store's one listmyassets, asked again with every block and
   // transaction of the wallet. Simple mode: a compact list.
   import SafeText from '../../components/SafeText.svelte';
@@ -51,7 +51,7 @@
     <!-- One compact row per asset (user feedback 2026-10-19): its logo, the crown if the wallet controls it, its ticker
          with its number, its display name, its balance and its worth; narrow, the name goes first, then the worth. -->
     <table class="held-table" class:compact={simple} aria-labelledby="held-title">
-      <thead class:sr-only={simple}><tr><th scope="col" class="c-img"><span class="sr-only">Image</span></th><th scope="col" class="c-ticker">Ticker</th><th scope="col" class="c-name">Name</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">CHN worth</th></tr></thead>
+      <thead class:sr-only={simple}><tr><th scope="col" class="c-img"><span class="sr-only">Image</span></th><th scope="col" class="c-ticker">Ticker</th><th scope="col" class="c-name">Name</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">ECX worth</th></tr></thead>
       <tbody>
         {#each shown as r (r.holding.asset)}
           {@const display = displayNameOf(r.holding.asset) ?? ''}

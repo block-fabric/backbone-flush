@@ -23,6 +23,7 @@
 
 #include <fstream>
 #include <set>
+#include <tuple>
 #include <vector>
 
 using namespace sidechain;
@@ -179,10 +180,12 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
     BOOST_CHECK_EQUAL(MainchainDataSubdir(ChainType::ECASH_TESTNET), "testnet4");
     BOOST_CHECK_EQUAL(MainchainName(ChainType::ECASH), "Backbone");
     BOOST_CHECK_EQUAL(MainchainName(ChainType::TESTNET), "Chains");
-    // A data directory of its own for the eCash networks.
+    // Starbase: the eCash networks in its data directory (~/.starbase), its default; the Chains networks (development)
+    // in its folder "chains".
     BOOST_CHECK(GetDefaultDataDir(/*ecash=*/true) != GetDefaultDataDir(/*ecash=*/false));
-    BOOST_CHECK(GetDefaultDataDir() == GetDefaultDataDir(/*ecash=*/false));
-    BOOST_CHECK(fs::PathToString(GetDefaultDataDir(/*ecash=*/true).filename()).find("ackbone-") != std::string::npos);
+    BOOST_CHECK(GetDefaultDataDir() == GetDefaultDataDir(/*ecash=*/true));
+    BOOST_CHECK(GetDefaultDataDir(/*ecash=*/false) == GetDefaultDataDir(/*ecash=*/true) / "chains");
+    BOOST_CHECK(fs::PathToString(GetDefaultDataDir(/*ecash=*/true).filename()).find("tarbase") != std::string::npos);
 
     // Identities of their own: genesis, message start, ports, address prefix; no two networks alike.
     std::set<uint256> genesis;
@@ -229,6 +232,16 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
             BOOST_CHECK(consensus.sidechain.main_single_payout);
             BOOST_CHECK(!consensus.sidechain.main_events_only);
         }
+    }
+
+    // Starbase's identities on eCash: slot 46, its address prefixes and message starts.
+    for (const auto& [type, hrp, last] : std::vector<std::tuple<ChainType, std::string, uint8_t>>{
+             {ChainType::ECASH, "sbx", 0x21}, {ChainType::ECASH_BETANET, "bsbx", 0x22}, {ChainType::ECASH_TESTNET, "tsbx", 0x23}}) {
+        const auto params{CreateChainParams(m_args, type)};
+        BOOST_CHECK_EQUAL(params->GetConsensus().sidechain.slot, 46U);
+        BOOST_CHECK_EQUAL(params->Bech32HRP(), hrp);
+        const MessageStartChars magic{0x73, 0x62, 0x73, last};
+        BOOST_CHECK(params->MessageStart() == magic);
     }
 
     // The network of a mainchain node: Backbone's "network" (its "chain" is eCash's name), else Chains' "chain".

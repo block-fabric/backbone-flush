@@ -4,7 +4,7 @@
 // and the auctions as the chain does it (amm::SwapOut, amm::Provide, Auction::PriceAt...), for the previews.
 // Pure: no state, no calls (tested in chain/bitassets.test.ts).
 
-/** The id of CHN, the coin of the chain: the null hash. */
+/** The id of ECX, the coin of the chain: the null hash. */
 export const CHN_ID = '0'.repeat(64);
 export const CHN_DECIMALS = 8;
 /** Limits of the chain (src/bitassets/state.h). */
@@ -230,7 +230,7 @@ export interface AssetTx {
   to: TxParty[];
   from: TxParty[];
   abandoned: boolean;
-  /** The wallet's own outputs of CHN that carry nothing (its change), when it paid (newer nodes). */
+  /** The wallet's own outputs of ECX that carry nothing (its change), when it paid (newer nodes). */
   change?: string[];
 }
 
@@ -260,11 +260,11 @@ export function isChn(id: string): boolean {
 }
 
 /**
- * How the pages name an asset to the commands: "CHN", or "0x" and its hash; never by its label, which an
- * asset registered under a name like "CHN" or like the number of another shares (as chains-qt did).
+ * How the pages name an asset to the commands: "ECX", or "0x" and its hash; never by its label, which an
+ * asset registered under a name like "ECX" or like the number of another shares (as chains-qt did).
  */
 export function assetArg(id: string): string {
-  return isChn(id) ? 'CHN' : `0x${id}`;
+  return isChn(id) ? 'ECX' : `0x${id}`;
 }
 
 /** The id of an asset of this name (bitassets::HashName): its SHA-256, written as the node writes a hash (reversed). */
@@ -393,7 +393,7 @@ export function formatPrice(price: number | undefined | null, digits = 6): strin
 
 /**
  * The price of one `base` in `quote`, readably both ways: when one unit is worth almost nothing, the other
- * way round (as chains-qt wrote it: "1 CHN buys 400,000 PEBBLES").
+ * way round (as chains-qt wrote it: "1 ECX buys 400,000 PEBBLES").
  */
 export function unitPrice(price: number | undefined | null): { kind: 'each'; price: string } | { kind: 'buys'; amount: string } | { kind: 'none' } {
   if (price === undefined || price === null || !Number.isFinite(price) || price <= 0) return { kind: 'none' };
@@ -420,9 +420,9 @@ export function isAssetName(name: string): boolean {
   return true;
 }
 
-/** bitassets::ReadsAsAnotherAsset: CHN in any case, "0x" first, or groups of four digits (two or three). */
+/** bitassets::ReadsAsAnotherAsset: ECX in any case, "0x" first, or groups of four digits (two or three). */
 export function readsAsAnotherAsset(name: string): boolean {
-  if (name.toLowerCase() === 'chn') return true;
+  if (name.toLowerCase() === 'chn' || name.toLowerCase() === 'ecx') return true;
   if (/^0[xX]/.test(name)) return true;
   return /^\d{4}-\d{4}(-\d{4})?$/.test(name);
 }
@@ -458,7 +458,7 @@ export function tickerProblem(name: string): string {
   if (name.length < MIN_TICKER) return `A ticker is at least ${MIN_TICKER} characters.`;
   if (name.length > MAX_TICKER) return `A ticker is at most ${MAX_TICKER} characters.`;
   const upper = tickerOf(name);
-  if (upper === 'CHN') return 'CHN is the coin of the chain.';
+  if (upper === 'ECX' || upper === 'CHN') return 'ECX is the coin of the chain (CHN, its name on Layers, is reserved too).';
   if (/^0X/.test(upper)) return 'A ticker does not start with "0X": that is how a hash is written.';
   return '';
 }
@@ -505,7 +505,7 @@ export function nameProblem(name: string): string {
   if (name.length > MAX_NAME) return `A name is at most ${MAX_NAME} characters.`;
   if (name.startsWith(' ') || name.endsWith(' ')) return 'A name has no space at either end.';
   if (!isAssetName(name)) return 'A name is plain characters: letters, digits, punctuation and spaces (ASCII).';
-  if (name.toLowerCase() === 'chn') return 'CHN is the coin of the chain.';
+  if (name.toLowerCase() === 'ecx' || name.toLowerCase() === 'chn') return 'ECX is the coin of the chain (CHN, its name on Layers, is reserved too).';
   if (/^0[xX]/.test(name)) return 'A name does not start with "0x": that is how a hash is written.';
   if (readsAsAnotherAsset(name)) return 'A name does not read as the number of an asset (such as 1739-0029).';
   if (nameMimicsNumber(name)) return 'A name holds no "#", "(" or ")", nor four digits, a dash and four digits: shown with its number, it would read as the number of another asset.';
@@ -628,7 +628,7 @@ export interface PoolUnits {
   reserve0: bigint;
   reserve1: bigint;
   shares: bigint;
-  /** Whether the first side is CHN (dust of CHN stays in the pool). */
+  /** Whether the first side is ECX (dust of ECX stays in the pool). */
   chn0?: boolean;
   chn1?: boolean;
 }
@@ -665,7 +665,7 @@ export function provide(pool: PoolUnits, amount0: bigint, amount1: bigint): Depo
   return { shares, take0, take1, opens: false };
 }
 
-/** amm::WithdrawPaid: what shares take out of a pool, CHN dust left in it. */
+/** amm::WithdrawPaid: what shares take out of a pool, ECX dust left in it. */
 export function withdraw(pool: PoolUnits, shares: bigint): [bigint, bigint] {
   if (pool.shares <= 0n || shares > pool.shares) return [0n, 0n];
   let out0 = (pool.reserve0 * shares) / pool.shares;
@@ -768,7 +768,7 @@ export function auctionProblems(f: {
   if (f.sameAsset) out.push('An auction sells one asset for another.');
   if (!f.amount.ok) out.push(f.amount.error);
   else if (f.held !== undefined && f.held !== null && f.amount.units > f.held) out.push('This wallet holds less than that.');
-  else if (f.sellsChn && f.amount.units < MIN_CHN_PAYOUT) out.push('An auction sells 0.0005 CHN at least (the least CHN paid out).');
+  else if (f.sellsChn && f.amount.units < MIN_CHN_PAYOUT) out.push('An auction sells 0.0005 ECX at least (the least ECX paid out).');
   if (!f.start.ok) out.push(`Start price: ${f.start.error}`);
   if (!f.end.ok) out.push(`End price: ${f.end.error}`);
   if (f.start.ok && f.end.ok && f.end.units > f.start.units) out.push('The price falls: the end price is at most the start price.');

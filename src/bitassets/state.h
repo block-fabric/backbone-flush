@@ -596,7 +596,7 @@ bool IsAssetName(const std::string& name);
 /**
  * Whether a name is a ticker: MIN_TICKER_SIZE to MAX_TICKER_SIZE characters, each an uppercase letter
  * A to Z or a digit 0 to 9. From SidechainParams::ticker_height, the name of every new asset is one
- * (the look-alike rules below apply too: no ticker is "CHN", "0X..." or holds what reads as a number).
+ * (the look-alike rules below apply too: no ticker is "ECX" or "CHN", "0X..." or holds what reads as a number).
  */
 bool IsTicker(const std::string& name);
 /**

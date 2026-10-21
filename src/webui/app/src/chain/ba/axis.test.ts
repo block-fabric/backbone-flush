@@ -1,4 +1,4 @@
-// The axes of the charts of prices (user feedback 2026-10-19): CHN prices with many decimals spilled off the
+// The axes of the charts of prices (user feedback 2026-10-19): ECX prices with many decimals spilled off the
 // left of the chart. The axis says them compactly and makes room for them; the readout says them exactly.
 import { render } from '@testing-library/svelte';
 import { beforeAll, describe, expect, it } from 'vitest';

@@ -826,17 +826,19 @@ public:
         consensus.sidechain.main_behind_margin = 2;
         switch (chain) {
         case ChainType::ECASH:
-            // Layers on eCash: slot 46 (doc/ecash-sidechains.md).
-            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone: assets on a fast chain over eCash", .genesis_time = 1792454400,
-                           .message_start = {0x6c, 0x79, 0x72, 0x21}, .default_port = 8255, .bech32_hrp = "lyx"});
+            // Starbase on eCash: slot 46 (doc/ecash-sidechains.md). Its own identity on each eCash network (first
+            // block, message start "sbs" + 0x21/0x22/0x23, address prefixes sbx, bsbx, tsbx); the ports of Layers on
+            // eCash, which Starbase is.
+            MakeSidechain({.slot = 46, .genesis_message = "Starbase: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1792540800,
+                           .message_start = {0x73, 0x62, 0x73, 0x21}, .default_port = 8255, .bech32_hrp = "sbx"});
             break;
         case ChainType::ECASH_BETANET:
-            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone, eCash betanet", .genesis_time = 1792454400,
-                           .message_start = {0x6c, 0x79, 0x72, 0x22}, .default_port = 38255, .bech32_hrp = "blyx"});
+            MakeSidechain({.slot = 46, .genesis_message = "Starbase on eCash betanet 21/Oct/2026", .genesis_time = 1792540800,
+                           .message_start = {0x73, 0x62, 0x73, 0x22}, .default_port = 38255, .bech32_hrp = "bsbx"});
             break;
         case ChainType::ECASH_TESTNET:
-            MakeSidechain({.slot = 46, .genesis_message = "Layers on Backbone, eCash test network", .genesis_time = 1792454400,
-                           .message_start = {0x6c, 0x79, 0x72, 0x23}, .default_port = 48255, .bech32_hrp = "tlyx"});
+            MakeSidechain({.slot = 46, .genesis_message = "Starbase on the eCash test network 21/Oct/2026", .genesis_time = 1792540800,
+                           .message_start = {0x73, 0x62, 0x73, 0x23}, .default_port = 48255, .bech32_hrp = "tsbx"});
             break;
         default:
             assert(false);

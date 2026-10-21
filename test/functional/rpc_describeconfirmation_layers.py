@@ -44,7 +44,7 @@ class LayersDescribeConfirmationTest(LayersTest):
 
         self.log.info("Setup: the slot, a deposit, an asset and a pool")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Layers", "Assets on a fast chain", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 50)
         self.mine_main()
@@ -56,7 +56,7 @@ class LayersDescribeConfirmationTest(LayersTest):
             self.bmm()
         n0.registerasset("GOLD", 1000000, 2)
         self.bmm()
-        n0.addliquidity("GOLD", 10000, "CHN", 20)
+        n0.addliquidity("GOLD", 10000, "ECX", 20)
         self.bmm()
         wallet = n0.listwallets()[0]
 
@@ -75,19 +75,19 @@ class LayersDescribeConfirmationTest(LayersTest):
         self.bmm()
 
         self.log.info("A swap: its amounts; changed after the question, refused")
-        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "CHN", 1, 10, "0.1"], wallet)
+        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "ECX", 1, 10, "0.1"], wallet)
         assert_equal(d["title"], "Swap")
         assert "min_out" in rows(d)
         tampered = dict(d["request"])
-        tampered["params"] = dict(d["request"]["params"], params=["GOLD", 100, "CHN", 1, 10, "0"])
+        tampered["params"] = dict(d["request"]["params"], params=["GOLD", 100, "ECX", 1, 10, "0"])
         assert_raises_rpc_error(REFUSED, "not the one that was confirmed", n0.webuihost, tampered, d["token"])
         assert_raises_rpc_error(REFUSED, "not known", n0.webuihost, d["request"], d["token"])
-        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "CHN", 1, 10, "0.1"], wallet)
+        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "ECX", 1, 10, "0.1"], wallet)
         n0.webuihost(d["request"], d["token"])
         self.bmm()
 
         self.log.info("Liquidity: both amounts shown")
-        d = n0.describeconfirmation("addliquidity", ["GOLD", 100, "CHN", "0.2"], wallet)
+        d = n0.describeconfirmation("addliquidity", ["GOLD", 100, "ECX", "0.2"], wallet)
         assert_equal(d["title"], "Add liquidity")
         assert {"amount_a", "amount_b"} <= set(rows(d))
 
@@ -119,7 +119,7 @@ class LayersDescribeConfirmationTest(LayersTest):
 
         self.log.info("A withdrawal to the mainchain (the kit's describer)")
         d = n0.describeconfirmation("createwithdrawal", [main.getnewaddress(), "1", "0.0001"], wallet)
-        assert_equal(d["title"], "Withdraw to Chains")
+        assert_equal(d["title"], "Withdraw to eCash")
         assert_equal(rows(d)["Leaves this wallet"].split(" ")[0], "1.00010000")
 
 

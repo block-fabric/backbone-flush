@@ -165,7 +165,7 @@ describe('showing logos', () => {
     expect(fallback.container.querySelector('img')).toBeNull();
     expect(fallback.container.querySelector('.mark')!.textContent).toBe('GO');
     fallback.unmount();
-    const chn = render(AssetBadge, { id: '0'.repeat(64), label: 'CHN', preview: URL });
+    const chn = render(AssetBadge, { id: '0'.repeat(64), label: 'ECX', preview: URL });
     expect(chn.container.querySelector('img')).toBeNull();
   });
 });
@@ -185,7 +185,7 @@ describe('the assets a wallet holds (Home, Overview)', () => {
     ...extra,
   });
 
-  it('by worth in CHN, then balance; the assets only controlled apart', () => {
+  it('by worth in ECX, then balance; the assets only controlled apart', () => {
     const list = [h('1'.repeat(64), 'A', 10), h('2'.repeat(64), 'B', 500), h('3'.repeat(64), 'C', 5), h('4'.repeat(64), 'D', 0, { control: true }), h('5'.repeat(64), 'E', 0, { pending: 3 })];
     const prices: Record<string, number> = { ['3'.repeat(64)]: 100, ['1'.repeat(64)]: 1 };
     const { rows, controlledOnly } = heldRows(list, (id) => prices[id], (id) => `seq-${id[0]}`);

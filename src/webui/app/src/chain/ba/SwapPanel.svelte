@@ -103,7 +103,7 @@
     if (!pool) return simple ? 'No market trades these two yet.' : 'No pool trades these two yet: make one in Liquidity.';
     if (pool.abandoned) return 'This pool is closed: nobody provides liquidity to it any more. It holds only the minimum every pool keeps for good; adding liquidity reopens it.';
     if (quoteError) return quoteError;
-    if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return 'Too little: the least CHN a pool pays out is 0.0005 CHN.';
+    if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return 'Too little: the least ECX a pool pays out is 0.0005 ECX.';
     if (impact > MAX_IMPACT) return 'Too large for this pool: you would pay more than 10% above its price. Trade less, or wait for more liquidity.';
     return '';
   });
@@ -163,7 +163,7 @@
     const r = await ask({
       title: t('Swap'),
       message: t('Pay %1 %2 for about %3 %4?', formatUnits(sAmount, sPayDecimals), payLabel, formatUnits(sOut, sGetDecimals), getLabel),
-      informative: t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('CHN comes by the coinbase of the next block.') : ''),
+      informative: t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('ECX comes by the coinbase of the next block.') : ''),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -246,7 +246,7 @@
   <section class="panel">
     <div class="panel-head"><h3>How a swap works</h3></div>
     <div class="panel-body how">
-      <p>Each token trades with CHN in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
+      <p>Each token trades with ECX in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
       <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the token then shows in My assets.</p>
       <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
     </div>

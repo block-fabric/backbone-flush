@@ -50,7 +50,7 @@
   const position = $derived(pool ? (ba.mine?.liquidity.find((l) => l.pool === pool.pool) ?? null) : null);
   const series = $derived(pool ? priceSeries(pool, pool.asset_a_id).map((p) => ({ x: p.h, y: p.p })) : []);
 
-  /** What a pool traded, in CHN where one side is CHN (else in trades). */
+  /** What a pool traded, in ECX where one side is ECX (else in trades). */
   function volumeChn(p: Pool): number {
     if (isChn(p.asset_a_id)) return approx(p.volume_a);
     if (isChn(p.asset_b_id)) return approx(p.volume_b);
@@ -118,7 +118,7 @@
     </div>
     <div class="ba-chips" role="group" aria-label="Filter pools">
       <button type="button" class="ba-chip" aria-pressed={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
-      <button type="button" class="ba-chip" aria-pressed={filter === 'chn'} onclick={() => (filter = 'chn')}>With CHN</button>
+      <button type="button" class="ba-chip" aria-pressed={filter === 'chn'} onclick={() => (filter = 'chn')}>With ECX</button>
       <button type="button" class="ba-chip" aria-pressed={filter === 'mine'} onclick={() => (filter = 'mine')}>Yours</button>
     </div>
     <HiddenToggle count={hiddenCount} bind:show={showHidden} />

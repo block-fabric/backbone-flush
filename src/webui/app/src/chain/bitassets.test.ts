@@ -109,17 +109,17 @@ function fresh() {
     asset(PEBBLES, { label: 'PEBBLES', name: 'PEBBLES', seq: '9031-1144', decimals: 0, supply: 0, minted: 5, burned: 5, fixed: true, registered: 8, releasable: true, release_fee: 0.0001 }),
   ];
   pools = [
-    { pool: id('p'), asset_a: 'GOLD', asset_b: 'CHN', asset_a_id: GOLD, asset_b_id: CHN_ID, reserve_a: 500, reserve_b: 50, price: 0.1, shares: 15811388, volume_a: 20, volume_b: 2, swaps: 4, created: 9, abandoned: false },
+    { pool: id('p'), asset_a: 'GOLD', asset_b: 'ECX', asset_a_id: GOLD, asset_b_id: CHN_ID, reserve_a: 500, reserve_b: 50, price: 0.1, shares: 15811388, volume_a: 20, volume_b: 2, swaps: 4, created: 9, abandoned: false },
   ];
   auctions = [
-    { auction: id('d'), base: 'GOLD', quote: 'CHN', base_id: GOLD, quote_id: CHN_ID, amount: 100, remaining: 60, proceeds: 4, start_price: 10, end_price: 5, unit_price: 0.09, price: 9, cost_of_remaining: 5.4, start_height: 10, end_height: 59, bids: 1, status: 'open' },
+    { auction: id('d'), base: 'GOLD', quote: 'ECX', base_id: GOLD, quote_id: CHN_ID, amount: 100, remaining: 60, proceeds: 4, start_price: 10, end_price: 5, unit_price: 0.09, price: 9, cost_of_remaining: 5.4, start_height: 10, end_height: 59, bids: 1, status: 'open' },
   ];
   mine = {
     assets: [{ asset: GOLD, label: 'GOLD', decimals: 2, balance: 200, pending: 0, outputs: 1, control: true, control_pending: false, supply: 1000, fixed: false },
       { asset: SILVER, label: 'SILVER', decimals: 0, balance: 30, pending: 0, outputs: 1, control: false, control_pending: false, supply: 50, fixed: true },
     ],
     reservations: [{ txid: id('r'), name: 'IRON', taken: false, height: 18, registers_from: 20, wait: 0 }],
-    liquidity: [{ pool: id('p'), asset_a: 'GOLD', asset_b: 'CHN', asset_a_id: GOLD, asset_b_id: CHN_ID, shares: 1000000, percent: 6.3245, value_a: 31.62, value_b: 3.162 }],
+    liquidity: [{ pool: id('p'), asset_a: 'GOLD', asset_b: 'ECX', asset_a_id: GOLD, asset_b_id: CHN_ID, shares: 1000000, percent: 6.3245, value_a: 31.62, value_b: 3.162 }],
     receipts: [{ auction: id('d') }],
   };
 }
@@ -220,7 +220,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     }
     case 'quoteswap': {
       const x = pools[0];
-      const payChn = p[0] === 'CHN';
+      const payChn = p[0] === 'ECX';
       const rin = payChn ? units(x.reserve_b, 8) : units(x.reserve_a, 2);
       const rout = payChn ? units(x.reserve_a, 2) : units(x.reserve_b, 8);
       const din = payChn ? 8 : 2;
@@ -381,7 +381,7 @@ describe('amounts, with the decimals of an asset', () => {
   it('knows an asset by the hash of its name, written as the node writes it', async () => {
     const hex = Buffer.from(createHash('sha256').update('GOLD').digest()).reverse().toString('hex');
     expect(await hashName('GOLD')).toBe(hex);
-    expect(assetArg(CHN_ID)).toBe('CHN');
+    expect(assetArg(CHN_ID)).toBe('ECX');
     expect(assetArg(GOLD)).toBe(`0x${GOLD}`);
   });
 });
@@ -429,7 +429,7 @@ describe('the pools and the auctions, as the chain works them out', () => {
     expect(d.take0).toBe(1000n);
     expect(d.take1).toBe(2000n);
     expect(pairedAmount(1000n, 1_000_000n, 2_000_000n)).toBe(2000n);
-    // CHN dust that would come back stays in the pool.
+    // ECX dust that would come back stays in the pool.
     expect(provide({ ...pool, chn1: true }, 1000n, 5000n)!.take1).toBe(5000n);
     expect(isAbandoned(1000n)).toBe(true);
     const reopened = provide({ reserve0: 10n, reserve1: 10n, shares: 1000n }, 1_000_000n, 1_000_000n)!;
@@ -472,7 +472,7 @@ describe('the journal of the app', () => {
 });
 
 // Layers: the pages of BitAssets on Layers (its Staking first).
-describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
+describe.runIf(CHAIN.name === 'Starbase')('the pages of BitAssets', () => {
   it('are in the Chain section and the menus, before the tools, with their quick actions', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
     expect(own).toEqual(['staking', 'assets', 'my-assets', 'issue', 'trade', 'auctions']);
@@ -491,7 +491,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     // Alt+6 opened Assets in bitassets-qt (audit port-2 #8); on Layers Alt+6 is Staking, Alt+7 Assets.
     expect(handleShortcut(new KeyboardEvent('keydown', { key: '7', altKey: true }))).toBe(true);
     expect(nav.page).toBe('assets');
-    expect(CHAIN.uriScheme).toBe('layers');
+    expect(CHAIN.uriScheme).toBe('starbase');
   });
 
   it('Assets: the cards, searched and filtered; an asset opened whole, its markets and the history of its data', async () => {
@@ -617,7 +617,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: '50%' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Take out' }));
     await answer('yes');
-    await waitFor(() => expect(called('removeliquidity')[0]?.params).toEqual([assetArg(GOLD), 'CHN', 50, 1]));
+    await waitFor(() => expect(called('removeliquidity')[0]?.params).toEqual([assetArg(GOLD), 'ECX', 50, 1]));
     nav.tab = 'auctions';
     await waitFor(() => expect(screen.getByText(/It can be collected once it ends/)).toBeTruthy());
     nav.tab = 'activity';
@@ -721,7 +721,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     // The least confirmed is the least signed (min_out, audit 7 E-BA2).
     expect(document.querySelector('dialog[open]')?.textContent).toContain('At least 4.88 #1739-0029');
     await answer('yes');
-    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10, '4.88']));
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['ECX', '0.5', assetArg(GOLD), 1, 10, '4.88']));
     // Done (the host confirmed and ran it): the form is cleared.
     await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // A larger trade moves the price more than 2%: asked about first.
@@ -738,7 +738,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await pickAsset('lq-a', SILVER);
     await fireEvent.input(document.querySelector('#lq-amount-a')!, { target: { value: '20' } });
     await fireEvent.input(document.querySelector('#lq-amount-b')!, { target: { value: '1' } });
-    // 20 SILVER and 1 CHN make too few shares to open a pool.
+    // 20 SILVER and 1 ECX make too few shares to open a pool.
     await waitFor(() => expect(screen.getByText(/Too little to open a pool/)).toBeTruthy());
     await fireEvent.input(document.querySelector('#lq-amount-a')!, { target: { value: '30' } });
     await fireEvent.input(document.querySelector('#lq-amount-b')!, { target: { value: '5' } });
@@ -746,7 +746,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Make the pool/ }));
     await answer('yes');
     // Both amounts, and that they set the price (audit 7 E-BA1).
-    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'CHN', '5', 1, true]));
+    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'ECX', '5', 1, true]));
 
     nav.tab = 'pools';
     await waitFor(() => expect(screen.getByRole('table', { name: 'Pools' })).toBeTruthy());
@@ -782,7 +782,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Start the auction/ }));
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
     await answer('yes');
-    await waitFor(() => expect(called('createauction')[0]?.params).toEqual([assetArg(GOLD), '50', 'CHN', '10', '4', 60, 1]));
+    await waitFor(() => expect(called('createauction')[0]?.params).toEqual([assetArg(GOLD), '50', 'ECX', '10', '4', 60, 1]));
   });
 
   it('Send: an asset chosen at the top of the page, sent with sendasset', async () => {
@@ -812,13 +812,13 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await fireEvent.input(document.querySelector('#lq-amount-b')!, { target: { value: '5' } });
     await waitFor(() => expect(screen.getByText('Share of the pool')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Make the pool/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Make the #4218-0372 · "SILVER" / CHN pool with 30'));
-    // Someone opens SILVER/CHN at 1 SILVER = 1000 CHN, and the store refreshes, while the dialog is open.
-    pools.push({ pool: id('q'), asset_a: 'SILVER', asset_b: 'CHN', asset_a_id: SILVER, asset_b_id: CHN_ID, reserve_a: 10, reserve_b: 10000, price: 1000, shares: 316227, volume_a: 0, volume_b: 0, swaps: 0, created: 20, abandoned: false });
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Make the #4218-0372 · "SILVER" / ECX pool with 30'));
+    // Someone opens SILVER/ECX at 1 SILVER = 1000 ECX, and the store refreshes, while the dialog is open.
+    pools.push({ pool: id('q'), asset_a: 'SILVER', asset_b: 'ECX', asset_a_id: SILVER, asset_b_id: CHN_ID, reserve_a: 10, reserve_b: 10000, price: 1000, shares: 316227, volume_a: 0, volume_b: 0, swaps: 0, created: 20, abandoned: false });
     await refreshBitAssets();
     await answer('yes');
-    // The amounts confirmed, and that they set the price: the wallet refuses it now, never 30,000 CHN.
-    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'CHN', '5', 1, true]));
+    // The amounts confirmed, and that they set the price: the wallet refuses it now, never 30,000 ECX.
+    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'ECX', '5', 1, true]));
   });
 
   it('pools and auctions are read a page at a time, with more on demand (audit 7 E-BA3)', async () => {
@@ -858,7 +858,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
   it('names an asset in a confirmation by its label and number, or the start of its hash (audit port-2 #5)', async () => {
     await refreshBitAssets();
     expect(nameOf(GOLD)).toBe('#1739-0029 · "GOLD"');
-    expect(nameOf(CHN_ID)).toBe('CHN');
+    expect(nameOf(CHN_ID)).toBe('ECX');
     // Not listed (a private name): the start and end of its hash.
     expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('0x99999999…abcd · "G0LD"');
     expect(nameOf('8'.repeat(64))).toBe('0x88888888…8888');
@@ -938,7 +938,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'My assets' })).toBeTruthy());
     expect(screen.getByRole('heading', { name: 'Markets' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Auctions' })).toBeTruthy();
-    // 200 GOLD at 0.1 CHN: its worth in its row of My assets (no totals: user feedback 2026-10-19).
+    // 200 GOLD at 0.1 ECX: its worth in its row of My assets (no totals: user feedback 2026-10-19).
     await waitFor(() => expect(document.querySelector('[data-testid="held-row"] .c-value')?.textContent).toBe('20'));
   });
 
@@ -955,7 +955,7 @@ describe.runIf(CHAIN.name === 'Layers')('the pages of BitAssets', () => {
         expect(screen.queryByText('Being issued')).toBeNull();
       }
       const rows = [...held.querySelectorAll('tbody tr')].map((r) => r.textContent ?? '');
-      // GOLD first (a pool prices it: 200 at 0.1 CHN), then SILVER (no price: –).
+      // GOLD first (a pool prices it: 200 at 0.1 ECX), then SILVER (no price: –).
       expect(rows[0]).toContain('GOLD');
       expect(rows[0]).toContain('#1739-0029');
       expect(rows[0]).toContain('200');
@@ -1002,7 +1002,7 @@ describe('Simple mode', () => {
     await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(GOLD));
     expect(screen.queryByRole('group', { name: 'Slippage' })).toBeNull();
     await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '0.5' } });
-    await waitFor(() => expect(screen.getByTestId('swap-plain').textContent).toMatch(/You pay 0\.5\s*CHN and get about/));
+    await waitFor(() => expect(screen.getByTestId('swap-plain').textContent).toMatch(/You pay 0\.5\s*ECX and get about/));
     expect(screen.getByTestId('swap-plain').textContent).toMatch(/At least .* if the price moves first/);
     // The plain summary names the asset with its number (audit 7 E-BA4).
     expect(screen.getByTestId('swap-plain').textContent).toContain('#1739-0029 · "GOLD"');
@@ -1010,7 +1010,7 @@ describe('Simple mode', () => {
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
     await answer('yes');
-    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 1, 10, '4.88']));
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['ECX', '0.5', assetArg(GOLD), 1, 10, '4.88']));
     // Done (the host confirmed and ran it): the form is cleared.
     await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
     // Asked for by a link: the pools are shown.
@@ -1069,7 +1069,7 @@ describe('audit 7 E-BA6: amounts past 2^53 units, exact from the node to the dia
   beforeEach(() => {
     assets[0] = { ...assets[0], decimals: 8, supply: num('23058430092.13693953'), minted: num('23058430092.13693953') };
     mine.assets[0] = { ...mine.assets[0], decimals: 8, balance: num(BIG), supply: num('23058430092.13693953') };
-    auctions[0] = { ...auctions[0], base: 'GOLD', quote: 'CHN', amount: num('11529215046.06846978'), remaining: num(BIG), cost_of_remaining: num('9007199254.74099313') };
+    auctions[0] = { ...auctions[0], base: 'GOLD', quote: 'ECX', amount: num('11529215046.06846978'), remaining: num(BIG), cost_of_remaining: num('9007199254.74099313') };
     // The host gives the results of the methods BitAssets reads exactly as text, as the node wrote them.
     setTransport(async (r) => {
       const result = await fakeNode(r);
@@ -1112,7 +1112,7 @@ describe('audit 7 E-BA6: amounts past 2^53 units, exact from the node to the dia
     await loaded();
     await waitFor(() => expect(document.body.textContent).toContain('11,529,215,046.06846977'));
     await fireEvent.click(screen.getByRole('button', { name: 'Buy all that is left' }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Pay 9,007,199,254.74099313 CHN for the 11,529,215,046.06846977'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Pay 9,007,199,254.74099313 ECX for the 11,529,215,046.06846977'));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '9007199254.74099313', true]));
   });
@@ -1139,12 +1139,12 @@ describe('audit 7: names and amounts', () => {
 });
 
 describe('the assets a wallet hides (user feedback 2026-10-19, item 19)', () => {
-  it('ignores an asset in this wallet only, never CHN; names, words and filters; kept in the preferences', async () => {
+  it('ignores an asset in this wallet only, never ECX; names, words and filters; kept in the preferences', async () => {
     await loadHiding();
     ignoreAsset(SILVER);
     ignoreAsset(CHN_ID);
     expect(assetIgnored(SILVER, 'SILVER')).toBe(true);
-    expect(assetIgnored(CHN_ID, 'CHN')).toBe(false);
+    expect(assetIgnored(CHN_ID, 'ECX')).toBe(false);
     expect((prefsStore.assetFilters as Record<string, { ignored: string[] }>).w.ignored).toEqual([SILVER]);
     expect(assetIgnored(SILVER, 'SILVER', 'other')).toBe(false);
     ignoreName('gold');
@@ -1422,8 +1422,8 @@ describe('tickers and display names', () => {
         if (!r.length) throw new Error('no rows');
         return r;
       });
-      // Image, Ticker (crown, #number), Name, Quantity, CHN worth.
-      expect([...held.querySelectorAll('thead th')].map((c) => c.textContent?.trim())).toEqual(['Image', 'Ticker', 'Name', 'Quantity', 'CHN worth']);
+      // Image, Ticker (crown, #number), Name, Quantity, ECX worth.
+      expect([...held.querySelectorAll('thead th')].map((c) => c.textContent?.trim())).toEqual(['Image', 'Ticker', 'Name', 'Quantity', 'ECX worth']);
       const cells = [...rows[0].querySelectorAll('td')].map((c) => c.textContent?.trim() ?? '');
       expect(rows[0].querySelector('.c-img .badge-asset')).not.toBeNull();
       expect(cells[1]).toContain('GOLD');

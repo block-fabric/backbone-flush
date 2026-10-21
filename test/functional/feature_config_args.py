@@ -48,7 +48,7 @@ class ConfArgsTest(BitcoinTestFramework):
 
     def test_dir_config(self):
         self.log.info('Error should be emitted if config file is a directory')
-        conf_path = self.nodes[0].datadir_path / 'layers.conf'
+        conf_path = self.nodes[0].datadir_path / 'starbase.conf'
         os.rename(conf_path, conf_path.with_suffix('.confbkp'))
         conf_path.mkdir()
         self.stop_node(0)
@@ -72,7 +72,7 @@ class ConfArgsTest(BitcoinTestFramework):
     def test_negated_config(self):
         self.log.info('Disabling configuration via -noconf')
 
-        conf_path = self.nodes[0].datadir_path / 'layers.conf'
+        conf_path = self.nodes[0].datadir_path / 'starbase.conf'
         with open(conf_path) as conf:
             settings = [f'-{line.rstrip()}' for line in conf if len(line) > 1 and line[0] != '[']
         os.rename(conf_path, conf_path.with_suffix('.confbkp'))
@@ -87,7 +87,7 @@ class ConfArgsTest(BitcoinTestFramework):
 
         self.log.debug('Verifying that disabling of the config file means garbage inside of it does ' \
             'not prevent the node from starting, and message about existing config file is logged')
-        ignored_file_message = [f'Data directory "{self.nodes[0].datadir_path}" contains a "layers.conf" file which is explicitly ignored using -noconf.']
+        ignored_file_message = [f'Data directory "{self.nodes[0].datadir_path}" contains a "starbase.conf" file which is explicitly ignored using -noconf.']
         with self.nodes[0].assert_debug_log(expected_msgs=ignored_file_message):
             self.start_node(0, extra_args=settings + ['-noconf'])
         self.stop_node(0)
@@ -103,7 +103,7 @@ class ConfArgsTest(BitcoinTestFramework):
     def test_config_file_parser(self):
         self.log.info('Test config file parser')
 
-        # Check that startup fails if conf= is set in layers.conf or in an included conf file
+        # Check that startup fails if conf= is set in starbase.conf or in an included conf file
         bad_conf_file_path = self.nodes[0].datadir_path / "bitcoin_bad.conf"
         util.write_config(bad_conf_file_path, n=0, chain='', extra_config='conf=some.conf\n')
         conf_in_config_file_err = 'Error: Error reading configuration file: conf cannot be set in the configuration file; use includeconf= if you want to include additional config files'
@@ -112,7 +112,7 @@ class ConfArgsTest(BitcoinTestFramework):
             expected_msg=conf_in_config_file_err,
         )
         inc_conf_file_path = self.nodes[0].datadir_path / 'include.conf'
-        with open(self.nodes[0].datadir_path / 'layers.conf', 'a') as conf:
+        with open(self.nodes[0].datadir_path / 'starbase.conf', 'a') as conf:
             conf.write(f'includeconf={inc_conf_file_path}\n')
         with open(inc_conf_file_path, 'w') as conf:
             conf.write('conf=some.conf\n')
@@ -174,7 +174,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 4, using # in rpcpassword can be ambiguous and should be avoided')
 
         inc_conf_file2_path = self.nodes[0].datadir_path / 'include2.conf'
-        with open(self.nodes[0].datadir_path / 'layers.conf', 'a') as conf:
+        with open(self.nodes[0].datadir_path / 'starbase.conf', 'a') as conf:
             conf.write(f'includeconf={inc_conf_file2_path}\n')
 
         with open(inc_conf_file_path, 'w') as conf:
@@ -202,11 +202,11 @@ class ConfArgsTest(BitcoinTestFramework):
         env, default_datadir = util.get_temp_default_datadir(Path(self.options.tmpdir, "test_config_file_log"))
         default_datadir.mkdir(parents=True)
 
-        # Write a layers.conf file in the default data directory containing a
+        # Write a starbase.conf file in the default data directory containing a
         # datadir= line pointing at the node datadir.
         node = self.nodes[0]
         conf_text = node.bitcoinconf.read_text()
-        conf_path = default_datadir / "layers.conf"
+        conf_path = default_datadir / "starbase.conf"
         conf_path.write_text(f"datadir={node.datadir_path}\n{conf_text}")
 
         # Drop the node -datadir= argument during this test, because if it is
@@ -461,20 +461,20 @@ class ConfArgsTest(BitcoinTestFramework):
             "be correlated to other connections over Tor. To reduce this risk, set -proxyrandomize=1."))
 
     def test_ignored_conf(self):
-        self.log.info('Test error is triggered when the datadir in use contains a layers.conf file that would be ignored '
+        self.log.info('Test error is triggered when the datadir in use contains a starbase.conf file that would be ignored '
                       'because a conflicting -conf file argument is passed.')
         node = self.nodes[0]
         with tempfile.NamedTemporaryFile(dir=self.options.tmpdir, mode="wt", delete=False) as temp_conf:
             temp_conf.write(f"datadir={node.datadir_path}\n")
         node.assert_start_raises_init_error([f"-conf={temp_conf.name}"], re.escape(
-            f'Error: Data directory "{node.datadir_path}" contains a "layers.conf" file which is ignored, because a '
+            f'Error: Data directory "{node.datadir_path}" contains a "starbase.conf" file which is ignored, because a '
             f'different configuration file "{temp_conf.name}" from command line argument "-conf={temp_conf.name}" '
             f'is being used instead.') + r"[\s\S]*", match=ErrorMatch.FULL_REGEX)
 
         # Test that passing a redundant -conf command line argument pointing to
-        # the same layers.conf that would be loaded anyway does not trigger an
+        # the same starbase.conf that would be loaded anyway does not trigger an
         # error.
-        self.start_node(0, [f'-conf={node.datadir_path}/layers.conf'])
+        self.start_node(0, [f'-conf={node.datadir_path}/starbase.conf'])
         self.stop_node(0)
 
     def test_ignored_default_conf(self):
@@ -483,20 +483,20 @@ class ConfArgsTest(BitcoinTestFramework):
         if platform.system() == "Windows":
             return
 
-        self.log.info('Test error is triggered when layers.conf in the default data directory sets another datadir '
-                      'and it contains a different layers.conf file that would be ignored')
+        self.log.info('Test error is triggered when starbase.conf in the default data directory sets another datadir '
+                      'and it contains a different starbase.conf file that would be ignored')
 
         # Create a temporary directory that will be treated as the default data
         # directory by bitcoind.
         env, default_datadir = util.get_temp_default_datadir(Path(self.options.tmpdir, "home"))
         default_datadir.mkdir(parents=True)
 
-        # Write a layers.conf file in the default data directory containing a
+        # Write a starbase.conf file in the default data directory containing a
         # datadir= line pointing at the node datadir. This will trigger a
         # startup error because the node datadir contains a different
-        # layers.conf that would be ignored.
+        # starbase.conf that would be ignored.
         node = self.nodes[0]
-        (default_datadir / "layers.conf").write_text(f"datadir={node.datadir_path}\n")
+        (default_datadir / "starbase.conf").write_text(f"datadir={node.datadir_path}\n")
 
         # Drop the node -datadir= argument during this test, because if it is
         # specified it would take precedence over the datadir setting in the
@@ -504,14 +504,14 @@ class ConfArgsTest(BitcoinTestFramework):
         node_args = node.args
         node.args = [arg for arg in node.args if not arg.startswith("-datadir=")]
         node.assert_start_raises_init_error([], re.escape(
-            f'Error: Data directory "{node.datadir_path}" contains a "layers.conf" file which is ignored, because a '
-            f'different configuration file "{default_datadir}/layers.conf" from data directory "{default_datadir}" '
+            f'Error: Data directory "{node.datadir_path}" contains a "starbase.conf" file which is ignored, because a '
+            f'different configuration file "{default_datadir}/starbase.conf" from data directory "{default_datadir}" '
             f'is being used instead.') + r"[\s\S]*", env=env, match=ErrorMatch.FULL_REGEX)
         node.args = node_args
 
     def test_acceptstalefeeestimates_arg_support(self):
         self.log.info("Test -acceptstalefeeestimates option support")
-        conf_file = self.nodes[0].datadir_path / "layers.conf"
+        conf_file = self.nodes[0].datadir_path / "starbase.conf"
         for chain, chain_name in {("main", ""), ("test", "testnet"), ("signet", "signet")}:
             util.write_config(conf_file, n=0, chain=chain_name, extra_config='acceptstalefeeestimates=1\n')
             # On main, the refusal of an unactivated slot comes first (see MAIN_REFUSED).
@@ -551,7 +551,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.nodes[0].assert_start_raises_init_error([f'-datadir={new_data_dir}'], f'Error: Specified data directory "{new_data_dir}" does not exist.')
 
         # Check that using non-existent datadir in conf file fails
-        conf_file = default_data_dir / "layers.conf"
+        conf_file = default_data_dir / "starbase.conf"
 
         # datadir needs to be set before [chain] section
         with open(conf_file) as f:

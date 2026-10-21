@@ -71,7 +71,7 @@ class LayersDexTest(LayersTest):
 
     def reserves(self, node, a, b):
         pool = node.getpool(a, b)
-        return units(pool["reserve_a"], 2 if a != "CHN" else 8), units(pool["reserve_b"], 2 if b != "CHN" else 8)
+        return units(pool["reserve_a"], 2 if a != "ECX" else 8), units(pool["reserve_b"], 2 if b != "ECX" else 8)
 
     def gold(self, node):
         return units(self.holding(node, "GOLD"), 2)
@@ -90,7 +90,7 @@ class LayersDexTest(LayersTest):
 
         self.log.info("Setup: the slot, deposits, four assets, four pools (BMM blocks)")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Layers", "Assets on a fast chain", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 60)
         main.createsidechaindeposit(SLOT, n1.getdepositaddress()["depositaddress"], 20)
@@ -109,8 +109,8 @@ class LayersDexTest(LayersTest):
         for name in names:
             n0.registerasset(name, 1000000, 2)
         self.bmm()
-        n0.addliquidity("GOLD", 10000, "CHN", 20)
-        n0.addliquidity("SILVER", 10000, "CHN", 10)
+        n0.addliquidity("GOLD", 10000, "ECX", 20)
+        n0.addliquidity("SILVER", 10000, "ECX", 10)
         n0.addliquidity("OIL", 5000, "WOOD", 5000)
         self.bmm()
         n0.addliquidity("SILVER", 5000, "OIL", 5000)
@@ -123,12 +123,12 @@ class LayersDexTest(LayersTest):
 
         self.log.info("Before the DEX's height: two swaps of a block trade one after the other; no routes, no TWAP")
         assert_greater_than(DEX_HEIGHT - 1, n0.getblockcount() + 1)
-        assert_raises_rpc_error(-1, "do not apply yet", n0.swaproute, ["GOLD", "CHN", "SILVER"], 10)
-        pool = n0.getpool("GOLD", "CHN")["pool"]
+        assert_raises_rpc_error(-1, "do not apply yet", n0.swaproute, ["GOLD", "ECX", "SILVER"], 10)
+        pool = n0.getpool("GOLD", "ECX")["pool"]
         assert_raises_rpc_error(-1, "no observations", n0.getpooltwap, pool, None, 60)
         g1, g2 = self.gold(n1), self.gold(n2)
-        n1.swapasset("CHN", "0.2", "GOLD", 5)
-        n2.swapasset("CHN", "0.2", "GOLD", 5)
+        n1.swapasset("ECX", "0.2", "GOLD", 5)
+        n2.swapasset("ECX", "0.2", "GOLD", 5)
         self.bmm()
         assert_equal(n0.getrawmempool(), [])
         got1, got2 = self.gold(n1) - g1, self.gold(n2) - g2
@@ -137,10 +137,10 @@ class LayersDexTest(LayersTest):
         assert n0.getdexinfo()["active"]
 
         self.log.info("Batch: two orders of the same side, one block, one price")
-        r_g, r_c = self.reserves(n0, "GOLD", "CHN")
+        r_g, r_c = self.reserves(n0, "GOLD", "ECX")
         g1, g2 = self.gold(n1), self.gold(n2)
-        n1.swapasset("CHN", "0.2", "GOLD", 5)
-        n2.swapasset("CHN", "0.2", "GOLD", 5)
+        n1.swapasset("ECX", "0.2", "GOLD", 5)
+        n2.swapasset("ECX", "0.2", "GOLD", 5)
         block = self.bmm()
         assert_equal(n0.getblockheader(block)["height"], DEX_HEIGHT)
         assert_equal(len(n0.getblock(block)["tx"]), 3)
@@ -151,13 +151,13 @@ class LayersDexTest(LayersTest):
 
         self.log.info("Routes: two hops, four hops, each what quoteroute said")
         quote = n0.quoteroute("GOLD", 10, "SILVER")
-        assert_equal(quote["path"], ["GOLD", "CHN", "SILVER"])
+        assert_equal(quote["path"], ["GOLD", "ECX", "SILVER"])
         before = self.holding(n0, "SILVER")
         n0.swaproute(quote["path"], 10)
         self.bmm()
         assert_equal(self.holding(n0, "SILVER") - before, quote["amount_out"])
         quote = n0.quoteroute("GOLD", 10, "WOOD")
-        assert_equal(quote["path"], ["GOLD", "CHN", "SILVER", "OIL", "WOOD"])
+        assert_equal(quote["path"], ["GOLD", "ECX", "SILVER", "OIL", "WOOD"])
         assert_equal(len(quote["routes"][0]["hops"]), 4)
         assert_equal(n0.quoteroute("GOLD", 10, "WOOD", 3)["routes"], [])
         before = self.holding(n0, "WOOD")
@@ -166,12 +166,12 @@ class LayersDexTest(LayersTest):
         assert_equal(self.holding(n0, "WOOD") - before, quote["amount_out"])
 
         self.log.info("Batch: opposing orders at the uniform price (BMM block)")
-        r_g, r_c = self.reserves(n0, "GOLD", "CHN")
-        alone_sell = n1.quoteswap("GOLD", 50, "CHN")["amount_out"]
-        alone_buy = n2.quoteswap("CHN", "0.2", "GOLD")["amount_out"]
+        r_g, r_c = self.reserves(n0, "GOLD", "ECX")
+        alone_sell = n1.quoteswap("GOLD", 50, "ECX")["amount_out"]
+        alone_buy = n2.quoteswap("ECX", "0.2", "GOLD")["amount_out"]
         g2 = self.gold(n2)
-        n1.swapasset("GOLD", 50, "CHN")
-        n2.swapasset("CHN", "0.2", "GOLD")
+        n1.swapasset("GOLD", 50, "ECX")
+        n2.swapasset("ECX", "0.2", "GOLD")
         block = self.bmm()
         (chn_out,), (gold_out,) = uniform(r_g, r_c, [5000], [units("0.2", 8)])
         assert_equal(self.gold(n2) - g2, gold_out)
@@ -179,13 +179,13 @@ class LayersDexTest(LayersTest):
         # Each better than alone: the other's flow nets against it.
         assert_greater_than(Decimal(chn_out) / COIN, alone_sell)
         assert_greater_than(Decimal(gold_out) / 100, alone_buy)
-        assert_equal(self.reserves(n0, "GOLD", "CHN"), (r_g + 5000 - gold_out, r_c + units("0.2", 8) - chn_out))
+        assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out, r_c + units("0.2", 8) - chn_out))
 
         self.log.info("Batch: an order whose min_out the batch misses is refunded; the other fills as alone")
-        alone = n1.quoteswap("GOLD", 50, "CHN")["amount_out"]
+        alone = n1.quoteswap("GOLD", 50, "ECX")["amount_out"]
         g1 = self.gold(n1)
-        tight = n1.swapasset("GOLD", 50, "CHN", 0)
-        n2.swapasset("GOLD", 50, "CHN", 1)
+        tight = n1.swapasset("GOLD", 50, "ECX", 0)
+        n2.swapasset("GOLD", 50, "ECX", 1)
         block = self.bmm()
         assert tight["txid"] in n0.getblock(block)["tx"]
         assert_equal(self.gold(n1), g1)  # its GOLD back
@@ -219,7 +219,7 @@ class LayersDexTest(LayersTest):
         assert whole["twap_a"] != whole["spot_a"]
         assert_raises_rpc_error(-8, "Name the window", n0.getpooltwap, pool)
         before = n0.getpooltwap(pool, DEX_HEIGHT)
-        n1.swapasset("GOLD", 100, "CHN")
+        n1.swapasset("GOLD", 100, "ECX")
         time.sleep(2)
         swap_block = self.bmm()
         time.sleep(2)
@@ -259,16 +259,16 @@ class LayersDexTest(LayersTest):
         height = n0.getblockcount()
         to_low, to_high, refund = n1.getnewaddress(), n2.getnewaddress(), n0.getnewaddress()
         outcomes = [{"min": INT64_MIN, "max": 99, "address": to_low}, {"min": 100, "max": INT64_MAX, "address": to_high}]
-        c_chn = n0.createoraclecontract(prices, "E1", "CHN", 1, outcomes, refund, height + 100)["txid"]
+        c_chn = n0.createoraclecontract(prices, "E1", "ECX", 1, outcomes, refund, height + 100)["txid"]
         c_gold = n0.createoraclecontract(prices, "E1", "GOLD", 20, outcomes, refund, height + 100)["txid"]
         self.bmm()
-        c_outside = n0.createoraclecontract(outside, "E2", "CHN", "0.5", outcomes, refund, height + 100)["txid"]
-        c_expiring = n0.createoraclecontract(prices, "E3", "CHN", "0.5", outcomes, refund, height + 3)["txid"]
+        c_outside = n0.createoraclecontract(outside, "E2", "ECX", "0.5", outcomes, refund, height + 100)["txid"]
+        c_expiring = n0.createoraclecontract(prices, "E3", "ECX", "0.5", outcomes, refund, height + 3)["txid"]
         self.bmm()
         assert_equal(n2.getoraclecontract(c_chn)["status"], "pending")
         assert_raises_rpc_error(-8, "waits", n2.settleoraclecontract, c_chn)
         # The contracts' CHN are in the state, with the pools': the peg balance's "assets".
-        pools_chn = sum(p["reserve_a"] if p["asset_a"] == "CHN" else p["reserve_b"] if p["asset_b"] == "CHN" else 0 for p in n0.listpools())
+        pools_chn = sum(p["reserve_a"] if p["asset_a"] == "ECX" else p["reserve_b"] if p["asset_b"] == "ECX" else 0 for p in n0.listpools())
         assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2)
 
         n0.publishoracle(prices, "E1", 150)

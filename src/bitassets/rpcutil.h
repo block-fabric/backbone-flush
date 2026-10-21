@@ -26,15 +26,15 @@ AssetData ParseData(const UniValue& value);
 AssetUpdates ParseUpdates(const UniValue& value);
 UniValue DataToJSON(const AssetData& data);
 
-/** How an asset is named: "CHN", its name, "0x" and the hex of its hash, or its number ("1739-0029"). */
-inline constexpr const char* ASSET_ARG_HELP{"The asset: \"CHN\", its name, \"0x\" and its hash, or its number"};
+/** How an asset is named: "ECX", its name, "0x" and the hex of its hash, or its number ("1739-0029"). */
+inline constexpr const char* ASSET_ARG_HELP{"The asset: \"ECX\", its name, \"0x\" and its hash, or its number"};
 /**
  * The asset an argument names. `lookup` gives the asset of a number, if it can; with it, text that
  * reads as a number names that asset or none (an error), never the asset of that name. A name is
  * taken as given (its hash), whether it is registered or not.
  */
 AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<AssetId>(uint32_t)>& lookup = {});
-/** How an asset is shown: "CHN", its name if public, or "0x" and its hash. */
+/** How an asset is shown: "ECX", its name if public, or "0x" and its hash. */
 std::string AssetLabel(const AssetId& asset, const AssetRecord* record);
 
 /** Units of an asset with `decimals` decimals, as a JSON number: 1.5 for 150 units with 2 decimals. */

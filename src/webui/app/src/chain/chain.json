@@ -1,10 +1,10 @@
 {
-  "comment": "The chain of this app, in one place: read by CMake (src/webui/CMakeLists.txt, which makes webui/chainconfig.h for the host) and by the interface (chain/config.ts). A sidechain sets its own here; see doc/webui.md.",
-  "name": "Layers",
-  "bin": "layers",
+  "comment": "Starbase: the networks ecash, ecashbeta (the default) and ecashtest are its own; main, test and signet (Chains, development only: -chainsnetworks) and regtest are kept for the tests. The chain of this app, in one place: read by CMake (src/webui/CMakeLists.txt, which makes webui/chainconfig.h for the host) and by the interface (chain/config.ts). A sidechain sets its own here; see doc/webui.md.",
+  "name": "Starbase",
+  "bin": "starbase",
   "role": "sidechain",
-  "coin": { "ticker": "CHN", "name": "Chains" },
-  "uriScheme": "layers",
+  "coin": { "ticker": "ECX", "name": "eCash" },
+  "uriScheme": "starbase",
   "brand": {
     "color": "#8f7cff",
     "iconHue": 0,
@@ -14,24 +14,30 @@
     "main": { "p2p": 9255, "rpc": 9254, "hrp": "ly", "pubkey": 28, "script": 88 },
     "test": { "p2p": 19255, "rpc": 19254, "hrp": "tly", "pubkey": 111, "script": 196 },
     "signet": { "p2p": 39255, "rpc": 39254, "hrp": "tly", "pubkey": 111, "script": 196 },
-    "regtest": { "p2p": 29255, "rpc": 29254, "hrp": "rsc", "pubkey": 111, "script": 196 }
+    "regtest": { "p2p": 29255, "rpc": 29254, "hrp": "rsc", "pubkey": 111, "script": 196 },
+    "ecash": { "p2p": 8255, "rpc": 8254, "hrp": "sbx", "pubkey": 28, "script": 88 },
+    "ecashbeta": { "p2p": 38255, "rpc": 38254, "hrp": "bsbx", "pubkey": 28, "script": 88 },
+    "ecashtest": { "p2p": 48255, "rpc": 48254, "hrp": "tsbx", "pubkey": 111, "script": 196 }
   },
   "mainchain": {
-    "name": "Chains",
-    "ticker": "CHN",
-    "uriScheme": "chains",
+    "name": "eCash",
+    "ticker": "ECX",
+    "uriScheme": "ecash",
     "networks": {
       "main": { "rpc": 9554, "hrp": "chn", "pubkey": 28, "script": 88 },
       "test": { "rpc": 19554, "hrp": "tchn", "pubkey": 111, "script": 196 },
       "signet": { "rpc": 39554, "hrp": "tchn", "pubkey": 111, "script": 196 },
-      "regtest": { "rpc": 29554, "hrp": "rchn", "pubkey": 111, "script": 196 }
+      "regtest": { "rpc": 29554, "hrp": "rchn", "pubkey": 111, "script": 196 },
+      "ecash": { "rpc": 8532, "hrp": "bc", "pubkey": 0, "script": 5 },
+      "ecashbeta": { "rpc": 8532, "hrp": "bc", "pubkey": 0, "script": 5 },
+      "ecashtest": { "rpc": 48532, "hrp": "tb", "pubkey": 111, "script": 196 }
     }
   },
   "links": {
     "website": "https://blockfab.org/drivechains/",
-    "source": "https://github.com/block-fabric/layers-app",
-    "issues": "https://github.com/block-fabric/layers-app/issues",
-    "guide": "https://github.com/block-fabric/layers-app/blob/main/doc/layers.md"
+    "source": "https://github.com/block-fabric/backbone-starbase",
+    "issues": "https://github.com/block-fabric/backbone-starbase/issues",
+    "guide": "https://github.com/block-fabric/backbone-starbase/blob/main/README.md"
   },
   "blockWeight": 1500000,
   "blockTarget": 15,

@@ -168,7 +168,7 @@ BOOST_AUTO_TEST_CASE(asset_payouts_bound_counts_their_own_across_blocks_of_stake
 }
 
 /** The first block of every network, as getblockhash 0 shows it (feature_layers_genesis.py checks the
- * daemon, layers-util and doc/layers.md against the same). The test network's is that of its restart of
+ * daemon, starbase-util and doc/layers.md against the same). The test network's is that of its restart of
  * 19/Oct/2026: it changes only with a restart of the test network. */
 BOOST_AUTO_TEST_CASE(genesis_hashes)
 {
@@ -177,6 +177,10 @@ BOOST_AUTO_TEST_CASE(genesis_hashes)
         {ChainType::TESTNET, "6ad3a3ff068fecfba95fc4aeec8404ac1db31cb840b852164db054ff31daa382"},
         {ChainType::SIGNET, "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101"},
         {ChainType::REGTEST, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"},
+        // Starbase on eCash (README.md).
+        {ChainType::ECASH, "7c873d949d0cac915173259dd7312ae7dc075438f8be5a0da459c6632bf0d2e0"},
+        {ChainType::ECASH_BETANET, "122710c06ae769c8d18a7ad8038a345173cfbf6b3d720fcbad9a7ac28a8afebc"},
+        {ChainType::ECASH_TESTNET, "5a463afcefde5455ddd78498cd139fe2f4e8f216d28710912d126d0f9d941d22"},
     };
     for (const auto& [chain, hash] : expected) {
         const auto params{CreateChainParams(*m_node.args, chain)};
@@ -190,7 +194,7 @@ BOOST_AUTO_TEST_CASE(genesis_hashes)
  * of FastBlocks' or BitAssets' chain parameters must not bring one of theirs back. */
 BOOST_AUTO_TEST_CASE(rules_from_genesis)
 {
-    for (const auto chain : {ChainType::MAIN, ChainType::TESTNET, ChainType::SIGNET}) {
+    for (const auto chain : {ChainType::MAIN, ChainType::TESTNET, ChainType::SIGNET, ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
         const auto params{CreateChainParams(*m_node.args, chain)};
         const Consensus::Params& consensus{params->GetConsensus()};
         BOOST_CHECK_EQUAL(consensus.sidechain.dex_height, 0);

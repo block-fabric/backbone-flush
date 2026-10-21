@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The asset a transaction of the wallet moved, in its details (components/TxDetailsView.svelte), above the CHN
+  // The asset a transaction of the wallet moved, in its details (components/TxDetailsView.svelte), above the ECX
   // details (user feedback 2026-10-19): per asset, its logo, label and number, the amount exact in its decimals, the
   // direction, the other side (each address once, the wallet's own as "this wallet"), and what the operation did in
   // the node's words (listassetactivity: the bid and the auction's prices, what went into a pool...), with the facts
@@ -113,7 +113,7 @@
           </dd>
         {/if}
         {#if own.length}
-          <!-- The wallet's own addresses of the move, each with what it got (the asset, the control coin, the change of CHN). -->
+          <!-- The wallet's own addresses of the move, each with what it got (the asset, the control coin, the change of ECX). -->
           <dt>This wallet</dt>
           <dd class="parties own" data-testid="own-addresses">
             {#each own as o (o.address)}

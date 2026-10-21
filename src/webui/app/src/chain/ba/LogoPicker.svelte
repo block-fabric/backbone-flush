@@ -220,7 +220,7 @@
         {#if busy}<span class="hint" role="status">Encoding…</span>
         {:else if logo}
           <span class="hint ba-good" role="status" data-testid="logo-size">{logo.kind}: {kb(logo.size)} KB of at most {kb(MAX_LOGO_BYTES)} KB</span>
-          <span class="hint">About {vsize} vB on the chain: about {(vsize / 1e8).toFixed(8)} CHN at 1 sat/vB. The confirmation shows the fee.</span>
+          <span class="hint">About {vsize} vB on the chain: about {(vsize / 1e8).toFixed(8)} ECX at 1 sat/vB. The confirmation shows the fee.</span>
         {/if}
       </div>
     </div>

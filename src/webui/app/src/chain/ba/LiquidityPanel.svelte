@@ -81,7 +81,7 @@
     if (!deposit) return 'Too little: it makes no shares (a new pool needs the product of the amounts, in units, above a million).';
     if (setsPrice) {
       const chn = isChn(a) ? aUnits : isChn(b) ? bUnits : MIN_OPEN_CHN;
-      if (deposit.shares < MIN_OPEN_SHARES || chn < MIN_OPEN_CHN) return 'Too little to open a pool: it takes at least 0.01 CHN on the CHN side, and amounts whose product, in units, is above 10,201,000,000.';
+      if (deposit.shares < MIN_OPEN_SHARES || chn < MIN_OPEN_CHN) return 'Too little to open a pool: it takes at least 0.01 ECX on the ECX side, and amounts whose product, in units, is above 10,201,000,000.';
     }
     return '';
   });
@@ -177,7 +177,7 @@
 
     {#if a && b && a !== b}
       {#if !pool}
-        <p class="ba-help"><strong>A new pool:</strong> your amounts set its price. It opens with at least 0.01 CHN on a CHN side, and keeps 1,000 shares for good, so that it is never emptied.</p>
+        <p class="ba-help"><strong>A new pool:</strong> your amounts set its price. It opens with at least 0.01 ECX on a ECX side, and keeps 1,000 shares for good, so that it is never emptied.</p>
       {:else if pool.abandoned}
         <p class="ba-problems"><strong>Nobody provides liquidity to this pool any more.</strong> It holds only the dust every pool keeps ({formatAmount(pool.asset_a_id === a ? pool.reserve_a : pool.reserve_b, da)} <SafeText text={labelOf(a)} /> and {formatAmount(pool.asset_a_id === a ? pool.reserve_b : pool.reserve_a, db)} <SafeText text={labelOf(b)} />), at whatever price it was left at: your amounts set its price, as for a new pool, and the dust counts toward them.</p>
       {:else}

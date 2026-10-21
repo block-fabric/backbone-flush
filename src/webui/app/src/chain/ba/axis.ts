@@ -1,4 +1,4 @@
-// The numbers of a chart's axes and of what the pointer is over (ba/Chart.svelte). Prices in CHN can be
+// The numbers of a chart's axes and of what the pointer is over (ba/Chart.svelte). Prices in ECX can be
 // tiny (0.000000012) or huge (12,000,000,000): an axis says them in a few characters, compactly (three
 // significant digits, k/M/B/T, or 1.2e-8 below a thousandth), as many digits as its ticks need to differ;
 // the readout under the pointer says the value exactly. User feedback 2026-10-19: long labels spilled off

@@ -748,7 +748,7 @@ export function tickersActive(): boolean {
   return ba.info?.tickers_active === true;
 }
 
-/** The decimals of an asset, by id (CHN: 8; an asset not listed: 0). */
+/** The decimals of an asset, by id (ECX: 8; an asset not listed: 0). */
 export function decimalsOf(id: string): number {
   if (/^0+$/.test(id)) return 8;
   return assetById(id)?.decimals ?? holdingOf(id)?.decimals ?? 0;
@@ -756,7 +756,7 @@ export function decimalsOf(id: string): number {
 
 /** The label of an asset, by id. Text of the chain. */
 export function labelOf(id: string): string {
-  if (/^0+$/.test(id)) return 'CHN';
+  if (/^0+$/.test(id)) return 'ECX';
   return assetById(id)?.label ?? holdingOf(id)?.label ?? `0x${id.slice(0, 12)}…`;
 }
 
@@ -768,7 +768,7 @@ export function labelOf(id: string): string {
  * (audit 7 E-BA4). Text of the chain.
  */
 export function nameOf(id: string, label?: string): string {
-  if (/^0+$/.test(id)) return 'CHN';
+  if (/^0+$/.test(id)) return 'ECX';
   const listed = assetById(id);
   const text = label ?? listed?.label ?? holdingOf(id)?.label ?? '';
   const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;
@@ -801,7 +801,7 @@ export function hasPool(id: string): boolean {
   return pooled.has(id);
 }
 
-/** The price of one of an asset in CHN, from its pool with CHN (undefined when it has none, or nobody provides to it). */
+/** The price of one of an asset in ECX, from its pool with ECX (undefined when it has none, or nobody provides to it). */
 export function chnPrice(id: string): number | undefined {
   if (/^0+$/.test(id)) return 1;
   const p = poolOf(id, '0'.repeat(64));
@@ -809,7 +809,7 @@ export function chnPrice(id: string): number | undefined {
   return p.asset_a_id === id ? p.price : 1 / p.price;
 }
 
-/** What the wallet can spend of an asset, in its units (CHN: undefined, the kit knows it). */
+/** What the wallet can spend of an asset, in its units (ECX: undefined, the kit knows it). */
 export function heldOf(id: string): Amount | undefined {
   return ba.mine?.assets.find((a) => a.asset === id)?.balance;
 }

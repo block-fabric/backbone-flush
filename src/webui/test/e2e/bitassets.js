@@ -74,7 +74,7 @@
     await host('test.confirmAnswer', { always: true });
     await waitFor('the node to run', () => T() && T().app.phase === 'ready' && T().node.tip, 120000);
     await waitFor('the node to reach the mainchain', async () => (await rpc('getmainchaininfo')).connected, 60000);
-    await check('Layers (the pages of BitAssets), the dashboard and Midnight by default', T().app.info.name === 'Layers' && T().prefs.layout === 'dashboard' && (T().prefs.theme ?? 'midnight') === 'midnight', `${T().app.info.name} ${T().prefs.layout}`);
+    await check('Starbase (the pages of BitAssets), the dashboard and Midnight by default', T().app.info.name === 'Starbase' && T().prefs.layout === 'dashboard' && (T().prefs.theme ?? 'midnight') === 'midnight', `${T().app.info.name} ${T().prefs.layout}`);
 
     // --- A wallet with coins ---
     await rpc('createwallet', [W]);

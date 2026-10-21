@@ -111,7 +111,7 @@ describe('every kind of move', () => {
       // The app's own headline where it reads better (a registration, a mint, a burn), else the node's words.
       if (['register', 'mint', 'burn'].includes(category)) expect(text, category).toContain(category === 'register' ? 'Registered GOLDEN-LONG-TICKER · 1,234,567.89 created' : `${label} 1,234,567.89 GOLDEN-LONG-TICKER`);
       else expect(text, category).toContain(`What ${category} did`);
-      // The wallet's own addresses, each once, with what it got; no fee here (the CHN side says it once).
+      // The wallet's own addresses, each once, with what it got; no fee here (the ECX side says it once).
       if (sign > 0) expect((text.match(new RegExp(ME1, 'g')) ?? []).length, category).toBe(1);
       expect(text, category).not.toContain('Network fee');
       if (sign < 0) expect(text, category).toContain(OTHER);
@@ -134,7 +134,7 @@ describe('every kind of move', () => {
 });
 
 describe('the wallet\'s own addresses of a move', () => {
-  it('says what each got (the asset, the control coin, the change of CHN), and opens it in the explorer', async () => {
+  it('says what each got (the asset, the control coin, the change of ECX), and opens it in the explorer', async () => {
     const e = move('register', 1, { display_name: 'Gold Bar Token, 1 g', to: [{ address: ME1, mine: true, roles: ['control coin'] }, { address: ME2, mine: true, roles: ['asset'] }], change: [OTHER] });
     expect(ownAddresses(e)).toEqual([
       { address: ME1, roles: ['control coin'] },
@@ -160,10 +160,10 @@ describe('the wallet\'s own addresses of a move', () => {
     view.unmount();
   });
 
-  it('leaves the zero Debit and Credit and the output index of the CHN record out of an asset operation', () => {
+  it('leaves the zero Debit and Credit and the output index of the ECX record out of an asset operation', () => {
     const e = move('register', 1, { to: [mine(ME1)] });
     ba.transfers = [e];
-    expect(chainTxDetails(e.txid)).toEqual({ hideZero: true, raw: { 'Output index': 'Output index of the CHN record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] });
+    expect(chainTxDetails(e.txid)).toEqual({ hideZero: true, raw: { 'Output index': 'Output index of the ECX record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] });
     expect(chainTxDetails('f'.repeat(64))).toBeUndefined();
   });
 });

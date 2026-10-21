@@ -168,7 +168,8 @@ AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<A
 {
     const std::string text{value.get_str()};
     if (text.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "The asset is empty");
-    if (ToUpper(text) == "CHN") return CHN;
+    // The coin of the chain: eCash's, ECX (Starbase), or by the name Layers gave it, CHN.
+    if (ToUpper(text) == "ECX" || ToUpper(text) == "CHN") return CHN;
     if (text.size() == 66 && text.starts_with("0x")) {
         if (const auto hash{uint256::FromHex(text.substr(2))}) return *hash;
     }
@@ -188,7 +189,7 @@ AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<A
 
 std::string AssetLabel(const AssetId& asset, const AssetRecord* record)
 {
-    if (asset.IsNull()) return "CHN";
+    if (asset.IsNull()) return "ECX";
     if (record && !record->text.empty()) return record->text;
     return "0x" + asset.GetHex();
 }
@@ -239,7 +240,7 @@ std::vector<RPCArg> SearchAssetsArgs()
                 {{"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
         }},
         {"sort", RPCArg::Type::STR, RPCArg::Default{"relevance"}, "relevance (a text: the whole name, then its start, then a word's start; no text: as activity), "
-            "name, newest, oldest, supply, activity (last touched first), volume (traded in the window; those not traded are left out), pool_depth (those with a pool with CHN only)"},
+            "name, newest, oldest, supply, activity (last touched first), volume (traded in the window; those not traded are left out), pool_depth (those with a pool with ECX only)"},
         {"cursor", RPCArg::Type::STR_HEX, RPCArg::Default{""}, "\"next_cursor\" of the page before, with the same query, filters and sort"},
         {"limit", RPCArg::Type::NUM, RPCArg::Default{50}, "How many at most, from 1 to 200"},
     };
@@ -264,8 +265,8 @@ RPCResult SearchAssetsResult()
             {RPCResult::Type::BOOL, "has_logo", ""},
             {RPCResult::Type::BOOL, "has_pool", "Whether it has a pool someone provides liquidity to"},
             {RPCResult::Type::NUM, "pools", "How many"},
-            {RPCResult::Type::NUM, "pool_depth", "The CHN in its pool with CHN (0 if none)"},
-            {RPCResult::Type::NUM, "volume", "CHN traded in its pools with CHN and its auctions for CHN over the volume window"},
+            {RPCResult::Type::NUM, "pool_depth", "The ECX in its pool with ECX (0 if none)"},
+            {RPCResult::Type::NUM, "volume", "ECX traded in its pools with ECX and its auctions for ECX over the volume window"},
             {RPCResult::Type::NUM, "created", "The height of the block that registered it"},
             {RPCResult::Type::NUM, "registered", "The same"},
             {RPCResult::Type::NUM, "last_activity", "The height of the last block that touched it"},

@@ -242,7 +242,7 @@
               {#if a.data?.info}<SafeText class="blurb" text={a.data.info} />{:else}<span class="blurb faint">No description.</span>{/if}
               <span class="nums">
                 <span><span class="faint">Supply</span> <strong class="num">{formatAmount(a.supply, a.decimals, { max: 4 })}</strong></span>
-                <span><span class="faint">Price</span> <strong class="num">{price !== undefined ? `${formatPrice(price)} CHN` : '–'}</strong></span>
+                <span><span class="faint">Price</span> <strong class="num">{price !== undefined ? `${formatPrice(price)} ECX` : '–'}</strong></span>
               </span>
               <span class="tags">
                 {#if a.fixed}<span class="ba-tag">Fixed supply</span>{/if}

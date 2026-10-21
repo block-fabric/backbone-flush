@@ -333,14 +333,14 @@ def get_binary_paths(config):
 
     paths = types.SimpleNamespace()
     binaries = {
-        "layers": "BITCOIN_BIN",
-        "layersd": "BITCOIND",
+        "starbase": "BITCOIN_BIN",
+        "starbased": "BITCOIND",
         "bench_bitcoin": "BITCOIN_BENCH",
-        "layers-cli": "BITCOINCLI",
-        "layers-util": "BITCOINUTIL",
-        "layers-tx": "BITCOINTX",
-        "layers-chainstate": "BITCOINCHAINSTATE",
-        "layers-wallet": "BITCOINWALLET",
+        "starbase-cli": "BITCOINCLI",
+        "starbase-util": "BITCOINUTIL",
+        "starbase-tx": "BITCOINTX",
+        "starbase-chainstate": "BITCOINCHAINSTATE",
+        "starbase-wallet": "BITCOINWALLET",
     }
     # Set paths to bitcoin core binaries allowing overrides with environment
     # variables.
@@ -510,7 +510,7 @@ def initialize_datadir(dirname, n, chain, disable_autoconnect=True):
     datadir = get_datadir_path(dirname, n)
     if not os.path.isdir(datadir):
         os.makedirs(datadir)
-    write_config(os.path.join(datadir, "layers.conf"), n=n, chain=chain, disable_autoconnect=disable_autoconnect)
+    write_config(os.path.join(datadir, "starbase.conf"), n=n, chain=chain, disable_autoconnect=disable_autoconnect)
     os.makedirs(os.path.join(datadir, 'stderr'), exist_ok=True)
     os.makedirs(os.path.join(datadir, 'stdout'), exist_ok=True)
     return datadir
@@ -525,6 +525,11 @@ def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=
         chain_name_conf_arg = chain
         chain_name_conf_section = chain
     with open(config_path, 'w') as f:
+        # Starbase: the Chains networks (main, test, signet) only with -chainsnetworks, and without a network
+        # it runs on ecashbeta: the tests name main as such.
+        f.write("chainsnetworks=1\n")
+        if not chain:
+            f.write("chain=main\n")
         if chain_name_conf_arg:
             f.write("{}=1\n".format(chain_name_conf_arg))
         if chain_name_conf_section:
@@ -584,18 +589,18 @@ def get_temp_default_datadir(temp_dir: pathlib.Path) -> tuple[dict, pathlib.Path
     temp_dir, as well as the complete path it would return."""
     if platform.system() == "Windows":
         env = dict(APPDATA=str(temp_dir))
-        datadir = temp_dir / "Layers"
+        datadir = temp_dir / "Starbase"
     else:
         env = dict(HOME=str(temp_dir))
         if platform.system() == "Darwin":
-            datadir = temp_dir / "Library/Application Support/Layers"
+            datadir = temp_dir / "Library/Application Support/Starbase"
         else:
-            datadir = temp_dir / ".layers"
+            datadir = temp_dir / ".starbase"
     return env, datadir
 
 
 def append_config(datadir, options):
-    with open(os.path.join(datadir, "layers.conf"), 'a') as f:
+    with open(os.path.join(datadir, "starbase.conf"), 'a') as f:
         for option in options:
             f.write(option + "\n")
 
@@ -603,8 +608,8 @@ def append_config(datadir, options):
 def get_auth_cookie(datadir, chain):
     user = None
     password = None
-    if os.path.isfile(os.path.join(datadir, "layers.conf")):
-        with open(os.path.join(datadir, "layers.conf"), 'r') as f:
+    if os.path.isfile(os.path.join(datadir, "starbase.conf")):
+        with open(os.path.join(datadir, "starbase.conf"), 'r') as f:
             for line in f:
                 if line.startswith("rpcuser="):
                     assert user is None  # Ensure that there is only one rpcuser line

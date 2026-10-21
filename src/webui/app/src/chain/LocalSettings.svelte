@@ -1,7 +1,7 @@
 <script lang="ts">
   // Settings → Asset filters (user feedback 2026-10-19): what the wallet shown hides of the assets, everywhere in its
   // lists (ba/hide.svelte.ts): filters, words and names to ignore, and the assets it ignores, to review and unignore.
-  // Display only: the coins stay in the wallet. CHN is never hidden.
+  // Display only: the coins stay in the wallet. ECX is never hidden.
   import SafeText from '../components/SafeText.svelte';
   import { wallets } from '../lib/state.svelte';
   import { walletDisplayName } from '../lib/wallet';
@@ -42,7 +42,7 @@
   {#if wallets.current === null}
     <p class="muted">Open a wallet: the asset filters are its own.</p>
   {:else}
-    <p class="ba-help">What wallet <SafeText text={walletDisplayName(wallets.current)} /> hides of the assets: in Browse assets, Send, Trade, Auctions, My assets, the home, the transactions and the notices. Each list can show what it hides. The coins stay in the wallet; CHN is never hidden.</p>
+    <p class="ba-help">What wallet <SafeText text={walletDisplayName(wallets.current)} /> hides of the assets: in Browse assets, Send, Trade, Auctions, My assets, the home, the transactions and the notices. Each list can show what it hides. The coins stay in the wallet; ECX is never hidden.</p>
 
     <h3>Filters</h3>
     <label class="check"><input type="checkbox" checked={f.hideDead} onchange={(e) => setFilters({ hideDead: e.currentTarget.checked })} /> Hide dead assets (nothing done with them for a while: no move, trade, mint or burn)</label>

@@ -234,6 +234,7 @@ BOOST_AUTO_TEST_CASE(asset_arg_number_never_a_name)
     BOOST_CHECK_THROW(ParseAssetArg(UniValue{number}, lookup), UniValue);
     BOOST_CHECK(ParseAssetArg(UniValue{"GOLD"}, lookup) == gold);
     BOOST_CHECK(ParseAssetArg(UniValue{"chn"}, lookup) == CHN);
+    BOOST_CHECK(ParseAssetArg(UniValue{"ECX"}, lookup) == CHN); // Starbase: the coin by eCash's ticker
 }
 
 BOOST_AUTO_TEST_CASE(register_and_conserve)
@@ -605,8 +606,8 @@ BOOST_AUTO_TEST_CASE(auction_does_not_keep_quote_alive)
 
 BOOST_AUTO_TEST_CASE(names_that_read_as_others)
 {
-    for (const char* name : {"CHN", "chn", "cHn", "1234-5678", "0001-2345-6789", "0x", "0xabc", "0X12"}) BOOST_CHECK_MESSAGE(ReadsAsAnotherAsset(name), name);
-    for (const char* name : {"CHNX", "CH", "1234-567", "12345678", "1234_5678", "1234-5678-", "x0", "GOLD", "0 x"}) BOOST_CHECK_MESSAGE(!ReadsAsAnotherAsset(name), name);
+    for (const char* name : {"CHN", "chn", "cHn", "ECX", "ecx", "eCx", "1234-5678", "0001-2345-6789", "0x", "0xabc", "0X12"}) BOOST_CHECK_MESSAGE(ReadsAsAnotherAsset(name), name);
+    for (const char* name : {"CHNX", "ECXX", "EC", "CH", "1234-567", "12345678", "1234_5678", "1234-5678-", "x0", "GOLD", "0 x"}) BOOST_CHECK_MESSAGE(!ReadsAsAnotherAsset(name), name);
 
     const auto try_register{[](const std::string& name, bool publish) {
         Fixture f;
@@ -622,11 +623,12 @@ BOOST_AUTO_TEST_CASE(names_that_read_as_others)
         f.Apply(MakeTx({COutPoint{reserve.GetHash(), 0}}, reg, {Unit(Token::Kind::CONTROL, id)}), &reason);
         return reason;
     }};
-    for (const char* name : {"CHN", "Chn", "1739-0029", "0001-1739-0029", "0xdead"}) {
+    for (const char* name : {"CHN", "Chn", "ECX", "eCx", "1739-0029", "0001-1739-0029", "0xdead"}) {
         BOOST_CHECK_EQUAL(try_register(name, true), "bad-ba-name-reserved");
     }
     // A private name is checked as far as it can be: CHN, by its hash.
     BOOST_CHECK_EQUAL(try_register("chn", false), "bad-ba-name-reserved");
+    BOOST_CHECK_EQUAL(try_register("ecx", false), "bad-ba-name-reserved");
     BOOST_CHECK_EQUAL(try_register("1739-0029", false), "");
     BOOST_CHECK_EQUAL(try_register("CHAIN", true), "");
 }
@@ -1814,7 +1816,7 @@ BOOST_AUTO_TEST_CASE(rpc_data_fields)
     BOOST_CHECK(ParseAssetArg(UniValue{"1739-0029"}) == HashName("1739-0029"));
     BOOST_CHECK_EQUAL(RpcError([] { ParseAssetArg(UniValue{""}); }), "The asset is empty");
     AssetRecord record;
-    BOOST_CHECK_EQUAL(AssetLabel(CHN, nullptr), "CHN");
+    BOOST_CHECK_EQUAL(AssetLabel(CHN, nullptr), "ECX");
     BOOST_CHECK_EQUAL(AssetLabel(GOLD, &record), "0x" + GOLD.GetHex());
     record.text = "GOLD";
     BOOST_CHECK_EQUAL(AssetLabel(GOLD, &record), "GOLD");
