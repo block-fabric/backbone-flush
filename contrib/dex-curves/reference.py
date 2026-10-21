@@ -7,6 +7,7 @@ Python's integers and fractions: no code of the node's. It checks the vectors th
 (src/test/data/dex_curves.json):
 
     contrib/dex-curves/reference.py src/test/data/dex_curves.json
+    contrib/dex-curves/reference.py src/test/data/dex_launch.json   (launch curves)
 
 Every quantity is the floor or ceiling of an exact one; how it is found (here a bisection) does not matter.
 """
@@ -185,7 +186,116 @@ def spot(k, r0, r1, inverse):
     return min((num << 64) // den, 2**256 - 1)
 
 
+def clear_cp0(x, y, orders):
+    """The constant product of fee-free amounts (ClearPool's formula, fee 0)."""
+    in0 = sum(a for s, a in orders if s == 0)
+    in1 = sum(a for s, a in orders if s == 1)
+    if in0 > MAX_AMOUNT - x or in1 > MAX_AMOUNT - y:
+        return None
+    num, den = y * F + in1 * F, x * F + in0 * F
+    outs = [(a * F * num) // (den * F) if s == 0 else (a * F * den) // (num * F) for s, a in orders]
+    out0 = sum(o for (s, a), o in zip(orders, outs) if s == 1)
+    out1 = sum(o for (s, a), o in zip(orders, outs) if s == 0)
+    if out0 >= x + in0 or out1 >= y + in1:
+        return None
+    return outs, x + in0 - out0, y + in1 - out1
+
+
+def clear_launch(c, x, y, orders):
+    """A launch curve's round (curves::ClearLaunch), from its definition."""
+    fee, end, max_buy, min_buy = c['fee'], int(c['end']), int(c['max_buy']), int(c['min_buy'])
+    if fee >= F or y <= end or x == 0 or x > MAX_AMOUNT or y > MAX_AMOUNT:
+        return None
+    fee_of = lambda a: -(-a * fee // F)
+    play, net = [], []
+    for s, a, d in orders:
+        over = s == 0 and ((max_buy and a > max_buy) or a < min_buy)
+        paid = a - fee_of(a) if s == 0 else a
+        ok = not over and paid > 0
+        play.append(ok)
+        if ok:
+            net.append((s, paid))
+    n = len(orders)
+    outs, refunds = [0] * n, [0] * n
+    if not net:
+        return outs, refunds, x, y, 0, False
+    cp = clear_cp0(x, y, net)
+    if cp is None:
+        return None
+    fees = 0
+    if cp[2] >= end:
+        k = 0
+        for i, (s, a, d) in enumerate(orders):
+            if not play[i]:
+                continue
+            o = cp[0][k]
+            k += 1
+            if s == 0:
+                outs[i] = o
+                fees += fee_of(a)
+            else:
+                f = min(o, fee_of(o))
+                outs[i] = o - f
+                fees += f
+        return outs, refunds, cp[1], cp[2], fees, cp[2] == end
+    x_end = -(-(x * y) // end)
+    if x_end > MAX_AMOUNT or x_end <= x:
+        return None
+    dx, dy = x_end - x, y - end
+    sold_in = coin_out = 0
+    for i, (s, a, d) in enumerate(orders):
+        if play[i] and s == 1:
+            gross = a * dx // dy
+            f = min(gross, fee_of(gross))
+            outs[i] = gross - f
+            fees += f
+            coin_out += gross
+            sold_in += a
+    buyers = [i for i, (s, a, d) in enumerate(orders) if play[i] and s == 0 and d]
+    offered = sum(orders[i][1] - fee_of(orders[i][1]) for i in buyers)
+    tokens = dy + sold_in
+    got = [0] * n
+    cost = lambda t: -(-(t * dx) // dy)
+    given = 0
+    for i in buyers:
+        if offered == 0:
+            break
+        budget = orders[i][1] - fee_of(orders[i][1])
+        got[i] = min(budget * dy // dx, tokens * budget // offered)
+        given += got[i]
+    for i in buyers:
+        if given >= tokens:
+            break
+        budget = orders[i][1] - fee_of(orders[i][1])
+        if cost(got[i] + 1) <= budget:
+            got[i] += 1
+            given += 1
+    coin_in = 0
+    for i in buyers:
+        if got[i] == 0:
+            continue
+        a = orders[i][1]
+        pays = cost(got[i])
+        f = min(a - pays, -(-(pays * fee) // (F - fee)))
+        outs[i] = got[i]
+        refunds[i] = a - pays - f
+        fees += f
+        coin_in += pays
+    if coin_in < coin_out or given > tokens:
+        return None
+    return outs, refunds, x + coin_in - coin_out, y + sold_in - given, fees, True
+
+
+def check_launch(case):
+    orders = [(s, int(a), d) for s, a, d in case['orders']]
+    c = clear_launch(case, int(case['x']), int(case['y']), orders)
+    got = {} if c is None else {'outs': [str(o) for o in c[0]], 'refunds': [str(r) for r in c[1]], 'x': str(c[2]), 'y': str(c[3]), 'fees': str(c[4]), 'reached_end': c[5]}
+    return [] if got == case['clearing'] else [f"launch clearing {got} != {case['clearing']}"]
+
+
 def check(case):
+    if case.get('launch'):
+        return check_launch(case)
     k = case
     r0, r1 = int(case['reserve0']), int(case['reserve1'])
     orders = [(s, int(a)) for s, a in case['orders']]

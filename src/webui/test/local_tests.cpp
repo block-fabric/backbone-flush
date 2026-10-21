@@ -142,11 +142,11 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // searches, searchmyassets), two of which sign with the wallet's keys, and the 7 of the DEX (its info, routes, TWAP,
     // the pool kinds' quotes, simulation, preview, depth); the 23 that pay or sign (setassetlogo and setassetdisplayname,
     // routes and the pool kinds' among them) are confirmed by the host; no bond among any of them.
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U);
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U);
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
-    BOOST_CHECK_EQUAL(confirmed.size(), 23U);
+    BOOST_CHECK_EQUAL(confirmed.size(), 27U);
     for (const char* m : {"getposinfo", "getstakinginfo", "listbonds", "createbond", "createunbond", "setstaking", "signbondpop"}) {
         BOOST_CHECK_MESSAGE(!keyed.contains(m), m);
         BOOST_CHECK_MESSAGE(!confirmed.contains(m), m);
@@ -401,6 +401,8 @@ BOOST_FIXTURE_TEST_CASE(confirmations_resolve_every_asset_and_pool, ReadingNode)
              {"swaproute", Arr({Arr({UniValue{"CHN"}, UniValue{"SILVER"}}), UniValue{"1"}})},
              {"createpool", Arr({UniValue{"USDX"}, UniValue{"1"}, UniValue{"CHN"}, UniValue{"1"}})},
              {"addpoolliquidity", Arr({UniValue{std::string(64, 'a')}, Obj({{"GOLD", UniValue{"1"}}})})},
+             {"buyfromlaunch", Arr({UniValue{"MOON"}, UniValue{"1"}})},
+             {"claimlaunch", Arr({UniValue{"1739-0029"}})},
          }) {
         const std::string why{Refused(method, params)};
         BOOST_CHECK_MESSAGE(why.find("id") != std::string::npos || why.find("No such pool") != std::string::npos, method << ": " << why);

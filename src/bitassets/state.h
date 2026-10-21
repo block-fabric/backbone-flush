@@ -633,9 +633,54 @@ struct SwapPools {
     friend bool operator==(const SwapPools&, const SwapPools&) = default;
 };
 
+/**
+ * Launch a token on a bonding curve (doc/layers.md "Launches"): register an asset (`reg`: the name revealed from
+ * its reservation, as Register, its ticker, logo, display name and description; supply 0 and LAUNCH_DECIMALS:
+ * the rules give it LAUNCH_SUPPLY, fixed, no control coin) whose supply sits on a launch curve priced in the chain's
+ * coin. Buyers pay the coin into the curve and sellers get it back (orders of the block's batch through the curve's
+ * pool, SwapPools); once the curve has raised SidechainParams::launch_graduation, its coin and the tokens left move
+ * into the token's pool with the coin (the kind AddLiquidity makes), whose shares nobody holds: locked for good.
+ * `creator` gets its part of the curve's fees (ClaimLaunch), and, if `allocation` (basis points of LAUNCH_SUPPLY, at
+ * most MAX_LAUNCH_ALLOCATION) is not 0, that many more tokens once it graduated. `min_buy`, `max_buy` (the chain's
+ * coin, 0: none) bound each buy. `first_buy` (0: none): the launch's own buy, an order of its block (its result
+ * output, at least `first_min_out`; CHN back to `chn_to`).
+ */
+struct LaunchToken {
+    static constexpr uint8_t KIND{22};
+    Register reg;
+    CScript creator;
+    uint16_t allocation{0};
+    uint64_t min_buy{0};
+    uint64_t max_buy{0};
+    uint64_t first_buy{0};
+    uint64_t first_min_out{0};
+    CScript chn_to;
+    SERIALIZE_METHODS(LaunchToken, obj)
+    {
+        READWRITE(obj.reg, obj.reg.logo, obj.reg.display_name, obj.creator, obj.allocation, VARINT(obj.min_buy), VARINT(obj.max_buy), VARINT(obj.first_buy), VARINT(obj.first_min_out),
+                  obj.chn_to);
+    }
+    friend bool operator==(const LaunchToken&, const LaunchToken&) = default;
+};
+
+/**
+ * Pay a launch's creator what it is owed: its part of the curve's fees (CHN, by the coinbase to its script), and, once
+ * the launch graduated, its allocation (the tokens, to the one result output, whose script must be the creator's).
+ * Anyone may send it: nothing goes anywhere but to the creator.
+ */
+struct ClaimLaunch {
+    static constexpr uint8_t KIND{23};
+    AssetId token;
+    SERIALIZE_METHODS(ClaimLaunch, obj) { READWRITE(obj.token); }
+    friend bool operator==(const ClaimLaunch&, const ClaimLaunch&) = default;
+};
+
 using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
                                Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract, SetLogo, SetDisplayName,
-                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools>;
+                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch>;
+
+/** The registration an operation makes: a Register's, or a LaunchToken's (nullptr: none). */
+const Register* RegisterOf(const Operation& op);
 
 /** Whether an operation is one of the DEX's (valid from SidechainParams::dex_height only); its pool kinds' included. */
 bool IsDexOperation(const Operation& op);
@@ -836,6 +881,80 @@ struct AssetHistory {
     std::optional<AssetData> AtHeight(int registered, int height) const;
 };
 
+/**
+ * Launches (LaunchToken): every launched token has LAUNCH_SUPPLY units (a billion tokens of LAUNCH_DECIMALS), of
+ * which LAUNCH_SUPPLY·3/4 are sold on its curve and LAUNCH_SUPPLY/4 go with the raised coin into its pool at
+ * graduation. The curve is x·y = k on virtual reserves from (V, Tv) = (G/2, LAUNCH_SUPPLY·9/8) to its end
+ * (V + G, yE) = (3G/2, LAUNCH_SUPPLY·3/8), G = SidechainParams::launch_graduation: selling the 3/4 raises exactly G,
+ * and the pool at graduation, (G, LAUNCH_SUPPLY/4), has the curve's last price, (V + G)²/k = 4G/LAUNCH_SUPPLY.
+ */
+inline constexpr uint8_t LAUNCH_DECIMALS{6};
+inline constexpr uint64_t LAUNCH_SUPPLY{1'000'000'000'000'000};
+inline constexpr uint64_t LAUNCH_CURVE_SUPPLY{LAUNCH_SUPPLY / 4 * 3};
+inline constexpr uint64_t LAUNCH_POOL_SUPPLY{LAUNCH_SUPPLY / 4};
+inline constexpr uint64_t LAUNCH_VIRTUAL_TOKENS{LAUNCH_SUPPLY / 8 * 9};
+inline constexpr uint64_t LAUNCH_CURVE_END{LAUNCH_SUPPLY / 8 * 3};
+static_assert(LAUNCH_VIRTUAL_TOKENS - LAUNCH_CURVE_END == LAUNCH_CURVE_SUPPLY && LAUNCH_CURVE_SUPPLY + LAUNCH_POOL_SUPPLY == LAUNCH_SUPPLY);
+/** Most a creator's allocation can be, in basis points of LAUNCH_SUPPLY, minted at graduation (shown as such). */
+inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{500};
+/** The blocks the launches' log keeps (State::GetLaunchLog): about a day and a half of 15-second blocks. */
+inline constexpr int32_t LAUNCH_LOG_BLOCKS{10'080};
+
+/** A launch (LaunchToken), by its token. */
+struct LaunchRecord {
+    Txid txid;
+    int32_t height{0};
+    CScript creator;
+    uint16_t allocation{0};
+    uint64_t min_buy{0};
+    uint64_t max_buy{0};
+    //! The rules it was made under (SidechainParams then): the fee (millionths), the creator's part of it
+    //! (millionths of the fee), what it graduates at, and the curve's virtual coin (half of that).
+    uint32_t fee{0};
+    uint32_t creator_share{0};
+    uint64_t graduation{0};
+    uint64_t virtual_coin{0};
+    //! Its curve's pool (PoolIdOf of the coin, the token and the launch's kind) until it graduates; then the token's pool with the coin.
+    uint256 pool;
+    //! The fees for the pool it graduates into, and the creator's not paid yet (the chain's coin), and the creator's paid.
+    uint64_t pool_fees{0};
+    uint64_t creator_fees{0};
+    uint64_t creator_paid{0};
+    //! -1 until it graduates; then the block, and the coin it had raised.
+    int32_t graduated{-1};
+    uint64_t raised_at_graduation{0};
+    bool allocation_claimed{false};
+    //! The coin traded in and out on its curve, ever, and its rounds.
+    uint64_t volume{0};
+    uint32_t trades{0};
+    SERIALIZE_METHODS(LaunchRecord, obj)
+    {
+        READWRITE(obj.txid, obj.height, obj.creator, obj.allocation, obj.min_buy, obj.max_buy, obj.fee, obj.creator_share, obj.graduation, obj.virtual_coin, obj.pool,
+                  obj.pool_fees, obj.creator_fees, obj.creator_paid, obj.graduated, obj.raised_at_graduation, obj.allocation_claimed, obj.volume, obj.trades);
+    }
+    friend bool operator==(const LaunchRecord&, const LaunchRecord&) = default;
+    bool Graduated() const { return graduated >= 0; }
+    /** Its allocation in units. */
+    uint64_t AllocationUnits() const { return LAUNCH_SUPPLY / 10'000 * allocation; }
+};
+
+/** What a block did on a launch's curve (State::GetLaunchLog): the coin and tokens in and out, the fees, the price after, whether it graduated. */
+struct LaunchLogEntry {
+    uint64_t coin_in{0};
+    uint64_t coin_out{0};
+    uint64_t tokens_in{0};
+    uint64_t tokens_out{0};
+    uint64_t fees{0};
+    uint32_t orders{0};
+    //! The curve's coin and tokens after the block (virtual), or the pool's at graduation.
+    uint64_t reserve_coin{0};
+    uint64_t reserve_tokens{0};
+    bool created{false};
+    bool graduated{false};
+    SERIALIZE_METHODS(LaunchLogEntry, obj) { READWRITE(obj.coin_in, obj.coin_out, obj.tokens_in, obj.tokens_out, obj.fees, obj.orders, obj.reserve_coin, obj.reserve_tokens, obj.created, obj.graduated); }
+    friend bool operator==(const LaunchLogEntry&, const LaunchLogEntry&) = default;
+};
+
 /** A pool of two assets, `asset0` < `asset1`. */
 struct Pool {
     AssetId asset0;
@@ -860,6 +979,7 @@ enum class Curve : uint8_t {
     CONSTANT_PRODUCT = 0, //!< x·y = k (Uniswap v2), the curve of every pool AddLiquidity makes
     STABLE = 1,           //!< Curve's StableSwap invariant, amplification A
     WEIGHTED = 2,         //!< x^w0 · y^w1 = k (Balancer), two weights
+    LAUNCH = 3,           //!< a launch's bonding curve (LaunchToken): constant product of virtual reserves; made by a launch only
 };
 inline constexpr uint8_t MAX_CURVE{static_cast<uint8_t>(Curve::WEIGHTED)};
 /** Fees are in millionths of what goes in. */
@@ -1167,6 +1287,14 @@ public:
     PoolParams GetPoolParams(const uint256& pool) const;
     /** Whether a pool has a kind recorded (it was made by CreatePool, of a kind other than the default). */
     bool HasPoolParams(const uint256& pool) const;
+    /** A launch, by its token. */
+    std::optional<LaunchRecord> GetLaunch(const AssetId& token) const;
+    /** Launches by the height that made them, oldest first, from (height, token) on, until `fn` returns false. */
+    void ForEachLaunch(const std::function<bool(int32_t, const AssetId&)>& fn, int32_t from_height = 0) const;
+    /** What the block at `height` did on each launch's curve. */
+    std::vector<std::pair<AssetId, LaunchLogEntry>> GetLaunchLog(int32_t height) const;
+    /** Whether an asset is on a launch curve that has not graduated (its pools are the curve's alone until then). */
+    bool Launching(const AssetId& asset) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
@@ -1179,11 +1307,15 @@ private:
     /** The DEX's part of MakePlan (dex.cpp). */
     bool PlanDex(const CTransaction& tx, const Operation& op, int height, Plan& plan, uint64_t& chn_taken, const std::function<void(const AssetId&, uint64_t)>& take,
                  std::string& reject_reason) const;
+    /** Launches' part of MakePlan, after the registration's: the curve, its pool, the first buy. */
+    bool PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take, std::string& reject_reason) const;
+    /** A launch graduates (FinishBlock): its curve's coin and the tokens left into the token's pool with the coin, locked. */
+    void Graduate(const AssetId& token, int height);
     /** The DEX's pool kinds' part of MakePlan: CreatePool, PoolDeposit, PoolWithdraw. */
     bool PlanPools(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                    const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit, std::string& reject_reason) const;
     /** The batch clearing (dex.cpp). */
-    void ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts);
+    void ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts, int height);
     /** Whether an order of this block holds an asset (keeps it from being retired). */
     bool OrderHolds(const AssetId& asset) const;
 

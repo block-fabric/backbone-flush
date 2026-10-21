@@ -268,6 +268,13 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"simulateclearing", Bridge::Thread::WORKER},
         {"previewpool", Bridge::Thread::WORKER},
         {"getpoolcurve", Bridge::Thread::WORKER},
+        {"quotepoolliquidity", Bridge::Thread::WORKER},
+        // Launches: read only.
+        {"getlaunch", Bridge::Thread::WORKER},
+        {"listlaunches", Bridge::Thread::WORKER},
+        {"quotelaunch", Bridge::Thread::WORKER},
+        {"getlaunchstats", Bridge::Thread::WORKER},
+        {"getlaunchlog", Bridge::Thread::WORKER},
         // Searches of the node, a page at a time (cursor; the pages never read a whole list: user feedback 2026-10-19).
         // A node without them answers "method not found", and the pages ask the list methods above instead.
         {"searchassets", Bridge::Thread::WORKER},
@@ -695,6 +702,11 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"createpool", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create a pool", "Create the pool", "The wallet makes a pool of the kind shown and puts both amounts into it, for shares of it: they set its price.", {}, {"amount_a", "amount_b"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"addpoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Add liquidity", "Add", "The wallet puts the amounts shown into the pool, for shares of it; out of the pool's proportions, it pays the pool's fee on the part a swap would trade."), {.asset_keys = {1}, .pools = {0}}), /*fee_unknown=*/true}},
         {"removepoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of the pool shown, for its assets (or the one shown alone, its fee paid on the part traded)."), {.assets = {2}, .pools = {0}}), /*fee_unknown=*/true}},
+        // Launches: the token resolved and shown (WithAssets); a launch names its ticker, which its reservation reveals.
+        {"launchtoken", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Launch a token", "Launch", "The wallet launches a token on a bonding curve, from its reservation of the ticker: a billion tokens, fixed; buyers pay CHN into its curve and sellers get CHN back from it, until it graduates into a locked pool. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false), /*fee_unknown=*/true}},
+        {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", "The wallet pays CHN into the token's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its CHN back.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", "The wallet sells the token back to its curve for at least the CHN shown (min_out), paid by the coinbase.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},
         {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
         {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},

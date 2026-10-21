@@ -779,6 +779,11 @@ public:
         if (!pool) return std::nullopt;
         return std::make_pair(*pool, state.GetPoolParams(id));
     }
+    std::optional<bitassets::LaunchRecord> getBitAssetsLaunch(const bitassets::AssetId& token) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetLaunch(token);
+    }
     std::vector<std::tuple<uint256, bitassets::Pool, bitassets::PoolParams>> getBitAssetsPoolsOf(const bitassets::AssetId& asset) override
     {
         LOCK(::cs_main);

@@ -173,6 +173,12 @@ struct Clearing {
     //! The protocol's part of the fees (PROTOCOL_FEE_SHARE): always 0, in the reserves above; a hook.
     uint64_t protocol0{0};
     uint64_t protocol1{0};
+    //! A launch curve (curves::ClearLaunch): its fees, in the chain's coin, taken out of the curve (to the
+    //! creator and to the liquidity of the pool it graduates to), what each order gets back of what it paid
+    //! when the round reached the curve's end (in the chain's coin), and whether it did.
+    uint64_t fees{0};
+    std::vector<uint64_t> refunds;
+    bool reached_end{false};
 };
 /**
  * The uniform price of a round of a pool. With A' and B' the inputs of asset0 and asset1 less the fee

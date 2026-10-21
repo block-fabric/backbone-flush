@@ -189,6 +189,7 @@ BASE_SCRIPTS = [
     'feature_layers_genesis.py',
     'feature_layers_dex.py',
     'feature_layers_dex_curves.py',
+    'feature_layers_launch.py',
     'feature_layers_logo.py',
     'feature_fastblocks_feesplit.py',
     'feature_bitassets_logo.py',

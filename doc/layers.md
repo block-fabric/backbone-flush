@@ -371,6 +371,78 @@ amp, weight_a}`, `addpoolliquidity pool {asset: amount}`, `removepoolliquidity p
 **Store keys:** `0x8a` the kind of each pool made by CreatePool (none for the default kind); during a block only
 `0x8b` the work of the pool kinds (`MAX_BLOCK_CURVE_WORK`).
 
+## Launches
+
+Bonding-curve token launches, with the pool kinds (same height, `dex_curves_height`; markers 22 and 23).
+`src/bitassets/curves.cpp` (`ClearLaunch`), `src/bitassets/state.cpp` (`PlanLaunch`, `Graduate`, `ClearOrders`).
+
+**A launch** (`LaunchToken`, kind 22) registers a token from a reservation of its ticker, exactly as
+`Register` does (reserve, then reveal once the reservation is deep enough: nobody can take a ticker they saw
+in the mempool; the ticker and look-alike rules of assets apply), with its display name, logo and description
+(at most `MAX_INFO_SIZE`, links included). Its supply is the rules', `LAUNCH_SUPPLY`: a billion tokens of 6
+decimals, fixed for good (no control coin). None of it goes to the creator at launch: the tokens are issued
+against the chain's coin, from a curve that buyers pay and that pays sellers. Optionally the launch buys some
+of its own token in its own block (`first_buy`, an order of that block like any other).
+
+**The curve.** A constant product of *virtual* reserves, x·y = k, x the chain's coin (asset0), y the token:
+from (V, Tv) to its end (V + G, yE), with G = `launch_graduation`, V = G/2, Tv = 9/8·S and yE = 3/8·S
+(S = `LAUNCH_SUPPLY`). Then V·Tv = (V + G)·yE exactly: selling the curve's 3/4·S raises exactly G. The last
+quarter, 1/4·S, goes with the raised coin into the pool at graduation; that pool, (G, S/4), starts at the
+curve's last price, (V + G)²/k = 4G/S (the marginal price is continuous; tested). The price rises 9× along the
+curve; the market value of the supply at graduation is 4G. The curve's pool is a pool of its own kind
+(`Curve::LAUNCH`), so orders reach it through the batch (`SwapPools`, routes from other assets via the coin
+included) and its prices feed the TWAP; nobody can put liquidity into it, and no other pool of the token can
+be made until it graduates (`bad-ba-launch-pooled`, `bad-ba-launch-pool`).
+
+**Clearing (uniform price per block).** A launch's round in the batch is a constant-product round of the
+fee-free amounts (ClearPool's formula on the virtual reserves: buyers' coin less the fee, sellers' tokens
+whole), unless it would sell past yE. Then the round goes *exactly* to the end, at the price of its last
+stretch P = Δx/Δy (Δy = y − yE, Δx = ⌈x·y/yE⌉ − x: a chord of the convex curve, so the curve never takes less
+than it would): sellers get ⌊b·P⌋; buyers that pay the coin in directly share the Δy + B tokens there are in
+proportion to what they pay, rounded down, the units left given one each, in order, to those that can pay for
+one more; each pays ⌈t·P⌉ (and the fee on it) and gets the rest of its coin back by the coinbase. A buy that
+reaches the curve through another pool first misses at that round (it is refunded whole: a part could not be
+given back through the route). The fee is taken in the coin from every trade (on the way in for a buy, on the
+way out for a sale, rounded up) and leaves the curve. Conservation (coin in = curve's coin after + fees + coin
+out; tokens likewise), the product never falling, never selling past yE, and the end reached exactly are
+property-tested; 60 vectors (`src/test/data/dex_launch.json`) are checked by the Python reference too.
+
+**Graduation.** At the end of a block whose clearing reached the curve's end (or once the curve's coin reached
+V + G), the launch graduates: its curve's pool goes, and the token's pool with the coin (the kind AddLiquidity
+makes: constant product at 0.30 %, the pool every `swapasset`, route and default liquidity names; a tier that
+lets every wallet and route find it, a fee high enough for a young, volatile token's LPs, and the same as
+every other default pool) is made with the coin raised plus the fees kept for it and the tokens left plus S/4.
+Its shares (isqrt of the product) are held by nobody, and nobody can ever hold them: the liquidity is locked
+for good. Anyone may add liquidity on top (their own shares). The raised coin at graduation is G plus a few
+satoshis of rounding (the chord's ceiling); `getlaunch` says it exactly.
+
+**Fees** (proposals, not decided tokenomics: consensus parameters, `SidechainParams`, kept by each launch as
+made): `launch_fee` 1 % of every trade on the curve; `launch_creator_share` 30 % of that to the creator
+(`ClaimLaunch`, kind 23, sent by anyone: CHN by the coinbase to the creator's script), the other 70 % into the
+pool at graduation (deepening its locked liquidity). No protocol token, no buybacks. A creator's allocation is
+optional, at most `MAX_LAUNCH_ALLOCATION` (5 %), minted only at graduation (to the creator, by a claim): until
+then no token exists but those the curve sold, so the curve always holds the coin to buy them back; the
+allocation is shown on every launch (`allocation`). Anti-abuse: the ticker rules of assets (reservation and
+reveal, no look-alikes), per-launch `min_buy` and `max_buy` (CHN; a buy outside is refunded), and the batch
+itself (every buy of a block, the creator's first included, at one price).
+
+**Parameters.** `launch_graduation` = 500 coins on every network (Layers: 500 CHN, the "CHN equivalent" until a
+rate is chosen; the eCash chain: 500 ECX), `launch_fee` = 10 000 millionths, `launch_creator_share` = 300 000
+millionths of the fee; in the drivechain database's fingerprint with the pool kinds' height.
+
+**State.** `0x8c` launches (`LaunchRecord`), `0x8d` the log (height, token) of the last `LAUNCH_LOG_BLOCKS`
+(10 080) blocks, `0x8e` launches by height; the curve's pool and kind in `0x34`/`0x8a`. `HeldChn` counts a curve's
+coin less its virtual part, and the fees not paid out.
+
+**RPCs.** Node: `getlaunch token`, `listlaunches {status: all|curve|graduated|new, min_progress, sort:
+newest|oldest|volume|progress|market_cap, cursor, limit}` (`next_cursor`), `quotelaunch token amount (buy|sell)`
+(out, back, fee, price, impact, progress after, whether it graduates), `getlaunchstats` (counts, volume, raised,
+the rules), `getlaunchlog from (to)` (a row per block and launch for indexers: created, graduated, orders, coin
+and tokens in and out, fees, the curve after), `decodeassettx` (launch_token, claim_launch). Wallet: `launchtoken
+ticker {display_name, logo, info, allocation, first_buy, min_buy, max_buy}`, `buyfromlaunch token amount`,
+`selltolaunch token amount`, `claimlaunch token`. Tests: `dex_launch_tests`, `feature_layers_launch.py` (launch,
+buys and a sale, graduation at 500 into a locked pool, a reorganisation across it, the creator's claim).
+
 ## Logos of assets
 
 Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of exactly 256 x 256 pixels, at most

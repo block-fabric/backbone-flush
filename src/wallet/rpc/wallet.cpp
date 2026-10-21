@@ -1099,6 +1099,10 @@ RPCMethod createpool();
 RPCMethod addpoolliquidity();
 RPCMethod removepoolliquidity();
 RPCMethod swappools();
+RPCMethod launchtoken();
+RPCMethod buyfromlaunch();
+RPCMethod selltolaunch();
+RPCMethod claimlaunch();
 RPCMethod createauction();
 RPCMethod bidauction();
 RPCMethod collectauction();
@@ -1200,6 +1204,10 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &addpoolliquidity},
         {"wallet", &removepoolliquidity},
         {"wallet", &swappools},
+        {"wallet", &launchtoken},
+        {"wallet", &buyfromlaunch},
+        {"wallet", &selltolaunch},
+        {"wallet", &claimlaunch},
         {"wallet", &createauction},
         {"wallet", &bidauction},
         {"wallet", &collectauction},

@@ -10,6 +10,7 @@
 #include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
+#include <chainparams.h>
 #include <coins.h>
 #include <core_io.h>
 #include <crypto/sha256.h>
@@ -320,7 +321,7 @@ void AbandonDroppedRegistration(CWallet& wallet, const AssetId& name)
         if (wallet.GetTxDepthInMainChain(wtx) != 0 || wtx.isAbandoned() || wtx.InMempool()) continue;
         const auto marker{bitassets::GetMarker(*wtx.GetTx())};
         if (!marker || !marker->operation) continue;
-        const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)};
+        const auto* reg{bitassets::RegisterOf(*marker->operation)};
         if (reg && reg->name == name) wallet.AbandonTransaction(wtx);
     }
 }
@@ -426,6 +427,18 @@ std::string LabelOfAsset(CWallet& wallet, const AssetId& asset)
     return bitassets::AssetLabel(asset, record ? &*record : nullptr);
 }
 
+
+/** A fee in millionths as a percentage ("0.05"). */
+std::string FormatFee(uint32_t fee)
+{
+    std::string text{strprintf("%.4f", fee / 10000.0)};
+    text.erase(text.find_last_not_of('0') + 1);
+    if (text.back() == '.') text.pop_back();
+    return text;
+}
+
+/** Units of what a route gives (its last asset is not in the operation): as units. */
+std::string FormatUnitsOnly(uint64_t units) { return strprintf("%u units", units); }
 
 /** An x-only key as hex, as written (not reversed as a hash is). */
 std::optional<uint256> ParseXOnlyHex(const std::string& text)
@@ -2029,6 +2042,260 @@ RPCMethod swappools()
     };
 }
 
+//
+// Launches (LaunchToken): a token on a bonding curve, from a reservation.
+//
+
+namespace {
+/** A launch this wallet names: its record and its curve's pool (with its kind), or an error. */
+std::pair<bitassets::LaunchRecord, std::optional<std::pair<bitassets::Pool, bitassets::PoolParams>>> LaunchOf(CWallet& wallet, const AssetInfo& token)
+{
+    const auto launch{wallet.chain().getBitAssetsLaunch(token.id)};
+    if (!launch) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s is not a launched token", token.label));
+    return {*launch, wallet.chain().getBitAssetsPoolOfKind(launch->pool)};
+}
+
+/** What a trade of `amount` alone on a launch's curve gives (and gives back), from its record: the rules' arithmetic. */
+std::optional<bitassets::dex::Clearing> LaunchQuote(const bitassets::LaunchRecord& launch, const bitassets::Pool& curve, bool buy, uint64_t amount)
+{
+    return bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, bitassets::LAUNCH_CURVE_END, launch.max_buy, launch.min_buy}, curve.reserve0, curve.reserve1,
+                                          {bitassets::dex::HopIn{buy, amount}}, {true});
+}
+} // namespace
+
+RPCMethod launchtoken()
+{
+    return RPCMethod{
+        "launchtoken",
+        "Layers' launches: launch a token on a bonding curve, from a reservation of its ticker (reserveasset, then this once the reservation is deep "
+        "enough, as registerasset). The token has a billion units of 6 decimals, fixed, no control coin: buyers pay CHN into its curve and sellers get "
+        "CHN back from it, in the block's batch; when the curve has raised what it graduates at (getlaunchstats), its CHN and the tokens left go into "
+        "the token's pool with CHN, whose shares nobody holds (locked for good). The creator gets its part of the curve's fees (claimlaunch) and, "
+        "if asked for, an allocation minted at graduation (at most 5 %, shown to everyone)." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"ticker", RPCArg::Type::STR, RPCArg::Optional::NO, "The ticker reserved"},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {
+                {"display_name", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Its display name"},
+                {"logo", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Its logo, in base64 (as registerasset's)"},
+                {"info", RPCArg::Type::STR, RPCArg::Optional::OMITTED, strprintf("Its description and links, at most %u bytes", bitassets::MAX_INFO_SIZE)},
+                {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to 5)"},
+                {"first_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "CHN the launch buys of its token in its own block, at the block's price"},
+                {"min_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least CHN a buy on the curve pays (0: any)"},
+                {"max_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The most CHN a buy on the curve pays (0: any)"},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "token", "The token's id"},
+            {RPCResult::Type::STR, "ticker", "Its ticker"},
+            {RPCResult::Type::STR_HEX, "pool", "Its curve's pool (buyfromlaunch, selltolaunch, swappools)"},
+        }},
+        RPCExamples{HelpExampleCli("launchtoken", "\"MOON\" '{\"display_name\":\"To the moon\",\"info\":\"https://example.org\",\"first_buy\":1}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const std::string name{NewAssetName(*pwallet, request.params[0].get_str())};
+    const AssetId asset{bitassets::HashName(name)};
+    if (pwallet->chain().getBitAsset(asset)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset of this name is registered");
+    if (bitassets::ReadsAsAnotherAsset(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The name reads as another asset (CHN, a number such as 1739-0029, or \"0x\" and a hash)");
+    if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, NAME_MIMICS_NUMBER);
+    const UniValue none{UniValue::VOBJ};
+    const UniValue& options{request.params[1].isNull() ? none : request.params[1]};
+    AbandonDroppedRegistration(*pwallet, asset);
+    const auto reservation{FindReservation(*pwallet, asset)};
+    if (!reservation) throw JSONRPCError(RPC_INVALID_PARAMETER, "This wallet has no reservation of the ticker in a block (see reserveasset)");
+    if (const auto made{pwallet->chain().getBitAssetsReservationHeight(reservation->id)}) {
+        const int next{pwallet->chain().getBitAssetsHeight()};
+        const int from{RevealHeight(*pwallet, *made)};
+        if (from > next) throw JSONRPCError(RPC_WALLET_ERROR, strprintf("The reservation is too recent: try again from block %d, in %d blocks", from, from - next));
+    }
+    bitassets::LaunchToken launch;
+    launch.reg.name = asset;
+    launch.reg.nonce = reservation->nonce;
+    launch.reg.decimals = bitassets::LAUNCH_DECIMALS;
+    launch.reg.text = name;
+    if (options.exists("display_name") && !options["display_name"].get_str().empty()) launch.reg.display_name = ParseDisplayName(options["display_name"], /*allow_empty=*/false);
+    if (options.exists("logo") && !options["logo"].get_str().empty()) {
+        NeedLogos(*pwallet);
+        launch.reg.logo = ParseLogo(options["logo"], /*allow_empty=*/false);
+    }
+    if (options.exists("info")) {
+        const std::string info{options["info"].get_str()};
+        if (info.size() > bitassets::MAX_INFO_SIZE) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The description is at most %u bytes", bitassets::MAX_INFO_SIZE));
+        if (!info.empty()) launch.reg.data.info = info;
+    }
+    const double allocation{options.exists("allocation") ? options["allocation"].get_real() : 0.0};
+    if (!(allocation >= 0 && allocation <= bitassets::MAX_LAUNCH_ALLOCATION / 100.0)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The allocation is 0 to 5 percent");
+    launch.allocation = static_cast<uint16_t>(std::llround(allocation * 100));
+    launch.creator = GetScriptForDestination(NewDestination(*pwallet, "launch creator"));
+    const auto coin{[&](const char* key) { return options.exists(key) ? bitassets::ParseUnits(options[key], bitassets::CHN_DECIMALS, /*allow_zero=*/true) : uint64_t{0}; }};
+    launch.min_buy = coin("min_buy");
+    launch.max_buy = coin("max_buy");
+    if (launch.max_buy != 0 && launch.max_buy < launch.min_buy) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_buy is less than min_buy");
+    launch.first_buy = coin("first_buy");
+    std::vector<Out> outs;
+    if (launch.first_buy > 0) {
+        if (launch.first_buy < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s CHN at least", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+        launch.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
+        outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    }
+    const CTransactionRef tx{Send(*pwallet, launch, outs, {reservation->outpoint}, static_cast<CAmount>(launch.first_buy))};
+    bitassets::PoolParams params;
+    params.curve = static_cast<uint8_t>(bitassets::Curve::LAUNCH);
+    params.fee = Params().GetConsensus().sidechain.launch_fee;
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("token", asset.GetHex());
+    result.pushKV("ticker", name);
+    result.pushKV("pool", bitassets::PoolIdOf(bitassets::CHN, asset, params).GetHex());
+    return result;
+},
+    };
+}
+
+RPCMethod buyfromlaunch()
+{
+    return RPCMethod{
+        "buyfromlaunch",
+        "Layers' launches: buy a launched token from its curve with CHN, for at least the quote less the slippage: an order of the block's batch. "
+        "A buy that would take the curve past its end gets the curve's last tokens and the rest of its CHN back (the launch then graduates)." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "CHN to pay in (the fee included)"},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than the quote, in percent, it may give"},
+            {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least the caller showed: refused rather than signed for less"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::NUM, "quote", "The tokens it gets alone in its block"},
+            {RPCResult::Type::NUM, "min_out", "The least it gets"},
+            {RPCResult::Type::STR_AMOUNT, "back", "CHN it would get back if it took the curve to its end"},
+        }},
+        RPCExamples{HelpExampleCli("buyfromlaunch", "\"0x<token>\" 2")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
+    const auto [launch, curve]{LaunchOf(*pwallet, token)};
+    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: its token trades in its pool now (swapasset)");
+    const uint64_t amount{bitassets::ParseUnits(request.params[1], bitassets::CHN_DECIMALS)};
+    if (amount < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A buy pays %s CHN at least", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    const auto quote{LaunchQuote(launch, curve->first, true, amount)};
+    if (!quote || quote->outs[0] == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve takes no such buy (its bounds: getlaunch's min_buy and max_buy)");
+    const uint64_t slippage{Slippage(request.params[2], 1)};
+    const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote->outs[0], slippage))};
+    if (!request.params[3].isNull() && min_out < bitassets::ParseUnits(request.params[3], token.decimals)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve moved: the buy now gives less than min_out. Quote it again");
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::SwapPools{bitassets::CHN, {launch.pool}, amount, min_out, ChnTo(*pwallet, {bitassets::CHN})}, outs, inputs, static_cast<CAmount>(amount))};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("quote", bitassets::AmountToJSON(quote->outs[0], token.decimals));
+    result.pushKV("min_out", bitassets::AmountToJSON(min_out, token.decimals));
+    result.pushKV("back", ValueFromAmount(static_cast<CAmount>(quote->refunds[0])));
+    return result;
+},
+    };
+}
+
+RPCMethod selltolaunch()
+{
+    return RPCMethod{
+        "selltolaunch",
+        "Layers' launches: sell a launched token back to its curve for CHN (the fee taken out of what comes out), for at least the quote less the "
+        "slippage: an order of the block's batch; the CHN by the coinbase." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it"},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than the quote, in percent, it may give"},
+            {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least CHN the caller showed"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_AMOUNT, "quote", "The CHN it gets alone in its block"},
+            {RPCResult::Type::STR_AMOUNT, "min_out", "The least it gets"},
+        }},
+        RPCExamples{HelpExampleCli("selltolaunch", "\"0x<token>\" 100000")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
+    const auto [launch, curve]{LaunchOf(*pwallet, token)};
+    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: its token trades in its pool now (swapasset)");
+    const uint64_t amount{bitassets::ParseUnits(request.params[1], token.decimals)};
+    const auto quote{LaunchQuote(launch, curve->first, false, amount)};
+    if (!quote || quote->outs[0] < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    const uint64_t slippage{Slippage(request.params[2], 1)};
+    const uint64_t min_out{std::max<uint64_t>(bitassets::MIN_CHN_PAYOUT, LessSlippage(quote->outs[0], slippage))};
+    if (!request.params[3].isNull() && min_out < bitassets::ParseUnits(request.params[3], bitassets::CHN_DECIMALS)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve moved: the sale now gives less than min_out. Quote it again");
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, token, amount, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::SwapPools{token.id, {launch.pool}, amount, min_out, ChnTo(*pwallet, {bitassets::CHN})}, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("quote", ValueFromAmount(static_cast<CAmount>(quote->outs[0])));
+    result.pushKV("min_out", ValueFromAmount(static_cast<CAmount>(min_out)));
+    return result;
+},
+    };
+}
+
+RPCMethod claimlaunch()
+{
+    return RPCMethod{
+        "claimlaunch",
+        "Layers' launches: pay a launch's creator what it is owed: its part of the curve's fees (CHN, by the coinbase to its address) and, once "
+        "graduated, its allocation (to its address). Anyone may send it; nothing goes anywhere but to the creator." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + std::string{bitassets::ASSET_ARG_HELP}},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_AMOUNT, "fees", "CHN paid to the creator"},
+            {RPCResult::Type::NUM, "allocation", "Tokens minted to the creator"},
+        }},
+        RPCExamples{HelpExampleCli("claimlaunch", "\"0x<token>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
+    const auto [launch, curve]{LaunchOf(*pwallet, token)};
+    const uint64_t fees{launch.creator_fees >= bitassets::MIN_CHN_PAYOUT ? launch.creator_fees : 0};
+    const bool allocation{launch.Graduated() && !launch.allocation_claimed && launch.allocation > 0};
+    if (fees == 0 && !allocation) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing is owed to the creator now");
+    std::vector<Out> outs;
+    if (allocation) {
+        CTxDestination dest;
+        if (!ExtractDestination(launch.creator, dest)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The creator's script has no address");
+        outs.push_back({dest, std::nullopt});
+    }
+    const CTransactionRef tx{Send(*pwallet, bitassets::ClaimLaunch{token.id}, outs, {})};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("fees", ValueFromAmount(static_cast<CAmount>(fees)));
+    result.pushKV("allocation", bitassets::AmountToJSON(allocation ? launch.AllocationUnits() : 0, token.decimals));
+    return result;
+},
+    };
+}
+
 RPCMethod createauction()
 {
     return RPCMethod{
@@ -2696,6 +2963,25 @@ RPCMethod listassetactivity()
                     operation = "logo";
                     summary = op.logo.empty() ? "Removed the logo of " + LabelOfAsset(*pwallet, op.asset)
                                               : strprintf("Set the logo of %s (%u bytes)", LabelOfAsset(*pwallet, op.asset), op.logo.size());
+                } else if constexpr (std::is_same_v<T, bitassets::CreatePool>) {
+                    operation = "create pool";
+                    summary = strprintf("Made a %s pool of %s and %s at %s %%", bitassets::curves::CurveName(static_cast<bitassets::Curve>(op.curve)), amount(op.asset_a, op.amount_a),
+                                        amount(op.asset_b, op.amount_b), FormatFee(op.fee));
+                } else if constexpr (std::is_same_v<T, bitassets::PoolDeposit>) {
+                    operation = "add liquidity";
+                    summary = "Put liquidity into a pool";
+                } else if constexpr (std::is_same_v<T, bitassets::PoolWithdraw>) {
+                    operation = "remove liquidity";
+                    summary = op.only == 0 ? "Took liquidity out of a pool" : "Took liquidity out of a pool, one asset alone";
+                } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
+                    operation = "route";
+                    summary = strprintf("Traded %s for at least %s through %u pools", amount(op.asset_in, op.amount_in), FormatUnitsOnly(op.min_out), op.pools.size());
+                } else if constexpr (std::is_same_v<T, bitassets::LaunchToken>) {
+                    operation = "launch";
+                    summary = op.reg.text ? "Launched " + *op.reg.text + " on a bonding curve" : "Launched a token on a bonding curve";
+                } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
+                    operation = "claim launch";
+                    summary = "Paid a launch's creator what it was owed";
                 } else if constexpr (std::is_same_v<T, bitassets::SetDisplayName>) {
                     operation = "display name";
                     summary = op.display_name.empty() ? "Removed the display name of " + LabelOfAsset(*pwallet, op.asset)

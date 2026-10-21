@@ -132,6 +132,30 @@ std::pair<unsigned __int128, unsigned __int128> StableD(uint32_t amp, unsigned _
  */
 std::optional<dex::Clearing> ClearPoolOf(const PoolParams& params, uint32_t fee, uint64_t reserve0, uint64_t reserve1, const std::vector<dex::HopIn>& orders);
 
+/**
+ * A launch curve (bonding-curve token launches, doc/layers.md "Launches"): the constant product of virtual
+ * reserves, x the chain's coin (asset0: CHN is the null id) and y the token, x·y = k, from (V, Tv) to its end
+ * (V + G, yE), where it graduates. `fee` (millionths) is taken in the chain's coin out of every trade, on the
+ * way in for a buy and on the way out for a sale; it leaves the curve (Clearing::fees).
+ *
+ * A round clears as a constant-product round of the fee-free amounts (ClearPool's formula: the price
+ * (x + A')/(y + B)), unless the token's end would be passed: then the round goes exactly to the end of the
+ * curve at the price of its last stretch, P = Δx/Δy with Δy = y − yE and Δx = ceil(x·y/yE) − x (a chord of the
+ * convex curve: the curve never takes less than it would). Sellers get ⌊b·P⌋ less the fee; buyers that pay the
+ * coin in directly (`direct`) share the Δy + B tokens there are by what they paid, rounded down, the units
+ * left one each to the first that can pay for one more, each paying ⌈t·P⌉ (and the fee on it) and getting the
+ * rest back (Clearing::refunds); an order that reaches the curve through another pool first misses there
+ * (it gets 0: refunded whole by the batch). `max_buy` (0: none): a buy paying more misses.
+ */
+struct LaunchCurve {
+    uint32_t fee{0};
+    uint64_t end{0};
+    uint64_t max_buy{0};
+    //! The least a buy pays (0: any); one paying less misses.
+    uint64_t min_buy{0};
+};
+std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, uint64_t y, const std::vector<dex::HopIn>& orders, const std::vector<bool>& direct);
+
 /** What `amount` of one side gives alone in a pool (a round of one order); 0 if nothing. */
 uint64_t SwapOutOf(const PoolParams& params, uint32_t fee, uint64_t reserve0, uint64_t reserve1, bool zero_in, uint64_t amount);
 /** The least that has to go in alone to get `amount_out` out; nullopt if the pool cannot give that much. */

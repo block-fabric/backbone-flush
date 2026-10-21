@@ -451,11 +451,121 @@ std::optional<dex::Clearing> ClearInvariant(const PoolParams& params, uint32_t f
 }
 } // namespace
 
+std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, uint64_t y, const std::vector<dex::HopIn>& orders, const std::vector<bool>& direct)
+{
+    if (curve.fee >= FEE_DENOMINATOR || y <= curve.end || x == 0 || x > MAX_AMOUNT || y > MAX_AMOUNT || direct.size() != orders.size()) return std::nullopt;
+    const uint64_t f{FEE_DENOMINATOR};
+    const auto fee_of{[&](uint64_t amount) { return static_cast<uint64_t>((static_cast<unsigned __int128>(amount) * curve.fee + f - 1) / f); }};
+    // The fee-free amounts: a buy's coin less its fee (rounded up), a sale's tokens whole. A buy over the bound
+    // misses (it goes through as nothing: 0 out).
+    std::vector<dex::HopIn> net;
+    std::vector<bool> in_play;
+    for (const dex::HopIn& order : orders) {
+        if (order.amount == 0 || order.amount > MAX_AMOUNT) return std::nullopt;
+        const bool over{order.zero_in && ((curve.max_buy != 0 && order.amount > curve.max_buy) || order.amount < curve.min_buy)};
+        const uint64_t paid{order.zero_in ? order.amount - fee_of(order.amount) : order.amount};
+        in_play.push_back(!over && paid > 0);
+        if (!over && paid > 0) net.push_back({order.zero_in, paid});
+    }
+    dex::Clearing clearing;
+    clearing.outs.assign(orders.size(), 0);
+    clearing.refunds.assign(orders.size(), 0);
+    clearing.reserve0 = x;
+    clearing.reserve1 = y;
+    if (net.empty()) return clearing;
+    const auto cleared{ClearConstantProduct(/*fee=*/0, x, y, net)};
+    if (!cleared) return std::nullopt;
+    uint64_t fees{0};
+    if (cleared->reserve1 >= curve.end) {
+        // Not past the end: a constant-product round of the fee-free amounts; the sellers' fee out of what they get.
+        size_t k{0};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!in_play[i]) continue;
+            const uint64_t out{cleared->outs[k++]};
+            if (orders[i].zero_in) {
+                clearing.outs[i] = out;
+                fees += fee_of(orders[i].amount);
+            } else {
+                const uint64_t fee{fee_of(out)};
+                clearing.outs[i] = out - std::min(out, fee);
+                fees += std::min(out, fee);
+            }
+        }
+        clearing.reserve0 = cleared->reserve0;
+        clearing.reserve1 = cleared->reserve1;
+        clearing.fees = fees;
+        clearing.reached_end = cleared->reserve1 == curve.end;
+        return clearing;
+    }
+    // Past the end: to the end exactly, at the price of the last stretch, P = Δx/Δy.
+    const unsigned __int128 k_now{static_cast<unsigned __int128>(x) * y};
+    const unsigned __int128 x_end{(k_now + curve.end - 1) / curve.end};
+    if (x_end > MAX_AMOUNT || x_end <= x) return std::nullopt;
+    const uint64_t dx{static_cast<uint64_t>(x_end) - x}, dy{y - curve.end};
+    uint64_t sold_in{0}, coin_out{0};
+    // The sellers: ⌊b·Δx/Δy⌋, less the fee.
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (!in_play[i] || orders[i].zero_in) continue;
+        const uint64_t gross{static_cast<uint64_t>(static_cast<unsigned __int128>(orders[i].amount) * dx / dy)};
+        const uint64_t fee{std::min(gross, fee_of(gross))};
+        clearing.outs[i] = gross - fee;
+        fees += fee;
+        coin_out += gross;
+        sold_in += orders[i].amount;
+    }
+    // The buyers that pay in directly share what there is by what they pay (less the fee), rounded down; the units left,
+    // one each in order to those that can pay for one more.
+    unsigned __int128 offered{0};
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (in_play[i] && orders[i].zero_in && direct[i]) offered += orders[i].amount - fee_of(orders[i].amount);
+    }
+    const uint64_t tokens{dy + sold_in};
+    std::vector<uint64_t> got(orders.size(), 0);
+    uint64_t given{0};
+    const auto cost{[&](uint64_t t) { return static_cast<uint64_t>((static_cast<unsigned __int128>(t) * dx + dy - 1) / dy); }};
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (!in_play[i] || !orders[i].zero_in || !direct[i] || offered == 0) continue;
+        const uint64_t budget{orders[i].amount - fee_of(orders[i].amount)};
+        // Its share, and never more than it can pay for at P: cost(t) ≤ budget ⇔ t ≤ ⌊budget·Δy/Δx⌋.
+        const uint64_t affordable{static_cast<uint64_t>(static_cast<unsigned __int128>(budget) * dy / dx)};
+        const uint64_t t{std::min(affordable, static_cast<uint64_t>(static_cast<unsigned __int128>(tokens) * budget / offered))};
+        got[i] = t;
+        given += t;
+    }
+    for (size_t i{0}; i < orders.size() && given < tokens; ++i) {
+        if (!in_play[i] || !orders[i].zero_in || !direct[i]) continue;
+        const uint64_t budget{orders[i].amount - fee_of(orders[i].amount)};
+        if (cost(got[i] + 1) <= budget) {
+            ++got[i];
+            ++given;
+        }
+    }
+    uint64_t coin_in{0};
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (!in_play[i] || !orders[i].zero_in || !direct[i] || got[i] == 0) continue;
+        const uint64_t pays{cost(got[i])};
+        // The fee on what it pays, rounded up, never more than it brought.
+        const uint64_t fee{std::min(orders[i].amount - pays, static_cast<uint64_t>((static_cast<unsigned __int128>(pays) * curve.fee + (f - curve.fee) - 1) / (f - curve.fee)))};
+        clearing.outs[i] = got[i];
+        clearing.refunds[i] = orders[i].amount - pays - fee;
+        fees += fee;
+        coin_in += pays;
+    }
+    if (coin_in < coin_out || given > tokens) return std::nullopt;
+    clearing.reserve0 = x + coin_in - coin_out;
+    clearing.reserve1 = y + sold_in - given;
+    clearing.fees = fees;
+    clearing.reached_end = true;
+    return clearing;
+}
+
 std::optional<dex::Clearing> ClearPoolOf(const PoolParams& params, uint32_t fee, uint64_t reserve0, uint64_t reserve1, const std::vector<dex::HopIn>& orders)
 {
     static_assert(PROTOCOL_FEE_SHARE == 0, "the protocol's part of the fees has no destination: the clearing leaves all of it to the liquidity providers");
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     if (params.GetCurve() == Curve::CONSTANT_PRODUCT) return ClearConstantProduct(fee, reserve0, reserve1, orders);
+    // A launch curve clears with its record (ClearLaunch), never here.
+    if (params.GetCurve() == Curve::LAUNCH) return std::nullopt;
     return ClearInvariant(params, fee, reserve0, reserve1, orders);
 }
 
@@ -538,6 +648,8 @@ uint256 SpotPriceQ64(const PoolParams& params, uint64_t reserve0, uint64_t reser
     BigUint num, den;
     switch (params.GetCurve()) {
     case Curve::CONSTANT_PRODUCT:
+    case Curve::LAUNCH:
+        // A launch curve is a constant product of its (virtual) reserves.
         return inverse ? dex::PriceQ64(reserve0, reserve1) : dex::PriceQ64(reserve1, reserve0);
     case Curve::WEIGHTED: {
         const auto [wa, wb]{ReducedWeights(params)};
@@ -577,6 +689,7 @@ std::string CurveName(Curve curve)
     case Curve::CONSTANT_PRODUCT: return "constant_product";
     case Curve::STABLE: return "stable";
     case Curve::WEIGHTED: return "weighted";
+    case Curve::LAUNCH: return "launch";
     }
     return "unknown";
 }

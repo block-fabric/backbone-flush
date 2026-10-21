@@ -840,7 +840,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         ws.m_side_payouts += payouts;
         // One registration of an asset at a time: the second could never be mined.
         if (const auto marker{bitassets::GetMarker(tx)}; marker && marker->operation) {
-            if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) {
+            if (const auto* reg{bitassets::RegisterOf(*marker->operation)}) {
                 // Policy: a published name that reads as another asset's number where names are shown with theirs.
                 if (m_pool.m_opts.require_standard && reg->text && bitassets::NameMimicsNumber(*reg->text)) {
                     return ws.m_state.Invalid(TxValidationResult::TX_NOT_STANDARD, "ba-name-look-alike");
