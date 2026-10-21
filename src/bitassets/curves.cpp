@@ -32,6 +32,8 @@ std::optional<std::string> WhyNotPoolKind(uint8_t curve, uint32_t fee, uint32_t 
         break;
     case Curve::LAUNCH:
         return "a launch's curve (launchtoken makes those)";
+    case Curve::BOOK:
+        return "an order book (placeorder makes those)";
     case Curve::CONSTANT_PRODUCT:
         if (amp != 0 || weight_a != 0) return "an amplification or a weight for a constant-product pool";
         break;
@@ -586,7 +588,7 @@ std::optional<dex::Clearing> ClearPoolOf(const PoolParams& params, uint32_t fee,
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     if (params.GetCurve() == Curve::CONSTANT_PRODUCT) return ClearConstantProduct(fee, reserve0, reserve1, orders);
     // A launch curve clears with its record (ClearLaunch), a concentrated pool with its state (State::ClearCl), never here.
-    if (params.GetCurve() == Curve::LAUNCH || params.GetCurve() == Curve::CONCENTRATED) return std::nullopt;
+    if (params.GetCurve() == Curve::LAUNCH || params.GetCurve() == Curve::CONCENTRATED || params.GetCurve() == Curve::BOOK) return std::nullopt;
     return ClearInvariant(params, fee, reserve0, reserve1, orders);
 }
 
@@ -714,6 +716,7 @@ std::string CurveName(Curve curve)
     case Curve::WEIGHTED: return "weighted";
     case Curve::LAUNCH: return "launch";
     case Curve::CONCENTRATED: return "concentrated";
+    case Curve::BOOK: return "book";
     }
     return "unknown";
 }

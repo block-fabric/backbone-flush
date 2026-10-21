@@ -154,6 +154,12 @@ namespace {
 uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const PoolParams& params, const AssetId& in, uint64_t amount)
 {
     if (amm::Abandoned(pool)) return 0;
+    if (params.GetCurve() == Curve::BOOK) {
+        std::map<uint256, BookOrder> resting;
+        // As of the next block (orders that expired before it do not trade): the book's own last change, a lower bound.
+        const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, pool.height)};
+        return cleared ? cleared->outs[0] : 0;
+    }
     if (params.GetCurve() == Curve::CONCENTRATED) {
         auto cl{state.GetClState(id)};
         if (!cl) return 0;

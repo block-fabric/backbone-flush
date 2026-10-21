@@ -919,6 +919,8 @@ struct State::Plan {
     std::optional<std::pair<uint256, ClState>> cl_state;
     std::vector<std::pair<int32_t, std::optional<ClTick>>> cl_ticks;
     std::optional<std::pair<uint256, std::optional<ClPosition>>> position;
+    //! An order placed or changed (nullopt: gone), and whether its book's resting orders cross at the block's end.
+    std::optional<std::pair<uint256, std::optional<BookOrder>>> book_order;
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -1930,7 +1932,7 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             for (const uint256& id : named->pools) {
                 const Curve curve{GetPoolParams(id).GetCurve()};
                 // A concentrated pool's round walks its ticks: twice the work of a searched curve.
-                if (curve == Curve::CONCENTRATED) {
+                if (curve == Curve::CONCENTRATED || curve == Curve::BOOK) {
                     plan.curve_work += 2;
                 } else if (curve != Curve::CONSTANT_PRODUCT && curve != Curve::LAUNCH) {
                     ++plan.curve_work;
@@ -2308,6 +2310,86 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         pool.shares = *total;
         return shares;
     }};
+    if (const auto* place{std::get_if<PlaceOrder>(&op)}) {
+        // The first order of a block in a book: the book crosses at the block's end, a round's work (2 units, as a hop).
+        plan.curve_work = BOOKS_TOUCHED.Get(*m_view, BookId(place->asset_sell, place->asset_buy)) ? 0 : 2;
+        const auto tradable{[&](const AssetId& asset) { return asset.IsNull() || HasAsset(asset); }};
+        if (!tradable(place->asset_sell) || !tradable(place->asset_buy)) return invalid("bad-ba-asset-unknown");
+        if (place->expiry < height || int64_t{place->expiry} > int64_t{height} + MAX_ORDER_DURATION) return invalid("bad-ba-order-expiry");
+        // CHN goes back and out by the coinbase: MIN_CHN_PAYOUT at least.
+        if (place->asset_sell.IsNull() && place->amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        const uint256 book_id{BookId(place->asset_sell, place->asset_buy)};
+        Pool book;
+        if (const auto found{GetPool(book_id)}) {
+            book = *found;
+        } else {
+            book.asset0 = std::min(place->asset_sell, place->asset_buy);
+            book.asset1 = std::max(place->asset_sell, place->asset_buy);
+            book.creation = txid;
+            book.height = height;
+            book.shares = MIN_LIQUIDITY;
+            PoolParams params;
+            params.curve = static_cast<uint8_t>(Curve::BOOK);
+            params.fee = 0;
+            plan.pool_params = std::make_pair(book_id, params);
+        }
+        BookOrder order;
+        order.book = book_id;
+        order.sells0 = place->asset_sell == book.asset0;
+        order.amount = order.remaining = place->amount;
+        order.price_num = place->price_num;
+        order.price_den = place->price_den;
+        order.expiry = place->expiry;
+        order.txid = txid;
+        order.height = height;
+        // A side holds at most MAX_BOOK_SIDE open orders (the index of a side, counted).
+        if (BookSide(book_id, order.sells0, MAX_BOOK_SIDE).size() >= MAX_BOOK_SIDE) return invalid("bad-ba-book-full");
+        uint64_t& reserve{order.sells0 ? book.reserve0 : book.reserve1};
+        if (place->amount > MAX_AMOUNT - reserve) return invalid("bad-ba-order");
+        reserve += place->amount;
+        // Its open orders in the shares: open while it holds any.
+        book.shares += 1;
+        take(place->asset_sell, place->amount);
+        const uint256 id{OrderId(txid)};
+        plan.results.push_back({id, 1, Token::Kind::ORDER});
+        plan.pool = std::make_pair(book_id, book);
+        plan.book_order = std::make_pair(id, std::optional<BookOrder>{order});
+        return true;
+    }
+    if (const auto* settle{std::get_if<SettleOrder>(&op)}) {
+        plan.curve_work = 0;
+        const auto found{GetOrder(settle->order)};
+        if (!found) return invalid("bad-ba-no-order");
+        BookOrder order{*found};
+        Pool book{*Assert(GetPool(order.book))};
+        // The token is taken in: whoever spends it (the books refuse anyone else).
+        debit(Token::Kind::ORDER, settle->order, 1);
+        const AssetId sold{order.sells0 ? book.asset0 : book.asset1}, bought{order.sells0 ? book.asset1 : book.asset0};
+        const bool closes{settle->cancel || order.expiry < height || order.remaining == 0};
+        uint64_t proceeds{order.proceeds}, left{closes ? order.remaining : 0};
+        // CHN dust is not paid out: it stays with the order until there is more, or with the book once it closes.
+        if (bought.IsNull() && proceeds < MIN_CHN_PAYOUT) proceeds = 0;
+        if (sold.IsNull() && left < MIN_CHN_PAYOUT) left = 0;
+        if (!closes && proceeds == 0) return invalid("bad-ba-order-nothing");
+        if (!closes) plan.results.push_back({settle->order, 1, Token::Kind::ORDER});
+        if (proceeds > 0) plan.results.push_back({bought, proceeds});
+        if (left > 0) plan.results.push_back({sold, left});
+        uint64_t& r_sold{order.sells0 ? book.reserve0 : book.reserve1};
+        uint64_t& r_bought{order.sells0 ? book.reserve1 : book.reserve0};
+        if (proceeds > r_bought || left > r_sold) return invalid("bad-ba-order");
+        r_bought -= proceeds;
+        r_sold -= left;
+        order.proceeds -= proceeds;
+        if (closes) {
+            if (order.remaining > 0) book.shares -= std::min<uint64_t>(book.shares - MIN_LIQUIDITY, 1);
+            order.remaining = 0;
+            plan.book_order = std::make_pair(settle->order, std::optional<BookOrder>{});
+        } else {
+            plan.book_order = std::make_pair(settle->order, std::optional<BookOrder>{order});
+        }
+        plan.pool = std::make_pair(order.book, book);
+        return true;
+    }
     if (const auto* claim{std::get_if<ClaimLaunch>(&op)}) {
         plan.curve_work = 0;
         const auto found{GetLaunch(claim->token)};
@@ -2402,6 +2484,7 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const PoolParams params{GetPoolParams(deposit->pool)};
         if (params.GetCurve() == Curve::LAUNCH) return invalid("bad-ba-launch-pool");
         if (params.GetCurve() == Curve::CONCENTRATED) return invalid("bad-ba-cl-pool");
+        if (params.GetCurve() == Curve::BOOK) return invalid("bad-ba-book");
         uint64_t shares{0};
         if (amm::Abandoned(pool)) {
             const auto opened{open(params, pool, deposit->amount0, deposit->amount1, deposit->min_shares)};
@@ -2430,6 +2513,7 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const PoolParams params{GetPoolParams(withdraw->pool)};
         if (params.GetCurve() == Curve::LAUNCH) return invalid("bad-ba-launch-pool");
         if (params.GetCurve() == Curve::CONCENTRATED) return invalid("bad-ba-cl-pool");
+        if (params.GetCurve() == Curve::BOOK) return invalid("bad-ba-book");
         auto [out0, out1]{curves::WithdrawOf(params, FeeOf(withdraw->pool, params, height), pool, withdraw->shares, withdraw->only)};
         // CHN under MIN_CHN_PAYOUT is not paid out: it stays in the pool, for its providers.
         if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) out0 = 0;
@@ -2525,6 +2609,23 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
                 out.Erase(TickKey(CL_TICKS, pool, tick));
                 out.Erase(TickKey(CL_TICKS_DOWN, pool, tick));
             }
+        }
+    }
+    if (plan->book_order) {
+        const auto& [id, order]{*plan->book_order};
+        const auto before{GetOrder(id)};
+        if (order) {
+            BOOK_ORDERS.Put(out, id, *order);
+            // In the index while it has something left to sell.
+            if (order->remaining > 0) {
+                out.Put(BookKey(id, *order), {});
+            } else if (before) {
+                out.Erase(BookKey(id, *before));
+            }
+            if (!before) BOOKS_TOUCHED.Put(out, order->book, 1);
+        } else {
+            if (before) out.Erase(BookKey(id, *before));
+            BOOK_ORDERS.Erase(out, id);
         }
     }
     if (plan->position) {
@@ -2654,6 +2755,8 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
         for (const size_t at : unused) payouts.erase(payouts.begin() + at);
         ORDER_COUNT.Put(out, 0);
     }
+    // Books with orders placed in the block: those that cross trade.
+    CrossBooks(height);
     // The price accumulators of every pool the block changed (Uniswap v2): the price it had since its
     // last change, as the block found it, times the seconds since; then an observation of the block.
     std::vector<std::pair<uint256, PoolSnapshot>> changed;
@@ -2677,7 +2780,10 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
             // a concentrated pool's square root price, squared, as it was before the block).
             const PoolParams params{GetPoolParams(id)};
             std::pair<uint256, uint256> prices;
-            if (params.GetCurve() == Curve::CONCENTRATED) {
+            if (params.GetCurve() == Curve::BOOK) {
+                // A book holds orders, not a curve: its reserves are no price. (No TWAP of books.)
+                prices = {uint256{}, uint256{}};
+            } else if (params.GetCurve() == Curve::CONCENTRATED) {
                 const auto snapshot{CL_SNAPSHOTS.Get(out, id)};
                 const auto now{GetClState(id)};
                 const arith_uint256 sqrt{UintToArith256(snapshot ? *snapshot : now ? now->sqrt_price : uint256{})};
@@ -2767,6 +2873,8 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         //! Concentrated pools: their state and the ticks they crossed, as the pass left them.
         std::map<uint256, ClState> cl;
         std::map<uint256, std::map<int32_t, ClTick>> ticks;
+        //! Books: their resting orders the pass changed.
+        std::map<uint256, std::map<uint256, BookOrder>> books;
     };
     // The rounds of the pools whose curves are searched, by what they cleared: a pass that clears one again gets the same.
     struct RoundKey {
@@ -2799,7 +2907,10 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 const Kind& kind{kinds.at(id)};
                 std::optional<dex::Clearing> cleared;
                 if (pool && !amm::Abandoned(*pool)) {
-                    if (kind.params.GetCurve() == Curve::CONCENTRATED) {
+                    if (kind.params.GetCurve() == Curve::BOOK) {
+                        // A book: its resting orders as this pass left them.
+                        cleared = ClearBook(id, *pool, effects.books[id], ins, height);
+                    } else if (kind.params.GetCurve() == Curve::CONCENTRATED) {
                         // A concentrated pool: its state and ticks as this pass left them.
                         auto it{effects.cl.find(id)};
                         if (it == effects.cl.end()) {
@@ -2890,6 +3001,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         for (const auto& [id, changed] : effects.ticks) {
             for (const auto& [tick, info] : changed) Writable().Put(TickKey(CL_TICKS, id, tick), sidechain::EncodeValue(info));
         }
+        for (const auto& [id, changed] : effects.books) CommitBook(id, changed);
         // The launches' fees, split between the creator and the pool they graduate into; their log; graduations.
         sidechain::StoreOverlay& out{Writable()};
         for (const auto& [id, entry] : effects.log) {
@@ -2950,6 +3062,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         Effects effects;
         effects.cl = all.cl;
         effects.ticks = all.ticks;
+        effects.books = all.books;
         const auto got{pass(one, trial, effects)};
         if (!got[i]) {
             refund(i);
@@ -2960,6 +3073,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         all.ended.insert(effects.ended.begin(), effects.ended.end());
         all.cl = effects.cl;
         all.ticks = effects.ticks;
+        all.books = effects.books;
         for (const auto& [id, entry] : effects.log) {
             LaunchLogEntry& e{all.log[id]};
             e.coin_in += entry.coin_in;
@@ -3232,6 +3346,223 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
     return clearing;
 }
 
+std::optional<dex::Clearing> State::ClearBook(const uint256& id, const Pool& pool, std::map<uint256, BookOrder>& resting, const std::vector<dex::HopIn>& orders, int height) const
+{
+    uint64_t t0{0}, t1{0};
+    for (const dex::HopIn& order : orders) {
+        if (order.amount == 0 || order.amount > MAX_AMOUNT) return std::nullopt;
+        uint64_t& sum{order.zero_in ? t0 : t1};
+        if (order.amount > MAX_AMOUNT - sum) return std::nullopt;
+        sum += order.amount;
+    }
+    if (t0 > MAX_AMOUNT - pool.reserve0 || t1 > MAX_AMOUNT - pool.reserve1) return std::nullopt;
+    // The best resting orders of each side as this pass left them (expired ones out).
+    const auto side{[&](bool asks) {
+        std::vector<std::pair<uint256, BookOrder>> out;
+        for (auto& [oid, order] : BookSide(id, asks, MAX_BOOK_ROUND)) {
+            const auto it{resting.find(oid)};
+            const BookOrder& now{it != resting.end() ? it->second : order};
+            if (now.remaining > 0 && now.expiry >= height) out.emplace_back(oid, now);
+        }
+        return out;
+    }};
+    const auto asks{side(true)}, bids{side(false)};
+    dex::Clearing clearing;
+    clearing.outs.assign(orders.size(), 0);
+    clearing.reserve0 = pool.reserve0 + t0;
+    clearing.reserve1 = pool.reserve1 + t1;
+    // Prices of asset0 in asset1 as rationals: an ask sells asset0 for at least num/den of asset1; a bid sells asset1 for at
+    // least num/den of asset0, so it pays at most den/num of asset1 per asset0.
+    struct Price {
+        curves::BigUint num, den;
+    };
+    const auto less{[](const Price& a, const Price& b) { return a.num * b.den < b.num * a.den; }};
+    std::vector<Price> candidates;
+    for (const auto& [oid, o] : asks) candidates.push_back({curves::BigUint{o.price_num}, curves::BigUint{o.price_den}});
+    for (const auto& [oid, o] : bids) candidates.push_back({curves::BigUint{o.price_den}, curves::BigUint{o.price_num}});
+    if (candidates.empty()) {
+        // No price: the takers miss (0 out); what came in is not the book's.
+        clearing.reserve0 = pool.reserve0;
+        clearing.reserve1 = pool.reserve1;
+        return clearing;
+    }
+    std::sort(candidates.begin(), candidates.end(), less);
+    // At a price P: what sells asset0 (takers and the asks at or under P) and what buys it (takers' and the bids' asset1, at
+    // or over P, over P), in units of asset0 times P's denominator... compared as rationals.
+    // Asks by their limit, lowest first, and bids by theirs (asset1 per asset0), highest first, with running sums: what
+    // sells asset0 at a price P is the takers' and the asks' at or under P; what buys it, the takers' and the bids' asset1
+    // at or over P. O(n log n) a round.
+    std::vector<std::pair<Price, uint64_t>> ask_levels, bid_levels;
+    for (const auto& [oid, o] : asks) ask_levels.push_back({{curves::BigUint{o.price_num}, curves::BigUint{o.price_den}}, o.remaining});
+    for (const auto& [oid, o] : bids) bid_levels.push_back({{curves::BigUint{o.price_den}, curves::BigUint{o.price_num}}, o.remaining});
+    std::stable_sort(ask_levels.begin(), ask_levels.end(), [&](const auto& a, const auto& b) { return less(a.first, b.first); });
+    std::stable_sort(bid_levels.begin(), bid_levels.end(), [&](const auto& a, const auto& b) { return less(b.first, a.first); });
+    std::vector<unsigned __int128> ask_sum(ask_levels.size() + 1, 0), bid_sum(bid_levels.size() + 1, 0);
+    for (size_t i{0}; i < ask_levels.size(); ++i) ask_sum[i + 1] = ask_sum[i] + ask_levels[i].second;
+    for (size_t i{0}; i < bid_levels.size(); ++i) bid_sum[i + 1] = bid_sum[i] + bid_levels[i].second;
+    const auto supply{[&](const Price& p) {
+        // The asks whose limit is not over P.
+        const size_t n{static_cast<size_t>(std::partition_point(ask_levels.begin(), ask_levels.end(), [&](const auto& l) { return !less(p, l.first); }) - ask_levels.begin())};
+        return curves::BigUint::U128(ask_sum[n] + t0);
+    }};
+    const auto spend{[&](const Price& p) {
+        // The bids whose limit is not under P.
+        const size_t n{static_cast<size_t>(std::partition_point(bid_levels.begin(), bid_levels.end(), [&](const auto& l) { return !less(l.first, p); }) - bid_levels.begin())};
+        return curves::BigUint::U128(bid_sum[n] + t1);
+    }};
+    // The price that trades the most asset0 (min of supply and spend/P); then the least imbalance; then the lowest.
+    std::optional<Price> best;
+    curves::BigUint best_volume_num, best_volume_den{1}, best_gap_num, best_gap_den{1};
+    for (const Price& p : candidates) {
+        const curves::BigUint s{supply(p)}, d{spend(p)};
+        // In asset0: supply s, demand d·den/num. volume = min; gap = |s − d·den/num|, both over num.
+        const curves::BigUint s_n{s * p.num}, d_n{d * p.den};
+        const curves::BigUint vol{s_n < d_n ? s_n : d_n};
+        const curves::BigUint gap{s_n < d_n ? d_n - s_n : s_n - d_n};
+        // Compare vol/num with best: cross-multiplied.
+        const bool more{!best || vol * best_volume_den > best_volume_num * p.num};
+        const bool same{best && vol * best_volume_den == best_volume_num * p.num};
+        const bool tighter{same && gap * best_gap_den < best_gap_num * p.num};
+        if (more || tighter) {
+            best = p;
+            best_volume_num = vol;
+            best_volume_den = p.num;
+            best_gap_num = gap;
+            best_gap_den = p.num;
+        }
+    }
+    if (best_volume_num.IsZero()) {
+        clearing.reserve0 = pool.reserve0;
+        clearing.reserve1 = pool.reserve1;
+        return clearing;
+    }
+    const Price& p{*best};
+    const auto fits{[](const curves::BigUint& v) { return std::min<uint64_t>(v.ToU128().value_or(MAX_AMOUNT) > MAX_AMOUNT ? MAX_AMOUNT : static_cast<uint64_t>(*v.ToU128()), MAX_AMOUNT); }};
+    // The asset0 that trades: ⌊volume⌋.
+    uint64_t left0{fits(best_volume_num / best_volume_den)};
+    // The buy side first (takers, all or nothing, then the bids, best first): each gets ⌊paid/P⌋ of asset0 and pays ⌈got·P⌉.
+    uint64_t delivered{0}, paid1{0}, taker_out0{0};
+    std::vector<uint64_t> outs(orders.size(), 0);
+    bool buyers_ok{true};
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (orders[i].zero_in) continue;
+        const uint64_t got{fits(curves::BigUint{orders[i].amount} * p.den / p.num)};
+        if (got > left0 || got == 0) {
+            buyers_ok = false;
+            continue;
+        }
+        outs[i] = got;
+        left0 -= got;
+        delivered += got;
+        taker_out0 += got;
+        paid1 += orders[i].amount;
+    }
+    if (!buyers_ok) {
+        // Takers that pay asset1 fill whole or not at all: none of them does (they miss; the next pass goes without them).
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!orders[i].zero_in) outs[i] = 0;
+        }
+        clearing.outs = outs;
+        for (size_t i{0}; i < orders.size(); ++i) clearing.outs[i] = 0;
+        clearing.reserve0 = pool.reserve0;
+        clearing.reserve1 = pool.reserve1;
+        return clearing;
+    }
+    for (const auto& [oid, o] : bids) {
+        if (left0 == 0) break;
+        if (less(Price{curves::BigUint{o.price_den}, curves::BigUint{o.price_num}}, p)) continue;
+        const uint64_t most{fits(curves::BigUint{o.remaining} * p.den / p.num)};
+        const uint64_t got{std::min(most, left0)};
+        if (got == 0) continue;
+        uint64_t pays{fits((curves::BigUint{got} * p.num + p.den - curves::BigUint{1}) / p.den)};
+        pays = std::min(pays, o.remaining);
+        BookOrder& now{resting.try_emplace(oid, o).first->second};
+        now.remaining -= pays;
+        now.proceeds += got;
+        now.got += got;
+        left0 -= got;
+        delivered += got;
+        paid1 += pays;
+    }
+    // The sell side delivers what the buy side got: takers first (all or nothing), then the asks, best first; each gets ⌊sold·P⌋.
+    uint64_t to_sell{delivered}, taker_out1{0};
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (!orders[i].zero_in) continue;
+        if (orders[i].amount > to_sell) {
+            // A taker selling asset0 that the buyers cannot take whole: none of them fills.
+            for (size_t k{0}; k < orders.size(); ++k) clearing.outs[k] = 0;
+            clearing.reserve0 = pool.reserve0;
+            clearing.reserve1 = pool.reserve1;
+            return clearing;
+        }
+        outs[i] = fits(curves::BigUint{orders[i].amount} * p.num / p.den);
+        to_sell -= orders[i].amount;
+        taker_out1 += outs[i];
+    }
+    for (const auto& [oid, o] : asks) {
+        if (to_sell == 0) break;
+        if (less(p, Price{curves::BigUint{o.price_num}, curves::BigUint{o.price_den}})) continue;
+        BookOrder& now{resting.try_emplace(oid, o).first->second};
+        const uint64_t sells{std::min(now.remaining, to_sell)};
+        const uint64_t gets{fits(curves::BigUint{sells} * p.num / p.den)};
+        now.remaining -= sells;
+        now.proceeds += gets;
+        now.got += gets;
+        to_sell -= sells;
+    }
+    // What the takers got leaves the book; what the makers got stays in it, theirs to collect. The roundings stay too.
+    clearing.outs = outs;
+    if (taker_out0 > clearing.reserve0 || taker_out1 > clearing.reserve1) return std::nullopt;
+    clearing.reserve0 -= taker_out0;
+    clearing.reserve1 -= taker_out1;
+    return clearing;
+}
+
+void State::CommitBook(const uint256& id, const std::map<uint256, BookOrder>& changed)
+{
+    sidechain::StoreOverlay& out{Writable()};
+    uint64_t filled{0};
+    for (const auto& [oid, order] : changed) {
+        const auto before{GetOrder(oid)};
+        BOOK_ORDERS.Put(out, oid, order);
+        // An order with nothing left to sell leaves the index (and the count of the book's open orders); it waits for its holder.
+        if (order.remaining == 0 && before && before->remaining > 0) {
+            out.Erase(BookKey(oid, *before));
+            ++filled;
+        }
+    }
+    if (filled > 0) {
+        auto book{*Assert(GetPool(id))};
+        book.shares -= std::min<uint64_t>(book.shares - std::min<uint64_t>(book.shares, MIN_LIQUIDITY), filled);
+        SetPool(id, book);
+    }
+}
+
+void State::CrossBooks(int height)
+{
+    sidechain::StoreOverlay& out{Writable()};
+    std::vector<uint256> touched;
+    BOOKS_TOUCHED.ForEach(out, [&](const uint256& id, const uint8_t&) {
+        touched.push_back(id);
+        return true;
+    });
+    for (const uint256& id : touched) {
+        BOOKS_TOUCHED.Erase(out, id);
+        const auto book{GetPool(id)};
+        if (!book) continue;
+        // The resting orders that cross one another trade at one price, as a round with no takers.
+        std::map<uint256, BookOrder> changed;
+        const auto cleared{ClearBook(id, *book, changed, {}, height)};
+        if (!cleared || changed.empty()) continue;
+        Pool after{*book};
+        after.reserve0 = cleared->reserve0;
+        after.reserve1 = cleared->reserve1;
+        ++after.swaps;
+        SetPool(id, after);
+        CommitBook(id, changed);
+    }
+}
+
 void State::Graduate(const AssetId& token, int height)
 {
     sidechain::StoreOverlay& out{Writable()};
@@ -3344,6 +3675,22 @@ std::optional<int32_t> State::NextClTick(const uint256& pool, int32_t tick, bool
     return TickOfKey(table, next->first);
 }
 std::optional<FeeState> State::GetFeeState(const uint256& pool) const { return FEE_STATES.Get(*m_view, pool); }
+std::optional<BookOrder> State::GetOrder(const uint256& id) const { return BOOK_ORDERS.Get(*m_view, id); }
+std::vector<std::pair<uint256, BookOrder>> State::BookSide(const uint256& book, bool asks, size_t max) const
+{
+    std::vector<std::pair<uint256, BookOrder>> side;
+    sidechain::StoreBytes prefix{BOOK_INDEX};
+    sidechain::KeyCodec<uint256>::Encode(prefix, book);
+    prefix.push_back(asks ? 0 : 1);
+    m_view->ForEach(prefix, [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
+        std::span<const unsigned char> in{key};
+        in = in.subspan(key.size() - 32);
+        const uint256 id{sidechain::KeyCodec<uint256>::Decode(in)};
+        if (const auto order{GetOrder(id)}) side.emplace_back(id, *order);
+        return side.size() < max;
+    });
+    return side;
+}
 uint32_t State::FeeOf(const uint256& pool, const PoolParams& params, int height) const
 {
     if (!(params.flags & POOL_FLAG_DYNAMIC_FEE)) return params.fee;

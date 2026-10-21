@@ -1106,6 +1106,9 @@ RPCMethod claimlaunch();
 RPCMethod openposition();
 RPCMethod changeposition();
 RPCMethod listpositions();
+RPCMethod placeorder();
+RPCMethod settleorder();
+RPCMethod listorders();
 RPCMethod createauction();
 RPCMethod bidauction();
 RPCMethod collectauction();
@@ -1214,6 +1217,9 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &openposition},
         {"wallet", &changeposition},
         {"wallet", &listpositions},
+        {"wallet", &placeorder},
+        {"wallet", &settleorder},
+        {"wallet", &listorders},
         {"wallet", &createauction},
         {"wallet", &bidauction},
         {"wallet", &collectauction},

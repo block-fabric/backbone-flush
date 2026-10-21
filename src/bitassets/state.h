@@ -1529,6 +1529,10 @@ private:
     bool PlanPosition(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                       const std::function<void(Token::Kind, const uint256&, uint64_t)>& credit, const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit,
                       std::string& reject_reason) const;
+    /** Writes a book's resting orders a round changed: those filled leave its index and its count of open orders. */
+    void CommitBook(const uint256& id, const std::map<uint256, BookOrder>& changed);
+    /** The books a block placed orders in: their resting orders that cross trade (FinishBlock). */
+    void CrossBooks(int height);
     /** Writes a pool's concentrated state, noting the price it had before its block (the price accumulators). */
     void SetClState(const uint256& pool, const ClState& state);
     /** Launches' part of MakePlan, after the registration's: the curve, its pool, the first buy. */

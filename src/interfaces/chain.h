@@ -211,6 +211,8 @@ public:
     //! Concentrated liquidity: a pool's state, a position.
     virtual std::optional<bitassets::ClState> getBitAssetsClState(const uint256& pool) = 0;
     virtual std::optional<bitassets::ClPosition> getBitAssetsPosition(const uint256& id) = 0;
+    //! Order books: a limit order.
+    virtual std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) = 0;
     //! Concentrated liquidity: what a position is owed in fees now (its record's and those earned since).
     virtual std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) = 0;
     //! Layers' launches: a launch, by its token.

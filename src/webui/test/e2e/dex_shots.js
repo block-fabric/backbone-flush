@@ -8,7 +8,7 @@
 // a description, an allocation and a first buy; STAR, with a few buys), the list of launches, MOON's page on its curve with
 // a buy quoted, and once a buy of 600 CHN takes it past the curve's end, its page graduated. Pictures in Midnight, Advanced.
 (async () => {
-  const { host, rpc, sleep, T, waitFor, check, snapshot, text, finish } = E2E;
+  const { host, log, rpc, sleep, T, waitFor, check, snapshot, text, finish } = E2E;
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   const set = (el, value) => {
@@ -56,6 +56,10 @@
   const CHN = '0'.repeat(64);
   const ids = {};
   /** Reserve a ticker, then register it once the reservation is deep enough (retried until the node takes it). */
+  /** A wallet call made again until a block took the change before it (one asset change of the wallet waits a block). */
+  async function retry(method, params, wallet = W) {
+    return waitFor(`${method} accepted`, async () => rpc(method, params, wallet), 300000);
+  }
   async function register(ticker, supply, decimals) {
     await rpc('reserveasset', [ticker], W);
     await waitFor(`${ticker} registered`, async () => (await rpc('registerasset', [ticker, supply, decimals, {}, true], W)).txid, 300000);
@@ -112,17 +116,17 @@
     await register('GOLD', 100000, 2);
     await register('SILVER', 100000, 2);
     // A shallow default pool, a deep weighted one beside it at the same price: the route from SILVER takes the weighted one.
-    await rpc('addliquidity', ['GOLD', 100, 'CHN', 5], W);
-    await rpc('createpool', ['USDX', 5000, 'USDY', 5000, { curve: 'stable', fee: 0.05, amp: 200 }], W);
-    await rpc('createpool', ['GOLD', 4000, 'CHN', 50, { curve: 'weighted', weight_a: 80 }], W);
-    await rpc('createpool', ['GOLD', 3000, 'SILVER', 3000, { curve: 'constant_product', fee: 1 }], W);
+    await retry('addliquidity', ['GOLD', 100, 'CHN', 5], W);
+    await retry('createpool', ['USDX', 5000, 'USDY', 5000, { curve: 'stable', fee: 0.05, amp: 200 }], W);
+    await retry('createpool', ['GOLD', 4000, 'CHN', 50, { curve: 'weighted', weight_a: 80 }], W);
+    await retry('createpool', ['GOLD', 3000, 'SILVER', 3000, { curve: 'constant_product', fee: 1 }], W);
     await waitFor('the four pools in a block', async () => (await rpc('listpools', [null, 100, 0])).length >= 4, 300000);
     await sleep(4000);
 
     // --- The pool wizard, one picture per curve ---
-    await wizard('create-pool-constant-product', ids.GOLD, ids.SILVER, 'Constant product', async () => click('0.3%', () => $('[aria-label="Fee tier"]')), '100', '120');
-    await wizard('create-pool-stable', ids.USDX, ids.USDY, 'Stable', null, '1000', '1000');
-    await wizard('create-pool-weighted', ids.SILVER, CHN, 'Weighted', async () => click('80/20', () => $('[aria-label="Weights"]')), '400', '2');
+    await wizard('create-pool-constant-product', ids.GOLD, ids.SILVER, 'Constant product', async () => click('0.3%', () => $('[aria-label="Fee tier"]')), '10000', '12000');
+    await wizard('create-pool-stable', ids.USDX, ids.USDY, 'Stable', null, '10000', '10000');
+    await wizard('create-pool-weighted', ids.SILVER, CHN, 'Weighted', async () => click('80/20', () => $('[aria-label="Weights"]')), '40000', '20');
 
     // --- The pages of the stable and the weighted pools ---
     for (const [name, kind] of [['pool-page-stable', 'Stable'], ['pool-page-weighted', 'Weighted']]) {
@@ -149,18 +153,18 @@
 
     // --- Concentrated liquidity and a dynamic fee: a concentrated USDX/USDY pool at 1 with three positions (one out of
     // range), a constant-product GOLD/SILVER pool with a dynamic fee, a few trades through both ---
-    const made = await rpc('createpool', ['USDX', 1, 'USDY', 1, { curve: 'concentrated', fee: 0.05 }], W);
-    const dyn = await rpc('createpool', ['GOLD', 1000, 'SILVER', 1000, { curve: 'constant_product', fee: 0.3, dynamic_fee: true }], W);
+    const made = await retry('createpool', ['USDX', 1, 'USDY', 1, { curve: 'concentrated', fee: 0.05 }], W);
+    const dyn = await retry('createpool', ['GOLD', 3000, 'SILVER', 3000, { curve: 'constant_product', fee: 0.3, dynamic_fee: true }], W);
     const clPool = await waitFor('the concentrated pool in a block', async () => rpc('getpool', [made.pool]), 300000);
     await waitFor('the dynamic pool in a block', async () => rpc('getpool', [dyn.pool]), 300000);
     const both = (x, y) => ({ [`0x${ids.USDX}`]: x, [`0x${ids.USDY}`]: y });
-    await rpc('openposition', [made.pool, 0.98, 1.02, both(500, 500)], W);
-    await rpc('openposition', [made.pool, 0.9, 1.1, both(300, 300)], W);
+    await retry('openposition', [made.pool, 0.98, 1.02, both(500, 500)], W);
+    await retry('openposition', [made.pool, 0.9, 1.1, both(300, 300)], W);
     // Above the price (the node's prices are of the pool's lower id in the other): out of range, one asset alone.
-    await rpc('openposition', [made.pool, 1.1, 1.2, both(200, 200)], W);
+    await retry('openposition', [made.pool, 1.1, 1.2, both(200, 200)], W);
     await waitFor('the three positions in a block', async () => (await rpc('listpositions', [], W)).length >= 3, 300000);
     for (const [asset, amount, pool] of [['USDX', 40, made.pool], ['USDY', 30, made.pool], ['USDX', 25, made.pool], ['GOLD', 60, dyn.pool], ['SILVER', 40, dyn.pool]]) {
-      await rpc('swappools', [asset, amount, [pool]], W);
+      await retry('swappools', [asset, amount, [pool]], W);
     }
     await waitFor('fees earned in range', async () => (await rpc('listpositions', [], W)).some((p) => Number(p.fees0) > 0 || Number(p.fees1) > 0), 300000);
     await check('the concentrated pool says its state', !!clPool.concentrated && clPool.curve === 'concentrated', JSON.stringify(clPool.concentrated));
@@ -173,6 +177,9 @@
     await click('±1%', () => $('[aria-label="Range presets"]'));
     set($('#cl-amount-a'), '100');
     await waitFor('the preview of the position', () => $('[data-testid="position-preview"]'), 60000);
+    // The picker and its chart in view (below the pool's summary).
+    $('#cl-lower').scrollIntoView({ block: 'center' });
+    await sleep(500);
     await shot('cl-range-picker');
 
     await go('trade', 'positions');
@@ -198,7 +205,12 @@
     // --- Two launches by RPC ---
     const moon = await launch('MOON', { display_name: 'To the moon', info: 'A token for the moon.\nhttps://example.org/moon', allocation: 2, first_buy: 1 });
     const star = await launch('STAR', { display_name: 'Star dust', first_buy: 0.5 });
-    for (const amount of [2, 5, 3]) await rpc('buyfromlaunch', [`0x${star}`, amount], W);
+    // One buy a block: the launch's chart and log have a few points.
+    for (const amount of [2, 5, 3]) {
+      const at = await rpc('getblockcount', []);
+      await retry('buyfromlaunch', [`0x${star}`, amount], W);
+      await waitFor('the buy in a block', async () => (await rpc('getblockcount', [])) > at + 1, 300000);
+    }
     await waitFor('STAR bought', async () => (await rpc('getlaunch', [`0x${star}`])).trades >= 2, 300000);
 
     await go('trade', 'swap');
@@ -213,13 +225,18 @@
     await shot('launch-page-curve');
 
     // --- A buy past the curve's end: MOON graduates ---
-    await rpc('buyfromlaunch', [`0x${moon}`, 600], W);
+    await retry('buyfromlaunch', [`0x${moon}`, 600], W);
     await waitFor('MOON graduated', async () => (await rpc('getlaunch', [`0x${moon}`])).status === 'graduated', 300000);
     await waitFor('the page says it', () => $('[data-testid="launch-graduated"]'), 60000);
     await check('graduated: it trades in its pool', text('[data-testid="launch-graduated"]').includes('Graduated'), text('[data-testid="launch-graduated"]'));
     await shot('launch-page-graduated');
     await finish();
   } catch (e) {
+    // The page as it was when it failed, and what it said.
+    try {
+      await log(`FAILED at: ${document.querySelector('main') ? document.querySelector('main').innerText.slice(0, 1500) : ''}`);
+      await snapshot('debug-failure');
+    } catch (_) {}
     await finish(e);
   }
 })();

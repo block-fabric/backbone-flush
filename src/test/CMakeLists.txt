@@ -54,6 +54,7 @@ add_executable(test_bitcoin
   fastblocks_tests.cpp
   layers_tests.cpp
   dex_cl_tests.cpp
+  dex_book_tests.cpp
   dex_curves_tests.cpp
   dex_launch_tests.cpp
   dex_pools_tests.cpp

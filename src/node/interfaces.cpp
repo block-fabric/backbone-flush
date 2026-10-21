@@ -801,6 +801,11 @@ public:
         LOCK(::cs_main);
         return chainman().ActiveChainstate().SideState().BitAssets().GetPosition(id);
     }
+    std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetOrder(id);
+    }
     std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) override
     {
         LOCK(::cs_main);

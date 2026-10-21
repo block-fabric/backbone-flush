@@ -1976,6 +1976,9 @@ std::optional<RoundResult> RoundOf(const bitassets::State& state, const uint256&
         r.cl_after = r.cl_before;
         std::map<int32_t, bitassets::ClTick> ticks;
         cleared = state.ClearCl(id, fee, pool, *r.cl_after, ticks, orders);
+    } else if (kind.GetCurve() == bitassets::Curve::BOOK) {
+        std::map<uint256, bitassets::BookOrder> resting;
+        cleared = state.ClearBook(id, pool, resting, orders, 0);
     } else if (kind.GetCurve() == bitassets::Curve::LAUNCH) {
         const auto launch{state.GetLaunch(pool.asset1)};
         if (!launch) return std::nullopt;
@@ -3323,6 +3326,148 @@ RPCMethod previewposition()
     };
 }
 
+//
+// Order books.
+//
+
+UniValue OrderToJSON(const bitassets::State& state, const uint256& id, const bitassets::BookOrder& o)
+{
+    const auto book{state.GetPool(o.book)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("order", id.GetHex());
+    obj.pushKV("book", o.book.GetHex());
+    if (!book) return obj;
+    const AssetId sell{o.sells0 ? book->asset0 : book->asset1}, buy{o.sells0 ? book->asset1 : book->asset0};
+    const uint8_t ds{DecimalsOf(state, sell)}, db{DecimalsOf(state, buy)};
+    obj.pushKV("sells", LabelOf(state, sell));
+    obj.pushKV("sells_id", sell.GetHex());
+    obj.pushKV("buys", LabelOf(state, buy));
+    obj.pushKV("buys_id", buy.GetHex());
+    obj.pushKV("amount", AmountToJSON(o.amount, ds));
+    obj.pushKV("remaining", AmountToJSON(o.remaining, ds));
+    // Its limit, in whole units of what it buys per whole unit of what it sells.
+    obj.pushKV("price", DecimalToJSON(static_cast<double>(o.price_num) / o.price_den * std::pow(10.0, int{ds} - int{db})));
+    obj.pushKV("got", AmountToJSON(o.got, db));
+    obj.pushKV("to_collect", AmountToJSON(o.proceeds, db));
+    obj.pushKV("expiry", o.expiry);
+    obj.pushKV("txid", o.txid.GetHex());
+    obj.pushKV("height", o.height);
+    return obj;
+}
+
+const std::vector<RPCResult> ORDER_RESULTS{
+    {RPCResult::Type::STR_HEX, "order", "Its id (its token)"},
+    {RPCResult::Type::STR_HEX, "book", "Its book"},
+    {RPCResult::Type::STR, "sells", "What it sells"},
+    {RPCResult::Type::STR_HEX, "sells_id", ""},
+    {RPCResult::Type::STR, "buys", "What it buys"},
+    {RPCResult::Type::STR_HEX, "buys_id", ""},
+    {RPCResult::Type::NUM, "amount", "What it sold at first"},
+    {RPCResult::Type::NUM, "remaining", "What is left to sell"},
+    {RPCResult::Type::NUM, "price", "Its limit: whole units bought per whole unit sold, at least"},
+    {RPCResult::Type::NUM, "got", "What it bought in all"},
+    {RPCResult::Type::NUM, "to_collect", "What it bought and is not collected yet"},
+    {RPCResult::Type::NUM, "expiry", "The last block it trades in"},
+    {RPCResult::Type::STR_HEX, "txid", "The transaction that placed it"},
+    {RPCResult::Type::NUM, "height", "Its block"},
+};
+
+RPCMethod getorder()
+{
+    return RPCMethod{
+        "getorder",
+        "A limit order of a book (placeorder): what it sells and buys, its limit, what is left, what it got.",
+        {{"order", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Its id"}},
+        RPCResult{RPCResult::Type::OBJ, "", "", ORDER_RESULTS},
+        RPCExamples{HelpExampleCli("getorder", "\"<order>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "order")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto order{state.GetOrder(id)};
+    if (!order) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such order");
+    return OrderToJSON(state, id, *order);
+},
+    };
+}
+
+RPCMethod getbook()
+{
+    return RPCMethod{
+        "getbook",
+        "The order book of two assets: its open orders on each side by price (a ladder), the best of each, and the spread. Prices of a whole "
+        "asset_a in asset_b.",
+        {
+            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"levels", RPCArg::Type::NUM, RPCArg::Default{50}, "Most prices on each side (1 to 500)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "book", "Its id (a venue of routes: swappools)"},
+            {RPCResult::Type::STR, "asset_a", ""},
+            {RPCResult::Type::STR, "asset_b", ""},
+            {RPCResult::Type::NUM, "open_orders", "Open orders, both sides"},
+            {RPCResult::Type::NUM, "best_ask", /*optional=*/true, "The lowest price asset_a is sold at"},
+            {RPCResult::Type::NUM, "best_bid", /*optional=*/true, "The highest price asset_a is bought at"},
+            {RPCResult::Type::ARR, "asks", "Sellers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a for sale at it"}, {RPCResult::Type::NUM, "orders", ""}}}}},
+            {RPCResult::Type::ARR, "bids", "Buyers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a wanted at it (what their asset_b buys)"}, {RPCResult::Type::NUM, "orders", ""}}}}},
+        }},
+        RPCExamples{HelpExampleCli("getbook", "\"GOLD\" \"CHN\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const int levels{request.params[2].isNull() ? 50 : request.params[2].getInt<int>()};
+    if (levels < 1 || levels > 500) throw JSONRPCError(RPC_INVALID_PARAMETER, "levels is 1 to 500");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId a{ParseAsset(request.params[0], state)}, b{ParseAsset(request.params[1], state)};
+    if (a == b) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a book");
+    const uint256 id{bitassets::BookId(a, b)};
+    const auto book{state.GetPool(id)};
+    const uint8_t da{DecimalsOf(state, a)}, db{DecimalsOf(state, b)};
+    const bool a_is_0{a < b};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("book", id.GetHex());
+    result.pushKV("asset_a", LabelOf(state, a));
+    result.pushKV("asset_b", LabelOf(state, b));
+    result.pushKV("open_orders", book ? book->shares - std::min<uint64_t>(book->shares, bitassets::MIN_LIQUIDITY) : 0);
+    // The side that sells a: the asks of a.
+    const auto ladder{[&](bool sells_a) {
+        UniValue arr(UniValue::VARR);
+        std::map<double, std::pair<double, int>, std::function<bool(double, double)>> levels_map{sells_a ? std::function<bool(double, double)>{std::less<double>{}} : std::function<bool(double, double)>{std::greater<double>{}}};
+        for (const auto& [oid, o] : state.BookSide(id, sells_a == a_is_0, bitassets::MAX_BOOK_SIDE)) {
+            if (o.remaining == 0) continue;
+            // Its limit as a price of a whole a in b.
+            const double lim{static_cast<double>(o.price_num) / o.price_den};
+            const double price{sells_a ? lim * std::pow(10.0, int{da} - int{db}) : (1.0 / lim) * std::pow(10.0, int{da} - int{db})};
+            const double amount_a{sells_a ? o.remaining / std::pow(10.0, da) : (o.remaining / std::pow(10.0, db)) / price};
+            auto& level{levels_map[price]};
+            level.first += amount_a;
+            ++level.second;
+        }
+        for (const auto& [price, level] : levels_map) {
+            if (arr.size() >= static_cast<size_t>(levels)) break;
+            UniValue l(UniValue::VOBJ);
+            l.pushKV("price", DecimalToJSON(price));
+            l.pushKV("amount", DecimalToJSON(level.first));
+            l.pushKV("orders", level.second);
+            arr.push_back(std::move(l));
+        }
+        return arr;
+    }};
+    UniValue asks{ladder(true)}, bids{ladder(false)};
+    if (!asks.empty()) result.pushKV("best_ask", asks[0]["price"]);
+    if (!bids.empty()) result.pushKV("best_bid", bids[0]["price"]);
+    result.pushKV("asks", std::move(asks));
+    result.pushKV("bids", std::move(bids));
+    return result;
+},
+    };
+}
+
 } // namespace
 
 UniValue SearchBitAssetsJSON(ChainstateManager& chainman, const UniValue& params, const std::vector<bitassets::AssetId>& only)
@@ -3368,6 +3513,8 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &getposition},
         {"bitassets", &getpoolticks},
         {"bitassets", &previewposition},
+        {"bitassets", &getorder},
+        {"bitassets", &getbook},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

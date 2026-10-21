@@ -2626,6 +2626,170 @@ RPCMethod listpositions()
     };
 }
 
+//
+// Order books: limit orders.
+//
+
+RPCMethod placeorder()
+{
+    return RPCMethod{
+        "placeorder",
+        "Layers' DEX: a limit order in the book of two assets: sell an amount of one for the other at a price at least, until a block. It trades "
+        "in the block's batch at the book's one price of each round (never below its limit), wholly or in part, with takers and with other "
+        "orders; its token collects what it got and cancels it (settleorder)." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"asset_sell", RPCArg::Type::STR, RPCArg::Optional::NO, "What it sells. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},
+            {"asset_buy", RPCArg::Type::STR, RPCArg::Optional::NO, "What it buys"},
+            {"price", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "Its limit: whole units of asset_buy per whole unit sold, at least"},
+            {"blocks", RPCArg::Type::NUM, RPCArg::Default{40320}, "For how many blocks it trades (about a week of 15-second blocks)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "order", "The order's id (its token)"},
+            {RPCResult::Type::STR_HEX, "book", "Its book"},
+        }},
+        RPCExamples{HelpExampleCli("placeorder", "\"GOLD\" 10 \"CHN\" 0.05")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const AssetInfo sell{ParseAsset(*pwallet, request.params[0])}, buy{ParseAsset(*pwallet, request.params[2])};
+    if (sell.id == buy.id) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a book");
+    const uint64_t amount{bitassets::ParseUnits(request.params[1], sell.decimals)};
+    // The price as units of buy per unit of sell: a fraction num/den of 64-bit integers, from its decimal text exactly.
+    std::string text{request.params[3].getValStr()};
+    const size_t dot{text.find('.')};
+    const std::string digits{dot == std::string::npos ? text : text.substr(0, dot) + text.substr(dot + 1)};
+    const int fraction{dot == std::string::npos ? 0 : static_cast<int>(text.size() - dot - 1)};
+    const auto mantissa{ToIntegral<uint64_t>(digits)};
+    if (!mantissa || *mantissa == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price is a positive number");
+    // units: price · 10^(db − ds); as num/den = mantissa · 10^db / (10^fraction · 10^ds), reduced.
+    unsigned __int128 num{*mantissa}, den{1};
+    for (int i{0}; i < buy.decimals; ++i) num *= 10;
+    for (int i{0}; i < fraction + sell.decimals; ++i) den *= 10;
+    const auto gcd{[](unsigned __int128 x, unsigned __int128 y) {
+        while (y != 0) {
+            const unsigned __int128 t{x % y};
+            x = y;
+            y = t;
+        }
+        return x;
+    }};
+    const unsigned __int128 g{gcd(num, den)};
+    num /= g;
+    den /= g;
+    if (num > bitassets::MAX_AMOUNT || den > bitassets::MAX_AMOUNT) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price has too many digits");
+    const int blocks{request.params[4].isNull() ? 40320 : request.params[4].getInt<int>()};
+    if (blocks < 1 || blocks > bitassets::MAX_ORDER_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, "blocks is 1 to about a year");
+    bitassets::PlaceOrder place{sell.id, buy.id, amount, static_cast<uint64_t>(num), static_cast<uint64_t>(den), pwallet->chain().getBitAssetsHeight() + blocks};
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, sell, amount, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, place, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("order", bitassets::OrderId(tx->GetHash()).GetHex());
+    result.pushKV("book", bitassets::BookId(sell.id, buy.id).GetHex());
+    return result;
+},
+    };
+}
+
+RPCMethod settleorder()
+{
+    return RPCMethod{
+        "settleorder",
+        "Layers' DEX: collect what a limit order of this wallet got; cancel it (or once it expired or filled): what is left of what it sells too, "
+        "and the order is gone." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"order", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The order"},
+            {"cancel", RPCArg::Type::BOOL, RPCArg::Default{false}, "Cancel it"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::STR_HEX, "txid", "The transaction"}}},
+        RPCExamples{HelpExampleCli("settleorder", "\"<order>\" true")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const uint256 id{ParseHashV(request.params[0], "order")};
+    const bool cancel{!request.params[1].isNull() && request.params[1].get_bool()};
+    const auto order{pwallet->chain().getBitAssetsOrder(id)};
+    if (!order) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such order");
+    const auto book{pwallet->chain().getBitAssetsPool(order->book)};
+    if (!book) throw JSONRPCError(RPC_MISC_ERROR, "Its book is gone");
+    const AssetId sold{order->sells0 ? book->asset0 : book->asset1}, bought{order->sells0 ? book->asset1 : book->asset0};
+    const bool closes{cancel || order->expiry < pwallet->chain().getBitAssetsHeight() || order->remaining == 0};
+    const uint64_t proceeds{bought.IsNull() && order->proceeds < bitassets::MIN_CHN_PAYOUT ? 0 : order->proceeds};
+    const uint64_t left{closes ? (sold.IsNull() && order->remaining < bitassets::MIN_CHN_PAYOUT ? 0 : order->remaining) : 0};
+    if (!closes && proceeds == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to collect yet");
+    const auto [held, total]{Select(*pwallet, Token::Kind::ORDER, id, 1, "this order")};
+    std::vector<Out> outs;
+    if (!closes) outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    std::vector<AssetId> results;
+    if (proceeds > 0) results.push_back(bought);
+    if (left > 0) results.push_back(sold);
+    ResultOuts(*pwallet, results, outs);
+    const CTransactionRef tx{Send(*pwallet, bitassets::SettleOrder{id, cancel, ChnTo(*pwallet, results)}, outs, held)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    return result;
+},
+    };
+}
+
+RPCMethod listorders()
+{
+    return RPCMethod{
+        "listorders",
+        "Layers' DEX: the limit orders this wallet holds (their tokens), with what is left and what they got.",
+        {},
+        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "order", ""},
+            {RPCResult::Type::STR_HEX, "book", ""},
+            {RPCResult::Type::STR, "sells", ""},
+            {RPCResult::Type::STR, "buys", ""},
+            {RPCResult::Type::NUM, "remaining", ""},
+            {RPCResult::Type::NUM, "to_collect", ""},
+            {RPCResult::Type::NUM, "expiry", ""},
+            {RPCResult::Type::BOOL, "expired", ""},
+        }}}},
+        RPCExamples{HelpExampleCli("listorders", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    UniValue list(UniValue::VARR);
+    const int next{pwallet->chain().getBitAssetsHeight()};
+    for (const OwnedToken& t : OwnedTokens(*pwallet)) {
+        if (t.token.kind != Token::Kind::ORDER) continue;
+        const auto order{pwallet->chain().getBitAssetsOrder(t.token.id)};
+        if (!order) continue;
+        const auto book{pwallet->chain().getBitAssetsPool(order->book)};
+        if (!book) continue;
+        const AssetId sold{order->sells0 ? book->asset0 : book->asset1}, bought{order->sells0 ? book->asset1 : book->asset0};
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("order", t.token.id.GetHex());
+        obj.pushKV("book", order->book.GetHex());
+        obj.pushKV("sells", LabelOfAsset(*pwallet, sold));
+        obj.pushKV("buys", LabelOfAsset(*pwallet, bought));
+        obj.pushKV("remaining", bitassets::AmountToJSON(order->remaining, DecimalsOf(*pwallet, sold)));
+        obj.pushKV("to_collect", bitassets::AmountToJSON(order->proceeds, DecimalsOf(*pwallet, bought)));
+        obj.pushKV("expiry", order->expiry);
+        obj.pushKV("expired", order->expiry < next);
+        list.push_back(std::move(obj));
+    }
+    return list;
+},
+    };
+}
+
 RPCMethod createauction()
 {
     return RPCMethod{

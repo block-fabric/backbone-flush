@@ -280,6 +280,10 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"getpoolticks", Bridge::Thread::WORKER},
         {"previewposition", Bridge::Thread::WORKER},
         {"listpositions", Bridge::Thread::WORKER},
+        // Order books: read only.
+        {"getbook", Bridge::Thread::WORKER},
+        {"getorder", Bridge::Thread::WORKER},
+        {"listorders", Bridge::Thread::WORKER},
         // Searches of the node, a page at a time (cursor; the pages never read a whole list: user feedback 2026-10-19).
         // A node without them answers "method not found", and the pages ask the list methods above instead.
         {"searchassets", Bridge::Thread::WORKER},
@@ -731,6 +735,9 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         // Concentrated liquidity: the pool shown resolved (its assets and kind); a position by its id.
         {"openposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Open a position", "Open", "The wallet puts liquidity into the pool shown between the two prices shown, for at most the amounts shown (the rest back): a position, a token of its own, which earns the pool's fees while the price is in its range.", {}, {}), {.asset_keys = {3}, .pools = {0}}), /*fee_unknown=*/true}},
         {"changeposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Change a position", "Change", "The wallet changes its position shown: adds liquidity, takes some out, collects its fees, or closes it (all out, all collected)."), {.positions = {0}}), /*fee_unknown=*/true}},
+        // Order books: the assets resolved; an order by its id.
+        {"placeorder", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Place a limit order", "Place", "The wallet puts the amount shown up for sale in the book of the two assets shown, at the price shown at least, for the blocks shown; it trades in the blocks' batches, wholly or in part; its token collects and cancels it.", {}, {"amount", "price"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
+        {"settleorder", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Settle a limit order", "Settle", "The wallet collects what its order got; cancelled, what is left of what it sells comes back too and the order is gone."), /*fee_unknown=*/true}},
         {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
         {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},
