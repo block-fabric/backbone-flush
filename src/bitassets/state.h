@@ -1117,6 +1117,12 @@ inline constexpr uint32_t MAX_BOOK_SIDE{1000};
 inline constexpr size_t MAX_BOOK_ROUND{256};
 /** Latest an order may expire, in blocks after the one that places it: about a year of 15-second blocks. */
 inline constexpr int32_t MAX_ORDER_DURATION{2'102'400};
+/** Index entries a look at a side reads at most (live orders and expired ones not swept yet). */
+inline constexpr size_t MAX_BOOK_SCAN{8192};
+/** Expired orders a block's end takes out of their books' indexes at most (the rest at the next blocks', oldest first). */
+inline constexpr size_t MAX_BOOK_SWEEP{5000};
+/** The least an order of a pair with CHN is worth, in CHN (satoshis), on its CHN side: 0.01 CHN. */
+inline constexpr uint64_t MIN_BOOK_CHN{1'000'000};
 
 /**
  * The volatility of a pool with a dynamic fee (POOL_FLAG_DYNAMIC_FEE): the last block's clearing price (UQ64.64) and a
@@ -1493,7 +1499,14 @@ public:
     // Order books.
     std::optional<BookOrder> GetOrder(const uint256& id) const;
     /** The open orders of a side of a book (asks: those selling asset0), best price first, `max` at most. */
-    std::vector<std::pair<uint256, BookOrder>> BookSide(const uint256& book, bool asks, size_t max) const;
+    /**
+     * The live orders of a side of a book, best first (by limit, then id): at most `max`, those that trade at `height`
+     * (not expired, something left to sell); entries that do not are skipped before they count. At most MAX_BOOK_SCAN
+     * entries read.
+     */
+    std::vector<std::pair<uint256, BookOrder>> BookSide(const uint256& book, bool asks, size_t max, int height) const;
+    /** Takes the orders that expired at or before `height` out of their books' indexes, at most `budget`; how many. */
+    size_t SweepBooks(int height, size_t budget = MAX_BOOK_SWEEP);
     /**
      * A round of a book (doc/layers.md "Order books"): the takers `orders` (each all or nothing) and the book's best
      * resting orders (`resting`: those the round changed, by id, which it updates) at one uniform price; nullopt as

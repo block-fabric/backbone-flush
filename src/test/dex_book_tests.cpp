@@ -20,6 +20,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <string>
@@ -86,7 +87,7 @@ struct Chain {
     }
     bitassets::State Assets() const { return state.BitAssets(); }
     std::optional<Token> TokenAt(const COutPoint& out) const { return Assets().GetToken(out); }
-    std::vector<COutPoint> Issue(const std::string& name, const std::vector<uint64_t>& amounts)
+    std::vector<COutPoint> Issue(const std::string& name, const std::vector<uint64_t>& amounts, uint8_t decimals = 0)
     {
         const AssetId id{HashName(name)};
         const uint256 nonce{HashName("nonce " + name)};
@@ -98,6 +99,7 @@ struct Chain {
         reg.name = id;
         reg.nonce = nonce;
         reg.supply = supply;
+        reg.decimals = decimals;
         reg.text = name;
         std::vector<std::optional<Token>> outs{Token{Token::Kind::CONTROL, id, 1}};
         for (uint64_t a : amounts) outs.push_back(AssetToken(id, a));
@@ -141,7 +143,7 @@ BOOST_AUTO_TEST_CASE(resting_orders_cross_at_one_price)
     const CTransaction bid{chain.Place(y[0], Y, 3000, X, 2, 5)};
     const uint256 book{BookId(X, Y)};
     BOOST_CHECK(chain.Assets().GetPoolParams(book).GetCurve() == Curve::BOOK);
-    BOOST_CHECK_EQUAL(chain.Assets().BookSide(book, X < Y, 10).size(), 2U);
+    BOOST_CHECK_EQUAL(chain.Assets().BookSide(book, X < Y, 10, chain.height).size(), 2U);
     chain.EndBlock();
     // They cross: the ask at 2 and the bid (up to 2.5). One price for both, the volume most: 1000 X.
     const auto a2{*chain.Assets().GetOrder(OrderId(ask2.GetHash()))}, b{*chain.Assets().GetOrder(OrderId(bid.GetHash()))};
@@ -319,6 +321,129 @@ BOOST_AUTO_TEST_CASE(worst_round)
     BOOST_CHECK_LT(us, 200000);
     // And the block's end crosses them: the book stays solvent.
     chain.EndBlock();
+}
+
+namespace {
+/** `parts` coins of `each` of an asset, issued and split (at most 32 outputs a transaction). */
+std::vector<COutPoint> Coins(Chain& chain, const std::string& name, uint64_t each, size_t parts)
+{
+    const AssetId id{HashName(name)};
+    const size_t batches{(parts + 31) / 32};
+    const auto big{chain.Issue(name, std::vector<uint64_t>(batches, each * 32))};
+    std::vector<COutPoint> out;
+    for (const COutPoint& coin : big) {
+        const CTransaction tx{MakeTx({coin}, std::nullopt, std::vector<std::optional<Token>>(32, AssetToken(id, each)))};
+        chain.Require(tx);
+        for (uint32_t i{0}; i < 32; ++i) out.emplace_back(tx.GetHash(), i);
+    }
+    out.resize(parts);
+    return out;
+}
+} // namespace
+
+BOOST_AUTO_TEST_CASE(stuffed_with_expiring_orders)
+{
+    // A side filled with orders that expire: while they live, a worse order is refused (a better one would take the
+    // worst's place); once they expired, the block's end sweeps them out, and new orders are placed and trade.
+    Chain chain;
+    const AssetId X{HashName("XXX")}, Y{HashName("YYY")};
+    const auto x{Coins(chain, "XXX", 10, MAX_BOOK_SIDE + 4)};
+    const auto y{Coins(chain, "YYY", 100, 2)};
+    const int expiry{chain.height + 1};
+    for (size_t i{0}; i < MAX_BOOK_SIDE; ++i) chain.Place(x[i], X, 10, Y, 5, 1, expiry);
+    const uint256 book{BookId(X, Y)};
+    const bool x0{X < Y};
+    BOOST_CHECK_EQUAL(chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE + 10, chain.height).size(), MAX_BOOK_SIDE);
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SIDE]}, PlaceOrder{X, Y, 10, 6, 1, chain.height + 100}, {std::nullopt})), "bad-ba-book-full");
+    chain.EndBlock();
+    // Still live in their last block.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SIDE]}, PlaceOrder{X, Y, 10, 6, 1, chain.height + 100}, {std::nullopt})), "bad-ba-book-full");
+    chain.EndBlock();
+    // Expired and swept: out of the index, not counted; the book's open orders back to none.
+    BOOST_CHECK(chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE, chain.height).empty());
+    BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, MIN_LIQUIDITY);
+    BOOST_CHECK_EQUAL(bitassets::State{chain.store}.SweepBooks(chain.height), 0U);
+    const CTransaction ask{chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 6, 1)};
+    const CTransaction bid{chain.Place(y[0], Y, 100, X, 1, 10)};
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.Assets().GetOrder(OrderId(ask.GetHash()))->remaining, 0U);
+    BOOST_CHECK_EQUAL(chain.Assets().GetOrder(OrderId(bid.GetHash()))->got, 10U);
+}
+
+BOOST_AUTO_TEST_CASE(dust_refused)
+{
+    Chain chain;
+    const AssetId X{HashName("XXX")}, Y{HashName("YYY")};
+    const AssetId CHN{};
+    const auto x{chain.Issue("XXX", {1'000'000, 100}, /*decimals=*/2)};
+    const auto y{chain.Issue("YYY", {1})};
+    const int h{chain.height};
+    // What it buys at its limit: nothing.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[0]}, PlaceOrder{X, CHN, 1, 1, 2, h + 10}, {std::nullopt})), "bad-ba-order-dust");
+    // The CHN side under 0.01 CHN, either way: refused; at it: placed.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[0]}, PlaceOrder{X, CHN, 999'999, 1, 1, h + 10}, {std::nullopt})), "bad-ba-order-dust");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({}, PlaceOrder{CHN, X, 999'999, 1, 1, h + 10}, {std::nullopt}, 999'999)), "bad-ba-order-dust");
+    chain.Place(x[0], X, 1'000'000, CHN, 1, 1);
+    // Without CHN: a whole unit of what it sells at least (X has 2 decimals: 100 units; Y none: 1).
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[1]}, PlaceOrder{X, Y, 99, 1, 1, h + 10}, {std::nullopt})), "bad-ba-order-dust");
+    chain.Place(x[1], X, 100, Y, 1, 1);
+    chain.Place(y[0], Y, 1, X, 100, 1);
+}
+
+BOOST_AUTO_TEST_CASE(full_side_evicts_its_worst)
+{
+    Chain chain;
+    const AssetId X{HashName("XXX")}, Y{HashName("YYY")};
+    const auto x{Coins(chain, "XXX", 10, MAX_BOOK_SIDE + 3)};
+    chain.Issue("YYY", {1});
+    std::vector<CTransaction> placed;
+    // Limits 2 .. : the worst is the last, the highest limit (the highest id among the same limit).
+    for (size_t i{0}; i < MAX_BOOK_SIDE; ++i) placed.push_back(chain.Place(x[i], X, 10, Y, 2 + i / 10, 1));
+    const uint256 book{BookId(X, Y)};
+    const bool x0{X < Y};
+    const auto live{chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE, chain.height)};
+    const uint256 worst{live.back().first};
+    const uint64_t shares{chain.Assets().GetPool(book)->shares};
+    // No better than the worst: refused.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[MAX_BOOK_SIDE]}, PlaceOrder{X, Y, 10, 2 + (MAX_BOOK_SIDE - 1) / 10, 1, chain.height + 100}, {std::nullopt})), "bad-ba-book-full");
+    // Better: placed; the worst out of the book (as expired), the count the same.
+    const CTransaction better{chain.Place(x[MAX_BOOK_SIDE], X, 10, Y, 1, 1)};
+    BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares);
+    const auto out{*chain.Assets().GetOrder(worst)};
+    BOOST_CHECK_LT(out.expiry, chain.height);
+    const auto after{chain.Assets().BookSide(book, x0, MAX_BOOK_SIDE + 1, chain.height)};
+    BOOST_CHECK_EQUAL(after.size(), MAX_BOOK_SIDE);
+    BOOST_CHECK(after.front().first == OrderId(better.GetHash()));
+    BOOST_CHECK(std::none_of(after.begin(), after.end(), [&](const auto& o) { return o.first == worst; }));
+    chain.EndBlock();
+    // Its holder takes it all back.
+    const auto it{std::find_if(placed.begin(), placed.end(), [&](const CTransaction& tx) { return OrderId(tx.GetHash()) == worst; })};
+    BOOST_REQUIRE(it != placed.end());
+    const CTransaction back{MakeTx({COutPoint{it->GetHash(), 0}}, SettleOrder{worst, false, PAYEE}, {std::nullopt})};
+    chain.Require(back);
+    BOOST_CHECK(chain.TokenAt(COutPoint{back.GetHash(), 0}) == AssetToken(X, 10));
+    BOOST_CHECK_EQUAL(chain.Assets().GetPool(book)->shares, shares);
+}
+
+BOOST_AUTO_TEST_CASE(sweep_bounded)
+{
+    // A block's end sweeps MAX_BOOK_SWEEP expired orders at most, oldest first; the rest at the next.
+    Chain chain;
+    const AssetId X{HashName("XXX")}, Y{HashName("YYY")};
+    const auto x{Coins(chain, "XXX", 10, 300)};
+    chain.Issue("YYY", {1});
+    for (size_t i{0}; i < 300; ++i) chain.Place(x[i], X, 10, Y, 2, 1, chain.height);
+    chain.EndBlock();
+    // A smaller budget than the expired orders: that many, then the rest.
+    Chain other;
+    const auto z{Coins(other, "XXX", 10, 300)};
+    other.Issue("YYY", {1});
+    for (size_t i{0}; i < 300; ++i) other.Place(z[i], X, 10, Y, 2, 1, other.height);
+    bitassets::State writable{other.store};
+    BOOST_CHECK_EQUAL(writable.SweepBooks(other.height, 120), 120U);
+    BOOST_CHECK_EQUAL(writable.SweepBooks(other.height, 1000), 180U);
+    BOOST_CHECK_EQUAL(writable.SweepBooks(other.height, 1000), 0U);
+    BOOST_CHECK(chain.Assets().BookSide(BookId(X, Y), X < Y, 1000, 0).empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

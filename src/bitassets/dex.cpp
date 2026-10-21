@@ -156,8 +156,9 @@ uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const
     if (amm::Abandoned(pool)) return 0;
     if (params.GetCurve() == Curve::BOOK) {
         std::map<uint256, BookOrder> resting;
-        // As of the next block (orders that expired before it do not trade): the book's own last change, a lower bound.
-        const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, pool.height)};
+        // The book's index as it is: the end of each block sweeps the orders that expired out of it (SweepBooks), so it
+        // holds live orders only, unless more expired at once than a block's end sweeps (a quote then; min_out guards).
+        const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, 0)};
         return cleared ? cleared->outs[0] : 0;
     }
     if (params.GetCurve() == Curve::CONCENTRATED) {

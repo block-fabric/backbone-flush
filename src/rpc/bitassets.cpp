@@ -3438,7 +3438,7 @@ RPCMethod getbook()
     const auto ladder{[&](bool sells_a) {
         UniValue arr(UniValue::VARR);
         std::map<double, std::pair<double, int>, std::function<bool(double, double)>> levels_map{sells_a ? std::function<bool(double, double)>{std::less<double>{}} : std::function<bool(double, double)>{std::greater<double>{}}};
-        for (const auto& [oid, o] : state.BookSide(id, sells_a == a_is_0, bitassets::MAX_BOOK_SIDE)) {
+        for (const auto& [oid, o] : state.BookSide(id, sells_a == a_is_0, bitassets::MAX_BOOK_SIDE, chainman.ActiveChain().Height() + 1)) {
             if (o.remaining == 0) continue;
             // Its limit as a price of a whole a in b.
             const double lim{static_cast<double>(o.price_num) / o.price_den};

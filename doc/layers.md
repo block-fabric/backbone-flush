@@ -511,6 +511,46 @@ ticker {display_name, logo, info, allocation, first_buy, min_buy, max_buy}`, `bu
 `selltolaunch token amount`, `claimlaunch token`. Tests: `dex_launch_tests`, `feature_layers_launch.py` (launch,
 buys and a sale, graduation at 500 into a locked pool, a reorganisation across it, the creator's claim).
 
+## Order books
+
+Limit orders beside the pools, with the pool kinds (same height, `dex_curves_height`; markers 26 `PlaceOrder` and 27
+`SettleOrder`). `src/bitassets/state.cpp` (`PlanPools`, `ClearBook`, `CrossBooks`, `SweepBooks`).
+
+**The book.** The first order of a pair makes its book: a pool record of curve `BOOK` (fee 0) at `BookId(a, b)`; its
+reserves are what its orders hold (what is left to sell, what they got and not collected, the roundings), its shares
+`MIN_LIQUIDITY` plus its open orders. An order sells `amount` of one asset for the other at a limit `price_num /
+price_den` (units bought per unit sold, at least), until a block `expiry` (at most `MAX_ORDER_DURATION` ahead); its id
+is `OrderId(txid)`, and a token of kind `ORDER` (one unit) is its holder's: it collects and cancels. Open orders are
+indexed by book, side, limit (UQ128.128, big-endian: best first) and id (table `0x99`), and by expiry (`0x9b`).
+
+**Clearing: a call auction.** In a block's batch a book is a venue as a pool is (`swappools`, routes, quotes): a round
+of the book has one price, chosen among the limits of the best `MAX_BOOK_ROUND` (256) live orders of each side: the one
+that trades the most of asset0 (min of what sells at it and what buys at it), then the least imbalance, then the lowest.
+Takers (orders of the batch through the book) fill whole or not at all (they miss, and are refunded, if the book cannot
+take them whole); makers fill by limit, then id, partially. What the buy side gets is ⌊paid/P⌋, what each seller gets
+⌊sold·P⌋: the roundings stay in the book, which never pays more than its orders hold (`random_books_stay_solvent`).
+At a block's end, the books it placed orders in clear once more without takers: resting orders that cross trade
+(`CrossBooks`). A book's hop costs 2 units of `MAX_BLOCK_CURVE_WORK`, as does the first order of a block in a book
+(its crossing at the block's end); a worst round (256 + 256 orders at different limits) takes about 0.8 ms.
+
+**Settling.** `settleorder order (cancel)` spends the order's token: it pays what the order got and has not collected;
+cancelled, expired or filled, what is left of what it sells comes back too and the order is gone; else its token comes
+back. CHN goes by the coinbase (`MIN_CHN_PAYOUT` at least; less waits).
+
+**Security.** (1) *Expired orders never crowd out live ones*: a side is read with expired and filled entries skipped
+before the round's limit counts them (`BookSide`, at most `MAX_BOOK_SCAN` entries read), and the end of each block
+sweeps the orders that expired out of their books' indexes, oldest first, at most `MAX_BOOK_SWEEP` (5000) a block, the
+rest at the next (`SweepBooks`; the order stays, its holder's to settle). (2) *A full side is no lock*: a side holds
+at most `MAX_BOOK_SIDE` (1000) live orders, expired ones not counted; full, an order with a better limit than its
+worst takes that one's place (the worst: the highest limit, then the highest id; it leaves the book as expired, its
+holder takes all it is owed back), and one no better is refused (`bad-ba-book-full`). (3) *No dust*: an order buys
+something at its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair,
+it sells a whole unit (10^decimals) at least (`bad-ba-order-dust`). Tests: `stuffed_with_expiring_orders`,
+`dust_refused`, `full_side_evicts_its_worst`, `sweep_bounded`, `worst_round`.
+
+RPCs: `getbook a b (levels)` (the ladder of each side, best bid and ask), `getorder order`; wallet `placeorder sell
+amount buy price (blocks)`, `settleorder order (cancel)`, `listorders`.
+
 ## Logos of assets
 
 Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of exactly 256 x 256 pixels, at most
@@ -580,7 +620,8 @@ state back, finality with assets, and the peg balance with CHN in pools and auct
 product never falls; the accumulators' wrap; the oracles' signatures; routes, batches, refunds,
 the bound of orders, observations, oracles and contracts on a state) and
 `dex_curves_tests` (the pool kinds' arithmetic: properties, extremes, determinism vectors, the worst case) and
-`dex_pools_tests` (their activation, pools of every kind side by side, batches, routes across kinds, one-sided
+`dex_book_tests` and `feature_layers_book.py` (order books: crossing, takers, routes, expiry, solvency, the
+security cases), `dex_pools_tests` (their activation, pools of every kind side by side, batches, routes across kinds, one-sided
 liquidity, retiring an asset, the per-block bound), `feature_layers_dex_curves.py` (before and after their
 height: pools of each kind, a swap and a batch against the Python reference, a route across kinds, one-sided
 liquidity, the TWAP, a reorganisation across a clearing).
