@@ -12,7 +12,7 @@
   import { simpleMode } from '../lib/uimode.svelte';
   import { assetTitle, formatAmount, type Activity, type AssetTx } from './ba/model';
   import { ba, displayNameOf } from './ba/store.svelte';
-  import { assetMovesOf, categoryText, counterparty, middleAddress, ownAddresses, signedAmount } from './txinfo.svelte';
+  import { assetMovesOf, counterparty, middleAddress, operationText, ownAddresses, signedAmount } from './txinfo.svelte';
 
   const simple = $derived(simpleMode());
 
@@ -89,8 +89,8 @@
       <dl class="facts">
         {#if !simple}
         <dt>Operation</dt>
-        <!-- Already in the language shown (categoryText translates it). -->
-        <dd><span translate="no">{categoryText(e)}</span></dd>
+        <!-- Already in the language shown (operationText translates it). -->
+        <dd><span translate="no">{operationText(e, activity?.operation)}</span></dd>
         {/if}
         {#if e.asset}
           <dt>Asset</dt>

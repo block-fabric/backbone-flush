@@ -771,6 +771,27 @@ public:
         LOCK(::cs_main);
         return chainman().ActiveChainstate().SideState().BitAssets().GetPool(id);
     }
+    std::optional<std::pair<bitassets::Pool, bitassets::PoolParams>> getBitAssetsPoolOfKind(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        const auto pool{state.GetPool(id)};
+        if (!pool) return std::nullopt;
+        return std::make_pair(*pool, state.GetPoolParams(id));
+    }
+    std::optional<bitassets::LaunchRecord> getBitAssetsLaunch(const bitassets::AssetId& token) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetLaunch(token);
+    }
+    std::vector<std::tuple<uint256, bitassets::Pool, bitassets::PoolParams>> getBitAssetsPoolsOf(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        std::vector<std::tuple<uint256, bitassets::Pool, bitassets::PoolParams>> pools;
+        for (const auto& [id, pool] : state.PoolsOf(asset)) pools.emplace_back(id, pool, state.GetPoolParams(id));
+        return pools;
+    }
     std::optional<bitassets::Auction> getBitAssetsAuction(const Txid& txid) override
     {
         LOCK(::cs_main);
@@ -843,6 +864,11 @@ public:
     {
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.DexActive(chainman().ActiveChain().Height() + 1);
+    }
+    bool getBitAssetsDexCurvesActive() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.DexCurvesActive(chainman().ActiveChain().Height() + 1);
     }
     std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) override
     {

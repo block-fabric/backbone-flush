@@ -1,11 +1,13 @@
 <script lang="ts">
-  // Trade: swap one asset for another in their pool (ba/SwapPanel.svelte), the pools (ba/PoolsPanel.svelte),
-  // and putting liquidity in them (ba/LiquidityPanel.svelte). The Trade tab of the Qt window of BitAssets.
+  // Trade: swap one asset for another in their pool, or along a route (ba/SwapPanel.svelte), the pools
+  // (ba/PoolsPanel.svelte), putting liquidity in them (ba/LiquidityPanel.svelte), and creating a pool of a kind
+  // (Layers' DEX: ba/CreatePool.svelte). The Trade tab of the Qt window of BitAssets.
   import SafeText from '../../components/SafeText.svelte';
   import TabRow from '../../components/TabRow.svelte';
   import { tn } from '../../lib/i18n.svelte';
   import { nav } from '../../lib/nav.svelte';
   import '../ba/ba.css';
+  import CreatePool from '../ba/CreatePool.svelte';
   import LiquidityPanel from '../ba/LiquidityPanel.svelte';
   import PoolsPanel from '../ba/PoolsPanel.svelte';
   import SwapPanel from '../ba/SwapPanel.svelte';
@@ -16,16 +18,19 @@
 
   $effect(() => startBitAssets());
 
-  type Tab = 'swap' | 'pools' | 'liquidity';
+  type Tab = 'swap' | 'pools' | 'liquidity' | 'create';
   const TABS: { id: Tab; label: string }[] = [
     { id: 'swap', label: 'Swap' },
     { id: 'pools', label: 'Pools' },
     { id: 'liquidity', label: 'Add liquidity' },
+    { id: 'create', label: 'Create pool' },
   ];
   const tab = $derived<Tab>(TABS.some((x) => x.id === nav.tab) ? (nav.tab as Tab) : 'swap');
   const open = $derived(ba.pools.filter((p) => !p.abandoned).length);
   // Simple mode (lib/uimode.svelte.ts): the swap alone; the pools and liquidity are Advanced's, shown when asked for.
   const simple = $derived(simpleMode());
+  /** The fee tiers of the pool kinds (getdexinfo). */
+  const tiers = $derived((ba.dex?.fee_tiers ?? []).map(Number).filter((x) => Number.isFinite(x)));
   const tabs = $derived(simple ? TABS.filter((x) => x.id === 'swap' || x.id === tab) : TABS);
 </script>
 
@@ -35,7 +40,7 @@
     {#if simple}
       <span class="muted">Pay ECX, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
     {:else}
-      <span class="muted">{tn('%n pool(s) with liquidity', open)} · 0.3% fee per trade, to their providers</span>
+      <span class="muted">{tn('%n pool(s) with liquidity', open)} · {#if ba.dex?.curves_active && tiers.length}a fee of {Math.min(...tiers)}% to {Math.max(...tiers)}% per trade, by pool{:else}0.3% fee per trade{/if}, to their providers</span>
     {/if}
   </header>
   {#if ba.error}<p class="ba-problems bad" role="alert"><SafeText text={ba.error} /></p>{/if}
@@ -44,6 +49,8 @@
     <SwapPanel />
   {:else if tab === 'pools'}
     <PoolsPanel />
+  {:else if tab === 'create'}
+    <CreatePool />
   {:else}
     <LiquidityPanel />
   {/if}

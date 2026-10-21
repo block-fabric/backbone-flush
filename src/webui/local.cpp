@@ -18,6 +18,7 @@
 
 #include <addresstype.h>
 #include <bitassets/logo.h>
+#include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <chainparams.h>
 #include <common/args.h>
@@ -51,6 +52,7 @@
 #include <mutex>
 #include <optional>
 #include <sstream>
+#include <set>
 #include <string>
 
 namespace webui::local {
@@ -260,6 +262,21 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"listauctions", Bridge::Thread::WORKER},
         {"getauction", Bridge::Thread::WORKER},
         {"quotebid", Bridge::Thread::WORKER},
+        // Layers' DEX: its bounds, routes, prices over time, and the pool kinds' quotes, previews and depth: read only.
+        {"getdexinfo", Bridge::Thread::WORKER},
+        {"quoteroute", Bridge::Thread::WORKER},
+        {"getpooltwap", Bridge::Thread::WORKER},
+        {"getswapquote", Bridge::Thread::WORKER},
+        {"simulateclearing", Bridge::Thread::WORKER},
+        {"previewpool", Bridge::Thread::WORKER},
+        {"getpoolcurve", Bridge::Thread::WORKER},
+        {"quotepoolliquidity", Bridge::Thread::WORKER},
+        // Launches: read only.
+        {"getlaunch", Bridge::Thread::WORKER},
+        {"listlaunches", Bridge::Thread::WORKER},
+        {"quotelaunch", Bridge::Thread::WORKER},
+        {"getlaunchstats", Bridge::Thread::WORKER},
+        {"getlaunchlog", Bridge::Thread::WORKER},
         // Searches of the node, a page at a time (cursor; the pages never read a whole list: user feedback 2026-10-19).
         // A node without them answers "method not found", and the pages ask the list methods above instead.
         {"searchassets", Bridge::Thread::WORKER},
@@ -554,6 +571,115 @@ std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> WithNa
         return dialog;
     };
 }
+
+/**
+ * An asset as a confirmation shows it, resolved as the node resolves it: only the chain's coin ("CHN", as the node reads it)
+ * or "0x" and the 64 hex digits of an id are taken, never a name or a number, which a page could pick to read as one asset
+ * while the node trades another (the parser differential of a confirmation, security review 2026-10-21). The row says the
+ * ticker, the display name and the id, short. Throws for anything else, or an id not registered: nothing unresolved runs.
+ */
+std::string ResolvedAsset(const confirm::Call& call, const UniValue& value)
+{
+    if (!value.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "An asset is named by its id (\"0x\" and 64 hex digits) or the chain's coin");
+    const std::string& text{value.get_str()};
+    if (text == "CHN" || text == bitassets::AssetLabel(bitassets::CHN, nullptr)) return bitassets::AssetLabel(bitassets::CHN, nullptr) + " (the chain's coin)";
+    if (text.size() != 66 || text.substr(0, 2) != "0x" || !IsHex(text.substr(2))) {
+        throw HostError(BRIDGE_INVALID_REQUEST, strprintf("The page named an asset as \"%s\": a confirmation takes an asset's id (\"0x\" and 64 hex digits) only", text.substr(0, 80)));
+    }
+    UniValue args{UniValue::VARR};
+    args.push_back(text);
+    const UniValue asset{call.Read("getasset", args)};
+    if (!asset.isObject() || !asset.find_value("asset").isStr() || asset.find_value("asset").get_str() != text.substr(2)) {
+        throw HostError(BRIDGE_INVALID_REQUEST, strprintf("No asset %s is registered", text));
+    }
+    const UniValue& name{asset.find_value("name")};
+    const UniValue& display{asset.find_value("display_name")};
+    const std::string id{text.substr(2)};
+    std::string shown{name.isStr() ? name.get_str() : "(no published name)"};
+    if (display.isStr()) shown += " — " + display.get_str();
+    return strprintf("%s (#%s, 0x%s…%s)", shown, asset.find_value("seq").isStr() ? asset.find_value("seq").get_str() : "?", id.substr(0, 8), id.substr(56));
+}
+
+/** A pool as a confirmation shows it: its two assets, resolved, its kind and its id, short. Throws if there is none. */
+std::string ResolvedPool(const confirm::Call& call, const UniValue& value)
+{
+    if (!value.isStr() || value.get_str().size() != 64 || !IsHex(value.get_str())) throw HostError(BRIDGE_INVALID_REQUEST, "A pool is named by its id (64 hex digits)");
+    UniValue args{UniValue::VARR};
+    args.push_back(value.get_str());
+    const UniValue pool{call.Read("getpool", args)};
+    if (!pool.isObject() || !pool.find_value("pool").isStr() || pool.find_value("pool").get_str() != value.get_str()) throw HostError(BRIDGE_INVALID_REQUEST, "No such pool");
+    const auto side{[&](const char* key) {
+        const std::string id{pool.find_value(key).get_str()};
+        return ResolvedAsset(call, UniValue{uint256::FromHex(id) && uint256::FromHex(id)->IsNull() ? std::string{"CHN"} : "0x" + id});
+    }};
+    std::string kind{pool.find_value("curve").isStr() ? pool.find_value("curve").get_str() : "constant_product"};
+    if (pool.find_value("amp").isNum()) kind += strprintf(", A %s", pool.find_value("amp").getValStr());
+    if (pool.find_value("weight_a").isNum()) kind += strprintf(", weights %s/%s", pool.find_value("weight_a").getValStr(), pool.find_value("weight_b").getValStr());
+    if (pool.find_value("fee").isNum()) kind += strprintf(", fee %s %%", pool.find_value("fee").getValStr());
+    return strprintf("%s / %s — %s (pool %s…%s)", side("asset_a_id"), side("asset_b_id"), kind, value.get_str().substr(0, 8), value.get_str().substr(56));
+}
+
+/** Which parameters of a call name assets or pools: one each, an array of them, or an object keyed by them. */
+struct AssetParams {
+    std::vector<size_t> assets;
+    std::vector<size_t> asset_arrays;
+    std::vector<size_t> asset_keys;
+    std::vector<size_t> pools;
+    std::vector<size_t> pool_arrays;
+};
+
+/**
+ * A describer that resolves every asset and pool a call names (ResolvedAsset, ResolvedPool) and shows each as a row of its
+ * own after the command, in place of the text the page gave (the other parameters as `generic` shows them). The host runs
+ * the very parameters it described (confirm::CanonicalParams), which name assets by id only: what is shown is what trades.
+ */
+std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> WithAssets(std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> generic, AssetParams which)
+{
+    return [=](const confirm::Call& call) -> std::optional<Window::ConfirmDialog> {
+        const std::vector<std::string> names{confirm::ArgNames(call.node, call.method)};
+        const auto label{[&](size_t index) {
+            std::string name{index < names.size() ? names[index] : strprintf("parameter %u", index + 1)};
+            std::replace(name.begin(), name.end(), '_', ' ');
+            if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            return name;
+        }};
+        std::vector<dialog::Row> rows;
+        std::set<size_t> resolved;
+        const auto contains{[](const std::vector<size_t>& v, size_t i) { return std::find(v.begin(), v.end(), i) != v.end(); }};
+        for (size_t i{0}; i < std::max<size_t>(names.size(), call.params.isArray() ? call.params.size() : 0); ++i) {
+            const UniValue arg{call.Arg(i)};
+            if (contains(which.assets, i) && !arg.isNull()) {
+                rows.push_back(confirm::Text(label(i), ResolvedAsset(call, arg)));
+            } else if (contains(which.asset_arrays, i) && !arg.isNull()) {
+                if (!arg.isArray()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: a list of assets", label(i)));
+                for (size_t k{0}; k < arg.size(); ++k) rows.push_back(confirm::Text(strprintf("%s %u", label(i), k + 1), ResolvedAsset(call, arg[k])));
+            } else if (contains(which.asset_keys, i) && !arg.isNull()) {
+                if (!arg.isObject()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: amounts by asset", label(i)));
+                for (const std::string& key : arg.getKeys()) rows.push_back(confirm::Text(strprintf("%s of", label(i)), strprintf("%s %s", confirm::ValueText(arg[key]), ResolvedAsset(call, UniValue{key}))));
+            } else if (contains(which.pools, i) && !arg.isNull()) {
+                rows.push_back(confirm::Text(label(i), ResolvedPool(call, arg)));
+            } else if (contains(which.pool_arrays, i) && !arg.isNull()) {
+                if (!arg.isArray()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: a list of pools", label(i)));
+                for (size_t k{0}; k < arg.size(); ++k) rows.push_back(confirm::Text(strprintf("Pool %u", k + 1), ResolvedPool(call, arg[k])));
+            } else {
+                continue;
+            }
+            resolved.insert(i);
+        }
+        UniValue others{call.params};
+        if (others.isArray()) {
+            UniValue trimmed{UniValue::VARR};
+            for (size_t i{0}; i < others.size(); ++i) trimmed.push_back(resolved.contains(i) ? UniValue{} : others[i]);
+            others = trimmed;
+        }
+        confirm::Call shown{call.node, call.wallet, call.method, others, call.fee_for};
+        auto dialog{generic(shown)};
+        if (!dialog) return dialog;
+        auto at{std::find_if(dialog->rows.begin(), dialog->rows.end(), [](const dialog::Row& r) { return r.label == "Command"; })};
+        dialog->rows.insert(at == dialog->rows.end() ? dialog->rows.end() : at + 1, rows.begin(), rows.end());
+        return dialog;
+    };
+}
 } // namespace
 
 std::map<std::string, confirm::Method> ConfirmedRpcMethods()
@@ -570,17 +696,28 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"setassetlogo", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithLogo(confirm::Generic("Set the logo of an asset", "Set the logo", "The wallet puts this logo on the chain for an asset it controls, in place of the one before: everyone sees it where the asset is shown."), 1, true), /*fee_unknown=*/false, 2}},
         {"setassetdisplayname", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Set the display name of an asset", "Set the display name", "The wallet puts this display name on the chain for an asset it controls, in place of the one before: everyone sees it after the asset's ticker. Display names are not unique."), SIZE_MAX, 1, true), /*fee_unknown=*/false, 2}},
         {"releaseassetreservation", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release a reservation", "Release", "The wallet gives up a reservation of an asset name."), /*fee_unknown=*/true}},
-        {"sendasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Send an asset", "Send", "The wallet sends units of an asset to the address shown.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
-        {"mintasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Mint an asset", "Mint", "The wallet mints more units of an asset it controls.", {"address"}, {"amount"}), /*fee_unknown=*/true}},
-        {"burnasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Burn an asset", "Burn", "The wallet destroys units of an asset: they cannot come back.", {}, {"amount"}), /*fee_unknown=*/true}},
+        {"sendasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Send an asset", "Send", "The wallet sends units of an asset to the address shown.", {"address"}, {"amount"}), {.assets = {1}}), /*fee_unknown=*/true}},
+        {"mintasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Mint an asset", "Mint", "The wallet mints more units of an asset it controls.", {"address"}, {"amount"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"burnasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Burn an asset", "Burn", "The wallet destroys units of an asset: they cannot come back.", {}, {"amount"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"updateasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Update an asset", "Update", "The wallet signs a change of an asset it controls."), /*fee_unknown=*/true}},
         {"transferassetcontrol", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Transfer the control of an asset", "Transfer", "The wallet gives the control of an asset to the address shown: it cannot be taken back.", {"address"}, {}), /*fee_unknown=*/true}},
         {"fixassetsupply", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Fix the supply of an asset", "Fix the supply", "The wallet fixes the supply of an asset for good: no more can ever be minted."), /*fee_unknown=*/true}},
         {"releaseasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Release an asset", "Release", "The wallet gives up an asset it controls."), /*fee_unknown=*/true}},
-        {"swapasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Swap", "Swap", "The wallet trades an asset in a pool, for at least what is shown (min_out): refused, not signed for less, should the pool have moved.", {}, {"amount_in", "min_out"}), /*fee_unknown=*/true}},
-        {"addliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Add liquidity", "Add", "The wallet puts both assets into a pool, for shares of it.", {}, {"amount_a", "amount_b"}), /*fee_unknown=*/true}},
-        {"removeliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of a pool, for both assets."), /*fee_unknown=*/true}},
-        {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), /*fee_unknown=*/true}},
+        {"swapasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Swap", "Swap", "The wallet trades an asset in a pool, for at least what is shown (min_out): refused, not signed for less, should the pool have moved.", {}, {"amount_in", "min_out"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
+        {"addliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Add liquidity", "Add", "The wallet puts both assets into a pool, for shares of it.", {}, {"amount_a", "amount_b"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
+        {"removeliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of a pool, for both assets."), {.assets = {0, 1}}), /*fee_unknown=*/true}},
+        // Layers' DEX: routes and the pool kinds. Every asset and pool resolved and shown (WithAssets).
+        {"swaproute", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Trade along a route", "Trade", "The wallet trades through the pools shown, in turn, for at least what is shown (min_out): its order clears at the end of its block with the block's other orders, at one price per pool; if it would give less, what went in comes back.", {}, {"amount_in", "min_out"}), {.asset_arrays = {0}, .pool_arrays = {4}}), /*fee_unknown=*/true}},
+        {"swappools", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Trade through pools", "Trade", "The wallet trades through the pools shown, in turn, for at least what is shown (min_out): its order clears at the end of its block, at one price per pool; if it would give less, what went in comes back.", {}, {"amount_in", "min_out"}), {.assets = {0}, .pool_arrays = {2}}), /*fee_unknown=*/true}},
+        {"createpool", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create a pool", "Create the pool", "The wallet makes a pool of the kind shown and puts both amounts into it, for shares of it: they set its price.", {}, {"amount_a", "amount_b"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
+        {"addpoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Add liquidity", "Add", "The wallet puts the amounts shown into the pool, for shares of it; out of the pool's proportions, it pays the pool's fee on the part a swap would trade."), {.asset_keys = {1}, .pools = {0}}), /*fee_unknown=*/true}},
+        {"removepoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of the pool shown, for its assets (or the one shown alone, its fee paid on the part traded)."), {.assets = {2}, .pools = {0}}), /*fee_unknown=*/true}},
+        // Launches: the token resolved and shown (WithAssets); a launch names its ticker, which its reservation reveals.
+        {"launchtoken", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Launch a token", "Launch", "The wallet launches a token on a bonding curve, from its reservation of the ticker: a billion tokens, fixed; buyers pay CHN into its curve and sellers get CHN back from it, until it graduates into a locked pool. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false), /*fee_unknown=*/true}},
+        {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", "The wallet pays CHN into the token's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its CHN back.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", "The wallet sells the token back to its curve for at least the CHN shown (min_out), paid by the coinbase.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
         {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},
     };

@@ -115,6 +115,23 @@ struct SidechainParams {
     int dex_height{std::numeric_limits<int>::max()};
     bool DexActive(int height) const { return height >= dex_height; }
     /**
+     * Layers: the first block of the DEX's pool kinds (bitassets/curves.h): fee tiers, stable and weighted
+     * pools, pools by id (CreatePool, PoolDeposit, PoolWithdraw, SwapPools). With the DEX's rules only.
+     * Never unless a network sets it (main and signet: 0; the test network: kernel/testnet_activation.h;
+     * regtest: 0, or -testactivationheight=dexcurves@<height>).
+     */
+    int dex_curves_height{std::numeric_limits<int>::max()};
+    bool DexCurvesActive(int height) const { return DexActive(height) && height >= dex_curves_height; }
+    /**
+     * Launches (bitassets LaunchToken, with the pool kinds): what a launch's curve raises before it graduates into a
+     * locked pool, in the chain's coin (even: the curve's virtual coin is half of it); the fee of a trade on a curve
+     * (millionths); the creator's part of that fee (millionths of it), the rest going with the curve into the pool.
+     * A launch keeps the values it was made under. Proposals, not decided tokenomics (doc/layers.md "Launches").
+     */
+    int64_t launch_graduation{int64_t{500} * 100'000'000};
+    uint32_t launch_fee{10'000};
+    uint32_t launch_creator_share{300'000};
+    /**
      * Height of the mainchain block that activated this sidechain in its slot (activationheight in
      * the mainchain's getsidechain). What the mainchain did up to that block, deposits included, was
      * for whatever held the slot before: it is not applied. The follower also stops if the mainchain

@@ -103,6 +103,7 @@ export const LOCAL_COMMANDS = [
   { id: 'ba.issue', label: 'Register new asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
   { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
+  { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable or weighted, at a fee tier', keywords: 'pool curve stable weighted stableswap amplification weights fee tier' },
   { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset', keywords: 'dutch auction' },
   { id: 'ba.activity', label: 'Asset activity', page: 'my-assets', tab: 'activity', tip: 'The asset transactions of this wallet', keywords: 'history transactions' },
 ] as const satisfies readonly LocalCommand[];
