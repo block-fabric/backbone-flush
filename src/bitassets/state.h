@@ -229,6 +229,7 @@ struct Token {
         RESERVATION = 2, //!< the reservation made by the transaction `id`
         LP = 3,          //!< `amount` shares of the pool `id`
         RECEIPT = 4,     //!< the right to what the auction `id` (the transaction that made it) brings in
+        POSITION = 5,    //!< a position of concentrated liquidity, `id` (OpenPosition; the DEX's pool kinds only)
     };
     Kind kind{Kind::ASSET};
     uint256 id;
@@ -239,7 +240,7 @@ struct Token {
     {
         uint8_t k{static_cast<uint8_t>(obj.kind)};
         READWRITE(k, obj.id, VARINT(obj.amount));
-        SER_READ(obj, if (k > static_cast<uint8_t>(Kind::RECEIPT)) throw std::ios_base::failure("unknown token kind"));
+        SER_READ(obj, if (k > static_cast<uint8_t>(Kind::POSITION)) throw std::ios_base::failure("unknown token kind"));
         SER_READ(obj, obj.kind = static_cast<Kind>(k));
     }
     friend bool operator==(const Token&, const Token&) = default;
@@ -675,9 +676,54 @@ struct ClaimLaunch {
     friend bool operator==(const ClaimLaunch&, const ClaimLaunch&) = default;
 };
 
+/**
+ * Open a position of concentrated liquidity (doc/layers.md "Concentrated liquidity") in a pool of that curve:
+ * `liquidity` between the prices of two ticks (multiples of the pool's tick spacing), for at most `max0` and `max1`
+ * of its assets (what the liquidity needs at the pool's price, rounded up, goes in; the rest back). Results: the
+ * position (a token of its own, POSITION, id PositionId(txid): transferable), then what comes back of asset0 and
+ * of asset1 (asset coins; CHN by the coinbase to `chn_to`), those of nothing left out.
+ */
+struct OpenPosition {
+    static constexpr uint8_t KIND{24};
+    uint256 pool;
+    int32_t tick_lower{0};
+    int32_t tick_upper{0};
+    uint64_t liquidity_hi{0};
+    uint64_t liquidity_lo{0};
+    uint64_t max0{0};
+    uint64_t max1{0};
+    CScript chn_to;
+    SERIALIZE_METHODS(OpenPosition, obj) { READWRITE(obj.pool, obj.tick_lower, obj.tick_upper, obj.liquidity_hi, obj.liquidity_lo, VARINT(obj.max0), VARINT(obj.max1), obj.chn_to); }
+    friend bool operator==(const OpenPosition&, const OpenPosition&) = default;
+    unsigned __int128 Liquidity() const { return (static_cast<unsigned __int128>(liquidity_hi) << 64) | liquidity_lo; }
+};
+
+/**
+ * Change a position by whoever spends its token: add liquidity (`add`, for at most `limit0`, `limit1`, the rest back),
+ * or take some out (for at least `limit0`, `limit1`), and collect the fees it earned (`collect`). `close`: all its
+ * liquidity out and everything owed collected, the position (its token) gone. Results: what comes back or out, of
+ * asset0 then asset1, those of nothing left out; CHN by the coinbase to `chn_to`. The token, unless closed, goes on
+ * one of the outputs the marker lists.
+ */
+struct ChangePosition {
+    static constexpr uint8_t KIND{25};
+    uint256 position;
+    bool add{false};
+    uint64_t liquidity_hi{0};
+    uint64_t liquidity_lo{0};
+    uint64_t limit0{0};
+    uint64_t limit1{0};
+    bool collect{false};
+    bool close{false};
+    CScript chn_to;
+    SERIALIZE_METHODS(ChangePosition, obj) { READWRITE(obj.position, obj.add, obj.liquidity_hi, obj.liquidity_lo, VARINT(obj.limit0), VARINT(obj.limit1), obj.collect, obj.close, obj.chn_to); }
+    friend bool operator==(const ChangePosition&, const ChangePosition&) = default;
+    unsigned __int128 Liquidity() const { return (static_cast<unsigned __int128>(liquidity_hi) << 64) | liquidity_lo; }
+};
+
 using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
                                Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract, SetLogo, SetDisplayName,
-                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch>;
+                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition>;
 
 /** The registration an operation makes: a Register's, or a LaunchToken's (nullptr: none). */
 const Register* RegisterOf(const Operation& op);
@@ -955,6 +1001,73 @@ struct LaunchLogEntry {
     friend bool operator==(const LaunchLogEntry&, const LaunchLogEntry&) = default;
 };
 
+/** A concentrated pool's price, tick, liquidity in range and fees per unit of liquidity (Q128), ever (Uniswap v3's slot0, liquidity, feeGrowthGlobal). */
+struct ClState {
+    uint256 sqrt_price;
+    int32_t tick{0};
+    uint64_t liquidity_hi{0};
+    uint64_t liquidity_lo{0};
+    uint256 fee_growth0;
+    uint256 fee_growth1;
+    SERIALIZE_METHODS(ClState, obj) { READWRITE(obj.sqrt_price, obj.tick, obj.liquidity_hi, obj.liquidity_lo, obj.fee_growth0, obj.fee_growth1); }
+    friend bool operator==(const ClState&, const ClState&) = default;
+    unsigned __int128 Liquidity() const { return (static_cast<unsigned __int128>(liquidity_hi) << 64) | liquidity_lo; }
+    void SetLiquidity(unsigned __int128 l)
+    {
+        liquidity_hi = static_cast<uint64_t>(l >> 64);
+        liquidity_lo = static_cast<uint64_t>(l);
+    }
+};
+
+/** A tick that a position starts or ends at (Uniswap v3's Tick.Info): its liquidity in all, what crossing it changes, the fees on its other side. */
+struct ClTick {
+    uint64_t gross_hi{0};
+    uint64_t gross_lo{0};
+    //! The liquidity that comes in crossing it upward (out downward): |net|, and its sign.
+    uint64_t net_hi{0};
+    uint64_t net_lo{0};
+    bool net_negative{false};
+    uint256 outside0;
+    uint256 outside1;
+    SERIALIZE_METHODS(ClTick, obj) { READWRITE(obj.gross_hi, obj.gross_lo, obj.net_hi, obj.net_lo, obj.net_negative, obj.outside0, obj.outside1); }
+    friend bool operator==(const ClTick&, const ClTick&) = default;
+    unsigned __int128 Gross() const { return (static_cast<unsigned __int128>(gross_hi) << 64) | gross_lo; }
+    unsigned __int128 NetAbs() const { return (static_cast<unsigned __int128>(net_hi) << 64) | net_lo; }
+};
+
+/** A position of concentrated liquidity (OpenPosition), by its id. */
+struct ClPosition {
+    uint256 pool;
+    int32_t tick_lower{0};
+    int32_t tick_upper{0};
+    uint64_t liquidity_hi{0};
+    uint64_t liquidity_lo{0};
+    uint256 inside0_last;
+    uint256 inside1_last;
+    uint64_t owed0{0};
+    uint64_t owed1{0};
+    Txid txid;
+    int32_t height{0};
+    SERIALIZE_METHODS(ClPosition, obj) { READWRITE(obj.pool, obj.tick_lower, obj.tick_upper, obj.liquidity_hi, obj.liquidity_lo, obj.inside0_last, obj.inside1_last, obj.owed0, obj.owed1, obj.txid, obj.height); }
+    friend bool operator==(const ClPosition&, const ClPosition&) = default;
+    unsigned __int128 Liquidity() const { return (static_cast<unsigned __int128>(liquidity_hi) << 64) | liquidity_lo; }
+};
+
+/** The id of the position OpenPosition `txid` makes. */
+uint256 PositionId(const Txid& txid);
+
+/**
+ * The volatility of a pool with a dynamic fee (POOL_FLAG_DYNAMIC_FEE): the last block's clearing price (UQ64.64) and a
+ * moving average of the change of the price from one block that traded to the next, in millionths (dex::PoolFee).
+ */
+struct FeeState {
+    uint256 last_price;
+    int32_t last_height{0};
+    uint64_t volatility{0};
+    SERIALIZE_METHODS(FeeState, obj) { READWRITE(obj.last_price, obj.last_height, obj.volatility); }
+    friend bool operator==(const FeeState&, const FeeState&) = default;
+};
+
 /** A pool of two assets, `asset0` < `asset1`. */
 struct Pool {
     AssetId asset0;
@@ -980,8 +1093,13 @@ enum class Curve : uint8_t {
     STABLE = 1,           //!< Curve's StableSwap invariant, amplification A
     WEIGHTED = 2,         //!< x^w0 · y^w1 = k (Balancer), two weights
     LAUNCH = 3,           //!< a launch's bonding curve (LaunchToken): constant product of virtual reserves; made by a launch only
+    CONCENTRATED = 4,     //!< concentrated liquidity (Uniswap v3): positions over price ranges, ticks
 };
-inline constexpr uint8_t MAX_CURVE{static_cast<uint8_t>(Curve::WEIGHTED)};
+/** The curves CreatePool makes (LAUNCH is made by launches only). */
+inline constexpr bool CreatableCurve(uint8_t curve) { return curve <= static_cast<uint8_t>(Curve::WEIGHTED) || curve == static_cast<uint8_t>(Curve::CONCENTRATED); }
+/** PoolParams::flags: the fee rises with the pool's recent volatility (dex::PoolFee), within bounds. */
+inline constexpr uint8_t POOL_FLAG_DYNAMIC_FEE{1};
+inline constexpr uint8_t MAX_CURVE{static_cast<uint8_t>(Curve::CONCENTRATED)};
 /** Fees are in millionths of what goes in. */
 inline constexpr uint32_t FEE_DENOMINATOR{1'000'000};
 /** The fee tiers a pool is made with: 0.01 %, 0.05 %, 0.30 %, 1.00 %. */
@@ -1163,6 +1281,10 @@ struct Result {
 };
 
 struct Order;
+namespace dex {
+struct HopIn;
+struct Clearing;
+} // namespace dex
 struct PoolSnapshot;
 struct PoolAccumulator;
 struct Observation;
@@ -1295,6 +1417,29 @@ public:
     std::vector<std::pair<AssetId, LaunchLogEntry>> GetLaunchLog(int32_t height) const;
     /** Whether an asset is on a launch curve that has not graduated (its pools are the curve's alone until then). */
     bool Launching(const AssetId& asset) const;
+    // Concentrated liquidity (bitassets/clmath.h).
+    std::optional<ClState> GetClState(const uint256& pool) const;
+    std::optional<ClTick> GetClTick(const uint256& pool, int32_t tick) const;
+    std::optional<ClPosition> GetPosition(const uint256& id) const;
+    /** The ticks of a pool with liquidity starting or ending there, in order, `max` at most. */
+    std::vector<std::pair<int32_t, ClTick>> ClTicksOf(const uint256& pool, size_t max) const;
+    /** The next tick with liquidity above `tick` (up) or at or below it (down), as Uniswap's walk takes them. */
+    std::optional<int32_t> NextClTick(const uint256& pool, int32_t tick, bool up) const;
+    /** The fees a position earned and not yet counted in its record (Uniswap's fee growth inside), and its amounts at the pool's price (rounded down). */
+    std::pair<uint64_t, uint64_t> PositionFees(const ClPosition& position) const;
+    // Dynamic fees.
+    std::optional<FeeState> GetFeeState(const uint256& pool) const;
+    /** The fee a pool charges in the block at `height` (its kind's; with POOL_FLAG_DYNAMIC_FEE, rising with its volatility). */
+    uint32_t FeeOf(const uint256& pool, const PoolParams& params, int height) const;
+    /** The same for a quote (the next block after the pool's last that traded). */
+    uint32_t QuoteFee(const uint256& pool, const PoolParams& params) const;
+    /**
+     * A round of a concentrated pool (doc/layers.md "Concentrated liquidity"), on a copy of its state and of the ticks it
+     * crosses (`ticks`: those the round changed, by tick), which it updates: the batch's uniform price with the net trade
+     * walked through the pool's ticks (at most MAX_CL_CROSSINGS of them), the round's fees and roundings credited to the
+     * liquidity in range. nullopt as ClearPool's.
+     */
+    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
@@ -1307,6 +1452,12 @@ private:
     /** The DEX's part of MakePlan (dex.cpp). */
     bool PlanDex(const CTransaction& tx, const Operation& op, int height, Plan& plan, uint64_t& chn_taken, const std::function<void(const AssetId&, uint64_t)>& take,
                  std::string& reject_reason) const;
+    /** Concentrated liquidity's part of MakePlan: OpenPosition, ChangePosition (CreatePool of that curve is PlanPools'). */
+    bool PlanPosition(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
+                      const std::function<void(Token::Kind, const uint256&, uint64_t)>& credit, const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit,
+                      std::string& reject_reason) const;
+    /** Writes a pool's concentrated state, noting the price it had before its block (the price accumulators). */
+    void SetClState(const uint256& pool, const ClState& state);
     /** Launches' part of MakePlan, after the registration's: the curve, its pool, the first buy. */
     bool PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take, std::string& reject_reason) const;
     /** A launch graduates (FinishBlock): its curve's coin and the tokens left into the token's pool with the coin, locked. */

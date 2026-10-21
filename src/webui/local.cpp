@@ -275,6 +275,11 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"quotelaunch", Bridge::Thread::WORKER},
         {"getlaunchstats", Bridge::Thread::WORKER},
         {"getlaunchlog", Bridge::Thread::WORKER},
+        // Concentrated liquidity: positions, ticks, previews: read only.
+        {"getposition", Bridge::Thread::WORKER},
+        {"getpoolticks", Bridge::Thread::WORKER},
+        {"previewposition", Bridge::Thread::WORKER},
+        {"listpositions", Bridge::Thread::WORKER},
         // Searches of the node, a page at a time (cursor; the pages never read a whole list: user feedback 2026-10-19).
         // A node without them answers "method not found", and the pages ask the list methods above instead.
         {"searchassets", Bridge::Thread::WORKER},
@@ -707,6 +712,9 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", "The wallet pays CHN into the token's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its CHN back.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", "The wallet sells the token back to its curve for at least the CHN shown (min_out), paid by the coinbase.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},
+        // Concentrated liquidity: the pool shown resolved (its assets and kind); a position by its id.
+        {"openposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Open a position", "Open", "The wallet puts liquidity into the pool shown between the two prices shown, for at most the amounts shown (the rest back): a position, a token of its own, which earns the pool's fees while the price is in its range.", {}, {}), {.asset_keys = {3}, .pools = {0}}), /*fee_unknown=*/true}},
+        {"changeposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Change a position", "Change", "The wallet changes its position shown: adds liquidity, takes some out, collects its fees, or closes it (all out, all collected)."), /*fee_unknown=*/true}},
         {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
         {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},

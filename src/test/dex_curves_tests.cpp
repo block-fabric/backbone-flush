@@ -152,8 +152,12 @@ BOOST_AUTO_TEST_CASE(kinds_and_ids)
     BOOST_CHECK(!WhyNotPoolKind(1, 500, 10000, 0, 0));
     BOOST_CHECK(WhyNotPoolKind(2, 3000, 0, 50, 0));
     BOOST_CHECK(!WhyNotPoolKind(2, 3000, 0, 98, 0));
-    BOOST_CHECK(WhyNotPoolKind(2, 3000, 0, 80, 1));
+    BOOST_CHECK(!WhyNotPoolKind(2, 3000, 0, 80, POOL_FLAG_DYNAMIC_FEE));
+    BOOST_CHECK(WhyNotPoolKind(2, 3000, 0, 80, 2));
+    BOOST_CHECK(!WhyNotPoolKind(4, 500, 0, 0, 0));
+    BOOST_CHECK(WhyNotPoolKind(4, 500, 5, 0, 0));
     BOOST_CHECK(WhyNotPoolKind(3, 3000, 0, 0, 0));
+    BOOST_CHECK(WhyNotPoolKind(5, 3000, 0, 0, 0));
     // The weight named for asset_a becomes asset0's.
     CreatePool create;
     create.asset_a = b;

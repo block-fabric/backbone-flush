@@ -11,6 +11,7 @@
 #include <uint256.h>
 
 #include <compare>
+#include <functional>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -63,6 +64,7 @@ public:
     /** Floor of a / b; b must not be zero. */
     friend BigUint operator/(const BigUint& a, const BigUint& b);
     BigUint operator<<(unsigned shift) const;
+    BigUint operator>>(unsigned shift) const;
     BigUint Pow(uint32_t exponent) const;
     friend std::strong_ordering operator<=>(const BigUint& a, const BigUint& b);
     friend bool operator==(const BigUint& a, const BigUint& b) = default;
@@ -78,6 +80,9 @@ struct Rat {
     BigUint num;
     BigUint den{1};
 };
+
+/** The largest v in [lo, hi] for which ok(v), ok(lo) holding and ok true then false: the bisection every search of the curves is. */
+uint64_t SearchMaxU64(uint64_t lo, uint64_t hi, const std::function<bool(uint64_t)>& ok);
 
 /** The weights of a weighted pool in lowest terms (wa for asset0, wb for asset1); 1:1 for a constant-product pool. */
 std::pair<uint32_t, uint32_t> ReducedWeights(const PoolParams& params);

@@ -371,6 +371,62 @@ amp, weight_a}`, `addpoolliquidity pool {asset: amount}`, `removepoolliquidity p
 **Store keys:** `0x8a` the kind of each pool made by CreatePool (none for the default kind); during a block only
 `0x8b` the work of the pool kinds (`MAX_BLOCK_CURVE_WORK`).
 
+## Concentrated liquidity
+
+A pool kind of its own (`Curve::CONCENTRATED`, with the pool kinds: same height; markers 24 and 25;
+`src/bitassets/clmath.{h,cpp}`, `State::ClearCl`, `State::PlanPosition`), after Uniswap v3.
+
+**Arithmetic.** Prices are square roots in Q64.96 (√(asset1 per asset0, in units)·2^96); ticks are powers of
+1.0001 (the price at tick t is 1.0001^t, −887272 ≤ t ≤ 887272); liquidity L is 128 bits. `SqrtRatioAtTick` is
+Uniswap v3's `TickMath.getSqrtRatioAtTick` bit for bit (its twenty constants, each 2^128·1.0001^(−2^(k−1)) to within
+one unit, are checked against an exact computation by `contrib/dex-curves/reference.py`); `TickAtSqrtRatio` is the
+largest tick whose ratio is at most the price. The amounts between two prices for a liquidity, the price after an
+amount, and a step of a swap are `SqrtPriceMath` and `SwapMath`'s, rounded as they round (in up, out down), with
+every product exact. 80 vectors (`src/test/data/dex_cl.json`) are checked by the reference too.
+
+**Pools and positions.** `createpool a x b y {"curve":"concentrated","fee":…}` makes a pool at the price y/x,
+nothing in; its tick spacing follows its fee tier (0.01 %: 1, 0.05 %: 10, 0.30 %: 60, 1.00 %: 200). Liquidity comes
+by *positions*: `OpenPosition` (24) puts a liquidity L between two ticks (multiples of the spacing), paying what L
+needs at the pool's price (rounded up; at most the amounts the transaction offers, the rest back); a range above the
+price holds asset0 alone, below it asset1 alone. A position is a token of its own (`Token::Kind::POSITION`, id
+`PositionId(txid)`): it can be sent, and whoever spends it changes it. `ChangePosition` (25) adds liquidity, takes
+some out (its amounts at the price, rounded down, paid at once), collects its fees, or closes it (all out, all
+collected, the token gone). The pool keeps Uniswap v3's state: the price, its tick, the liquidity in range, the
+fees per unit of liquidity ever (`ClState`, table `0x93`); each tick in use, its liquidity in all, what crossing it
+changes, the fees on its other side (`ClTick`, `0x94` in order and `0x97` reversed, so the next one either way is
+one ordered read); each position (`ClPosition`, `0x95`). The fees a position earned are its liquidity times the
+growth of the fees inside its range since it last counted them (Uniswap's fee growth inside).
+
+**Batch clearing.** A concentrated pool's round has one uniform price, as every pool's: with A', B' the inputs
+less the fee, the pool's net trade is walked through its ticks (each tick crossed brings its liquidity in or out
+and turns its fees over, as Uniswap's swap does; at most `MAX_CL_CROSSINGS`, 64, a round), and the net out is the
+largest dy that the walk gives for the net in it gets, ⌊A'·dy/(dy + B')⌋ (bisection over that predicate, the
+same procedure for every implementation: a walk's output is monotone in its input, up to one unit of rounding at a
+tick, where the procedure decides). Every order then gets the price P = (dy + B')/A' (or the reverse), rounded down.
+The walk is computed once a round, a stretch per tick, so each step of the search is one swap step. What the pool
+kept beyond the walk (the fees, the roundings, the matched orders' differences) is credited to the liquidity in
+range at the price after the round (or, if none, at the price before): its positions earn the round's fees; a
+position out of range earns nothing. The reserves are what went in less what came out; every position can always be
+closed (property-tested: positions in and out of range, twenty blocks of trades and batches crossing ticks, then
+all closed; the pool never owes more than it holds). A hop through a concentrated pool counts two units of the
+block's work (`MAX_BLOCK_CURVE_WORK`). Routes and quotes go through them as through every pool; their prices feed
+the TWAP (the square root price, squared, as it was before each block that changed the pool).
+
+**RPCs.** `getpool` (its `concentrated` state), `getpoolticks pool` (the liquidity by price: a distribution chart),
+`previewposition pool lower upper {amounts}`, `getposition id`; wallet `openposition pool lower upper {amounts}`,
+`changeposition id {add|remove|collect|close}`, `listpositions` (in range or not, amounts, fees owed). Prices are of
+the pool's asset0 (the lower id; CHN in a pool with CHN) in its asset1, whole units.
+
+## Dynamic fees
+
+A pool of any kind may be made with `POOL_FLAG_DYNAMIC_FEE` (`createpool … {"dynamic_fee": true}`; another pool
+than the one without it, its id names the flag). Its fee in a block is its tier's plus half its *volatility*, at
+most `DYNAMIC_MAX_EXTRA` (2 %) more: the volatility is a moving average (window `DYNAMIC_WINDOW`, 8) of the change of
+the pool's price, in millionths, from one block that changed it to the next (`FeeState`, table `0x8f`), halving
+every `DYNAMIC_HALF_LIFE` (40) blocks without a change. The fee of a block is fixed by the state before it (the
+clearing reads it once per pool); quotes take it as of the next block. A pool whose price moves 1 % a block charges
+about 0.5 % more; quiet, it returns to its tier.
+
 ## Launches
 
 Bonding-curve token launches, with the pool kinds (same height, `dex_curves_height`; markers 22 and 23).

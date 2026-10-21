@@ -779,6 +779,35 @@ public:
         if (!pool) return std::nullopt;
         return std::make_pair(*pool, state.GetPoolParams(id));
     }
+    std::optional<std::vector<uint64_t>> quoteBitAssetsPools(const bitassets::AssetId& asset_in, const std::vector<uint256>& pools, uint64_t amount) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        return bitassets::dex::QuoteRoutePools(state, asset_in, pools, amount);
+    }
+    uint32_t getBitAssetsPoolFee(const uint256& pool) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        return state.QuoteFee(pool, state.GetPoolParams(pool));
+    }
+    std::optional<bitassets::ClState> getBitAssetsClState(const uint256& pool) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetClState(pool);
+    }
+    std::optional<bitassets::ClPosition> getBitAssetsPosition(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().GetPosition(id);
+    }
+    std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        const auto position{state.GetPosition(id)};
+        return position ? state.PositionFees(*position) : std::pair<uint64_t, uint64_t>{0, 0};
+    }
     std::optional<bitassets::LaunchRecord> getBitAssetsLaunch(const bitassets::AssetId& token) override
     {
         LOCK(::cs_main);

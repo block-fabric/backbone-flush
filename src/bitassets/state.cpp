@@ -6,6 +6,7 @@
 
 #include <bitassets/state.h>
 
+#include <bitassets/clmath.h>
 #include <bitassets/curves.h>
 #include <bitassets/dex.h>
 #include <bitassets/displayname_table.h>
@@ -233,6 +234,8 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
         case SwapPools::KIND: ReadOperation<SwapPools>(s, marker.operation); break;
         case LaunchToken::KIND: ReadOperation<LaunchToken>(s, marker.operation); break;
         case ClaimLaunch::KIND: ReadOperation<ClaimLaunch>(s, marker.operation); break;
+        case OpenPosition::KIND: ReadOperation<OpenPosition>(s, marker.operation); break;
+        case ChangePosition::KIND: ReadOperation<ChangePosition>(s, marker.operation); break;
         case SetLogo::KIND: ReadOperation<SetLogo>(s, marker.operation); break;
         case SetDisplayName::KIND: ReadOperation<SetDisplayName>(s, marker.operation); break;
         case REGISTER_WITH_DISPLAY_NAME_KIND: {
@@ -300,6 +303,13 @@ uint256 PoolId(const AssetId& a, const AssetId& b)
 {
     HashWriter writer{};
     writer << std::string{"BitAssets pool"} << std::min(a, b) << std::max(a, b);
+    return writer.GetSHA256();
+}
+
+uint256 PositionId(const Txid& txid)
+{
+    HashWriter writer{};
+    writer << std::string{"Layers position"} << txid;
     return writer.GetSHA256();
 }
 
@@ -616,6 +626,8 @@ const CScript* ChnTo(const Operation& op)
     if (const auto* withdraw{std::get_if<PoolWithdraw>(&op)}) return &withdraw->chn_to;
     if (const auto* swap{std::get_if<SwapPools>(&op)}) return &swap->chn_to;
     if (const auto* launch{std::get_if<LaunchToken>(&op)}) return &launch->chn_to;
+    if (const auto* open{std::get_if<OpenPosition>(&op)}) return &open->chn_to;
+    if (const auto* change{std::get_if<ChangePosition>(&op)}) return &change->chn_to;
     return nullptr;
 }
 } // namespace
@@ -623,7 +635,8 @@ const CScript* ChnTo(const Operation& op)
 bool IsCurveOperation(const Operation& op)
 {
     return std::holds_alternative<CreatePool>(op) || std::holds_alternative<PoolDeposit>(op) || std::holds_alternative<PoolWithdraw>(op) ||
-           std::holds_alternative<SwapPools>(op) || std::holds_alternative<LaunchToken>(op) || std::holds_alternative<ClaimLaunch>(op);
+           std::holds_alternative<SwapPools>(op) || std::holds_alternative<LaunchToken>(op) || std::holds_alternative<ClaimLaunch>(op) ||
+           std::holds_alternative<OpenPosition>(op) || std::holds_alternative<ChangePosition>(op);
 }
 
 const Register* RegisterOf(const Operation& op)
@@ -643,7 +656,11 @@ bool CheckCurvesActivation(const CTransaction& tx, bool active, std::string& rej
 {
     if (active) return true;
     const auto marker{GetMarker(tx)};
-    if (marker && marker->operation && IsCurveOperation(*marker->operation)) {
+    if (!marker) return true;
+    // No marker of their kinds, nor one that names a position (a token kind they brought), was valid before.
+    bool position{false};
+    for (const MarkerOutput& out : marker->outputs) position |= out.token && out.token->kind == Token::Kind::POSITION;
+    if ((marker->operation && IsCurveOperation(*marker->operation)) || position) {
         reject_reason = "bad-ba-marker";
         return false;
     }
@@ -717,7 +734,7 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
     } else if (const auto* burn{std::get_if<Burn>(&op)}) {
         if (burn->tokens.empty() || burn->tokens.size() > MAX_BURNS) return invalid("bad-ba-burn");
         for (const Token& token : burn->tokens) {
-            if (token.kind == Token::Kind::LP || token.kind == Token::Kind::RECEIPT || token.id.IsNull()) return invalid("bad-ba-burn");
+            if (token.kind == Token::Kind::LP || token.kind == Token::Kind::RECEIPT || token.kind == Token::Kind::POSITION || token.id.IsNull()) return invalid("bad-ba-burn");
             if (token.amount == 0 || token.amount > MAX_AMOUNT || (!Token::Divisible(token.kind) && token.amount != 1)) return invalid("bad-ba-burn");
         }
     } else if (const auto* swap{std::get_if<Swap>(&op)}) {
@@ -748,6 +765,12 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         if (!positive(withdraw->shares) || withdraw->only > 2 || withdraw->min0 > MAX_AMOUNT || withdraw->min1 > MAX_AMOUNT) return invalid("bad-ba-liquidity");
     } else if (const auto* claim{std::get_if<ClaimLaunch>(&op)}) {
         if (claim->token.IsNull()) return invalid("bad-ba-launch");
+    } else if (const auto* open{std::get_if<OpenPosition>(&op)}) {
+        if (open->Liquidity() == 0 || open->tick_lower >= open->tick_upper || open->tick_lower < cl::MIN_TICK || open->tick_upper > cl::MAX_TICK) return invalid("bad-ba-position");
+        if (open->max0 > MAX_AMOUNT || open->max1 > MAX_AMOUNT) return invalid("bad-ba-position");
+    } else if (const auto* change{std::get_if<ChangePosition>(&op)}) {
+        if (change->limit0 > MAX_AMOUNT || change->limit1 > MAX_AMOUNT) return invalid("bad-ba-position");
+        if ((change->add && change->close) || (change->Liquidity() == 0 && !change->collect && !change->close)) return invalid("bad-ba-position");
     } else if (const auto* swap_pools{std::get_if<SwapPools>(&op)}) {
         if (swap_pools->pools.empty() || swap_pools->pools.size() + 1 > MAX_ROUTE_ASSETS || !positive(swap_pools->amount_in) || swap_pools->min_out > MAX_AMOUNT) {
             return invalid("bad-ba-route");
@@ -866,6 +889,10 @@ struct State::Plan {
     //! A launch made, or a claim's change of one.
     std::optional<std::pair<AssetId, LaunchRecord>> launch;
     bool launch_created{false};
+    //! Concentrated liquidity: a pool's state, ticks written (nullopt: cleared), a position written (nullopt: closed).
+    std::optional<std::pair<uint256, ClState>> cl_state;
+    std::vector<std::pair<int32_t, std::optional<ClTick>>> cl_ticks;
+    std::optional<std::pair<uint256, std::optional<ClPosition>>> position;
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -944,6 +971,62 @@ constexpr uint8_t LAUNCH_LOG{0x8d};
 //! Launches by the height that made them, then token.
 constexpr uint8_t LAUNCHES_BY_HEIGHT{0x8e};
 const sidechain::TableId LAUNCH_INDEXES_TAKEN[]{sidechain::TableId{LAUNCH_LOG}, sidechain::TableId{LAUNCHES_BY_HEIGHT}};
+// Concentrated liquidity (clmath.h).
+const sidechain::Table<uint256, ClState> CL_STATES{0x93};
+//! Ticks with liquidity: by pool, then the tick in order (CL_TICKS) and in reverse order (CL_TICKS_DOWN, empty values).
+constexpr uint8_t CL_TICKS{0x94};
+constexpr uint8_t CL_TICKS_DOWN{0x97};
+const sidechain::Table<uint256, ClPosition> CL_POSITIONS{0x95};
+//! During a block only: the square root price a concentrated pool had before the block (the price accumulators).
+const sidechain::Table<uint256, uint256> CL_SNAPSHOTS{0x96};
+const sidechain::TableId CL_INDEXES_TAKEN[]{sidechain::TableId{CL_TICKS}, sidechain::TableId{CL_TICKS_DOWN}};
+//! Dynamic fees: the volatility of each pool that has one (FeeState).
+const sidechain::Table<uint256, FeeState> FEE_STATES{0x8f};
+
+/** A tick's place in key order: tick + 2^31, big-endian (down: the order reversed). */
+sidechain::StoreBytes TickKey(uint8_t table, const uint256& pool, int32_t tick)
+{
+    sidechain::StoreBytes key{table};
+    sidechain::KeyCodec<uint256>::Encode(key, pool);
+    const uint32_t ordered{table == CL_TICKS_DOWN ? 0x7fffffffU - static_cast<uint32_t>(tick) : static_cast<uint32_t>(tick) ^ 0x80000000U};
+    for (int shift{24}; shift >= 0; shift -= 8) key.push_back(static_cast<uint8_t>(ordered >> shift));
+    return key;
+}
+int32_t TickOfKey(uint8_t table, std::span<const unsigned char> key)
+{
+    uint32_t ordered{0};
+    for (size_t i{key.size() - 4}; i < key.size(); ++i) ordered = (ordered << 8) | key[i];
+    return table == CL_TICKS_DOWN ? static_cast<int32_t>(0x7fffffffU - ordered) : static_cast<int32_t>(ordered ^ 0x80000000U);
+}
+
+/** Dynamic fees: how the volatility of the blocks since the last that traded decays, and what it adds to the fee. */
+constexpr uint64_t DYNAMIC_WINDOW{8};
+constexpr int32_t DYNAMIC_HALF_LIFE{40};
+constexpr uint32_t DYNAMIC_MAX_EXTRA{20'000};
+uint64_t Decayed(const FeeState& fee, int height)
+{
+    const int32_t gap{height - fee.last_height};
+    if (gap <= 1) return fee.volatility;
+    const int halvings{std::min<int32_t>((gap - 1) / DYNAMIC_HALF_LIFE, 63)};
+    return fee.volatility >> halvings;
+}
+/** Uniswap v3's fee growth inside a range of ticks (modulo 2^256). */
+std::pair<arith_uint256, arith_uint256> FeeGrowthInside(const ClState& cl, int32_t lower, int32_t upper, const ClTick& lo, const ClTick& hi)
+{
+    const arith_uint256 g0{UintToArith256(cl.fee_growth0)}, g1{UintToArith256(cl.fee_growth1)};
+    const arith_uint256 lo0{UintToArith256(lo.outside0)}, lo1{UintToArith256(lo.outside1)}, hi0{UintToArith256(hi.outside0)}, hi1{UintToArith256(hi.outside1)};
+    const arith_uint256 below0{cl.tick >= lower ? lo0 : arith_uint256{g0 - lo0}}, below1{cl.tick >= lower ? lo1 : arith_uint256{g1 - lo1}};
+    const arith_uint256 above0{cl.tick < upper ? hi0 : arith_uint256{g0 - hi0}}, above1{cl.tick < upper ? hi1 : arith_uint256{g1 - hi1}};
+    return {g0 - below0 - above0, g1 - below1 - above1};
+}
+/** What a position's liquidity earned between two readings of the fee growth inside: ⌊Δ·L / 2^128⌋. */
+uint64_t Earned(const arith_uint256& now, const uint256& last, unsigned __int128 liquidity)
+{
+    const curves::BigUint e{(curves::BigUint::FromArith(now - UintToArith256(last)) * curves::BigUint::U128(liquidity)) >> 128};
+    const auto v{e.ToU128()};
+    return v && *v <= MAX_AMOUNT ? static_cast<uint64_t>(*v) : MAX_AMOUNT;
+}
+
 
 sidechain::StoreBytes HeightKey(uint8_t table, int32_t height, const uint256& token)
 {
@@ -1326,7 +1409,9 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
 
     if (op && m_dex && (std::holds_alternative<Swap>(*op) || IsDexOperation(*op)) && !std::holds_alternative<LaunchToken>(*op)) {
         // The DEX: swaps and routes are orders of the block's batch; oracles and their contracts; pools of every kind.
-        if (IsCurveOperation(*op) && !std::holds_alternative<SwapPools>(*op)) {
+        if (std::holds_alternative<OpenPosition>(*op) || std::holds_alternative<ChangePosition>(*op)) {
+            if (!PlanPosition(tx, *op, height, plan, take, credit, debit, reject_reason)) return std::nullopt;
+        } else if (IsCurveOperation(*op) && !std::holds_alternative<SwapPools>(*op)) {
             if (!PlanPools(tx, *op, height, plan, take, debit, reject_reason)) return std::nullopt;
         } else if (!PlanDex(tx, *op, height, plan, chn_taken, take, reject_reason)) {
             return std::nullopt;
@@ -1774,7 +1859,13 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             order.pools = named->pools;
             // Each hop through a pool whose curve is searched (stable, weighted) is work.
             for (const uint256& id : named->pools) {
-                if (GetPoolParams(id).GetCurve() != Curve::CONSTANT_PRODUCT) ++plan.curve_work;
+                const Curve curve{GetPoolParams(id).GetCurve()};
+                // A concentrated pool's round walks its ticks: twice the work of a searched curve.
+                if (curve == Curve::CONCENTRATED) {
+                    plan.curve_work += 2;
+                } else if (curve != Curve::CONSTANT_PRODUCT && curve != Curve::LAUNCH) {
+                    ++plan.curve_work;
+                }
             }
             order.amount_in = named->amount_in;
             order.min_out = named->min_out;
@@ -1869,6 +1960,188 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
         return true;
     }
     return invalid("bad-ba-marker");
+}
+
+bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
+                         const std::function<void(Token::Kind, const uint256&, uint64_t)>& credit, const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit,
+                         std::string& reject_reason) const
+{
+    const auto invalid{[&](const char* reason) {
+        reject_reason = reason;
+        return false;
+    }};
+    plan.curve_work = 1;
+    const uint256 pool_id{std::holds_alternative<OpenPosition>(op) ? std::get<OpenPosition>(op).pool : [&] {
+        const auto position{GetPosition(std::get<ChangePosition>(op).position)};
+        return position ? position->pool : uint256{};
+    }()};
+    const auto found{GetPool(pool_id)};
+    if (!found) return invalid(std::holds_alternative<OpenPosition>(op) ? "bad-ba-no-pool" : "bad-ba-no-position");
+    const PoolParams params{GetPoolParams(pool_id)};
+    if (params.GetCurve() != Curve::CONCENTRATED) return invalid("bad-ba-not-cl");
+    Pool pool{*found};
+    ClState cl{*Assert(GetClState(pool_id))};
+    const arith_uint256 price{UintToArith256(cl.sqrt_price)};
+    const int32_t spacing{cl::TickSpacing(params.fee)};
+    // A tick's record after a change of the liquidity that starts (lower) or ends (upper) there by `delta` (Uniswap's Tick.update).
+    const auto update_tick{[&](int32_t tick, bool upper, unsigned __int128 delta, bool add) -> std::optional<std::optional<ClTick>> {
+        ClTick t{GetClTick(pool_id, tick).value_or(ClTick{})};
+        const unsigned __int128 gross{t.Gross()};
+        if (!add && gross < delta) return std::nullopt;
+        if (add && gross > ~static_cast<unsigned __int128>(0) - delta) return std::nullopt;
+        const unsigned __int128 after{add ? gross + delta : gross - delta};
+        // A tick newly in use: the fees on its other side are taken as all of them below the price (Uniswap's convention).
+        if (gross == 0) {
+            t.outside0 = tick <= cl.tick ? cl.fee_growth0 : uint256{};
+            t.outside1 = tick <= cl.tick ? cl.fee_growth1 : uint256{};
+        }
+        // net: + at the lower tick, − at the upper, of the liquidity added (the reverse removed).
+        const bool plus{add != upper};
+        __int128 net{t.net_negative ? -static_cast<__int128>(t.NetAbs()) : static_cast<__int128>(t.NetAbs())};
+        net += plus ? static_cast<__int128>(delta) : -static_cast<__int128>(delta);
+        const unsigned __int128 abs{static_cast<unsigned __int128>(net < 0 ? -net : net)};
+        t.net_negative = net < 0;
+        t.net_hi = static_cast<uint64_t>(abs >> 64);
+        t.net_lo = static_cast<uint64_t>(abs);
+        t.gross_hi = static_cast<uint64_t>(after >> 64);
+        t.gross_lo = static_cast<uint64_t>(after);
+        if (after == 0) return std::optional<ClTick>{};
+        return std::optional<ClTick>{t};
+    }};
+    // A change of a position's liquidity: its ticks, the pool's liquidity in range, the fees it earned so far into its record.
+    const auto modify{[&](ClPosition& position, unsigned __int128 delta, bool add) -> bool {
+        if (delta > 0) {
+            const auto lo{update_tick(position.tick_lower, false, delta, add)}, hi{update_tick(position.tick_upper, true, delta, add)};
+            if (!lo || !hi) return false;
+            plan.cl_ticks.emplace_back(position.tick_lower, *lo);
+            plan.cl_ticks.emplace_back(position.tick_upper, *hi);
+        }
+        // Fees earned so far, with the ticks as they were before the change (a tick cleared reads as fresh).
+        const ClTick lo_before{GetClTick(pool_id, position.tick_lower).value_or(ClTick{})}, hi_before{GetClTick(pool_id, position.tick_upper).value_or(ClTick{})};
+        ClTick lo_now{lo_before}, hi_now{hi_before};
+        for (const auto& [tick, value] : plan.cl_ticks) {
+            if (tick == position.tick_lower && value) lo_now = *value;
+            if (tick == position.tick_upper && value) hi_now = *value;
+        }
+        const bool fresh{position.Liquidity() == 0 && add};
+        const auto [in0, in1]{FeeGrowthInside(cl, position.tick_lower, position.tick_upper, fresh ? lo_now : lo_before, fresh ? hi_now : hi_before)};
+        if (!fresh) {
+            const uint64_t e0{Earned(in0, position.inside0_last, position.Liquidity())}, e1{Earned(in1, position.inside1_last, position.Liquidity())};
+            position.owed0 = position.owed0 > MAX_AMOUNT - e0 ? MAX_AMOUNT : position.owed0 + e0;
+            position.owed1 = position.owed1 > MAX_AMOUNT - e1 ? MAX_AMOUNT : position.owed1 + e1;
+        }
+        position.inside0_last = ArithToUint256(in0);
+        position.inside1_last = ArithToUint256(in1);
+        const unsigned __int128 l{position.Liquidity()};
+        if (!add && l < delta) return false;
+        const unsigned __int128 after{add ? l + delta : l - delta};
+        position.liquidity_hi = static_cast<uint64_t>(after >> 64);
+        position.liquidity_lo = static_cast<uint64_t>(after);
+        // In range: the pool's liquidity now changes too.
+        if (delta > 0 && position.tick_lower <= cl.tick && cl.tick < position.tick_upper) {
+            const unsigned __int128 active{cl.Liquidity()};
+            if (!add && active < delta) return false;
+            cl.SetLiquidity(add ? active + delta : active - delta);
+        }
+        return true;
+    }};
+    // What comes back or out: asset coins as results; CHN by the coinbase (ChnTo), no dust (it stays owed, or in the pool).
+    const auto result{[&](const AssetId& asset, uint64_t amount) {
+        if (amount > 0) plan.results.push_back({asset, amount});
+    }};
+    if (const auto* open{std::get_if<OpenPosition>(&op)}) {
+        if (spacing == 0 || open->tick_lower % spacing != 0 || open->tick_upper % spacing != 0) return invalid("bad-ba-position-ticks");
+        const unsigned __int128 delta{open->Liquidity()};
+        ClPosition position;
+        position.pool = pool_id;
+        position.tick_lower = open->tick_lower;
+        position.tick_upper = open->tick_upper;
+        position.txid = tx.GetHash();
+        position.height = height;
+        const auto needed{cl::AmountsForLiquidity(price, cl::SqrtRatioAtTick(open->tick_lower), cl::SqrtRatioAtTick(open->tick_upper), delta, /*round_up=*/true)};
+        if (!needed || needed->first > open->max0 || needed->second > open->max1) return invalid("bad-ba-position-price");
+        if (needed->first > MAX_AMOUNT - pool.reserve0 || needed->second > MAX_AMOUNT - pool.reserve1) return invalid("bad-ba-position");
+        if (!modify(position, delta, true)) return invalid("bad-ba-position");
+        take(pool.asset0, open->max0);
+        take(pool.asset1, open->max1);
+        pool.reserve0 += needed->first;
+        pool.reserve1 += needed->second;
+        // The position's token: the first result (results are made by the operation, outside the books).
+        const uint256 id{PositionId(tx.GetHash())};
+        (void)credit;
+        plan.results.push_back({id, 1, Token::Kind::POSITION});
+        // What comes back: CHN under MIN_CHN_PAYOUT stays in the pool (nobody's), as a deposit's dust does.
+        const uint64_t back0{open->max0 - needed->first}, back1{open->max1 - needed->second};
+        if (pool.asset0.IsNull() && back0 < MIN_CHN_PAYOUT) {
+            pool.reserve0 += back0;
+        } else {
+            result(pool.asset0, back0);
+        }
+        result(pool.asset1, back1);
+        plan.pool = std::make_pair(pool_id, pool);
+        plan.cl_state = std::make_pair(pool_id, cl);
+        plan.position = std::make_pair(id, std::optional<ClPosition>{position});
+        return true;
+    }
+    const ChangePosition& change{std::get<ChangePosition>(op)};
+    ClPosition position{*Assert(GetPosition(change.position))};
+    // Whoever spends its token: the books hold the token to an output, or to the close.
+    const unsigned __int128 delta{change.close ? position.Liquidity() : change.Liquidity()};
+    const arith_uint256 sa{cl::SqrtRatioAtTick(position.tick_lower)}, sb{cl::SqrtRatioAtTick(position.tick_upper)};
+    if (change.add) {
+        const auto needed{cl::AmountsForLiquidity(price, sa, sb, delta, /*round_up=*/true)};
+        if (!needed || needed->first > change.limit0 || needed->second > change.limit1) return invalid("bad-ba-position-price");
+        if (needed->first > MAX_AMOUNT - pool.reserve0 || needed->second > MAX_AMOUNT - pool.reserve1) return invalid("bad-ba-position");
+        if (!modify(position, delta, true)) return invalid("bad-ba-position");
+        take(pool.asset0, change.limit0);
+        take(pool.asset1, change.limit1);
+        pool.reserve0 += needed->first;
+        pool.reserve1 += needed->second;
+        const uint64_t back0{change.limit0 - needed->first}, back1{change.limit1 - needed->second};
+        if (pool.asset0.IsNull() && back0 < MIN_CHN_PAYOUT) {
+            pool.reserve0 += back0;
+        } else {
+            result(pool.asset0, back0);
+        }
+        result(pool.asset1, back1);
+    } else {
+        // Out: the liquidity's amounts at the price (rounded down), and, collected, all it is owed.
+        const auto amounts{cl::AmountsForLiquidity(price, sa, sb, delta, /*round_up=*/false)};
+        if (!amounts) return invalid("bad-ba-position");
+        if (!modify(position, delta, false)) return invalid("bad-ba-position");
+        uint64_t out0{amounts->first}, out1{amounts->second};
+        if (out0 < change.limit0 || out1 < change.limit1) return invalid("bad-ba-position-price");
+        if (change.collect || change.close) {
+            out0 = out0 > MAX_AMOUNT - position.owed0 ? MAX_AMOUNT : out0 + position.owed0;
+            out1 = out1 > MAX_AMOUNT - position.owed1 ? MAX_AMOUNT : out1 + position.owed1;
+            position.owed0 = position.owed1 = 0;
+        } else {
+            // Liquidity taken out and its fees left to collect later.
+        }
+        // CHN dust is not paid: owed (or, closing, left in the pool).
+        if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) {
+            if (!change.close) position.owed0 += out0;
+            out0 = 0;
+        }
+        if (out0 > pool.reserve0 || out1 > pool.reserve1) return invalid("bad-ba-position");
+        pool.reserve0 -= out0;
+        pool.reserve1 -= out1;
+        result(pool.asset0, out0);
+        result(pool.asset1, out1);
+    }
+    // The token is taken in (so the transaction must spend it: the books refuse a change by anyone else), and given
+    // back as the first result unless the position closes.
+    debit(Token::Kind::POSITION, change.position, 1);
+    if (change.close) {
+        if (position.Liquidity() != 0) return invalid("bad-ba-position");
+        plan.position = std::make_pair(change.position, std::optional<ClPosition>{});
+    } else {
+        plan.results.insert(plan.results.begin(), Result{change.position, 1, Token::Kind::POSITION});
+        plan.position = std::make_pair(change.position, std::optional<ClPosition>{position});
+    }
+    plan.pool = std::make_pair(pool_id, pool);
+    plan.cl_state = std::make_pair(pool_id, cl);
+    return true;
 }
 
 bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take, std::string& reject_reason) const
@@ -2011,6 +2284,34 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
             pool.height = height;
         }
         const bool a_first{asset0 == create->asset_a};
+        if (params.GetCurve() == Curve::CONCENTRATED) {
+            // A concentrated pool: made at the price the amounts name (asset1 per asset0), nothing in; liquidity comes by positions.
+            if (GetPool(id)) return invalid("bad-ba-pool-exists");
+            const uint64_t amount0{a_first ? create->amount_a : create->amount_b}, amount1{a_first ? create->amount_b : create->amount_a};
+            // ⌊sqrt(amount1·2^192 / amount0)⌋, the largest root whose square is at most it.
+            const curves::BigUint target{(curves::BigUint{amount1} << 192) / curves::BigUint{amount0}};
+            arith_uint256 lo{0}, hi{arith_uint256{1} << 161};
+            while (lo < hi) {
+                const arith_uint256 mid{lo + ((hi - lo + 1) >> 1)};
+                const curves::BigUint m{curves::BigUint::FromArith(mid)};
+                if (m * m <= target) {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            if (lo < cl::MinSqrtRatio() || lo >= cl::MaxSqrtRatio()) return invalid("bad-ba-cl-price");
+            ClState state;
+            state.sqrt_price = ArithToUint256(lo);
+            state.tick = cl::TickAtSqrtRatio(lo);
+            pool.reserve0 = pool.reserve1 = 0;
+            // Open (above MIN_LIQUIDITY) with no shares: its positions are its providers.
+            pool.shares = MIN_LIQUIDITY + 1;
+            plan.pool = std::make_pair(id, pool);
+            plan.pool_params = std::make_pair(id, params);
+            plan.cl_state = std::make_pair(id, state);
+            return true;
+        }
         const auto shares{open(params, pool, a_first ? create->amount_a : create->amount_b, a_first ? create->amount_b : create->amount_a, create->min_shares)};
         if (!shares) return false;
         take(create->asset_a, create->amount_a);
@@ -2026,13 +2327,14 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         Pool pool{*found};
         const PoolParams params{GetPoolParams(deposit->pool)};
         if (params.GetCurve() == Curve::LAUNCH) return invalid("bad-ba-launch-pool");
+        if (params.GetCurve() == Curve::CONCENTRATED) return invalid("bad-ba-cl-pool");
         uint64_t shares{0};
         if (amm::Abandoned(pool)) {
             const auto opened{open(params, pool, deposit->amount0, deposit->amount1, deposit->min_shares)};
             if (!opened) return false;
             shares = *opened;
         } else {
-            const auto got{curves::DepositShares(params, dex::PoolFee(params), pool, deposit->amount0, deposit->amount1)};
+            const auto got{curves::DepositShares(params, FeeOf(deposit->pool, params, height), pool, deposit->amount0, deposit->amount1)};
             if (!got || *got < deposit->min_shares || *got > MAX_AMOUNT - pool.shares) return invalid("bad-ba-liquidity-price");
             shares = *got;
             pool.shares += shares;
@@ -2053,7 +2355,8 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         if (withdraw->shares > pool.shares - std::min(pool.shares, MIN_LIQUIDITY)) return invalid("bad-ba-liquidity");
         const PoolParams params{GetPoolParams(withdraw->pool)};
         if (params.GetCurve() == Curve::LAUNCH) return invalid("bad-ba-launch-pool");
-        auto [out0, out1]{curves::WithdrawOf(params, dex::PoolFee(params), pool, withdraw->shares, withdraw->only)};
+        if (params.GetCurve() == Curve::CONCENTRATED) return invalid("bad-ba-cl-pool");
+        auto [out0, out1]{curves::WithdrawOf(params, FeeOf(withdraw->pool, params, height), pool, withdraw->shares, withdraw->only)};
         // CHN under MIN_CHN_PAYOUT is not paid out: it stays in the pool, for its providers.
         if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) out0 = 0;
         if (pool.asset1.IsNull() && out1 < MIN_CHN_PAYOUT) out1 = 0;
@@ -2137,6 +2440,26 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     }
     if (plan->pool) SetPool(plan->pool->first, plan->pool->second);
     if (plan->pool_params) POOL_PARAMS.Put(out, plan->pool_params->first, plan->pool_params->second);
+    if (plan->cl_state) {
+        const uint256& pool{plan->cl_state->first};
+        SetClState(pool, plan->cl_state->second);
+        for (const auto& [tick, value] : plan->cl_ticks) {
+            if (value) {
+                out.Put(TickKey(CL_TICKS, pool, tick), sidechain::EncodeValue(*value));
+                out.Put(TickKey(CL_TICKS_DOWN, pool, tick), {});
+            } else {
+                out.Erase(TickKey(CL_TICKS, pool, tick));
+                out.Erase(TickKey(CL_TICKS_DOWN, pool, tick));
+            }
+        }
+    }
+    if (plan->position) {
+        if (plan->position->second) {
+            CL_POSITIONS.Put(out, plan->position->first, *plan->position->second);
+        } else {
+            CL_POSITIONS.Erase(out, plan->position->first);
+        }
+    }
     if (plan->launch) {
         const auto& [token, record]{*plan->launch};
         LAUNCHES.Put(out, token, record);
@@ -2276,8 +2599,19 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
             acc->last_time = time;
         } else if (time > acc->last_time) {
             const uint32_t elapsed{time - acc->last_time};
-            // The prices of its kind (the reserves' ratios for constant product, as always; the curve's slope for the others).
-            const auto [price0, price1]{dex::PricesQ64(GetPoolParams(id), before.reserve0, before.reserve1)};
+            // The prices of its kind (the reserves' ratios for constant product, as always; the curve's slope for the others;
+            // a concentrated pool's square root price, squared, as it was before the block).
+            const PoolParams params{GetPoolParams(id)};
+            std::pair<uint256, uint256> prices;
+            if (params.GetCurve() == Curve::CONCENTRATED) {
+                const auto snapshot{CL_SNAPSHOTS.Get(out, id)};
+                const auto now{GetClState(id)};
+                const arith_uint256 sqrt{UintToArith256(snapshot ? *snapshot : now ? now->sqrt_price : uint256{})};
+                prices = {cl::PriceQ64(sqrt), cl::PriceQ64(sqrt, true)};
+            } else {
+                prices = dex::PricesQ64(params, before.reserve0, before.reserve1);
+            }
+            const auto& [price0, price1]{prices};
             acc->price0_cumulative = dex::Accumulate(acc->price0_cumulative, price0, elapsed);
             acc->price1_cumulative = dex::Accumulate(acc->price1_cumulative, price1, elapsed);
             acc->last_time = time;
@@ -2286,7 +2620,37 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
         out.Put(ObservationKey(id, static_cast<uint32_t>(acc->count % TWAP_OBSERVATIONS)), sidechain::EncodeValue(obs));
         ++acc->count;
         ACCUMULATORS.Put(out, id, *acc);
+        // A dynamic fee: the change of the price from the last block that traded to this one, into its moving average.
+        const PoolParams kind{GetPoolParams(id)};
+        if (kind.flags & POOL_FLAG_DYNAMIC_FEE) {
+            uint256 now_price;
+            if (kind.GetCurve() == Curve::CONCENTRATED) {
+                const auto state{GetClState(id)};
+                now_price = state ? cl::PriceQ64(UintToArith256(state->sqrt_price)) : uint256{};
+            } else {
+                now_price = dex::PricesQ64(kind, pool->reserve0, pool->reserve1).first;
+            }
+            FeeState fee{FEE_STATES.Get(out, id).value_or(FeeState{})};
+            const arith_uint256 p1{UintToArith256(now_price)}, p0{UintToArith256(fee.last_price)};
+            if (p0 != 0 && fee.last_height < height) {
+                // |p1 − p0| / p0 in millionths, at most a whole (10^6).
+                const arith_uint256 diff{p1 > p0 ? p1 - p0 : p0 - p1};
+                const arith_uint256 change{diff * 1'000'000 / p0};
+                const uint64_t step{change > arith_uint256{1'000'000} ? 1'000'000 : change.GetLow64()};
+                fee.volatility = (Decayed(fee, height) * (DYNAMIC_WINDOW - 1) + step) / DYNAMIC_WINDOW;
+            }
+            fee.last_price = now_price;
+            fee.last_height = height;
+            FEE_STATES.Put(out, id, fee);
+        }
     }
+    // The prices of the concentrated pools before the block were for this block only.
+    std::vector<uint256> cl_snapshots;
+    CL_SNAPSHOTS.ForEach(out, [&](const uint256& id, const uint256&) {
+        cl_snapshots.push_back(id);
+        return true;
+    });
+    for (const uint256& id : cl_snapshots) CL_SNAPSHOTS.Erase(out, id);
 }
 
 void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts, int height)
@@ -2311,7 +2675,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             start.emplace(id, pool);
             Kind kind;
             kind.params = GetPoolParams(id);
-            kind.fee = dex::PoolFee(kind.params);
+            kind.fee = FeeOf(id, kind.params, height);
             if (kind.params.GetCurve() == Curve::LAUNCH && pool) {
                 kind.token = pool->asset1;
                 if (const auto record{GetLaunch(pool->asset1)}) kind.launch = curves::LaunchCurve{record->fee, LAUNCH_CURVE_END, record->max_buy, record->min_buy};
@@ -2326,6 +2690,9 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         std::set<uint256> ended;
         std::vector<uint64_t> refunds;
         std::map<uint256, LaunchLogEntry> log;
+        //! Concentrated pools: their state and the ticks they crossed, as the pass left them.
+        std::map<uint256, ClState> cl;
+        std::map<uint256, std::map<int32_t, ClTick>> ticks;
     };
     // The rounds of the pools whose curves are searched, by what they cleared: a pass that clears one again gets the same.
     struct RoundKey {
@@ -2358,7 +2725,14 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 const Kind& kind{kinds.at(id)};
                 std::optional<dex::Clearing> cleared;
                 if (pool && !amm::Abandoned(*pool)) {
-                    if (kind.params.GetCurve() == Curve::LAUNCH) {
+                    if (kind.params.GetCurve() == Curve::CONCENTRATED) {
+                        // A concentrated pool: its state and ticks as this pass left them.
+                        auto it{effects.cl.find(id)};
+                        if (it == effects.cl.end()) {
+                            if (const auto state{GetClState(id)}) it = effects.cl.emplace(id, *state).first;
+                        }
+                        if (it != effects.cl.end()) cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins);
+                    } else if (kind.params.GetCurve() == Curve::LAUNCH) {
                         // A launch curve: its coin is asset0. A buy paying the coin in at its first hop pays directly.
                         std::vector<bool> direct;
                         for (size_t i : members) direct.push_back(hop == 0 && orders[i].path[0].IsNull());
@@ -2435,6 +2809,13 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         for (const auto& [id, pool] : pools) {
             if (pool && pool != start.at(id)) SetPool(id, *pool);
         }
+        // Concentrated pools: their state and the ticks crossed.
+        for (const auto& [id, state] : effects.cl) {
+            if (GetClState(id) != state) SetClState(id, state);
+        }
+        for (const auto& [id, changed] : effects.ticks) {
+            for (const auto& [tick, info] : changed) Writable().Put(TickKey(CL_TICKS, id, tick), sidechain::EncodeValue(info));
+        }
         // The launches' fees, split between the creator and the pool they graduate into; their log; graduations.
         sidechain::StoreOverlay& out{Writable()};
         for (const auto& [id, entry] : effects.log) {
@@ -2491,7 +2872,10 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         for (size_t hop{0}; hop + 1 < orders[i].path.size(); ++hop) trial.emplace(hop_pool(i, hop), pools.at(hop_pool(i, hop)));
         std::vector<bool> one(n, false);
         one[i] = true;
+        // From the concentrated pools as the orders before left them.
         Effects effects;
+        effects.cl = all.cl;
+        effects.ticks = all.ticks;
         const auto got{pass(one, trial, effects)};
         if (!got[i]) {
             refund(i);
@@ -2500,6 +2884,8 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         for (auto& [id, pool] : trial) pools.at(id) = std::move(pool);
         for (const auto& [id, fee] : effects.fees) all.fees[id] += fee;
         all.ended.insert(effects.ended.begin(), effects.ended.end());
+        all.cl = effects.cl;
+        all.ticks = effects.ticks;
         for (const auto& [id, entry] : effects.log) {
             LaunchLogEntry& e{all.log[id]};
             e.coin_in += entry.coin_in;
@@ -2514,6 +2900,214 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         fill(i, *got[i], effects.refunds[i]);
     }
     commit(pools, all);
+}
+
+uint32_t State::QuoteFee(const uint256& pool, const PoolParams& params) const
+{
+    const auto fee{GetFeeState(pool)};
+    return FeeOf(pool, params, fee ? fee->last_height + 1 : 0);
+}
+
+namespace {
+/** The most ticks a round of a concentrated pool crosses; the rest of its input finds no price. */
+constexpr int MAX_CL_CROSSINGS{64};
+
+/** A stretch of a walk through a concentrated pool: from a price to the next tick with liquidity, its liquidity, what it takes and gives in full. */
+struct ClSegment {
+    arith_uint256 start, target;
+    unsigned __int128 liquidity{0};
+    uint64_t in_before{0}, out_before{0}, in_full{0}, out_full{0};
+    bool reaches{false};
+    std::optional<int32_t> cross;
+};
+
+/** What `x` gives on a walk (the same as walking with x from the start: each stretch takes what reaching its end takes). */
+uint64_t WalkOut(const std::vector<ClSegment>& segs, uint64_t x, bool zero_in)
+{
+    for (size_t i{0}; i < segs.size(); ++i) {
+        const ClSegment& seg{segs[i]};
+        const uint64_t rem{x - seg.in_before};
+        if (seg.reaches && rem >= seg.in_full && i + 1 < segs.size()) continue;
+        if (seg.reaches && rem >= seg.in_full) return seg.out_before + seg.out_full;
+        return seg.out_before + cl::SwapStep(seg.start, seg.target, seg.liquidity, rem, zero_in).amount_out;
+    }
+    return 0;
+}
+} // namespace
+
+std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders) const
+{
+    if (fee >= FEE_DENOMINATOR) return std::nullopt;
+    uint64_t in0{0}, in1{0};
+    for (const dex::HopIn& order : orders) {
+        if (order.amount == 0 || order.amount > MAX_AMOUNT) return std::nullopt;
+        uint64_t& sum{order.zero_in ? in0 : in1};
+        if (order.amount > MAX_AMOUNT - sum) return std::nullopt;
+        sum += order.amount;
+    }
+    if (in0 > MAX_AMOUNT - pool.reserve0 || in1 > MAX_AMOUNT - pool.reserve1) return std::nullopt;
+    const uint64_t keep{FEE_DENOMINATOR - fee};
+    const unsigned __int128 f{FEE_DENOMINATOR};
+    const unsigned __int128 a_hat{static_cast<unsigned __int128>(in0) * keep}, b_hat{static_cast<unsigned __int128>(in1) * keep};
+    const auto tick_at{[&](int32_t t) {
+        if (const auto it{ticks.find(t)}; it != ticks.end()) return it->second;
+        return GetClTick(id, t).value_or(ClTick{});
+    }};
+    const auto net_of{[](const ClTick& t) { return t.net_negative ? -static_cast<__int128>(t.NetAbs()) : static_cast<__int128>(t.NetAbs()); }};
+    // The walk from the pool's price in one direction, for at most `max_in`, at most MAX_CL_CROSSINGS ticks crossed.
+    const auto walk{[&](bool zero_in, uint64_t max_in) {
+        std::vector<ClSegment> segs;
+        arith_uint256 price{UintToArith256(cl.sqrt_price)};
+        int32_t tick{cl.tick};
+        unsigned __int128 liquidity{cl.Liquidity()};
+        uint64_t in_cum{0}, out_cum{0};
+        const arith_uint256 limit{zero_in ? cl::MinSqrtRatio() + 1 : cl::MaxSqrtRatio() - 1};
+        for (int crossed{0}; crossed <= MAX_CL_CROSSINGS; ++crossed) {
+            const auto next{NextClTick(id, tick, /*up=*/!zero_in)};
+            arith_uint256 target{next ? cl::SqrtRatioAtTick(*next) : limit};
+            if (zero_in ? target < limit : target > limit) target = limit;
+            const cl::Step full{cl::SwapStep(price, target, liquidity, max_in - in_cum, zero_in)};
+            ClSegment seg{price, target, liquidity, in_cum, out_cum, full.amount_in, full.amount_out, full.sqrt_next == target, next};
+            segs.push_back(seg);
+            if (!seg.reaches || !next || crossed == MAX_CL_CROSSINGS || in_cum + full.amount_in > max_in) break;
+            in_cum += full.amount_in;
+            out_cum = out_cum > MAX_AMOUNT - full.amount_out ? MAX_AMOUNT : out_cum + full.amount_out;
+            // Crossing the tick: its liquidity comes in going up, goes out going down.
+            const __int128 net{net_of(tick_at(*next))};
+            const __int128 l{static_cast<__int128>(liquidity) + (zero_in ? -net : net)};
+            liquidity = l < 0 ? 0 : static_cast<unsigned __int128>(l);
+            price = target;
+            tick = zero_in ? *next - 1 : *next;
+        }
+        return segs;
+    }};
+    // The batch's uniform price, as ClearInvariant's: the largest net out the walk gives for the net in it gets.
+    const uint64_t max_in0{static_cast<uint64_t>(a_hat / f)}, max_in1{static_cast<uint64_t>(b_hat / f)};
+    const auto x_gain{[&](uint64_t dy) -> uint64_t {
+        if (b_hat == 0) return max_in0;
+        return static_cast<uint64_t>(a_hat * dy / (f * dy + b_hat));
+    }};
+    const auto y_gain{[&](uint64_t dx) -> uint64_t {
+        if (a_hat == 0) return max_in1;
+        return static_cast<uint64_t>(b_hat * dx / (f * dx + a_hat));
+    }};
+    bool asset0_priced{true};
+    unsigned __int128 num{0}, den{0};
+    std::vector<ClSegment> segs;
+    uint64_t swapped_in{0}, swapped_out{0};
+    bool zero_walk{true};
+    uint64_t dy{0};
+    if (a_hat > 0 && max_in0 > 0) {
+        segs = walk(true, max_in0);
+        const uint64_t most{std::min<uint64_t>(WalkOut(segs, max_in0, true), pool.reserve1 > 0 ? pool.reserve1 - 1 : 0)};
+        dy = curves::SearchMaxU64(0, most, [&](uint64_t d) { return WalkOut(segs, x_gain(d), true) >= d; });
+    }
+    if (a_hat > 0 && (dy > 0 || b_hat == 0)) {
+        num = f * dy + b_hat;
+        den = a_hat;
+        swapped_in = x_gain(dy);
+        swapped_out = dy > 0 || b_hat == 0 ? WalkOut(segs, swapped_in, true) : 0;
+        if (dy == 0 && b_hat == 0) swapped_out = 0, swapped_in = 0;
+    } else {
+        uint64_t dx{0};
+        if (b_hat > 0 && max_in1 > 0) {
+            segs = walk(false, max_in1);
+            const uint64_t most{std::min<uint64_t>(WalkOut(segs, max_in1, false), pool.reserve0 > 0 ? pool.reserve0 - 1 : 0)};
+            dx = curves::SearchMaxU64(0, most, [&](uint64_t d) { return WalkOut(segs, y_gain(d), false) >= d; });
+        }
+        if (b_hat > 0 && (dx > 0 || a_hat == 0)) {
+            asset0_priced = false;
+            num = f * dx + a_hat;
+            den = b_hat;
+            zero_walk = false;
+            swapped_in = dx > 0 ? y_gain(dx) : 0;
+            swapped_out = dx > 0 ? WalkOut(segs, swapped_in, false) : 0;
+        } else {
+            num = b_hat;
+            den = a_hat;
+            segs.clear();
+        }
+    }
+    dex::Clearing clearing;
+    uint64_t out0{0}, out1{0};
+    const arith_uint256 pnum{UintToArith256(curves::BigUint::U128(num).ToUint256())}, pden{UintToArith256(curves::BigUint::U128(den).ToUint256())}, f256{FEE_DENOMINATOR};
+    for (const dex::HopIn& order : orders) {
+        const arith_uint256 paid{arith_uint256{order.amount} * keep};
+        const bool priced_side{order.zero_in == asset0_priced};
+        arith_uint256 out;
+        if (priced_side) {
+            out = pden == 0 ? arith_uint256{} : paid * pnum / (pden * f256);
+        } else {
+            out = pnum == 0 ? arith_uint256{} : paid * pden / (pnum * f256);
+        }
+        const uint64_t got{out > arith_uint256{MAX_AMOUNT} ? MAX_AMOUNT : out.GetLow64()};
+        clearing.outs.push_back(got);
+        uint64_t& sum{order.zero_in ? out1 : out0};
+        if (got > MAX_AMOUNT - sum) return std::nullopt;
+        sum += got;
+    }
+    if (out0 > pool.reserve0 + in0 || out1 > pool.reserve1 + in1) return std::nullopt;
+    // What the pool kept beyond the walk: the fees and the roundings, of each asset, for the liquidity in range.
+    const __int128 net0{static_cast<__int128>(in0) - out0}, net1{static_cast<__int128>(in1) - out1};
+    const __int128 surplus0{zero_walk ? net0 - static_cast<__int128>(swapped_in) : net0 + static_cast<__int128>(swapped_out)};
+    const __int128 surplus1{zero_walk ? net1 + static_cast<__int128>(swapped_out) : net1 - static_cast<__int128>(swapped_in)};
+    if (surplus0 < 0 || surplus1 < 0) return std::nullopt;
+    const unsigned __int128 l_start{cl.Liquidity()};
+    const auto credit{[&](unsigned __int128 liquidity) {
+        if (liquidity == 0) return;
+        const curves::BigUint l{curves::BigUint::U128(liquidity)};
+        const arith_uint256 g0{UintToArith256(((curves::BigUint::U128(static_cast<unsigned __int128>(surplus0)) << 128) / l).ToUint256())};
+        const arith_uint256 g1{UintToArith256(((curves::BigUint::U128(static_cast<unsigned __int128>(surplus1)) << 128) / l).ToUint256())};
+        cl.fee_growth0 = ArithToUint256(UintToArith256(cl.fee_growth0) + g0);
+        cl.fee_growth1 = ArithToUint256(UintToArith256(cl.fee_growth1) + g1);
+    }};
+    // The walk itself: the price, the tick, the liquidity in range, the ticks crossed (their outside fees turned over).
+    std::vector<int32_t> crossed;
+    arith_uint256 price{UintToArith256(cl.sqrt_price)};
+    int32_t tick{cl.tick};
+    unsigned __int128 liquidity{l_start};
+    uint64_t rem{swapped_in};
+    for (size_t i{0}; i < segs.size() && (rem > 0 || i == 0); ++i) {
+        const ClSegment& seg{segs[i]};
+        if (rem == 0) break;
+        if (seg.reaches && rem >= seg.in_full && seg.cross && i + 1 < segs.size()) {
+            rem -= seg.in_full;
+            crossed.push_back(*seg.cross);
+            const __int128 net{net_of(tick_at(*seg.cross))};
+            const __int128 l{static_cast<__int128>(liquidity) + (zero_walk ? -net : net)};
+            liquidity = l < 0 ? 0 : static_cast<unsigned __int128>(l);
+            price = seg.target;
+            tick = zero_walk ? *seg.cross - 1 : *seg.cross;
+            continue;
+        }
+        const cl::Step step{cl::SwapStep(seg.start, seg.target, seg.liquidity, rem, zero_walk)};
+        price = step.sqrt_next;
+        if (price == seg.target && seg.cross) {
+            crossed.push_back(*seg.cross);
+            const __int128 net{net_of(tick_at(*seg.cross))};
+            const __int128 l{static_cast<__int128>(liquidity) + (zero_walk ? -net : net)};
+            liquidity = l < 0 ? 0 : static_cast<unsigned __int128>(l);
+            tick = zero_walk ? *seg.cross - 1 : *seg.cross;
+        } else {
+            tick = cl::TickAtSqrtRatio(price);
+        }
+        break;
+    }
+    const bool at_end_credit{liquidity > 0};
+    if (!at_end_credit) credit(l_start);
+    for (const int32_t t : crossed) {
+        ClTick info{tick_at(t)};
+        info.outside0 = ArithToUint256(UintToArith256(cl.fee_growth0) - UintToArith256(info.outside0));
+        info.outside1 = ArithToUint256(UintToArith256(cl.fee_growth1) - UintToArith256(info.outside1));
+        ticks[t] = info;
+    }
+    cl.sqrt_price = ArithToUint256(price);
+    cl.tick = tick;
+    cl.SetLiquidity(liquidity);
+    if (at_end_credit) credit(liquidity);
+    clearing.reserve0 = pool.reserve0 + in0 - out0;
+    clearing.reserve1 = pool.reserve1 + in1 - out1;
+    return clearing;
 }
 
 void State::Graduate(const AssetId& token, int height)
@@ -2600,6 +3194,64 @@ std::optional<Attestation> State::GetAttestation(const uint256& oracle, const ui
 std::optional<OracleContract> State::GetContract(const Txid& id) const { return CONTRACTS.Get(*m_view, id.ToUint256()); }
 PoolParams State::GetPoolParams(const uint256& pool) const { return POOL_PARAMS.Get(*m_view, pool).value_or(PoolParams{}); }
 std::optional<LaunchRecord> State::GetLaunch(const AssetId& token) const { return LAUNCHES.Get(*m_view, token); }
+std::optional<ClState> State::GetClState(const uint256& pool) const { return CL_STATES.Get(*m_view, pool); }
+std::optional<ClTick> State::GetClTick(const uint256& pool, int32_t tick) const
+{
+    const auto bytes{m_view->Get(TickKey(CL_TICKS, pool, tick))};
+    if (!bytes) return std::nullopt;
+    return sidechain::DecodeValue<ClTick>(*bytes);
+}
+std::optional<ClPosition> State::GetPosition(const uint256& id) const { return CL_POSITIONS.Get(*m_view, id); }
+std::vector<std::pair<int32_t, ClTick>> State::ClTicksOf(const uint256& pool, size_t max) const
+{
+    std::vector<std::pair<int32_t, ClTick>> ticks;
+    m_view->ForEach(Prefix(CL_TICKS, pool), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes& value) {
+        ticks.emplace_back(TickOfKey(CL_TICKS, key), sidechain::DecodeValue<ClTick>(value));
+        return ticks.size() < max;
+    });
+    return ticks;
+}
+std::optional<int32_t> State::NextClTick(const uint256& pool, int32_t tick, bool up) const
+{
+    // Up: the first above `tick`; down: the first at or below it (Uniswap's nextInitializedTick).
+    const uint8_t table{up ? CL_TICKS : CL_TICKS_DOWN};
+    if (up && tick >= cl::MAX_TICK) return std::nullopt;
+    const sidechain::StoreBytes from{TickKey(table, pool, up ? tick + 1 : tick)};
+    const auto next{m_view->Next(from, Prefix(table, pool))};
+    if (!next) return std::nullopt;
+    return TickOfKey(table, next->first);
+}
+std::optional<FeeState> State::GetFeeState(const uint256& pool) const { return FEE_STATES.Get(*m_view, pool); }
+uint32_t State::FeeOf(const uint256& pool, const PoolParams& params, int height) const
+{
+    if (!(params.flags & POOL_FLAG_DYNAMIC_FEE)) return params.fee;
+    const auto fee{GetFeeState(pool)};
+    if (!fee) return params.fee;
+    // Half the recent average change of the price per block, in millionths: a pool whose price moves 1 % a block
+    // charges 0.5 % more; at most DYNAMIC_MAX_EXTRA more.
+    return params.fee + static_cast<uint32_t>(std::min<uint64_t>(Decayed(*fee, height) / 2, DYNAMIC_MAX_EXTRA));
+}
+
+
+std::pair<uint64_t, uint64_t> State::PositionFees(const ClPosition& position) const
+{
+    const auto cl{GetClState(position.pool)};
+    const auto lo{GetClTick(position.pool, position.tick_lower)}, hi{GetClTick(position.pool, position.tick_upper)};
+    if (!cl || !lo || !hi) return {position.owed0, position.owed1};
+    const auto [in0, in1]{FeeGrowthInside(*cl, position.tick_lower, position.tick_upper, *lo, *hi)};
+    const auto add{[](uint64_t a, uint64_t b) { return a > MAX_AMOUNT - b ? MAX_AMOUNT : a + b; }};
+    return {add(position.owed0, Earned(in0, position.inside0_last, position.Liquidity())), add(position.owed1, Earned(in1, position.inside1_last, position.Liquidity()))};
+}
+
+void State::SetClState(const uint256& pool, const ClState& state)
+{
+    sidechain::StoreOverlay& out{Writable()};
+    if (m_dex && !CL_SNAPSHOTS.Contains(out, pool)) {
+        const auto before{GetClState(pool)};
+        CL_SNAPSHOTS.Put(out, pool, before ? before->sqrt_price : state.sqrt_price);
+    }
+    CL_STATES.Put(out, pool, state);
+}
 bool State::Launching(const AssetId& asset) const
 {
     if (asset.IsNull()) return false;
