@@ -5,6 +5,7 @@
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
 #include <addresstype.h>
+#include <bitassets/curves.h>
 #include <bitassets/dex.h>
 #include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
@@ -1210,6 +1211,10 @@ RPCMethod swaproute()
             {"amount_in", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of the first goes in"},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{0.5}, "How much less than the quote, in percent, it may give"},
             {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least the caller showed: refused rather than signed for less"},
+            {"pools", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "The pool of each hop, of any kind (quoteroute's pools; the DEX's pool kinds): left out, the pool of each two assets addliquidity makes",
+            {
+                {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "A pool"},
+            }},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -1217,7 +1222,7 @@ RPCMethod swaproute()
             {RPCResult::Type::NUM, "quote", "What it gives alone, if nothing moves the pools first"},
             {RPCResult::Type::NUM, "min_out", "The least it gives"},
         }},
-        RPCExamples{HelpExampleCli("swaproute", "'[\"GOLD\",\"CHN\",\"SILVER\"]' 10")},
+        RPCExamples{HelpExampleCli("swaproute", "'[\"GOLD\",\"CHN\",\"SILVER\"]' 10") + HelpExampleCli("swaproute", "'[\"GOLD\",\"CHN\"]' 10 0.5 null '[\"<pool>\"]'")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     const auto pwallet{ReadyWallet(request)};
@@ -1233,13 +1238,23 @@ RPCMethod swaproute()
     const AssetInfo& out{path.back()};
     const uint64_t amount_in{bitassets::ParseUnits(request.params[1], in.decimals)};
     const uint64_t slippage{Slippage(request.params[2], 0.5)};
+    // The pools: named (any kind), or the pool of each two assets addliquidity makes.
+    std::vector<uint256> pools;
+    if (!request.params[4].isNull()) {
+        if (!pwallet->chain().getBitAssetsDexCurvesActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's pool kinds do not apply yet (getdexinfo): leave pools out");
+        for (const UniValue& id : request.params[4].getValues()) pools.push_back(ParseHashV(id, "pool"));
+        if (pools.size() + 1 != ids.size()) throw JSONRPCError(RPC_INVALID_PARAMETER, "One pool for each hop of the path");
+    }
     uint64_t quote{amount_in};
     for (size_t i{0}; i + 1 < ids.size(); ++i) {
-        const auto pool{pwallet->chain().getBitAssetsPool(bitassets::PoolId(ids[i], ids[i + 1]))};
-        if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("There is no pool of %s and %s", path[i].label, path[i + 1].label));
-        if (bitassets::amm::Abandoned(*pool)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Nobody provides liquidity to the pool of %s and %s", path[i].label, path[i + 1].label));
-        const auto cleared{bitassets::dex::ClearPool(pool->reserve0, pool->reserve1, {bitassets::dex::HopIn{pool->asset0 == ids[i], quote}})};
-        quote = cleared ? cleared->outs[0] : 0;
+        const uint256 id{pools.empty() ? bitassets::PoolId(ids[i], ids[i + 1]) : pools[i]};
+        const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)};
+        if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("There is no pool of %s and %s", path[i].label, path[i + 1].label));
+        const auto& [pool, kind]{*found};
+        // A named pool holds the two assets of its hop, in either order.
+        if (std::minmax(ids[i], ids[i + 1]) != std::minmax(pool.asset0, pool.asset1)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The pool %s is not a pool of %s and %s", id.GetHex(), path[i].label, path[i + 1].label));
+        if (bitassets::amm::Abandoned(pool)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Nobody provides liquidity to the pool of %s and %s", path[i].label, path[i + 1].label));
+        quote = bitassets::curves::SwapOutOf(kind, bitassets::dex::PoolFee(kind), pool.reserve0, pool.reserve1, pool.asset0 == ids[i], quote);
         if (quote == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing");
     }
     if (out.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
@@ -1254,7 +1269,9 @@ RPCMethod swaproute()
     CAmount chn_in{0};
     PayIn(*pwallet, in, amount_in, inputs, outs, chn_in);
     outs.push_back({ChangeDestination(*pwallet), std::nullopt});
-    const CTransactionRef tx{Send(*pwallet, bitassets::Route{ids, amount_in, min_out, ChnTo(*pwallet, {in.id, out.id})}, outs, inputs, chn_in)};
+    const CScript chn_to{ChnTo(*pwallet, {in.id, out.id})};
+    const CTransactionRef tx{pools.empty() ? Send(*pwallet, bitassets::Route{ids, amount_in, min_out, chn_to}, outs, inputs, chn_in)
+                                           : Send(*pwallet, bitassets::SwapPools{in.id, pools, amount_in, min_out, chn_to}, outs, inputs, chn_in)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("quote", bitassets::AmountToJSON(quote, out.decimals));
@@ -1678,6 +1695,335 @@ RPCMethod removeliquidity()
     result.pushKV("shares", shares);
     result.pushKV("amount_a", bitassets::AmountToJSON(out_a, a.decimals));
     result.pushKV("amount_b", bitassets::AmountToJSON(out_b, b.decimals));
+    return result;
+},
+    };
+}
+
+//
+// The DEX's pool kinds (bitassets/curves.h).
+//
+
+namespace {
+void NeedCurves(CWallet& wallet)
+{
+    if (!wallet.chain().getBitAssetsDexCurvesActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's pool kinds do not apply yet (getdexinfo's curves_active)");
+}
+
+/** The pool kind an options object names: curve, fee (percent), amp, weight_a. */
+bitassets::CreatePool KindOf(const UniValue& options)
+{
+    bitassets::CreatePool create;
+    const UniValue none{UniValue::VOBJ};
+    const UniValue& o{options.isNull() ? none : options};
+    const auto curve{bitassets::curves::ParseCurve(o.exists("curve") ? o["curve"].get_str() : "constant_product")};
+    if (!curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "curve is constant_product, stable or weighted");
+    create.curve = static_cast<uint8_t>(*curve);
+    const double fee_percent{o.exists("fee") ? o["fee"].get_real() : (*curve == bitassets::Curve::STABLE ? 0.05 : 0.3)};
+    create.fee = static_cast<uint32_t>(std::llround(fee_percent * 10000));
+    if (*curve == bitassets::Curve::STABLE) create.amp = o.exists("amp") ? o["amp"].getInt<uint32_t>() : 100;
+    if (*curve == bitassets::Curve::WEIGHTED) {
+        if (!o.exists("weight_a")) throw JSONRPCError(RPC_INVALID_PARAMETER, "A weighted pool needs weight_a, the first asset's weight in percent");
+        create.weight_a = static_cast<uint8_t>(o["weight_a"].getInt<int>());
+    }
+    if (const auto why{bitassets::WhyNotPoolKind(create.curve, create.fee, create.amp, create.weight_a, 0)}) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a pool kind: " + *why);
+    return create;
+}
+
+/** The shares of a pool this wallet holds. */
+uint64_t SharesHeld(CWallet& wallet, const uint256& pool)
+{
+    uint64_t held{0};
+    for (const OwnedToken& t : OwnedTokens(wallet)) {
+        if (t.token.kind == Token::Kind::LP && t.token.id == pool) held += t.token.amount;
+    }
+    return held;
+}
+} // namespace
+
+RPCMethod createpool()
+{
+    return RPCMethod{
+        "createpool",
+        "Layers' DEX: make a pool of two assets of a kind (curve, fee tier, amplification or weights) and put its first liquidity in, for "
+        "shares of it (previewpool shows what it would make). A pair has a pool of each kind; the constant-product pool at 0.3 % is the one "
+        "addliquidity makes. Both amounts go in whole and set the pool's price." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"amount_a", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it goes in"},
+            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"amount_b", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it"},
+            {"kind", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "The pool's kind",
+            {
+                {"curve", RPCArg::Type::STR, RPCArg::Default{"constant_product"}, "constant_product, stable or weighted"},
+                {"fee", RPCArg::Type::NUM, RPCArg::DefaultHint{"0.05 for stable, else 0.3"}, "The fee tier, in percent: 0.01, 0.05, 0.3 or 1"},
+                {"amp", RPCArg::Type::NUM, RPCArg::DefaultHint{"100 for stable"}, "A stable pool's amplification, 1 to 10000"},
+                {"weight_a", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A weighted pool's weight of asset_a, in percent: 2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95 or 98"},
+            }},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How many fewer shares than quoted, in percent, it may give (should someone else reopen the pool first)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR_HEX, "pool", "The pool's id"},
+            {RPCResult::Type::NUM, "shares", "The shares it gives"},
+        }},
+        RPCExamples{HelpExampleCli("createpool", "\"USDX\" 1000 \"USDY\" 1000 '{\"curve\":\"stable\",\"fee\":0.05,\"amp\":200}'") +
+                    HelpExampleCli("createpool", "\"GOLD\" 800 \"CHN\" 2 '{\"curve\":\"weighted\",\"weight_a\":80}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    bitassets::CreatePool create{KindOf(request.params[4])};
+    const AssetInfo a{ParseAsset(*pwallet, request.params[0])};
+    const AssetInfo b{ParseAsset(*pwallet, request.params[2])};
+    if (a.id == b.id) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a pool");
+    create.asset_a = a.id;
+    create.asset_b = b.id;
+    create.amount_a = bitassets::ParseUnits(request.params[1], a.decimals);
+    create.amount_b = bitassets::ParseUnits(request.params[3], b.decimals);
+    const uint64_t slippage{Slippage(request.params[5], 1)};
+    const bool a_first{a.id < b.id};
+    const bitassets::PoolParams kind{bitassets::MakePoolParams(create, a_first ? a.decimals : b.decimals, a_first ? b.decimals : a.decimals)};
+    const uint256 id{bitassets::PoolIdOf(a.id, b.id, kind)};
+    bitassets::Pool pool;
+    if (const auto found{pwallet->chain().getBitAssetsPool(id)}) {
+        if (!bitassets::amm::Abandoned(*found)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A pool of this kind of these assets exists, and has providers: addpoolliquidity puts liquidity into it");
+        pool = *found;
+    }
+    const uint64_t r0{pool.reserve0 + (a_first ? create.amount_a : create.amount_b)}, r1{pool.reserve1 + (a_first ? create.amount_b : create.amount_a)};
+    const auto total{bitassets::curves::OpeningShares(kind, r0, r1)};
+    if (!total || *total <= bitassets::MIN_LIQUIDITY || *total - bitassets::MIN_LIQUIDITY < bitassets::MIN_OPEN_SHARES) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little to open a pool: it makes fewer than %u shares (previewpool)", bitassets::MIN_OPEN_SHARES));
+    }
+    const uint64_t chn{a.id.IsNull() ? create.amount_a : b.id.IsNull() ? create.amount_b : bitassets::MIN_OPEN_CHN};
+    if (chn < bitassets::MIN_OPEN_CHN) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little to open a pool: it takes at least %s CHN", FormatMoney(bitassets::MIN_OPEN_CHN)));
+    const uint64_t shares{*total - bitassets::MIN_LIQUIDITY};
+    create.min_shares = std::max<uint64_t>(1, LessSlippage(shares, slippage));
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, a, create.amount_a, inputs, outs, chn_in);
+    PayIn(*pwallet, b, create.amount_b, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, create, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("pool", id.GetHex());
+    result.pushKV("shares", shares);
+    return result;
+},
+    };
+}
+
+RPCMethod addpoolliquidity()
+{
+    return RPCMethod{
+        "addpoolliquidity",
+        "Layers' DEX: put liquidity into a pool by its id (any kind; createpool, getpool, listpools): any amounts of its assets, or one of them "
+        "alone. All of it goes in; a deposit out of the pool's proportions pays the pool's fee on the part a swap to them would trade." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::NO, "What goes in, by asset (one or both of the pool's)",
+            {
+                {"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "How much of it (the key: " + std::string{bitassets::ASSET_ARG_HELP} + ")"},
+            }},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How many fewer shares than quoted, in percent, it may give if the pool moves first"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::NUM, "shares", "The shares it gives if nothing moves the pool first"},
+        }},
+        RPCExamples{HelpExampleCli("addpoolliquidity", "\"<pool>\" '{\"GOLD\":10}'") + HelpExampleCli("addpoolliquidity", "\"<pool>\" '{\"GOLD\":10,\"CHN\":0.5}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)};
+    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const auto& [pool, kind]{*found};
+    const AssetInfo info0{ParseAsset(*pwallet, UniValue{pool.asset0.IsNull() ? std::string{"CHN"} : "0x" + pool.asset0.GetHex()})};
+    const AssetInfo info1{ParseAsset(*pwallet, UniValue{"0x" + pool.asset1.GetHex()})};
+    uint64_t amount0{0}, amount1{0};
+    const UniValue& amounts{request.params[1].get_obj()};
+    for (const std::string& key : amounts.getKeys()) {
+        const AssetInfo asset{ParseAsset(*pwallet, UniValue{key})};
+        if (asset.id != pool.asset0 && asset.id != pool.asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s is not an asset of this pool", key));
+        (asset.id == pool.asset0 ? amount0 : amount1) = bitassets::ParseUnits(amounts[key], asset.decimals);
+    }
+    if (amount0 == 0 && amount1 == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to put in");
+    const uint64_t slippage{Slippage(request.params[2], 1)};
+    uint64_t shares{0};
+    if (bitassets::amm::Abandoned(pool)) {
+        if (amount0 == 0 || amount1 == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nobody provides liquidity to this pool any more: both amounts reopen it, at their price");
+        const auto total{bitassets::curves::OpeningShares(kind, pool.reserve0 + amount0, pool.reserve1 + amount1)};
+        if (!total || *total <= bitassets::MIN_LIQUIDITY + bitassets::MIN_OPEN_SHARES) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little to open the pool again");
+        shares = *total - bitassets::MIN_LIQUIDITY;
+    } else {
+        const auto got{bitassets::curves::DepositShares(kind, bitassets::dex::PoolFee(kind), pool, amount0, amount1)};
+        if (!got) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it makes no shares");
+        shares = *got;
+    }
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    if (amount0 > 0) PayIn(*pwallet, info0, amount0, inputs, outs, chn_in);
+    if (amount1 > 0) PayIn(*pwallet, info1, amount1, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::PoolDeposit{id, amount0, amount1, std::max<uint64_t>(1, LessSlippage(shares, slippage))}, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("shares", shares);
+    return result;
+},
+    };
+}
+
+RPCMethod removepoolliquidity()
+{
+    return RPCMethod{
+        "removepoolliquidity",
+        "Layers' DEX: give back shares of a pool by its id (any kind), for both its assets, or for one of them alone (what the shares are "
+        "worth of it, plus what their part of the other buys of it in the pool, its fee paid)." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"percent", RPCArg::Type::NUM, RPCArg::Default{100}, "How much of the shares held, in percent"},
+            {"only", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "One of the pool's assets: that asset alone comes out. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than quoted, in percent, it may give if the pool moves first"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::NUM, "shares", "The shares given back"},
+            {RPCResult::Type::OBJ_DYN, "amounts", "What comes out of each asset, if nothing moves the pool first", {{RPCResult::Type::NUM, "asset", ""}}},
+        }},
+        RPCExamples{HelpExampleCli("removepoolliquidity", "\"<pool>\" 50") + HelpExampleCli("removepoolliquidity", "\"<pool>\" 100 \"CHN\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)};
+    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const auto& [pool, kind]{*found};
+    const double percent{request.params[1].isNull() ? 100.0 : request.params[1].get_real()};
+    if (!(percent > 0 && percent <= 100)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The percentage is above 0, at most 100");
+    uint8_t only{0};
+    if (!request.params[2].isNull()) {
+        const AssetInfo asset{ParseAsset(*pwallet, request.params[2])};
+        if (asset.id != pool.asset0 && asset.id != pool.asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is not an asset of this pool");
+        only = asset.id == pool.asset0 ? 1 : 2;
+    }
+    const uint64_t slippage{Slippage(request.params[3], 1)};
+    const uint64_t held{SharesHeld(*pwallet, id)};
+    if (held == 0) NotHeld(*pwallet, Token::Kind::LP, id, "shares of this pool");
+    const uint64_t shares{percent >= 100 ? held : static_cast<uint64_t>(static_cast<long double>(held) * percent / 100)};
+    if (shares == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is no share at all");
+    if (shares > pool.shares - std::min(pool.shares, bitassets::MIN_LIQUIDITY)) throw JSONRPCError(RPC_INVALID_PARAMETER, "More shares than the pool can give back");
+    auto [out0, out1]{bitassets::curves::WithdrawOf(kind, bitassets::dex::PoolFee(kind), pool, shares, only)};
+    if (pool.asset0.IsNull() && out0 < bitassets::MIN_CHN_PAYOUT) out0 = 0;
+    if (pool.asset1.IsNull() && out1 < bitassets::MIN_CHN_PAYOUT) out1 = 0;
+    if (out0 == 0 && out1 == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too few shares: they take nothing out of the pool");
+    const auto [inputs, total]{Select(*pwallet, Token::Kind::LP, id, shares, "shares of this pool")};
+    std::vector<Out> outs;
+    if (total > shares) {
+        Token change{UnitToken(Token::Kind::LP, id)};
+        change.amount = total - shares;
+        outs.push_back({ChangeDestination(*pwallet), change});
+    }
+    std::vector<AssetId> results;
+    if (out0 > 0) results.push_back(pool.asset0);
+    if (out1 > 0) results.push_back(pool.asset1);
+    ResultOuts(*pwallet, results, outs);
+    const auto least{[&](uint64_t out) { return out == 0 ? uint64_t{0} : std::max<uint64_t>(1, LessSlippage(out, slippage)); }};
+    const CTransactionRef tx{Send(*pwallet, bitassets::PoolWithdraw{id, shares, only, least(out0), least(out1), ChnTo(*pwallet, results)}, outs, inputs)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("shares", shares);
+    UniValue amounts(UniValue::VOBJ);
+    amounts.pushKV(LabelOfAsset(*pwallet, pool.asset0), bitassets::AmountToJSON(out0, DecimalsOf(*pwallet, pool.asset0)));
+    amounts.pushKV(LabelOfAsset(*pwallet, pool.asset1), bitassets::AmountToJSON(out1, DecimalsOf(*pwallet, pool.asset1)));
+    result.pushKV("amounts", std::move(amounts));
+    return result;
+},
+    };
+}
+
+RPCMethod swappools()
+{
+    return RPCMethod{
+        "swappools",
+        "Layers' DEX: trade through named pools of any kind (getswapquote's or quoteroute's pools), from an asset, for at least the quote less "
+        "the slippage: an order of its block's batch, as swaproute's." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"asset_in", RPCArg::Type::STR, RPCArg::Optional::NO, "What is paid in. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount_in", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},
+            {"pools", RPCArg::Type::ARR, RPCArg::Optional::NO, "The pools, first to last (1 to 4), each holding what the one before gives",
+            {
+                {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "A pool"},
+            }},
+            {"slippage", RPCArg::Type::NUM, RPCArg::Default{0.5}, "How much less than the quote, in percent, it may give"},
+            {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least the caller showed: refused rather than signed for less"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR, "asset_out", "What comes out"},
+            {RPCResult::Type::NUM, "quote", "What it gives alone, if nothing moves the pools first"},
+            {RPCResult::Type::NUM, "min_out", "The least it gives"},
+        }},
+        RPCExamples{HelpExampleCli("swappools", "\"GOLD\" 10 '[\"<pool>\"]'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    const AssetInfo in{ParseAsset(*pwallet, request.params[0])};
+    const uint64_t amount_in{bitassets::ParseUnits(request.params[1], in.decimals)};
+    std::vector<uint256> pools;
+    for (const UniValue& id : request.params[2].getValues()) pools.push_back(ParseHashV(id, "pool"));
+    if (pools.empty() || pools.size() + 1 > bitassets::MAX_ROUTE_ASSETS) throw JSONRPCError(RPC_INVALID_PARAMETER, "1 to 4 pools");
+    const uint64_t slippage{Slippage(request.params[3], 0.5)};
+    std::vector<AssetId> path{in.id};
+    uint64_t quote{amount_in};
+    for (const uint256& id : pools) {
+        const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)};
+        if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("No pool %s", id.GetHex()));
+        const auto& [pool, kind]{*found};
+        const AssetId at{path.back()};
+        if (pool.asset0 != at && pool.asset1 != at) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The pool %s does not hold what the hop before gives", id.GetHex()));
+        const AssetId next{pool.asset0 == at ? pool.asset1 : pool.asset0};
+        if (std::find(path.begin(), path.end(), next) != path.end()) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset twice on the route");
+        if (bitassets::amm::Abandoned(pool)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Nobody provides liquidity to the pool %s", id.GetHex()));
+        quote = bitassets::curves::SwapOutOf(kind, bitassets::dex::PoolFee(kind), pool.reserve0, pool.reserve1, pool.asset0 == at, quote);
+        if (quote == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing");
+        path.push_back(next);
+    }
+    const AssetId out{path.back()};
+    const uint8_t dout{DecimalsOf(*pwallet, out)};
+    if (out.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least CHN paid out is %s", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (in.id.IsNull() && amount_in < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s CHN at least (what comes back is paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote, slippage))};
+    if (!request.params[4].isNull()) {
+        const uint64_t confirmed{bitassets::ParseUnits(request.params[4], dout)};
+        if (min_out < confirmed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The pools moved: the route now gives less than min_out. Quote it again");
+    }
+    std::vector<COutPoint> inputs;
+    std::vector<Out> outs;
+    CAmount chn_in{0};
+    PayIn(*pwallet, in, amount_in, inputs, outs, chn_in);
+    outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    const CTransactionRef tx{Send(*pwallet, bitassets::SwapPools{in.id, pools, amount_in, min_out, ChnTo(*pwallet, {in.id, out})}, outs, inputs, chn_in)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("asset_out", LabelOfAsset(*pwallet, out));
+    result.pushKV("quote", bitassets::AmountToJSON(quote, dout));
+    result.pushKV("min_out", bitassets::AmountToJSON(min_out, dout));
     return result;
 },
     };

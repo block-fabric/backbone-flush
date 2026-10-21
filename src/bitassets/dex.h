@@ -47,6 +47,15 @@ inline constexpr size_t MAX_ROUTE_ASSETS{5};
 inline constexpr size_t MAX_BLOCK_ORDERS{500};
 /** Passes of the batch clearing before the block's orders execute one after another. */
 inline constexpr int MAX_CLEARING_PASSES{8};
+/**
+ * The work of the DEX's pool kinds a block may hold (their curves are searched, not a closed form): each
+ * hop of an order through a stable or weighted pool, and each CreatePool, PoolDeposit and PoolWithdraw,
+ * counts one. A transaction beyond is not valid in that block (bad-ba-block-curve-work-full), and the
+ * miner leaves it for the next, as for MAX_BLOCK_ORDERS. With the clearing's passes this bounds a block's
+ * clearing to (MAX_CLEARING_PASSES + 1) · MAX_BLOCK_CURVE_WORK rounds of a curve pool, each a few hundred
+ * exact comparisons (doc/layers.md, "Pool kinds": the measured worst case).
+ */
+inline constexpr uint32_t MAX_BLOCK_CURVE_WORK{200};
 /** The observations of the price accumulators each pool keeps: the last ones. */
 inline constexpr uint32_t TWAP_OBSERVATIONS{1024};
 /** What registering an oracle costs, paid to mainchain miners (as the CHN freed by retiring an asset): 0.1 CHN. */

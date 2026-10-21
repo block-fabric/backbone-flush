@@ -434,6 +434,31 @@ BOOST_AUTO_TEST_CASE(speed)
     BOOST_CHECK_LT(micros / rounds, 20'000);
 }
 
+BOOST_AUTO_TEST_CASE(worst_case_round)
+{
+    // The slowest round of a pool whose curve is searched, over adversarial kinds, reserves and orders: the
+    // bound of a block's clearing is (MAX_CLEARING_PASSES + 1) · MAX_BLOCK_CURVE_WORK of these (doc/layers.md).
+    std::vector<PoolParams> kinds{Stable(1, 100), Stable(10000, 100), Stable(5000, 10000, 12, 0), Stable(1, 10000, 0, 12), Weighted(98, 100), Weighted(2, 10000), Weighted(60, 100), Weighted(40, 10000)};
+    double worst{0};
+    for (const PoolParams& p : kinds) {
+        uint64_t s0{1}, s1{1};
+        for (int i{0}; i < p.scale0; ++i) s0 *= 10;
+        for (int i{0}; i < p.scale1; ++i) s1 *= 10;
+        for (const auto& [r0, r1] : std::vector<std::pair<uint64_t, uint64_t>>{{MAX_AMOUNT / 3 / s0, MAX_AMOUNT / 3 / s1}, {MAX_AMOUNT / 3 / s0, 7}, {11, MAX_AMOUNT / 3 / s1}, {123456789, 987654321}}) {
+            for (const auto& orders : std::vector<std::vector<dex::HopIn>>{{{true, MAX_AMOUNT / 4}, {false, MAX_AMOUNT / 5}}, {{true, 1}, {false, 1}}, {{true, r0 / 2 + 1}, {false, r1 / 3 + 1}, {true, 17}},
+                                                                          {{false, MAX_AMOUNT / 3}}}) {
+                const auto start{std::chrono::steady_clock::now()};
+                ClearPoolOf(p, p.fee, r0, r1, orders);
+                worst = std::max(worst, std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count());
+            }
+        }
+    }
+    const double block_ms{worst * (MAX_CLEARING_PASSES + 1) * MAX_BLOCK_CURVE_WORK / 1000};
+    BOOST_TEST_MESSAGE("worst round: " << worst << " us; a block's clearing at most about " << block_ms << " ms");
+    // Well under a slot (15 s), on this machine at its slowest (nice 19, sanitizers off).
+    BOOST_CHECK_LT(block_ms, 5000);
+}
+
 /** The vectors: each case's inputs and what the rules give, which other implementations check. */
 UniValue Case(const PoolParams& p, uint64_t r0, uint64_t r1, const std::vector<dex::HopIn>& orders)
 {

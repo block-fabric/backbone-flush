@@ -841,6 +841,8 @@ struct State::Plan {
     std::optional<std::pair<uint256, Pool>> pool;
     //! The kind of a pool CreatePool makes (not the default).
     std::optional<std::pair<uint256, PoolParams>> pool_params;
+    //! The work of the pool kinds it adds to its block (MAX_BLOCK_CURVE_WORK).
+    uint32_t curve_work{0};
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -910,6 +912,8 @@ const sidechain::Table<uint256, OracleContract> CONTRACTS{0x88};
 constexpr uint8_t CONTRACTS_BY_ASSET{0x89};
 // The DEX's pool kinds (curves.h), from SidechainParams::dex_curves_height: none before.
 const sidechain::Table<uint256, PoolParams> POOL_PARAMS{0x8a};
+//! During a block only: the work of the pool kinds its transactions added (MAX_BLOCK_CURVE_WORK).
+const sidechain::Cell<uint32_t> CURVE_WORK{0x8b, 0};
 //! The bytes of the DEX's indexes, taken (sidechain::DuplicateTableIds) as the tables' are.
 const sidechain::TableId DEX_INDEXES_TAKEN[]{sidechain::TableId{OBSERVATIONS}, sidechain::TableId{ATTESTATIONS}, sidechain::TableId{CONTRACTS_BY_ASSET}};
 
@@ -1711,6 +1715,10 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             }
             order.path = *path;
             order.pools = named->pools;
+            // Each hop through a pool whose curve is searched (stable, weighted) is work.
+            for (const uint256& id : named->pools) {
+                if (GetPoolParams(id).GetCurve() != Curve::CONSTANT_PRODUCT) ++plan.curve_work;
+            }
             order.amount_in = named->amount_in;
             order.min_out = named->min_out;
             order.chn_to = named->chn_to;
@@ -1814,6 +1822,7 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         return false;
     }};
     const Txid txid{tx.GetHash()};
+    plan.curve_work = 1;
     // A pool nobody provides liquidity to (new, or everyone left) opens as AddLiquidity opens one: the
     // shares are the invariant's first degree at the reserves after, MIN_LIQUIDITY of them kept for good,
     // what it held merged in; a deposit worth trading against, not dust.
@@ -1953,7 +1962,14 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
         reject_reason = "bad-ba-block-orders-full";
         return false;
     }
+    // The DEX's pool kinds: their work is bounded the same way.
+    const uint32_t work_before{plan->curve_work > 0 ? CURVE_WORK.Get(*m_view) : 0};
+    if (plan->curve_work > 0 && work_before + plan->curve_work > MAX_BLOCK_CURVE_WORK) {
+        reject_reason = "bad-ba-block-curve-work-full";
+        return false;
+    }
     sidechain::StoreOverlay& out{Writable()};
+    if (plan->curve_work > 0) CURVE_WORK.Put(out, work_before + plan->curve_work);
     // In the order the rules have always applied a plan in.
     for (const COutPoint& outpoint : plan->spent) SetToken(outpoint, std::nullopt);
     for (const auto& [outpoint, token] : plan->created) SetToken(outpoint, token);
@@ -2051,6 +2067,8 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
 {
     m_dex = true;
     sidechain::StoreOverlay& out{Writable()};
+    // The pool kinds' work counts for its block only.
+    if (CURVE_WORK.Get(out) != 0) CURVE_WORK.Put(out, 0);
     std::vector<Order> orders;
     ORDERS.ForEach(out, [&](const uint32_t&, const Order& order) {
         orders.push_back(order);
@@ -2121,6 +2139,14 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             }
         }
     }
+    // The rounds of the pools whose curves are searched, by what they cleared: a pass that clears one again gets the same.
+    struct RoundKey {
+        uint256 pool;
+        uint64_t reserve0, reserve1;
+        std::vector<std::pair<bool, uint64_t>> ins;
+        auto operator<=>(const RoundKey&) const = default;
+    };
+    std::map<RoundKey, std::optional<dex::Clearing>> rounds;
     // One pass: the orders in `active` cleared together on `pools`, a round per hop, the pools of a round
     // in the order of their ids; what each gets (nullopt: it misses).
     const auto pass{[&](const std::vector<bool>& active, Pools& pools) {
@@ -2138,9 +2164,20 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 std::vector<dex::HopIn> ins;
                 for (size_t i : members) ins.push_back({pool && pool->asset0 == orders[i].path[hop], *amount[i]});
                 // A pool gone, or closed, since the order: it misses.
-                // Of its kind (curves::ClearPoolOf: ClearPool's own result for the pools AddLiquidity makes).
+                // Of its kind (curves::ClearPoolOf: ClearPool's own result for the pools AddLiquidity makes). A round
+                // the passes before cleared already (the same pool, reserves and orders) is not searched again.
                 const auto& [params, fee]{kinds.at(id)};
-                const auto cleared{pool && !amm::Abandoned(*pool) ? curves::ClearPoolOf(params, fee, pool->reserve0, pool->reserve1, ins) : std::nullopt};
+                std::optional<dex::Clearing> cleared;
+                if (pool && !amm::Abandoned(*pool)) {
+                    RoundKey key{id, pool->reserve0, pool->reserve1, {}};
+                    for (const dex::HopIn& in : ins) key.ins.emplace_back(in.zero_in, in.amount);
+                    if (const auto memo{rounds.find(key)}; memo != rounds.end()) {
+                        cleared = memo->second;
+                    } else {
+                        cleared = curves::ClearPoolOf(params, fee, pool->reserve0, pool->reserve1, ins);
+                        if (params.GetCurve() != Curve::CONSTANT_PRODUCT) rounds.emplace(std::move(key), cleared);
+                    }
+                }
                 if (!cleared) {
                     for (size_t i : members) amount[i].reset();
                     continue;

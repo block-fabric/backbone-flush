@@ -365,4 +365,40 @@ BOOST_AUTO_TEST_CASE(release_takes_the_kinds)
     BOOST_CHECK(!chain.Assets().HasPoolParams(id));
 }
 
+BOOST_AUTO_TEST_CASE(curve_work_budget)
+{
+    // A block holds at most MAX_BLOCK_CURVE_WORK of the pool kinds' work: one more is left for the next
+    // block (the miner skips it; a block with it is not valid), orders through constant-product pools of any
+    // fee tier count none.
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")}, SILVER{HashName("SILVER")};
+    auto g{chain.Issue("GOLD", 1'000'000'000, {10'000'000, 10'000'000})};
+    // Coins of 1000, 50 a transaction (a marker lists at most 64 outputs).
+    COutPoint rest{g.back()};
+    uint64_t left{1'000'000'000 - 20'000'000};
+    g.pop_back();
+    while (g.size() < MAX_BLOCK_CURVE_WORK + 5) {
+        std::vector<std::optional<Token>> outs(50, AssetToken(GOLD, 1000));
+        outs.push_back(AssetToken(GOLD, left - 50'000));
+        const CTransaction split{MakeTx({rest}, std::nullopt, outs)};
+        chain.Require(split);
+        for (uint32_t i{0}; i < 50; ++i) g.emplace_back(split.GetHash(), i);
+        rest = COutPoint{split.GetHash(), 50};
+        left -= 50'000;
+    }
+    const auto s{chain.Issue("SILVER", 100'000'000, {10'000'000, 10'000'000})};
+    chain.Create(g[0], GOLD, 10'000'000, s[0], SILVER, 10'000'000, Curve::STABLE, 500, 100);
+    chain.Create(g[1], GOLD, 10'000'000, s[1], SILVER, 10'000'000, Curve::CONSTANT_PRODUCT, 100);
+    chain.EndBlock();
+    const uint256 stable{PoolIdOf(GOLD, SILVER, Kind(Curve::STABLE, 500, 100))}, cp{PoolIdOf(GOLD, SILVER, Kind(Curve::CONSTANT_PRODUCT, 100))};
+    for (uint32_t i{0}; i < MAX_BLOCK_CURVE_WORK; ++i) chain.Require(MakeTx({g[2 + i]}, SwapPools{GOLD, {stable}, 1000, 1, CScript{}}, {std::nullopt}));
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({g[2 + MAX_BLOCK_CURVE_WORK]}, SwapPools{GOLD, {stable}, 1000, 1, CScript{}}, {std::nullopt})), "bad-ba-block-curve-work-full");
+    // A constant-product pool of another tier is not searched: no work.
+    chain.Require(MakeTx({g[3 + MAX_BLOCK_CURVE_WORK]}, SwapPools{GOLD, {cp}, 1000, 1, CScript{}}, {std::nullopt}));
+    chain.EndBlock();
+    // The next block starts afresh.
+    chain.Require(MakeTx({g[2 + MAX_BLOCK_CURVE_WORK]}, SwapPools{GOLD, {stable}, 1000, 1, CScript{}}, {std::nullopt}));
+    chain.EndBlock();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
