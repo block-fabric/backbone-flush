@@ -14,6 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import VerifiedBadge from './VerifiedBadge.svelte';
   import Chart from './Chart.svelte';
   import PoolKind from './PoolKind.svelte';
   import { flipKind, kindOf } from './kinds';
@@ -153,6 +154,7 @@
         {#if asset.display_name}<p class="display-name muted" data-testid="asset-display-name"><SafeText text={asset.display_name} /></p>{/if}
         <div class="tags">
           <span class="ba-tag" translate="no">#{asset.seq}</span>
+          <VerifiedBadge {id} />
           {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<span class="ba-tag">Mintable</span>{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
           {#if controlled}<span class="ba-tag accent"><Icon name="crown" size={12} /> You control it</span>{/if}

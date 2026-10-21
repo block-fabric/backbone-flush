@@ -8,11 +8,12 @@ import { approx, assetArg, isChn, unitsOf, type Amount } from './model';
 
 /**
  * The curves of pools; 'concentrated' takes its liquidity by positions between two prices (ba/cl.ts); 'launch' is a launch's
- * bonding curve (ba/launch.ts), which nobody makes or puts liquidity into.
+ * bonding curve (ba/launch.ts), which nobody makes or puts liquidity into; 'book' is the order book of a pair (ba/book.ts):
+ * limit orders, no liquidity of its own (a venue of routes all the same).
  */
-export type Curve = 'constant_product' | 'stable' | 'weighted' | 'concentrated' | 'launch';
+export type Curve = 'constant_product' | 'stable' | 'weighted' | 'concentrated' | 'launch' | 'book';
 /** The curves a pool is made with (createpool). */
-export type MadeCurve = Exclude<Curve, 'launch'>;
+export type MadeCurve = Exclude<Curve, 'launch' | 'book'>;
 export const CURVES: readonly MadeCurve[] = ['constant_product', 'stable', 'weighted', 'concentrated'];
 
 /** The fee of the kind addliquidity makes (constant product), in percent; and that of a stable pool by default. */
@@ -61,7 +62,7 @@ export interface DexInfo {
 }
 
 export function isCurve(value: unknown): value is Curve {
-  return value === 'constant_product' || value === 'stable' || value === 'weighted' || value === 'concentrated' || value === 'launch';
+  return value === 'constant_product' || value === 'stable' || value === 'weighted' || value === 'concentrated' || value === 'launch' || value === 'book';
 }
 
 /**
@@ -92,7 +93,7 @@ export function flipKind(k: PoolKind): PoolKind {
 }
 
 /** The words of a curve (shown with t()). */
-export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted', concentrated: 'Concentrated', launch: 'Launch curve' };
+export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted', concentrated: 'Concentrated', launch: 'Launch curve', book: 'Order book' };
 
 /** When to choose each curve, in a line (shown with t()). */
 export const CURVE_HELP: Record<Curve, string> = {
@@ -101,6 +102,7 @@ export const CURVE_HELP: Record<Curve, string> = {
   weighted: 'For a pool that holds more of one asset than of the other (such as 80/20): less exposure to the price of the lighter one, and more slippage.',
   concentrated: 'Liquidity between two prices you choose (positions), as Uniswap v3: far deeper where the price trades, and earning only while the price is in your range. Made at a price, empty: positions bring its liquidity.',
   launch: 'The bonding curve of a launched token: it sells the token for CHN until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.',
+  book: 'The order book of a pair: limit orders to buy or sell at a price, for some blocks, which trade at the end of each block in one batch. Nobody puts liquidity into it: place an order instead.',
 };
 
 /** The fee a pool charges now: a dynamic fee's value for the next block, else its tier. */

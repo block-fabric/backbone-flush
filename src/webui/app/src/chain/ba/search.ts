@@ -5,10 +5,13 @@
 // page only (listassets with its match; the pools and auctions the store read), filtered and sorted here.
 import { BridgeError } from '../../lib/bridge';
 import { rpc } from '../../lib/rpc';
+import type { MarketSort } from './markets';
 import { approx, type Asset, type Auction, type Pool } from './model';
 import { ba, noteKnownAssets } from './store.svelte';
 
 export type AssetSort = 'relevance' | 'name' | 'newest' | 'oldest' | 'supply' | 'activity' | 'volume' | 'pool_depth';
+/** The sorts a search takes: those of the assets, and searchpools' own (the market index: ba/markets.ts). */
+export type SearchSort = AssetSort | MarketSort;
 
 /** The filters the node applies (its own words). */
 export interface SearchFilters {
@@ -26,7 +29,7 @@ export interface SearchFilters {
 export interface SearchQuery {
   query: string;
   filters: SearchFilters;
-  sort: AssetSort;
+  sort: SearchSort;
   cursor?: string | null;
   /** At most MAX_LIMIT. */
   limit?: number;
@@ -68,7 +71,7 @@ function pageOf<T>(raw: unknown, keys: string[]): { items: T[]; cursor: string |
   return { items, cursor, total: typeof o.total === 'number' ? o.total : undefined };
 }
 
-type Params = [string, SearchFilters, AssetSort, string | null, number];
+type Params = [string, SearchFilters, SearchSort, string | null, number];
 
 async function search<T>(method: string, ask: (params: Params) => Promise<unknown>, keys: string[], q: SearchQuery, fallback: () => Promise<T[]>): Promise<SearchPage<T>> {
   const limit = Math.max(1, Math.min(MAX_LIMIT, q.limit ?? PAGE));
@@ -104,7 +107,7 @@ export function filterAssets(list: readonly Asset[], f: SearchFilters, pooled: (
   });
 }
 
-export function sortAssets(list: Asset[], sort: AssetSort): Asset[] {
+export function sortAssets(list: Asset[], sort: SearchSort): Asset[] {
   const by: Record<string, (a: Asset, b: Asset) => number> = {
     name: (a, b) => a.label.localeCompare(b.label),
     oldest: (a, b) => a.registered - b.registered,
@@ -158,13 +161,15 @@ export async function searchPools(q: SearchQuery): Promise<SearchPage<Pool>> {
   });
 }
 
-export function sortPools(list: Pool[], sort: AssetSort): Pool[] {
+export function sortPools(list: Pool[], sort: SearchSort): Pool[] {
   const by: Record<string, (a: Pool, b: Pool) => number> = {
     name: (a, b) => `${a.asset_a}/${a.asset_b}`.localeCompare(`${b.asset_a}/${b.asset_b}`),
     activity: (a, b) => b.swaps - a.swaps,
     volume: (a, b) => b.swaps - a.swaps,
     pool_depth: (a, b) => approx(b.reserve_a) * approx(b.reserve_b) - approx(a.reserve_a) * approx(a.reserve_b),
+    newest: (a, b) => b.created - a.created,
   };
+  by.depth = by.pool_depth;
   return [...list].sort(by[sort] ?? by.activity);
 }
 

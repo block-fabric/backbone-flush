@@ -6,7 +6,9 @@
 // 1 % pool and the weighted one; a concentrated USDX/USDY pool with three positions (one out of range) and a pool with a
 // dynamic fee, a few trades, the range picker with a preview and the positions; the launch wizard at its review; then two tokens launched by RPC (MOON, with a display name,
 // a description, an allocation and a first buy; STAR, with a few buys), the list of launches, MOON's page on its curve with
-// a buy quoted, and once a buy of 600 CHN takes it past the curve's end, its page graduated. Pictures in Midnight, Advanced.
+// a buy quoted, and once a buy of 600 CHN takes it past the curve's end, its page graduated; then limit orders of GOLD for
+// USDX in its order book (the ladder, the wallet's orders), the market index, and a curator that verifies GOLD, trusted
+// through the page: its Verified badge. Pictures in Midnight, Advanced.
 (async () => {
   const { host, log, rpc, sleep, T, waitFor, check, snapshot, text, finish } = E2E;
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -40,6 +42,13 @@
       if (!close.length) break;
       close.forEach((b) => b.click());
       await sleep(150);
+    }
+    // Notices that arrive in the meantime (a block's coinbase) are not in the picture: hidden for the whole run.
+    if (!document.getElementById('e2e-no-toasts')) {
+      const hide = document.createElement('style');
+      hide.id = 'e2e-no-toasts';
+      hide.textContent = '.toasts { display: none !important; }';
+      document.head.appendChild(hide);
     }
     await sleep(600);
     await snapshot(name);
@@ -176,9 +185,11 @@
     await waitFor('the liquidity by price', () => $('#cl-lower') && $$('rect.bar').length > 0, 60000);
     await click('±1%', () => $('[aria-label="Range presets"]'));
     set($('#cl-amount-a'), '100');
+    set($('#cl-amount-b'), '100');
     await waitFor('the preview of the position', () => $('[data-testid="position-preview"]'), 60000);
-    // The picker and its chart in view (below the pool's summary).
-    $('#cl-lower').scrollIntoView({ block: 'center' });
+    // The picker and its chart in view (below the pool's summary), from their headings.
+    const heading = $$('h2, h3, h4, .title, strong').find((h) => h.textContent.trim() === 'Liquidity by price');
+    (heading || $('#cl-lower')).scrollIntoView({ block: 'start' });
     await sleep(500);
     await shot('cl-range-picker');
 
@@ -230,6 +241,72 @@
     await waitFor('the page says it', () => $('[data-testid="launch-graduated"]'), 60000);
     await check('graduated: it trades in its pool', text('[data-testid="launch-graduated"]').includes('Graduated'), text('[data-testid="launch-graduated"]'));
     await shot('launch-page-graduated');
+
+    // --- Order books: limit orders of GOLD for USDX, one a block, prices about 1: the bid at 1 crosses the ask at 0.98, the
+    // others rest (a bid is USDX sold for GOLD, its limit in GOLD per USDX: 1 / its price in USDX) ---
+    const orders = [
+      ['GOLD', 20, 'USDX', 1.05],
+      ['GOLD', 15, 'USDX', 1.1],
+      ['GOLD', 10, 'USDX', 0.98],
+      ['USDX', 19, 'GOLD', 1.25],
+      ['USDX', 18, 'GOLD', 1.052631578947],
+      ['USDX', 12, 'GOLD', 1],
+    ];
+    for (const [sell, amount, buy, price] of orders) {
+      const at = await rpc('getblockcount', []);
+      await retry('placeorder', [sell, amount, buy, price, 5760], W);
+      await waitFor('the order in a block', async () => (await rpc('getblockcount', [])) > at + 1, 300000);
+    }
+    await waitFor('the orders in the wallet', async () => (await rpc('listorders', [], W)).length >= orders.length, 300000);
+    const book = await waitFor('the book with both sides', async () => {
+      const b = await rpc('getbook', ['GOLD', 'USDX']);
+      return b.asks.length >= 2 && b.bids.length >= 2 ? b : null;
+    }, 300000);
+    await check('the book has asks and bids', book.asks.length >= 2 && book.bids.length >= 2, JSON.stringify(book));
+
+    await go('trade', 'swap');
+    await go('trade', 'book');
+    await pick('book-base', ids.GOLD);
+    await pick('book-quote', ids.USDX);
+    await waitFor('the ladder', () => $$('[aria-label="Order book"] button.lvl.ask').length >= 2 && $$('[aria-label="Order book"] button.lvl.bid').length >= 2, 60000);
+    set($('#order-amount'), '5');
+    set($('#order-price'), '0.97');
+    await waitFor('the preview of the order', () => $('[data-testid="order-preview"]'), 20000);
+    await shot('order-book');
+
+    const mine = await waitFor('my orders', () => $$('table[aria-label="My orders"] [data-testid="my-order"]').length >= 2 && $('table[aria-label="My orders"]'), 60000);
+    mine.scrollIntoView({ block: 'center' });
+    await sleep(400);
+    await shot('my-orders');
+
+    // --- The market index, every pair (newest first) ---
+    await go('trade', 'markets');
+    set(await waitFor('the sort of the pairs', () => $('select[aria-label="Sort pairs"]'), 30000), 'newest');
+    await waitFor('the pairs', () => $$('table[aria-label="Markets"] tbody tr').length >= 4, 60000);
+    await shot('markets');
+
+    // --- Verified issuers: a curator verifies GOLD, trusted through the page ---
+    const curator = await retry('registeroracle', ['curator'], W);
+    await waitFor('the curator in a block', async () => {
+      try {
+        return (await rpc('getverifications', ['GOLD', [curator.oracle]])).curators.length === 1;
+      } catch (_) {
+        return false;
+      }
+    }, 300000);
+    await retry('verifyasset', [curator.oracle, 'GOLD'], W);
+    await waitFor('GOLD verified by the curator', async () => (await rpc('getverifications', ['GOLD', [curator.oracle]])).verified === true, 300000);
+    await go('trade', 'swap');
+    await go('trade', 'markets');
+    const panel = await waitFor('the curators panel', () => $('details[aria-label="Verified issuers"]'), 30000);
+    panel.open = true;
+    set(await waitFor('the curator field', () => $('#curator-id'), 10000), curator.oracle);
+    await click('Trust', () => panel);
+    await waitFor('the curator trusted', () => $('ul[aria-label="Curators trusted"]') && text('ul[aria-label="Curators trusted"]').includes('curator'), 30000);
+    set($('select[aria-label="Sort pairs"]'), 'newest');
+    await waitFor('the Verified badge', () => $('table[aria-label="Markets"] [data-testid="verified-badge"]'), 60000);
+    await check('the badge names the curator', /curator/.test($('[data-testid="verified-badge"]').getAttribute('title') || ''), $('[data-testid="verified-badge"]').getAttribute('title'));
+    await shot('verified-badge');
     await finish();
   } catch (e) {
     // The page as it was when it failed, and what it said.

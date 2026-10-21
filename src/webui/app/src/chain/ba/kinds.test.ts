@@ -17,6 +17,8 @@ describe('pool kinds', () => {
     expect(kindOf({ curve: 'weighted', fee: '0.3', weight_a: 80, weight_b: 20, default_kind: false })).toMatchObject({ curve: 'weighted', fee: 0.3, weight_a: 80, weight_b: 20 });
     // An unknown curve reads as the default one; a weighted pool without weight_b has the rest.
     expect(kindOf({ curve: 'cubic' }).curve).toBe('constant_product');
+    // An order book is a kind of its own (Layers' DEX), never the default one.
+    expect(kindOf({ curve: 'book', fee: 0, default_kind: false })).toMatchObject({ curve: 'book', default_kind: false });
     expect(kindOf({ curve: 'weighted', weight_a: 75, default_kind: false }).weight_b).toBe(25);
     expect(flipKind(kindOf({ curve: 'weighted', weight_a: 80, weight_b: 20, default_kind: false }))).toMatchObject({ weight_a: 20, weight_b: 80 });
     const stable = kindOf({ curve: 'stable', amp: 100, fee: 0.05, default_kind: false });

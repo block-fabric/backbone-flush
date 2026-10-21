@@ -34,7 +34,9 @@
   const position = $derived(ba.mine?.liquidity.find((l) => l.pool === pool.pool) ?? null);
   const series = $derived(priceSeries(pool, pool.asset_a_id).map((p) => ({ x: p.h, y: p.p })));
   /** The pool kinds apply from the next block: liquidity by the pool's id (getdexinfo). */
-  const curves = $derived(ba.dex?.curves_active === true && kind.curve !== 'launch' && kind.curve !== 'concentrated');
+  const curves = $derived(ba.dex?.curves_active === true && kind.curve !== 'launch' && kind.curve !== 'concentrated' && kind.curve !== 'book');
+  /** An order book (Layers' DEX: ba/book.ts): no liquidity, no depth curve; its orders on its own page. */
+  const book = $derived(kind.curve === 'book');
 
   // --- Its depth (getpoolcurve), again with each block ---
   let depth = $state<PoolCurve | null>(null);
@@ -42,6 +44,7 @@
   $effect(() => {
     const id = pool.pool;
     void ba.version;
+    if (book) return;
     let live = true;
     rpc
       .raw<PoolCurve>('getpoolcurve', [id, 16])
@@ -63,6 +66,11 @@
     tradeIntent.pay = pool.asset_b_id;
     tradeIntent.get = pool.asset_a_id;
     nav.tab = 'swap';
+  }
+  function openBook() {
+    tradeIntent.bookBase = isChn(pool.asset_a_id) ? pool.asset_b_id : pool.asset_a_id;
+    tradeIntent.bookQuote = isChn(pool.asset_a_id) ? pool.asset_a_id : pool.asset_b_id;
+    nav.tab = 'book';
   }
   function addDefault() {
     tradeIntent.a = pool.asset_a_id;
@@ -266,14 +274,14 @@
   </header>
   <section class="ba-figures">
     <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(pool.price)}</strong><span class="faint"><SafeText text={pool.asset_b} /> for 1 <SafeText text={pool.asset_a} /></span></div>
-    <div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, da, { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, db, { max: 4 })} <SafeText text={pool.asset_b} /></span></div>
+    {#if !book}<div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, da, { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, db, { max: 4 })} <SafeText text={pool.asset_b} /></span></div>{/if}
     <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatCount(pool.swaps)}</strong><span class="faint">trades since block {formatCount(pool.created)}</span></div>
-    <div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>
+    {#if !book}<div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>{/if}
   </section>
   <section class="panel kind-panel" aria-label="Its kind">
     <dl class="ba-lines">
       <dt>Kind</dt><dd><PoolKind {kind} showDefault /></dd>
-      <dt>Fee</dt><dd>{feeNow(kind)}% of what goes in, to its providers{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>
+      {#if !book}<dt>Fee</dt><dd>{feeNow(kind)}% of what goes in, to its providers{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>{/if}
       {#if kind.curve === 'stable' && kind.amp !== undefined}<dt>Amplification</dt><dd>A = {kind.amp}: the higher, the flatter its price near the balance</dd>{/if}
       {#if kind.curve === 'weighted' && kind.weight_a !== undefined}<dt>Weights</dt><dd>{kind.weight_a}% <SafeText text={pool.asset_a} /> · {kind.weight_b ?? 100 - kind.weight_a}% <SafeText text={pool.asset_b} /></dd>{/if}
       <dt>Pool id</dt><dd class="id"><span class="mono break" translate="no">{pool.pool}</span> <CopyButton text={pool.pool} label="Copy the pool id" /></dd>
@@ -281,7 +289,7 @@
     <p class="ba-help">{t(CURVE_HELP[kind.curve])}</p>
   </section>
   <div class="ba-cols">
-    <section class="panel">
+    {#if !book}<section class="panel">
       <div class="panel-head"><h3>Depth</h3><span class="muted small">a trade alone in its block, each way</span></div>
       <div class="panel-body">
         {#if aligned.length}
@@ -292,7 +300,7 @@
           <p class="ba-empty">The node gives no depth of this pool.</p>
         {/if}
       </div>
-    </section>
+    </section>{/if}
     <section class="panel">
       <div class="panel-head"><h3>Price</h3><span class="muted small">as this app saw it</span></div>
       <div class="panel-body">
@@ -374,6 +382,8 @@
         {/if}
       </form>
     </div>
+  {:else if book}
+    <p class="ba-help">An order book: limit orders to buy or sell at a price, which trade at the end of each block in one batch. <button type="button" class="btn small" onclick={openBook}><Icon name="book" size={14} /> Its order book</button></p>
   {:else if kind.curve === 'launch'}
     <p class="ba-help">A launch's curve: buy and sell the token on its page (Launches), until it graduates into its pool with CHN. <button type="button" class="btn small" onclick={() => { tradeIntent.launch = pool.asset_a_id; nav.tab = 'launches'; }}>Its launch</button></p>
   {:else if !kind.default_kind || (ba.dex && ba.dex.curves_height >= 0)}

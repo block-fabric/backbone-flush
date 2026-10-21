@@ -12,6 +12,7 @@
   import PoolKind from './PoolKind.svelte';
   import PoolView from './PoolView.svelte';
   import { kindOf } from './kinds';
+  import { isBook } from './markets';
   import { approx, formatAmount, formatPrice, isChn, type Pool } from './model';
   import HiddenToggle from './HiddenToggle.svelte';
   import { hiddenAsset } from './visible.svelte';
@@ -35,8 +36,10 @@
     newest: (x, y) => y.created - x.created,
     name: (x, y) => `${x.asset_a}/${x.asset_b}`.localeCompare(`${y.asset_a}/${y.asset_b}`),
   };
+  // The order books have their tab (Order book) and the market index (Markets): not pools to list here.
+  const pools = $derived(ba.pools.filter((p) => !isBook(p)));
   const matching = $derived(
-    ba.pools
+    pools
       .filter((p) => showClosed || !p.abandoned)
       .filter((p) => filter === 'all' || (filter === 'chn' && (isChn(p.asset_a_id) || isChn(p.asset_b_id))) || (filter === 'mine' && positions.has(p.pool)) || (filter === 'kinds' && p.default_kind === false))
       .filter((p) => {
@@ -46,7 +49,7 @@
   );
   const hiddenCount = $derived(showHidden ? 0 : matching.filter(isHidden).length);
   const list = $derived((showHidden ? matching : matching.filter((p) => !isHidden(p))).sort(SORTS[sort]));
-  const closed = $derived(ba.pools.filter((p) => p.abandoned).length);
+  const closed = $derived(pools.filter((p) => p.abandoned).length);
   // A pool opened that is not among those read (a launch's pool, a page not read): asked of the node by its id.
   let fetched = $state<Pool | null>(null);
   $effect(() => {
@@ -105,7 +108,7 @@
     </div>
     <HiddenToggle count={hiddenCount} bind:show={showHidden} />
     {#if list.length === 0}
-      <p class="ba-empty">{ba.pools.length === 0 ? 'No pools yet: add liquidity, or create a pool, to make the first.' : 'No pool matches.'}</p>
+      <p class="ba-empty">{pools.length === 0 ? 'No pools yet: add liquidity, or create a pool, to make the first.' : 'No pool matches.'}</p>
     {:else}
       <div class="ba-wrap">
         <table class="ba-table" use:stacked aria-label="Pools">

@@ -199,8 +199,8 @@ export const ba = $state({
 
 /** What another page asks the Send page to send (an asset, by id). */
 export const sendIntent = $state({ asset: '' });
-/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id). */
-export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '' });
+/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id), a book (its base and quote). */
+export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '' });
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
 
@@ -801,8 +801,11 @@ export function poolOf(a: string, b: string): Pool | undefined {
     };
     for (const p of list) {
       poolIds.set(p.pool, p);
-      better(`${p.asset_a_id}:${p.asset_b_id}`, p);
-      better(`${p.asset_b_id}:${p.asset_a_id}`, p);
+      // An order book (Layers' DEX) is no pool to swap in or add to by the pair: by its id only.
+      if (p.curve !== 'book') {
+        better(`${p.asset_a_id}:${p.asset_b_id}`, p);
+        better(`${p.asset_b_id}:${p.asset_a_id}`, p);
+      }
       if (!p.abandoned) {
         pooled.add(p.asset_a_id);
         pooled.add(p.asset_b_id);
