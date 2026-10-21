@@ -144,6 +144,8 @@ public:
         std::optional<int> fee_split_height{};
         //! Layers: Consensus::SidechainParams::dex_height (-testactivationheight=dex@<height>; regtest only).
         std::optional<int> dex_height{};
+        //! Layers: Consensus::SidechainParams::dex_curves_height (-testactivationheight=dexcurves@<height>; regtest only).
+        std::optional<int> dex_curves_height{};
         //! FastBlocks: Consensus::PosParams::fee_curve2_height (-testactivationheight=feecurve2@<height>; regtest only).
         std::optional<int> fee_curve2_height{};
         //! BitAssets: Consensus::SidechainParams::logo_height (-testactivationheight=logo@<height>; regtest only).

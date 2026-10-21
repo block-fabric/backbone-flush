@@ -5,6 +5,8 @@
 #ifndef BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 #define BITCOIN_KERNEL_TESTNET_ACTIVATION_H
 
+#include <limits>
+
 /**
  * Layers on the Chains test network: the height of the Chains testnet block that activated Layers in
  * slot 7 (Consensus::SidechainParams::main_activation_height of the test network, and the PoS rules'
@@ -21,5 +23,14 @@
  * slot 7 stays the one activated at Chains testnet block 4997. Only this height is the test network's own.
  */
 inline constexpr int TESTNET_MAIN_ACTIVATION_HEIGHT{4997};
+
+/**
+ * The DEX's pool kinds (fee tiers, stable and weighted pools; Consensus::SidechainParams::dex_curves_height)
+ * on the running test network: a change of its rules, so a height every node runs a release with before
+ * it is reached. Never until a deployment names one (a node of this release then follows the test network
+ * exactly as one of before). The next restart of the test network from a new genesis takes them from its
+ * first block (0), as every other rule, and this goes.
+ */
+inline constexpr int TESTNET_DEX_CURVES_HEIGHT{std::numeric_limits<int>::max()};
 
 #endif // BITCOIN_KERNEL_TESTNET_ACTIVATION_H

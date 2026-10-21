@@ -6,6 +6,7 @@
 
 #include <bitassets/state.h>
 
+#include <bitassets/curves.h>
 #include <bitassets/dex.h>
 #include <bitassets/displayname_table.h>
 #include <bitassets/logo.h>
@@ -225,6 +226,11 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
         case Attest::KIND: ReadOperation<Attest>(s, marker.operation); break;
         case CreateOracleContract::KIND: ReadOperation<CreateOracleContract>(s, marker.operation); break;
         case SettleOracleContract::KIND: ReadOperation<SettleOracleContract>(s, marker.operation); break;
+        // The DEX's pool kinds (valid from SidechainParams::dex_curves_height: CheckCurvesActivation).
+        case CreatePool::KIND: ReadOperation<CreatePool>(s, marker.operation); break;
+        case PoolDeposit::KIND: ReadOperation<PoolDeposit>(s, marker.operation); break;
+        case PoolWithdraw::KIND: ReadOperation<PoolWithdraw>(s, marker.operation); break;
+        case SwapPools::KIND: ReadOperation<SwapPools>(s, marker.operation); break;
         case SetLogo::KIND: ReadOperation<SetLogo>(s, marker.operation); break;
         case SetDisplayName::KIND: ReadOperation<SetDisplayName>(s, marker.operation); break;
         case REGISTER_WITH_DISPLAY_NAME_KIND: {
@@ -605,14 +611,33 @@ const CScript* ChnTo(const Operation& op)
     if (const auto* bid{std::get_if<Bid>(&op)}) return &bid->chn_to;
     if (const auto* collect{std::get_if<Collect>(&op)}) return &collect->chn_to;
     if (const auto* route{std::get_if<Route>(&op)}) return &route->chn_to;
+    if (const auto* withdraw{std::get_if<PoolWithdraw>(&op)}) return &withdraw->chn_to;
+    if (const auto* swap{std::get_if<SwapPools>(&op)}) return &swap->chn_to;
     return nullptr;
 }
 } // namespace
 
+bool IsCurveOperation(const Operation& op)
+{
+    return std::holds_alternative<CreatePool>(op) || std::holds_alternative<PoolDeposit>(op) || std::holds_alternative<PoolWithdraw>(op) ||
+           std::holds_alternative<SwapPools>(op);
+}
+
 bool IsDexOperation(const Operation& op)
 {
     return std::holds_alternative<Route>(op) || std::holds_alternative<RegisterOracle>(op) || std::holds_alternative<Attest>(op) ||
-           std::holds_alternative<CreateOracleContract>(op) || std::holds_alternative<SettleOracleContract>(op);
+           std::holds_alternative<CreateOracleContract>(op) || std::holds_alternative<SettleOracleContract>(op) || IsCurveOperation(op);
+}
+
+bool CheckCurvesActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (marker && marker->operation && IsCurveOperation(*marker->operation)) {
+        reject_reason = "bad-ba-marker";
+        return false;
+    }
+    return true;
 }
 
 bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
@@ -694,6 +719,19 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         // All different: no pool twice, no cycle.
         const std::set<AssetId> distinct{route->path.begin(), route->path.end()};
         if (distinct.size() != route->path.size()) return invalid("bad-ba-route");
+    } else if (const auto* create{std::get_if<CreatePool>(&op)}) {
+        if (create->asset_a == create->asset_b || !positive(create->amount_a) || !positive(create->amount_b) || create->min_shares > MAX_AMOUNT) return invalid("bad-ba-liquidity");
+        if (WhyNotPoolKind(create->curve, create->fee, create->amp, create->weight_a, create->flags)) return invalid("bad-ba-pool-kind");
+    } else if (const auto* deposit{std::get_if<PoolDeposit>(&op)}) {
+        if (deposit->amount0 > MAX_AMOUNT || deposit->amount1 > MAX_AMOUNT || (deposit->amount0 == 0 && deposit->amount1 == 0) || deposit->min_shares > MAX_AMOUNT) {
+            return invalid("bad-ba-liquidity");
+        }
+    } else if (const auto* withdraw{std::get_if<PoolWithdraw>(&op)}) {
+        if (!positive(withdraw->shares) || withdraw->only > 2 || withdraw->min0 > MAX_AMOUNT || withdraw->min1 > MAX_AMOUNT) return invalid("bad-ba-liquidity");
+    } else if (const auto* swap_pools{std::get_if<SwapPools>(&op)}) {
+        if (swap_pools->pools.empty() || swap_pools->pools.size() + 1 > MAX_ROUTE_ASSETS || !positive(swap_pools->amount_in) || swap_pools->min_out > MAX_AMOUNT) {
+            return invalid("bad-ba-route");
+        }
     } else if (const auto* oracle{std::get_if<RegisterOracle>(&op)}) {
         if (!dex::IsOracleName(oracle->name) || !XOnlyPubKey{oracle->pubkey}.IsFullyValid()) return invalid("bad-ba-oracle");
     } else if (const auto* contract{std::get_if<CreateOracleContract>(&op)}) {
@@ -784,7 +822,9 @@ bool CheckDependsOnHeight(const CTransaction& tx)
                            // height stays valid at every later one; a settlement's winner, once the next block can pay
                            // it, is fixed (an attestation after the expiry does not count).
                            std::holds_alternative<Route>(op) || std::holds_alternative<RegisterOracle>(op) || std::holds_alternative<Attest>(op) ||
-                           std::holds_alternative<SettleOracleContract>(op)};
+                           std::holds_alternative<SettleOracleContract>(op) ||
+                           // The pool kinds' read pools and their kinds, no height.
+                           IsCurveOperation(op)};
     return !independent;
 }
 
@@ -799,6 +839,8 @@ struct State::Plan {
     std::vector<Txid> reservations_gone;
     std::optional<std::pair<uint32_t, AssetId>> seq;
     std::optional<std::pair<uint256, Pool>> pool;
+    //! The kind of a pool CreatePool makes (not the default).
+    std::optional<std::pair<uint256, PoolParams>> pool_params;
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -866,6 +908,8 @@ constexpr uint8_t ATTESTATIONS{0x87};
 const sidechain::Table<uint256, OracleContract> CONTRACTS{0x88};
 //! Contracts not settled, by the asset they hold (CHN not indexed), then id.
 constexpr uint8_t CONTRACTS_BY_ASSET{0x89};
+// The DEX's pool kinds (curves.h), from SidechainParams::dex_curves_height: none before.
+const sidechain::Table<uint256, PoolParams> POOL_PARAMS{0x8a};
 //! The bytes of the DEX's indexes, taken (sidechain::DuplicateTableIds) as the tables' are.
 const sidechain::TableId DEX_INDEXES_TAKEN[]{sidechain::TableId{OBSERVATIONS}, sidechain::TableId{ATTESTATIONS}, sidechain::TableId{CONTRACTS_BY_ASSET}};
 
@@ -1230,8 +1274,12 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
     }};
 
     if (op && m_dex && (std::holds_alternative<Swap>(*op) || IsDexOperation(*op))) {
-        // The DEX: swaps and routes are orders of the block's batch; oracles and their contracts.
-        if (!PlanDex(tx, *op, height, plan, chn_taken, take, reject_reason)) return std::nullopt;
+        // The DEX: swaps and routes are orders of the block's batch; oracles and their contracts; pools of every kind.
+        if (IsCurveOperation(*op) && !std::holds_alternative<SwapPools>(*op)) {
+            if (!PlanPools(tx, *op, height, plan, take, debit, reject_reason)) return std::nullopt;
+        } else if (!PlanDex(tx, *op, height, plan, chn_taken, take, reject_reason)) {
+            return std::nullopt;
+        }
     } else if (const auto* reserve{op ? std::get_if<Reserve>(op) : nullptr}) {
         credit(Token::Kind::RESERVATION, txid.ToUint256(), 1);
         plan.reservation_made = std::make_pair(txid, reserve->commitment);
@@ -1601,15 +1649,15 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         }
     }
     for (const Result& result : plan.returns ? std::vector<Result>{} : plan.results) {
-        if (result.asset.IsNull()) {
+        if (result.kind == Token::Kind::ASSET && result.asset.IsNull()) {
             const CScript* chn_to{op ? ChnTo(*op) : nullptr};
             if (!chn_to || chn_to->empty()) return invalid("bad-ba-chn-to");
             if (result.amount > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
             plan.payouts.emplace_back(static_cast<CAmount>(result.amount), *chn_to);
             continue;
         }
-        // An AddLiquidity's results are above; the others are asset coins.
-        result_tokens.push_back(Token{Token::Kind::ASSET, result.asset, result.amount});
+        // An AddLiquidity's results are above; the others are asset coins, or shares (CreatePool, PoolDeposit).
+        result_tokens.push_back(Token{result.kind, result.asset, result.amount});
     }
     if (plan.back) {
         if (plan.back->amount == 0) {
@@ -1651,10 +1699,22 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
         return false;
     }};
     const Txid txid{tx.GetHash()};
-    if (std::holds_alternative<Swap>(op) || std::holds_alternative<Route>(op)) {
+    if (std::holds_alternative<Swap>(op) || std::holds_alternative<Route>(op) || std::holds_alternative<SwapPools>(op)) {
         Order order;
         order.txid = txid;
-        if (const auto* swap{std::get_if<Swap>(&op)}) {
+        if (const auto* named{std::get_if<SwapPools>(&op)}) {
+            // The pools named, each open, each holding what the hop before gave, no asset twice.
+            const auto path{dex::PathOfPools(*this, named->asset_in, named->pools)};
+            if (!path) return invalid("bad-ba-no-pool");
+            for (const uint256& id : named->pools) {
+                if (amm::Abandoned(*Assert(GetPool(id)))) return invalid("bad-ba-pool-closed");
+            }
+            order.path = *path;
+            order.pools = named->pools;
+            order.amount_in = named->amount_in;
+            order.min_out = named->min_out;
+            order.chn_to = named->chn_to;
+        } else if (const auto* swap{std::get_if<Swap>(&op)}) {
             order.path = {swap->asset_in, swap->asset_out};
             order.amount_in = swap->amount_in;
             order.min_out = swap->min_out;
@@ -1667,7 +1727,7 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             order.chn_to = route.chn_to;
         }
         // Every pool of the path, open (one closed or gone by the block's end: the order is refunded).
-        for (size_t i{0}; i + 1 < order.path.size(); ++i) {
+        for (size_t i{0}; order.pools.empty() && i + 1 < order.path.size(); ++i) {
             const auto pool{FindPool(order.path[i], order.path[i + 1])};
             if (!pool) return invalid("bad-ba-no-pool");
             if (amm::Abandoned(*pool)) return invalid("bad-ba-pool-closed");
@@ -1746,6 +1806,115 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
     return invalid("bad-ba-marker");
 }
 
+bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
+                      const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit, std::string& reject_reason) const
+{
+    const auto invalid{[&](const char* reason) {
+        reject_reason = reason;
+        return false;
+    }};
+    const Txid txid{tx.GetHash()};
+    // A pool nobody provides liquidity to (new, or everyone left) opens as AddLiquidity opens one: the
+    // shares are the invariant's first degree at the reserves after, MIN_LIQUIDITY of them kept for good,
+    // what it held merged in; a deposit worth trading against, not dust.
+    const auto open{[&](const PoolParams& params, Pool& pool, uint64_t amount0, uint64_t amount1, uint64_t min_shares) -> std::optional<uint64_t> {
+        if (amount0 == 0 || amount1 == 0 || amount0 > MAX_AMOUNT - pool.reserve0 || amount1 > MAX_AMOUNT - pool.reserve1) {
+            invalid("bad-ba-liquidity");
+            return std::nullopt;
+        }
+        const uint64_t r0{pool.reserve0 + amount0}, r1{pool.reserve1 + amount1};
+        const auto total{curves::OpeningShares(params, r0, r1)};
+        if (!total || *total <= MIN_LIQUIDITY || *total - MIN_LIQUIDITY < min_shares) {
+            invalid("bad-ba-liquidity-price");
+            return std::nullopt;
+        }
+        const uint64_t shares{*total - MIN_LIQUIDITY};
+        const uint64_t chn_after{pool.asset0.IsNull() ? r0 : pool.asset1.IsNull() ? r1 : MIN_OPEN_CHN};
+        if (shares < MIN_OPEN_SHARES || chn_after < MIN_OPEN_CHN) {
+            invalid("bad-ba-pool-too-small");
+            return std::nullopt;
+        }
+        pool.reserve0 = r0;
+        pool.reserve1 = r1;
+        pool.shares = *total;
+        return shares;
+    }};
+    if (const auto* create{std::get_if<CreatePool>(&op)}) {
+        const auto tradable{[&](const AssetId& asset) { return asset.IsNull() || HasAsset(asset); }};
+        if (!tradable(create->asset_a) || !tradable(create->asset_b)) return invalid("bad-ba-asset-unknown");
+        // The decimals of each asset (CHN's 8): a stable pool counts their units alike.
+        const auto decimals{[&](const AssetId& asset) -> uint8_t { return asset.IsNull() ? 8 : Assert(GetAsset(asset))->decimals; }};
+        const AssetId asset0{std::min(create->asset_a, create->asset_b)}, asset1{std::max(create->asset_a, create->asset_b)};
+        const PoolParams params{MakePoolParams(*create, decimals(asset0), decimals(asset1))};
+        const uint256 id{PoolIdOf(asset0, asset1, params)};
+        Pool pool;
+        if (const auto found{GetPool(id)}) {
+            if (!amm::Abandoned(*found)) return invalid("bad-ba-pool-exists");
+            pool = *found;
+        } else {
+            pool.asset0 = asset0;
+            pool.asset1 = asset1;
+            pool.creation = txid;
+            pool.height = height;
+        }
+        const bool a_first{asset0 == create->asset_a};
+        const auto shares{open(params, pool, a_first ? create->amount_a : create->amount_b, a_first ? create->amount_b : create->amount_a, create->min_shares)};
+        if (!shares) return false;
+        take(create->asset_a, create->amount_a);
+        take(create->asset_b, create->amount_b);
+        plan.results.push_back({id, *shares, Token::Kind::LP});
+        plan.pool = std::make_pair(id, pool);
+        if (!params.Legacy()) plan.pool_params = std::make_pair(id, params);
+        return true;
+    }
+    if (const auto* deposit{std::get_if<PoolDeposit>(&op)}) {
+        const auto found{GetPool(deposit->pool)};
+        if (!found) return invalid("bad-ba-no-pool");
+        Pool pool{*found};
+        const PoolParams params{GetPoolParams(deposit->pool)};
+        uint64_t shares{0};
+        if (amm::Abandoned(pool)) {
+            const auto opened{open(params, pool, deposit->amount0, deposit->amount1, deposit->min_shares)};
+            if (!opened) return false;
+            shares = *opened;
+        } else {
+            const auto got{curves::DepositShares(params, dex::PoolFee(params), pool, deposit->amount0, deposit->amount1)};
+            if (!got || *got < deposit->min_shares || *got > MAX_AMOUNT - pool.shares) return invalid("bad-ba-liquidity-price");
+            shares = *got;
+            pool.shares += shares;
+            pool.reserve0 += deposit->amount0;
+            pool.reserve1 += deposit->amount1;
+        }
+        if (deposit->amount0 > 0) take(pool.asset0, deposit->amount0);
+        if (deposit->amount1 > 0) take(pool.asset1, deposit->amount1);
+        plan.results.push_back({deposit->pool, shares, Token::Kind::LP});
+        plan.pool = std::make_pair(deposit->pool, pool);
+        return true;
+    }
+    if (const auto* withdraw{std::get_if<PoolWithdraw>(&op)}) {
+        const auto found{GetPool(withdraw->pool)};
+        if (!found) return invalid("bad-ba-no-pool");
+        Pool pool{*found};
+        // The shares nobody holds stay.
+        if (withdraw->shares > pool.shares - std::min(pool.shares, MIN_LIQUIDITY)) return invalid("bad-ba-liquidity");
+        const PoolParams params{GetPoolParams(withdraw->pool)};
+        auto [out0, out1]{curves::WithdrawOf(params, dex::PoolFee(params), pool, withdraw->shares, withdraw->only)};
+        // CHN under MIN_CHN_PAYOUT is not paid out: it stays in the pool, for its providers.
+        if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) out0 = 0;
+        if (pool.asset1.IsNull() && out1 < MIN_CHN_PAYOUT) out1 = 0;
+        if ((out0 == 0 && out1 == 0) || out0 < withdraw->min0 || out1 < withdraw->min1) return invalid("bad-ba-liquidity-price");
+        pool.reserve0 -= out0;
+        pool.reserve1 -= out1;
+        pool.shares -= withdraw->shares;
+        debit(Token::Kind::LP, withdraw->pool, withdraw->shares);
+        if (out0 > 0) plan.results.push_back({pool.asset0, out0});
+        if (out1 > 0) plan.results.push_back({pool.asset1, out1});
+        plan.pool = std::make_pair(withdraw->pool, pool);
+        return true;
+    }
+    return invalid("bad-ba-marker");
+}
+
 bool State::CheckTx(const CTransaction& tx, int height, std::string& reject_reason, std::vector<Result>* results, int reveal_depth, size_t* payouts, bool dex) const
 {
     m_dex = dex;
@@ -1805,7 +1974,12 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
         NEXT_SEQ.Put(out, NextSeq() + 1);
     }
     if (plan->pool) SetPool(plan->pool->first, plan->pool->second);
-    for (const uint256& id : plan->pools_gone) SetPool(id, std::nullopt);
+    if (plan->pool_params) POOL_PARAMS.Put(out, plan->pool_params->first, plan->pool_params->second);
+    for (const uint256& id : plan->pools_gone) {
+        SetPool(id, std::nullopt);
+        // Its kind goes with it (the pools AddLiquidity made have none recorded).
+        if (POOL_PARAMS.Contains(out, id)) POOL_PARAMS.Erase(out, id);
+    }
     // The name is free again; its number is not given again (lists skip it). Its history goes with it.
     if (plan->asset_gone) {
         ASSETS.Erase(out, *plan->asset_gone);
@@ -1916,8 +2090,10 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
             acc->last_time = time;
         } else if (time > acc->last_time) {
             const uint32_t elapsed{time - acc->last_time};
-            acc->price0_cumulative = dex::Accumulate(acc->price0_cumulative, dex::PriceQ64(before.reserve1, before.reserve0), elapsed);
-            acc->price1_cumulative = dex::Accumulate(acc->price1_cumulative, dex::PriceQ64(before.reserve0, before.reserve1), elapsed);
+            // The prices of its kind (the reserves' ratios for constant product, as always; the curve's slope for the others).
+            const auto [price0, price1]{dex::PricesQ64(GetPoolParams(id), before.reserve0, before.reserve1)};
+            acc->price0_cumulative = dex::Accumulate(acc->price0_cumulative, price0, elapsed);
+            acc->price1_cumulative = dex::Accumulate(acc->price1_cumulative, price1, elapsed);
             acc->last_time = time;
         }
         const Observation obs{height, acc->last_time, acc->price0_cumulative, acc->price1_cumulative, pool->reserve0, pool->reserve1};
@@ -1931,13 +2107,18 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
 {
     const size_t n{orders.size()};
     using Pools = std::map<uint256, std::optional<Pool>>;
-    const auto hop_pool{[&](size_t i, size_t hop) { return PoolId(orders[i].path[hop], orders[i].path[hop + 1]); }};
-    // The pools of the orders as the block's transactions left them.
+    const auto hop_pool{[&](size_t i, size_t hop) { return orders[i].PoolOfHop(hop); }};
+    // The pools of the orders as the block's transactions left them, their kinds and fees.
     Pools start;
+    std::map<uint256, std::pair<PoolParams, uint32_t>> kinds;
     for (size_t i{0}; i < n; ++i) {
         for (size_t hop{0}; hop + 1 < orders[i].path.size(); ++hop) {
             const uint256 id{hop_pool(i, hop)};
-            if (!start.contains(id)) start.emplace(id, GetPool(id));
+            if (!start.contains(id)) {
+                start.emplace(id, GetPool(id));
+                const PoolParams params{GetPoolParams(id)};
+                kinds.emplace(id, std::make_pair(params, dex::PoolFee(params)));
+            }
         }
     }
     // One pass: the orders in `active` cleared together on `pools`, a round per hop, the pools of a round
@@ -1957,7 +2138,9 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 std::vector<dex::HopIn> ins;
                 for (size_t i : members) ins.push_back({pool && pool->asset0 == orders[i].path[hop], *amount[i]});
                 // A pool gone, or closed, since the order: it misses.
-                const auto cleared{pool && !amm::Abandoned(*pool) ? dex::ClearPool(pool->reserve0, pool->reserve1, ins) : std::nullopt};
+                // Of its kind (curves::ClearPoolOf: ClearPool's own result for the pools AddLiquidity makes).
+                const auto& [params, fee]{kinds.at(id)};
+                const auto cleared{pool && !amm::Abandoned(*pool) ? curves::ClearPoolOf(params, fee, pool->reserve0, pool->reserve1, ins) : std::nullopt};
                 if (!cleared) {
                     for (size_t i : members) amount[i].reset();
                     continue;
@@ -2053,6 +2236,13 @@ bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) 
         path = route->path;
         amount_in = route->amount_in;
         min_out = route->min_out;
+    } else if (const auto* named{std::get_if<SwapPools>(&*marker->operation)}) {
+        const auto outs{dex::QuoteRoutePools(*this, named->asset_in, named->pools, named->amount_in, &path)};
+        if (!outs || outs->back() < named->min_out || (path.back().IsNull() && outs->back() < MIN_CHN_PAYOUT)) {
+            reject_reason = "ba-swap-price";
+            return false;
+        }
+        return true;
     } else {
         return true;
     }
@@ -2079,6 +2269,8 @@ std::optional<Attestation> State::GetAttestation(const uint256& oracle, const ui
     return sidechain::DecodeValue<Attestation>(*bytes);
 }
 std::optional<OracleContract> State::GetContract(const Txid& id) const { return CONTRACTS.Get(*m_view, id.ToUint256()); }
+PoolParams State::GetPoolParams(const uint256& pool) const { return POOL_PARAMS.Get(*m_view, pool).value_or(PoolParams{}); }
+bool State::HasPoolParams(const uint256& pool) const { return POOL_PARAMS.Contains(*m_view, pool); }
 void State::ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from) const { ORACLES.ForEach(*m_view, fn, from); }
 void State::ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const
 {

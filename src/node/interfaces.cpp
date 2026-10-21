@@ -844,6 +844,11 @@ public:
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.DexActive(chainman().ActiveChain().Height() + 1);
     }
+    bool getBitAssetsDexCurvesActive() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.DexCurvesActive(chainman().ActiveChain().Height() + 1);
+    }
     std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) override
     {
         LOCK(::cs_main);

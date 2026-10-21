@@ -828,6 +828,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         size_t payouts{0};
         if (!bitassets::CheckLogoActivation(tx, side_params.LogoActive(height), reject_reason) ||
             !bitassets::CheckTickerActivation(tx, side_params.TickerActive(height), reject_reason) ||
+            !bitassets::CheckCurvesActivation(tx, side_params.DexCurvesActive(height), reject_reason) ||
             !side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts, side_params.DexActive(height))) {
             return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
         }
@@ -5941,7 +5942,9 @@ void Chainstate::RemoveStaleDrivechainTxs()
         // when the next block's rules are not those of the last check.
         const Consensus::SidechainParams& side_params{m_chainman.GetConsensus().sidechain};
         const bool dex{side_params.DexActive(tip->nHeight + 1)};
-        const bool dex_changed{std::exchange(m_mempool_dex_active, dex) != dex};
+        const bool curves{side_params.DexCurvesActive(tip->nHeight + 1)};
+        const bool dex_was{std::exchange(m_mempool_dex_active, dex)}, curves_were{std::exchange(m_mempool_dex_curves_active, curves)};
+        const bool dex_changed{dex_was != dex || curves_were != curves};
         if (changed_all || dex_changed) {
             to_check = m_mempool->m_bitassets_txs;
         } else {
@@ -5954,6 +5957,7 @@ void Chainstate::RemoveStaleDrivechainTxs()
             const bitassets::RecordingView reads{side.View()};
             if (!bitassets::CheckLogoActivation(*tx, side_params.LogoActive(tip->nHeight + 1), reject_reason) ||
                 !bitassets::CheckTickerActivation(*tx, side_params.TickerActive(tip->nHeight + 1), reject_reason) ||
+                !bitassets::CheckCurvesActivation(*tx, curves, reject_reason) ||
                 !bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, side_params.bitassets_reveal_depth, nullptr, dex) ||
                 (dex && !bitassets::State{reads}.OrderFillsAlone(*tx, reject_reason))) {
                 stale.push_back(tx);

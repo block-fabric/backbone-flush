@@ -67,7 +67,12 @@ struct Order {
     uint32_t result_n{0};
     //! Where in the payouts of the block's transactions its CHN (out or back) goes; -1 if neither end is CHN.
     int32_t payout{-1};
-    SERIALIZE_METHODS(Order, obj) { READWRITE(obj.txid, obj.path, obj.amount_in, obj.min_out, obj.chn_to, obj.result_n, obj.payout); }
+    //! The pools of its hops (SwapPools); empty: the pool of each two assets of the path (PoolId), as Route and Swap.
+    //! Orders live in the store during their block only (State::FinishBlock erases them), never in undo data.
+    std::vector<uint256> pools;
+    SERIALIZE_METHODS(Order, obj) { READWRITE(obj.txid, obj.path, obj.amount_in, obj.min_out, obj.chn_to, obj.result_n, obj.payout, obj.pools); }
+    /** The pool of hop `hop`. */
+    uint256 PoolOfHop(size_t hop) const { return pools.empty() ? PoolId(path[hop], path[hop + 1]) : pools[hop]; }
     friend bool operator==(const Order&, const Order&) = default;
 };
 
@@ -156,6 +161,9 @@ struct Clearing {
     std::vector<uint64_t> outs;
     uint64_t reserve0{0};
     uint64_t reserve1{0};
+    //! The protocol's part of the fees (PROTOCOL_FEE_SHARE): always 0, in the reserves above; a hook.
+    uint64_t protocol0{0};
+    uint64_t protocol1{0};
 };
 /**
  * The uniform price of a round of a pool. With A' and B' the inputs of asset0 and asset1 less the fee
@@ -174,8 +182,10 @@ uint256 PriceQ64(uint64_t reserve_num, uint64_t reserve_den);
 uint256 Accumulate(const uint256& cumulative, const uint256& price, uint32_t seconds);
 /** later - earlier, modulo 2^256: what was added between two readings, whatever wrapped. */
 uint256 CumulativeDelta(const uint256& later, const uint256& earlier);
-/** The cumulative price at `time`, from an observation at or before it: the reserves it left held since. */
-std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time);
+/** The cumulative price at `time`, from an observation at or before it: the reserves it left held since (the prices of a pool of that kind, curves::SpotPriceQ64). */
+std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time, const PoolParams& params = {});
+/** The prices of a pool at its reserves: of asset0 in asset1, and of asset1 in asset0 (UQ64.64; the reserves' ratios for constant product). */
+std::pair<uint256, uint256> PricesQ64(const PoolParams& params, uint64_t reserve0, uint64_t reserve1);
 /** The average of a price between two cumulative readings `seconds` apart, as a decimal number of the other asset per unit. */
 double AveragePrice(const uint256& delta, uint32_t seconds);
 
@@ -196,19 +206,34 @@ bool IsOracleName(const std::string& name);
 
 /** What a route gives, alone, against these pools: each hop's output (the last is what comes out); nullopt if a pool is missing, closed, or a hop gives nothing. */
 std::optional<std::vector<uint64_t>> QuoteRoute(const State& state, const std::vector<AssetId>& path, uint64_t amount_in);
+/**
+ * The same through named pools (SwapPools), from `asset_in`: `path` gets the assets of the route; nullopt
+ * if a pool is missing, closed, does not hold the asset the hop before gave, or a hop gives nothing.
+ */
+std::optional<std::vector<uint64_t>> QuoteRoutePools(const State& state, const AssetId& asset_in, const std::vector<uint256>& pools, uint64_t amount_in,
+                                                      std::vector<AssetId>* path = nullptr);
+/** The assets a route through named pools goes through, from `asset_in`; nullopt if the pools do not chain (or repeat an asset). */
+std::optional<std::vector<AssetId>> PathOfPools(const State& state, const AssetId& asset_in, const std::vector<uint256>& pools);
 
 /** A route the search found, and what it gives alone. */
 struct FoundRoute {
     std::vector<AssetId> path;
     std::vector<uint64_t> outs;
+    //! The pool of each hop (of any kind).
+    std::vector<uint256> pools;
+    /** Whether every hop is through the pool of the kind AddLiquidity makes (a Route can name it). */
+    bool legacy{true};
 };
 /**
- * The routes from `from` to `to` of at most `max_hops` pools, over the pools there are, best (most out)
- * first, ties to fewer hops; at most `max_results`. Bounded: at most `max_visits` partial paths are
+ * The routes from `from` to `to` of at most `max_hops` pools, over the pools there are (of every kind, when
+ * `curves`: the DEX's pool kinds apply), best (most out) first, ties to fewer hops; at most `max_results`. Bounded: at most `max_visits` partial paths are
  * looked at, and of each asset its `max_pools_per_asset` deepest pools (by its reserve). For the RPC.
  */
 std::vector<FoundRoute> FindRoutes(const State& state, const AssetId& from, const AssetId& to, uint64_t amount_in, size_t max_hops, size_t max_results = 5,
-                                   size_t max_visits = 20000, size_t max_pools_per_asset = 16);
+                                   size_t max_visits = 20000, size_t max_pools_per_asset = 16, bool curves = true);
+
+/** The fee a pool charges in the block being made (of FEE_DENOMINATOR): its kind's. */
+uint32_t PoolFee(const PoolParams& params);
 
 } // namespace dex
 } // namespace bitassets
