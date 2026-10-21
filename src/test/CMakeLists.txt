@@ -53,6 +53,8 @@ add_executable(test_bitcoin
   sidechain_hooks_tests.cpp
   fastblocks_tests.cpp
   layers_tests.cpp
+  dex_cl_tests.cpp
+  dex_book_tests.cpp
   dex_curves_tests.cpp
   dex_launch_tests.cpp
   dex_pools_tests.cpp
@@ -165,6 +167,7 @@ target_json_data_sources(test_bitcoin
   data/base58_encode_decode.json
   data/bip341_wallet_vectors.json
   data/blockfilters.json
+  data/dex_cl.json
   data/dex_curves.json
   data/dex_launch.json
   data/key_io_invalid.json

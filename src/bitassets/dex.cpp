@@ -100,6 +100,8 @@ std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time, 
 
 uint32_t PoolFee(const PoolParams& params) { return params.fee; }
 
+std::string VerificationEvent(const AssetId& asset, int round) { return "Layers verification " + asset.GetHex() + " #" + std::to_string(round); }
+
 double AveragePrice(const uint256& delta, uint32_t seconds)
 {
     if (seconds == 0) return 0;
@@ -151,9 +153,23 @@ bool IsOracleName(const std::string& name) { return IsAssetName(name); }
 
 namespace {
 /** What `amount` of `in` gives alone in a pool of a kind; 0 if nothing (or the pool is closed). A launch curve's from its record (a buy paying in directly). */
-uint64_t HopAlone(const State& state, const Pool& pool, const PoolParams& params, const AssetId& in, uint64_t amount)
+uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const PoolParams& params, const AssetId& in, uint64_t amount)
 {
     if (amm::Abandoned(pool)) return 0;
+    if (params.GetCurve() == Curve::BOOK) {
+        std::map<uint256, BookOrder> resting;
+        // The book's index as it is: the end of each block sweeps the orders that expired out of it (SweepBooks), so it
+        // holds live orders only, unless more expired at once than a block's end sweeps (a quote then; min_out guards).
+        const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, 0)};
+        return cleared ? cleared->outs[0] : 0;
+    }
+    if (params.GetCurve() == Curve::CONCENTRATED) {
+        auto cl{state.GetClState(id)};
+        if (!cl) return 0;
+        std::map<int32_t, ClTick> ticks;
+        const auto cleared{state.ClearCl(id, state.QuoteFee(id, params), pool, *cl, ticks, {HopIn{pool.asset0 == in, amount}})};
+        return cleared ? cleared->outs[0] : 0;
+    }
     if (params.GetCurve() == Curve::LAUNCH) {
         const auto launch{state.GetLaunch(pool.asset1)};
         if (!launch) return 0;
@@ -161,7 +177,7 @@ uint64_t HopAlone(const State& state, const Pool& pool, const PoolParams& params
         return cleared ? cleared->outs[0] : 0;
     }
     // ClearPool's own result for the pools AddLiquidity makes (curves::ClearPoolOf at 0.30 % is it).
-    const auto cleared{curves::ClearPoolOf(params, PoolFee(params), pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}})};
+    const auto cleared{curves::ClearPoolOf(params, state.QuoteFee(id, params), pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}})};
     return cleared ? cleared->outs[0] : 0;
 }
 } // namespace
@@ -174,7 +190,7 @@ std::optional<std::vector<uint64_t>> QuoteRoute(const State& state, const std::v
     for (size_t i{0}; i + 1 < path.size(); ++i) {
         const auto pool{state.FindPool(path[i], path[i + 1])};
         if (!pool) return std::nullopt;
-        amount = HopAlone(state, *pool, PoolParams{}, path[i], amount);
+        amount = HopAlone(state, PoolId(path[i], path[i + 1]), *pool, PoolParams{}, path[i], amount);
         if (amount == 0) return std::nullopt;
         outs.push_back(amount);
     }
@@ -205,7 +221,7 @@ std::optional<std::vector<uint64_t>> QuoteRoutePools(const State& state, const A
     uint64_t amount{amount_in};
     for (size_t i{0}; i < pools.size(); ++i) {
         const Pool pool{*Assert(state.GetPool(pools[i]))};
-        amount = HopAlone(state, pool, state.GetPoolParams(pools[i]), (*path)[i], amount);
+        amount = HopAlone(state, pools[i], pool, state.GetPoolParams(pools[i]), (*path)[i], amount);
         if (amount == 0) return std::nullopt;
         outs.push_back(amount);
     }
@@ -240,7 +256,7 @@ std::vector<FoundRoute> FindRoutes(const State& state, const AssetId& from, cons
             if (++visits > max_visits) return;
             const AssetId other{pool.asset0 == at ? pool.asset1 : pool.asset0};
             if (std::find(path.begin(), path.end(), other) != path.end()) continue;
-            const uint64_t out{HopAlone(state, pool, state.GetPoolParams(id), at, amount)};
+            const uint64_t out{HopAlone(state, id, pool, state.GetPoolParams(id), at, amount)};
             if (out == 0) continue;
             path.push_back(other);
             outs.push_back(out);

@@ -14,9 +14,11 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import VerifiedBadge from './VerifiedBadge.svelte';
   import Chart from './Chart.svelte';
   import PoolKind from './PoolKind.svelte';
   import { flipKind, kindOf } from './kinds';
+  import type { Launch } from './launch';
   import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
   import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
   import { ignoreAsset, ignoreName, unignoreAsset, unignoreName } from './hide.svelte';
@@ -27,6 +29,7 @@
   let asset = $state<Asset | null>(null);
   let history = $state<AssetHistory>({});
   let pools = $state<Pool[]>([]);
+  let launched = $state<Launch | null>(null);
   let error = $state('');
   let loadedAt = '';
 
@@ -51,10 +54,13 @@
       rpc.raw<AssetHistory>('getassethistory', [arg]).catch(() => ({})),
       rpc.raw<Pool[]>('listpools', [arg, 1000, 0]).catch(() => []),
       rpc.raw<Auction[]>('listauctions', [false, 100, 0, arg]).catch(() => null),
+      // A launched token (Layers' launches): its launch.
+      rpc.raw<Launch>('getlaunch', [arg]).catch(() => null),
     ])
-      .then(([a, h, p, au]) => {
+      .then(([a, h, p, au, l]) => {
         if (loadedAt !== key) return;
         asset = a;
+        launched = l && typeof l === 'object' ? l : null;
         history = h ?? {};
         pools = p ?? [];
         ownAuctions = au;
@@ -148,6 +154,7 @@
         {#if asset.display_name}<p class="display-name muted" data-testid="asset-display-name"><SafeText text={asset.display_name} /></p>{/if}
         <div class="tags">
           <span class="ba-tag" translate="no">#{asset.seq}</span>
+          <VerifiedBadge {id} />
           {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<span class="ba-tag">Mintable</span>{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
           {#if controlled}<span class="ba-tag accent"><Icon name="crown" size={12} /> You control it</span>{/if}
@@ -201,6 +208,15 @@
           </div>
         </section>
 
+        {#if launched}
+          <section class="panel launched" data-testid="asset-launch">
+            <div class="panel-head"><h3>Launch</h3>{#if launched.status === 'graduated'}<span class="ba-tag accent">graduated</span>{:else}<span class="ba-tag">on its curve</span>{/if}</div>
+            <div class="panel-body">
+              <p class="ba-help">{#if launched.status === 'graduated'}Launched on a bonding curve; it graduated into its locked pool with ECX.{:else}On its bonding curve: {formatPercent(Number(launched.progress))} of the way to graduation.{/if}{#if launched.allocation > 0} The creator's allocation is {launched.allocation}% of the supply, minted at graduation.{/if}</p>
+              <button type="button" class="btn small" onclick={() => { tradeIntent.launch = id; go('trade', 'launches'); }}>Its launch</button>
+            </div>
+          </section>
+        {/if}
         <section class="panel">
           <div class="panel-head"><h3>Markets</h3>{#if pools.length === 0}<button type="button" class="btn small" onclick={makePool}><Icon name="plus" size={14} /> Make a pool</button>{/if}</div>
           {#if pools.length === 0}

@@ -124,6 +124,10 @@
   border-color: var(--warning);
   background: var(--warning-soft);
 }
+.ba-kind.book {
+  border-color: var(--line-strong);
+  background: var(--surface-2, var(--raised));
+}
 
 /* Two columns that fall to one in a narrow window. */
 .ba-cols {

@@ -6,8 +6,15 @@
 // Pure: no state, no calls (tested in chain/ba/kinds.test.ts).
 import { approx, assetArg, isChn, unitsOf, type Amount } from './model';
 
-export type Curve = 'constant_product' | 'stable' | 'weighted';
-export const CURVES: readonly Curve[] = ['constant_product', 'stable', 'weighted'];
+/**
+ * The curves of pools; 'concentrated' takes its liquidity by positions between two prices (ba/cl.ts); 'launch' is a launch's
+ * bonding curve (ba/launch.ts), which nobody makes or puts liquidity into; 'book' is the order book of a pair (ba/book.ts):
+ * limit orders, no liquidity of its own (a venue of routes all the same).
+ */
+export type Curve = 'constant_product' | 'stable' | 'weighted' | 'concentrated' | 'launch' | 'book';
+/** The curves a pool is made with (createpool). */
+export type MadeCurve = Exclude<Curve, 'launch' | 'book'>;
+export const CURVES: readonly MadeCurve[] = ['constant_product', 'stable', 'weighted', 'concentrated'];
 
 /** The fee of the kind addliquidity makes (constant product), in percent; and that of a stable pool by default. */
 export const DEFAULT_FEE = 0.3;
@@ -33,6 +40,9 @@ export interface PoolKind {
   weight_b?: number;
   /** Whether it is the kind addliquidity makes (constant product, 0.3%): the pool swapasset, swaproute's path and addliquidity name. */
   default_kind: boolean;
+  /** Whether its fee rises with its volatility (at most 2% above its tier), and that fee for the next block, in percent. */
+  dynamic_fee?: boolean;
+  fee_now?: number;
 }
 
 /** What getdexinfo says of the pool kinds (and of the DEX). */
@@ -52,18 +62,22 @@ export interface DexInfo {
 }
 
 export function isCurve(value: unknown): value is Curve {
-  return value === 'constant_product' || value === 'stable' || value === 'weighted';
+  return value === 'constant_product' || value === 'stable' || value === 'weighted' || value === 'concentrated' || value === 'launch' || value === 'book';
 }
 
 /**
  * The kind of a pool as the node gives it. A node from before the pool kinds gives none: its pools are all of the kind
  * addliquidity makes, constant product at 0.3%.
  */
-export function kindOf(p: { curve?: unknown; fee?: unknown; fee_millionths?: unknown; amp?: unknown; weight_a?: unknown; weight_b?: unknown; default_kind?: unknown }): PoolKind {
+export function kindOf(p: { curve?: unknown; fee?: unknown; fee_millionths?: unknown; amp?: unknown; weight_a?: unknown; weight_b?: unknown; default_kind?: unknown; dynamic_fee?: unknown; fee_now?: unknown }): PoolKind {
   const curve: Curve = isCurve(p.curve) ? p.curve : 'constant_product';
   const fee = typeof p.fee === 'number' || typeof p.fee === 'string' ? approx(p.fee) : DEFAULT_FEE;
   const out: PoolKind = { curve, fee, default_kind: typeof p.default_kind === 'boolean' ? p.default_kind : curve === 'constant_product' && fee === DEFAULT_FEE };
   if (typeof p.fee_millionths === 'number') out.fee_millionths = p.fee_millionths;
+  if (p.dynamic_fee === true) {
+    out.dynamic_fee = true;
+    if (typeof p.fee_now === 'number' || typeof p.fee_now === 'string') out.fee_now = approx(p.fee_now);
+  }
   if (curve === 'stable' && (typeof p.amp === 'number' || typeof p.amp === 'string')) out.amp = approx(p.amp);
   if (curve === 'weighted' && (typeof p.weight_a === 'number' || typeof p.weight_a === 'string')) {
     out.weight_a = approx(p.weight_a);
@@ -79,14 +93,25 @@ export function flipKind(k: PoolKind): PoolKind {
 }
 
 /** The words of a curve (shown with t()). */
-export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted' };
+export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant product', stable: 'Stable', weighted: 'Weighted', concentrated: 'Concentrated', launch: 'Launch curve', book: 'Order book' };
 
 /** When to choose each curve, in a line (shown with t()). */
 export const CURVE_HELP: Record<Curve, string> = {
   constant_product: 'For two assets whose prices move freely against each other: liquidity at every price. The usual kind, and the one Add liquidity makes (at 0.3%).',
   stable: 'For two assets meant to be worth about the same (two stablecoins, a token and its wrapped twin): far less slippage near the balance; A sets how flat it is there.',
   weighted: 'For a pool that holds more of one asset than of the other (such as 80/20): less exposure to the price of the lighter one, and more slippage.',
+  concentrated: 'Liquidity between two prices you choose (positions), as Uniswap v3: far deeper where the price trades, and earning only while the price is in your range. Made at a price, empty: positions bring its liquidity.',
+  launch: 'The bonding curve of a launched token: it sells the token for ECX until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.',
+  book: 'The order book of a pair: limit orders to buy or sell at a price, for some blocks, which trade at the end of each block in one batch. Nobody puts liquidity into it: place an order instead.',
 };
+
+/** The fee a pool charges now: a dynamic fee's value for the next block, else its tier. */
+export function feeNow(k: Pick<PoolKind, 'fee' | 'dynamic_fee' | 'fee_now'>): number {
+  return k.dynamic_fee && k.fee_now !== undefined ? k.fee_now : k.fee;
+}
+
+/** What a dynamic fee does, in a line (shown with t()). */
+export const DYNAMIC_FEE_HELP = 'The fee rises with the pool\'s volatility: its tier plus half the recent change of its price per block, at most 2% more; quiet, it returns to its tier.';
 
 /** A fee in percent, as the node writes it: "0.01%", "0.05%", "0.3%", "1%". */
 export function feePercent(fee: number): string {
@@ -108,16 +133,17 @@ export function clampAmp(value: number, min = MIN_AMP, max = MAX_AMP): number {
 }
 
 /** The kind of a pool to make, as createpool and previewpool take it: the curve, the fee, and A or asset_a's weight. */
-export function kindParam(curve: Curve, fee: number, amp: number, weightA: number): Record<string, string | number> {
-  const out: Record<string, string | number> = { curve, fee };
+export function kindParam(curve: Curve, fee: number, amp: number, weightA: number, dynamic = false): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = { curve, fee };
   if (curve === 'stable') out.amp = amp;
   if (curve === 'weighted') out.weight_a = weightA;
+  if (dynamic) out.dynamic_fee = true;
   return out;
 }
 
 /** Whether a kind is the one addliquidity makes. */
-export function isDefaultKind(curve: Curve, fee: number): boolean {
-  return curve === 'constant_product' && fee === DEFAULT_FEE;
+export function isDefaultKind(curve: Curve, fee: number, dynamic = false): boolean {
+  return curve === 'constant_product' && fee === DEFAULT_FEE && !dynamic;
 }
 
 // --- Trades over every pool of a pair, and routes ---
@@ -290,6 +316,8 @@ export interface PoolCurve extends PoolKind {
   pool: string;
   asset_a: string;
   asset_b: string;
+  asset_a_id?: string;
+  asset_b_id?: string;
   price: number;
   depth: DepthPoint[];
 }
@@ -315,7 +343,9 @@ export function flipDepth(depth: readonly DepthPoint[]): DepthPoint[] {
  * getpoolcurve's depth in the order of a pool as the lists give it (listpools, getpool: the asset that is not CHN first):
  * the same when its first asset is the list's, flipped when it is the list's second.
  */
-export function alignDepth(curve: Pick<PoolCurve, 'asset_a' | 'asset_b' | 'depth'>, pool: { asset_a: string; asset_b: string; asset_a_id: string; asset_b_id: string }): DepthPoint[] {
+export function alignDepth(curve: Pick<PoolCurve, 'asset_a' | 'asset_b' | 'depth'> & { asset_a_id?: string; asset_b_id?: string }, pool: { asset_a: string; asset_b: string; asset_a_id: string; asset_b_id: string }): DepthPoint[] {
+  // By the ids (newer nodes), else by the labels.
+  if (curve.asset_a_id !== undefined) return curve.asset_a_id === pool.asset_a_id ? curve.depth : flipDepth(curve.depth);
   if (pool.asset_a !== pool.asset_b) {
     if (curve.asset_a === pool.asset_a && curve.asset_b === pool.asset_b) return curve.depth;
     if (curve.asset_a === pool.asset_b && curve.asset_b === pool.asset_a) return flipDepth(curve.depth);
@@ -362,23 +392,22 @@ export function depositAmounts(entries: readonly { id: string; units: bigint | n
   return out;
 }
 
+/** What quotepoolliquidity answers: the shares for amounts, or the amounts for shares (by label, the pool's own order). */
+export interface LiquidityQuote {
+  shares: Amount;
+  opens: boolean;
+  amounts: Record<string, Amount>;
+  share_of_pool: number;
+}
+
 /**
- * About the shares a deposit gives a pool someone provides to (no quote of the node: addpoolliquidity says it once sent):
- * its worth at the pool's price over the pool's, less the fee on the part out of the pool's proportions, which a swap to
- * them would trade. `price`: what one unit of A is worth in units of B. Exact for a deposit in proportion to a
- * constant-product pool; near for the other kinds.
+ * The amounts of a quote of quotepoolliquidity, of a pool's asset_a and asset_b as the lists give them: by their labels
+ * when they differ, else in the node's order (the pool's own: CHN, the null hash, first, where the lists put it second).
  */
-export function estimateDepositShares(pool: { reserveA: bigint; reserveB: bigint; shares: bigint; price: number; fee: number }, amountA: bigint, amountB: bigint): bigint {
-  if (pool.shares <= 0n || !(pool.price > 0) || (amountA <= 0n && amountB <= 0n)) return 0n;
-  const worthA = Number(amountA) * pool.price;
-  const worth = worthA + Number(amountB);
-  const total = Number(pool.reserveA) * pool.price + Number(pool.reserveB);
-  if (!(total > 0)) return 0n;
-  // The part of A in the pool's worth, and how much of the deposit's worth is out of it.
-  const off = Math.abs(worthA - (worth * Number(pool.reserveA) * pool.price) / total);
-  const kept = worth - (off * pool.fee) / 100;
-  const shares = Math.floor((Number(pool.shares) * Math.max(0, kept)) / total);
-  return Number.isFinite(shares) && shares > 0 ? BigInt(shares) : 0n;
+export function quoteAmounts(amounts: Record<string, Amount>, pool: { asset_a: string; asset_b: string; asset_b_id: string }): { a: Amount; b: Amount } {
+  if (pool.asset_a !== pool.asset_b && pool.asset_a in amounts && pool.asset_b in amounts) return { a: amounts[pool.asset_a], b: amounts[pool.asset_b] };
+  const [first = 0, second = 0] = Object.values(amounts);
+  return isChn(pool.asset_b_id) ? { a: second, b: first } : { a: first, b: second };
 }
 
 /** The shares a percentage of those held is, as removepoolliquidity works it out (all of them at 100). */

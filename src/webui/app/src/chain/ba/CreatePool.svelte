@@ -6,6 +6,10 @@
   // its id, whether a pool of that kind is there and open, the shares, the price, a table of slippage and a depth
   // chart); a pool of the kind that is open already takes liquidity by its id instead (its page). Before the pool kinds
   // apply (getdexinfo curves_active), the page says when they will, and offers Add liquidity.
+  //
+  // A concentrated pool is made at a price, empty (its liquidity comes by positions between two prices): its price in
+  // place of the deposit, then a way to its page to open a position. Any kind may have a dynamic fee (its tier, plus up to
+  // 2% as its price moves).
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
@@ -19,7 +23,8 @@
   import PoolKind from './PoolKind.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { hiddenAsset } from './visible.svelte';
-  import { clampAmp, CURVE_HELP, CURVE_NAMES, CURVES, DEFAULT_AMP, defaultFee, FEE_TIERS, flipKind, isDefaultKind, kindOf, kindParam, MAX_AMP, MIN_AMP, WEIGHTS, type Curve, type PoolPreview } from './kinds';
+  import { clampAmp, CURVE_HELP, CURVE_NAMES, CURVES, DEFAULT_AMP, defaultFee, DYNAMIC_FEE_HELP, FEE_TIERS, flipKind, isDefaultKind, kindOf, kindParam, MAX_AMP, MIN_AMP, WEIGHTS, type MadeCurve, type PoolPreview } from './kinds';
+  import { priceAmounts } from './cl';
   import { amountParam, assetArg, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, unitsAtMost, type Amount } from './model';
   import { assetById, ba, decimalsOf, labelOf, nameOf, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
 
@@ -30,14 +35,10 @@
   const maxAmp = $derived(dex?.max_amp ?? MAX_AMP);
   const weights = $derived(dex?.weights?.length ? dex.weights.map(Number) : WEIGHTS);
 
-  type Step = 'assets' | 'kind' | 'deposit' | 'review';
-  const STEPS: { id: Step; label: string }[] = [
-    { id: 'assets', label: 'Assets' },
-    { id: 'kind', label: 'Kind' },
-    { id: 'deposit', label: 'Deposit' },
-    { id: 'review', label: 'Review' },
-  ];
-  const order = STEPS.map((s) => s.id);
+  type Step = 'assets' | 'kind' | 'deposit' | 'review' | 'done';
+  const order = 'assets kind deposit review'.split(' ') as Step[];
+  /** A concentrated pool made: its id, for the way to open a position in it. */
+  let made = $state('');
   let step = $state<Step>('assets');
 
   // --- The assets ---
@@ -57,21 +58,31 @@
   const pairPools = $derived(a && b && a !== b ? poolsOf(a, b) : []);
 
   // --- The kind ---
-  let curve = $state<Curve>('constant_product');
+  let curve = $state<MadeCurve>('constant_product');
+  let dynamic = $state(false);
+  const cl = $derived(curve === 'concentrated');
+  const STEPS = $derived<{ id: Step; label: string }[]>([
+    { id: 'assets', label: 'Assets' },
+    { id: 'kind', label: 'Kind' },
+    { id: 'deposit', label: curve === 'concentrated' ? 'Price' : 'Deposit' },
+    { id: 'review', label: 'Review' },
+  ]);
   let fee = $state(0.3);
   let amp = $state(DEFAULT_AMP);
   let weightA = $state(80);
-  function pickCurve(c: Curve) {
+  function pickCurve(c: MadeCurve) {
     curve = c;
     fee = defaultFee(c, tiers);
     if (c === 'weighted' && !weights.includes(weightA)) weightA = weights.includes(80) ? 80 : weights[0];
   }
-  const kind = $derived(kindParam(curve, fee, clampAmp(amp, minAmp, maxAmp), weightA));
+  const kind = $derived(kindParam(curve, fee, clampAmp(amp, minAmp, maxAmp), weightA, dynamic));
+  /** The kind as the badges show it. */
+  const shownKind = $derived(kindOf({ curve, fee, amp: clampAmp(amp, minAmp, maxAmp), weight_a: weightA, weight_b: 100 - weightA, default_kind: isDefaultKind(curve, fee, dynamic), dynamic_fee: dynamic }));
   /** The pool of the pair of this kind the store read, if any (its weights the other way round when its first asset is b). */
   const existing = $derived(
     pairPools.find((p) => {
       const k = p.asset_a_id === a ? kindOf(p) : flipKind(kindOf(p));
-      return k.curve === curve && k.fee === fee && (curve !== 'stable' || k.amp === clampAmp(amp, minAmp, maxAmp)) && (curve !== 'weighted' || k.weight_a === weightA);
+      return k.curve === curve && k.fee === fee && (k.dynamic_fee === true) === dynamic && (curve !== 'stable' || k.amp === clampAmp(amp, minAmp, maxAmp)) && (curve !== 'weighted' || k.weight_a === weightA);
     }),
   );
 
@@ -87,13 +98,19 @@
     return h ? unitsAtMost(h.balance, decimals) : 0n;
   };
 
+  // A concentrated pool's price (1 of the first asset in the second): the amounts that name it (nothing goes in).
+  let startText = $state('');
+  const startPrice = $derived(Number(startText.trim().replace(/,/g, '')));
+  /** The amounts createpool and previewpool take: the deposit, or for a concentrated pool those that name its price. */
+  const amounts = $derived(cl ? priceAmounts(startPrice, db) : aUnits !== null && bUnits !== null ? { a: amountParam(aUnits, da), b: amountParam(bUnits, db) } : null);
+
   // The node's preview, a moment after the last change (and again with each block).
   let preview = $state<PoolPreview | null>(null);
   let previewError = $state('');
   let generation = 0;
   $effect(() => {
     const mine = ++generation;
-    const args = a && b && a !== b && aUnits !== null && bUnits !== null ? [assetArg(a), amountParam(aUnits, da), assetArg(b), amountParam(bUnits, db), kind] : null;
+    const args = a && b && a !== b && amounts ? [assetArg(a), amounts.a, assetArg(b), amounts.b, kind] : null;
     void ba.version;
     previewError = '';
     if (!args || !active) {
@@ -119,7 +136,7 @@
   const canNext = $derived.by(() => {
     if (step === 'assets') return !!a && !!b && a !== b;
     if (step === 'kind') return tiers.includes(fee) && (curve !== 'weighted' || weights.includes(weightA));
-    if (step === 'deposit') return aUnits !== null && bUnits !== null && !!preview && !preview.open && !preview.too_small;
+    if (step === 'deposit') return !!amounts && !!preview && (cl ? !preview.exists : !preview.open && !preview.too_small);
     return false;
   });
   function next() {
@@ -137,18 +154,16 @@
   let busy = $state(false);
   async function create() {
     const wallet = wallets.current;
-    if (wallet === null || busy || aUnits === null || bUnits === null || !preview || preview.open || preview.too_small) return;
+    if (wallet === null || busy || !amounts || !preview || preview.open || preview.too_small) return;
     // What the confirmation shows is what is signed: taken now (the preview follows the chain while the dialog is open).
     const sA = a;
     const sB = b;
-    const sDa = da;
-    const sDb = db;
-    const sAUnits = aUnits;
-    const sBUnits = bUnits;
+    const sAmounts = amounts;
+    const sCl = cl;
     const sKind = { ...kind };
     const sSlippage = slippage;
     const sPreview = preview;
-    const params: unknown[] = [assetArg(sA), amountParam(sAUnits, sDa), assetArg(sB), amountParam(sBUnits, sDb), sKind];
+    const params: unknown[] = [assetArg(sA), sAmounts.a, assetArg(sB), sAmounts.b, sKind];
     // The pool may have been made meanwhile: asked again.
     let now: PoolPreview | null = null;
     try {
@@ -156,7 +171,7 @@
     } catch {
       now = null;
     }
-    if (now?.open) {
+    if (now?.open && !sCl) {
       await inform(t('Create a pool'), t('A pool of this kind of these assets was opened meanwhile: put liquidity into it from its page.'), 'warning');
       preview = now;
       return;
@@ -165,8 +180,10 @@
     const lb = nameOf(sB);
     const r = await ask({
       title: t('Create a pool'),
-      message: t('Make a %1 pool of %2 and %3 with %4 %2 and %5 %3?', t(CURVE_NAMES[curve]), la, lb, formatUnits(sAUnits, sDa), formatUnits(sBUnits, sDb)),
-      informative: t('Fee %1%. Its price starts at 1 %2 = %3 %4: check it is the price you want. About %5 shares, at least %6% fewer should someone reopen it first.', String(sKind.fee), la, formatPrice(sPreview.price), lb, String(sPreview.shares), String(sSlippage)),
+      message: sCl ? t('Make a concentrated pool of %1 and %2 at 1 %1 = %3 %2?', la, lb, formatPrice(sPreview.price)) : t('Make a %1 pool of %2 and %3 with %4 %2 and %5 %3?', t(CURVE_NAMES[curve]), la, lb, sAmounts.a, sAmounts.b),
+      informative: sCl
+        ? t('Fee %1%. Nothing goes in: its liquidity comes by positions between two prices, which you open next, on its page.', String(sKind.fee))
+        : t('Fee %1%. Its price starts at 1 %2 = %3 %4: check it is the price you want. About %5 shares, at least %6% fewer should someone reopen it first.', String(sKind.fee), la, formatPrice(sPreview.price), lb, String(sPreview.shares), String(sSlippage)),
       level: sPreview.exists ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -178,6 +195,14 @@
     try {
       const done = await walletRpc<{ txid: string; pool: string; shares: Amount }>(wallet, 'createpool', [...params, sSlippage]);
       if (!done) return;
+      if (sCl) {
+        toast('success', t('Creating a pool'), t('%1 / %2, with the next block: then open a position in it.', la, lb));
+        made = done.pool;
+        startText = '';
+        step = 'done';
+        void refreshBitAssets();
+        return;
+      }
       toast('success', t('Creating a pool'), t('%1 / %2, for about %3 shares, with the next block.', la, lb, String(done.shares)));
       aText = '';
       bText = '';
@@ -248,8 +273,9 @@
             <div class="ba-chips" role="group" aria-label="Fee tier">
               {#each tiers as f (f)}<button type="button" class="ba-chip" aria-pressed={fee === f} onclick={() => (fee = f)}>{f}%</button>{/each}
             </div>
-            <span class="hint">What each trade leaves in the pool, all to its providers. Low for assets that hold their price against each other; high for those that swing.</span>
+            <span class="hint">What each trade leaves in the pool, all to its providers. Low for assets that hold their price against each other; high for those that swing.{#if cl} A concentrated pool's positions are ranges of ticks spaced by its tier (0.01%: 1 tick, 0.05%: 10, 0.3%: 60, 1%: 200).{/if}</span>
           </div>
+          <label class="check dynamic"><input type="checkbox" bind:checked={dynamic} /> <span><strong>Dynamic fee</strong> <span class="faint small">{t(DYNAMIC_FEE_HELP)} Another pool than the one without it.</span></span></label>
           {#if curve === 'stable'}
             <div class="field">
               <label for="cp-amp">Amplification A: {clampAmp(amp, minAmp, maxAmp)}</label>
@@ -266,8 +292,8 @@
               <span class="hint">{weightA}% of the pool's worth in <SafeText text={labelOf(a)} />, {100 - weightA}% in <SafeText text={labelOf(b)} />.</span>
             </div>
           {/if}
-          <p class="ba-help"><PoolKind kind={kindOf({ curve, fee, amp: clampAmp(amp, minAmp, maxAmp), weight_a: weightA, weight_b: 100 - weightA, default_kind: isDefaultKind(curve, fee) })} showDefault />
-            {#if isDefaultKind(curve, fee)}The kind Add liquidity makes: swaps and routes find it by its two assets alone.{/if}</p>
+          <p class="ba-help"><PoolKind kind={shownKind} showDefault />
+            {#if shownKind.default_kind}The kind Add liquidity makes: swaps and routes find it by its two assets alone.{/if}</p>
           {#if existing}
             <p class="ba-problems" role="status">{#if existing.abandoned}A pool of this kind is there, closed: creating it reopens it, at the price of your amounts.{:else}A pool of this kind is open already: put liquidity into it from its page.{/if}
               {#if !existing.abandoned}<button type="button" class="btn small" onclick={() => openPool(existing.pool)}>Open the pool</button>{/if}</p>
@@ -276,31 +302,42 @@
         </form>
       {:else if step === 'deposit'}
         <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
+          {#if cl}
+            <div class="field">
+              <label for="cp-price">Its price: 1 <SafeText text={labelOf(a)} /> in <SafeText text={labelOf(b)} /></label>
+              <input id="cp-price" type="text" inputmode="decimal" autocomplete="off" placeholder="Such as 1.0" bind:value={startText} aria-invalid={startText.trim() && !amounts ? 'true' : undefined} />
+              {#if startText.trim() && !amounts}<span class="error">Enter a price above 0.</span>{:else}<span class="hint">The pool starts at this price, empty: nothing goes in now. Positions bring its liquidity, each between two prices.</span>{/if}
+            </div>
+            {#if preview?.exists}
+              <p class="ba-problems" role="status">A concentrated pool of this fee tier of these assets exists: open a position in it. <button type="button" class="btn small" onclick={() => openPool(preview?.pool ?? '')}>Open the pool</button></p>
+            {/if}
+          {:else}
           <UnitsInput id="cp-amount-a" label="First amount" decimals={da} bind:units={aUnits} bind:text={aText} max={heldOf(a, da)} unit={labelOf(a)} />
           <UnitsInput id="cp-amount-b" label="Second amount" decimals={db} bind:units={bUnits} bind:text={bText} max={heldOf(b, db)} unit={labelOf(b)} />
           <p class="ba-help">Both amounts go in whole and set the pool's price{#if curve === 'weighted'} with its weights{/if}. It keeps 1,000 shares for good, so that it is never emptied; a pool with ECX opens with at least 0.01 ECX.</p>
           {#if previewError}<p class="ba-problems bad" role="status"><SafeText text={previewError} /></p>{/if}
           {#if preview?.too_small}<p class="ba-problems" role="status">Too little to open a pool: <SafeText text={preview.too_small} />.</p>{/if}
-          {#if preview?.open}
+          {/if}
+          {#if !cl && preview?.open}
             <p class="ba-problems" role="status">A pool of this kind is open already: put liquidity into it from its page. <button type="button" class="btn small" onclick={() => openPool(preview?.pool ?? '')}>Open the pool</button></p>
-          {:else if preview?.exists}
+          {:else if !cl && preview?.exists}
             <p class="ba-help">A pool of this kind is there, closed (nobody provides liquidity to it): creating it reopens it, its dust counting toward your amounts.</p>
           {/if}
           <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
         </form>
-      {:else}
+      {:else if step === 'review'}
         <form class="ba-form" onsubmit={(e) => { e.preventDefault(); void create(); }}>
           <h2>Review</h2>
           <dl class="ba-lines">
             <dt>Pair</dt><dd><SafeText text={nameOf(a)} /> / <SafeText text={nameOf(b)} /></dd>
-            <dt>Kind</dt><dd><PoolKind kind={kindOf({ curve, fee, amp: clampAmp(amp, minAmp, maxAmp), weight_a: weightA, weight_b: 100 - weightA, default_kind: isDefaultKind(curve, fee) })} showDefault /></dd>
-            {#if aUnits !== null && bUnits !== null}
+            <dt>Kind</dt><dd><PoolKind kind={shownKind} showDefault /></dd>
+            {#if !cl && aUnits !== null && bUnits !== null}
               <dt>Goes in</dt><dd>{formatUnits(aUnits, da)} <SafeText text={labelOf(a)} /></dd>
               <dt></dt><dd>{formatUnits(bUnits, db)} <SafeText text={labelOf(b)} /></dd>
             {/if}
             {#if preview}
               <dt>Its price</dt><dd>1 <SafeText text={labelOf(a)} /> = {formatPrice(preview.price)} <SafeText text={labelOf(b)} /></dd>
-              <dt>Shares</dt><dd class="strong">≈ {formatAmount(preview.shares, 0)}</dd>
+              {#if cl}<dt>Goes in</dt><dd>nothing: positions bring its liquidity</dd>{:else}<dt>Shares</dt><dd class="strong">≈ {formatAmount(preview.shares, 0)}</dd>{/if}
             {/if}
           </dl>
           <div class="field">
@@ -310,6 +347,13 @@
           </div>
           <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={busy || wallets.current === null || !preview || preview.open || !!preview.too_small}><Icon name="pool" size={16} /> {busy ? 'Creating…' : 'Create the pool'}</button></div>
         </form>
+      {:else}
+        <div class="ba-form" data-testid="pool-made">
+          <h2>Made, empty</h2>
+          <p class="ba-help">The concentrated pool is made with the next block, at its price, with nothing in. Open a position in it: liquidity between two prices, which earns its fees while the price is between them.</p>
+          <p class="mono break small" translate="no">{made}</p>
+          <div class="row"><button type="button" class="btn primary" onclick={() => openPool(made)}><Icon name="pool" size={16} /> Open a position</button><button type="button" class="btn" onclick={() => (step = 'assets')}>Create another pool</button></div>
+        </div>
       {/if}
     </section>
 
@@ -319,9 +363,9 @@
         {#if (step === 'deposit' || step === 'review') && preview}
           <dl class="ba-lines" data-testid="pool-preview">
             <dt>Pool id</dt><dd class="mono break" translate="no">{preview.pool}</dd>
-            <dt>State</dt><dd>{#if preview.open}open: it has providers{:else if preview.exists}there, closed: this reopens it{:else}new{/if}</dd>
+            <dt>State</dt><dd>{#if cl && preview.exists}there already{:else if preview.open}open: it has providers{:else if preview.exists}there, closed: this reopens it{:else}new{/if}</dd>
             <dt>Its price</dt><dd>1 <SafeText text={labelOf(a)} /> = {formatPrice(preview.price)} <SafeText text={labelOf(b)} /></dd>
-            <dt>Shares</dt><dd>{formatAmount(preview.shares, 0)}</dd>
+            {#if !cl}<dt>Shares</dt><dd>{formatAmount(preview.shares, 0)}</dd>{/if}
           </dl>
           {#if preview.depth?.length}
             <h4>Slippage of the new pool</h4>

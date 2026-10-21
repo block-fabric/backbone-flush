@@ -1,8 +1,8 @@
 // The DEX's pool kinds as the pages see them (ba/kinds.ts): the kinds read, the ways a trade can go and how the
 // wallet sends the one chosen, the depth of a pool, liquidity by a pool's id.
 import { describe, expect, it } from 'vitest';
-import { alignDepth, chooseOption, clampAmp, defaultFee, depositAmounts, depthSeries, estimateDepositShares, executionOf, feePercent, flipDepth, flipKind, kindOf, kindParam, sharesOf, slippageRows, tradeOptions, type DepthPoint, type MarketQuote, type RouteQuote } from './kinds';
-import { amountParam, CHN_ID, provide } from './model';
+import { alignDepth, chooseOption, clampAmp, defaultFee, depositAmounts, depthSeries, executionOf, feePercent, flipDepth, flipKind, kindOf, kindParam, quoteAmounts, sharesOf, slippageRows, tradeOptions, type DepthPoint, type MarketQuote, type RouteQuote } from './kinds';
+import { amountParam, CHN_ID } from './model';
 
 const id = (c: string) => c.repeat(64);
 const GOLD = id('a');
@@ -17,6 +17,8 @@ describe('pool kinds', () => {
     expect(kindOf({ curve: 'weighted', fee: '0.3', weight_a: 80, weight_b: 20, default_kind: false })).toMatchObject({ curve: 'weighted', fee: 0.3, weight_a: 80, weight_b: 20 });
     // An unknown curve reads as the default one; a weighted pool without weight_b has the rest.
     expect(kindOf({ curve: 'cubic' }).curve).toBe('constant_product');
+    // An order book is a kind of its own (Layers' DEX), never the default one.
+    expect(kindOf({ curve: 'book', fee: 0, default_kind: false })).toMatchObject({ curve: 'book', default_kind: false });
     expect(kindOf({ curve: 'weighted', weight_a: 75, default_kind: false }).weight_b).toBe(25);
     expect(flipKind(kindOf({ curve: 'weighted', weight_a: 80, weight_b: 20, default_kind: false }))).toMatchObject({ weight_a: 20, weight_b: 80 });
     const stable = kindOf({ curve: 'stable', amp: 100, fee: 0.05, default_kind: false });
@@ -85,11 +87,11 @@ describe('ways to trade', () => {
 
   it('sends one hop in the default pool by swapasset, one pool of another kind by swappools, a route by swaproute', () => {
     const a = { amount: '10', slippage: 0.5, minOut: '9.85', maxImpact: 10 };
-    expect(executionOf({ pools: [id('2')], path: [CHN_ID, GOLD], defaultPools: true }, a)).toEqual({ method: 'swapasset', params: ['CHN', '10', `0x${GOLD}`, 0.5, 10, '9.85'] });
+    expect(executionOf({ pools: [id('2')], path: [CHN_ID, GOLD], defaultPools: true }, a)).toEqual({ method: 'swapasset', params: ['ECX', '10', `0x${GOLD}`, 0.5, 10, '9.85'] });
     expect(executionOf({ pools: [id('1')], path: [GOLD, SILVER], defaultPools: false }, a)).toEqual({ method: 'swappools', params: [`0x${GOLD}`, '10', [id('1')], 0.5, '9.85'] });
-    expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: false }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'CHN', `0x${SILVER}`], '10', 0.5, '9.85', [id('4'), id('5')]] });
+    expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: false }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'ECX', `0x${SILVER}`], '10', 0.5, '9.85', [id('4'), id('5')]] });
     // Every pool of the default kind: the path alone names them (as before the pool kinds).
-    expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: true }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'CHN', `0x${SILVER}`], '10', 0.5, '9.85'] });
+    expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: true }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'ECX', `0x${SILVER}`], '10', 0.5, '9.85'] });
   });
 });
 
@@ -120,6 +122,9 @@ describe('depth', () => {
     // Labels the lists do not tell apart: CHN, the null hash, is the node's first.
     expect(alignDepth({ asset_a: 'X', asset_b: 'X', depth }, { ...pool, asset_a: 'X', asset_b: 'X' })[0].side).toBe('sell_b');
     expect(alignDepth({ asset_a: 'X', asset_b: 'X', depth }, { asset_a: 'X', asset_b: 'X', asset_a_id: GOLD, asset_b_id: USDX })).toBe(depth);
+    // A node that says the ids: by them.
+    expect(alignDepth({ asset_a: 'GOLD', asset_b: 'GOLD', asset_a_id: CHN_ID, asset_b_id: GOLD, depth }, pool)[0].side).toBe('sell_b');
+    expect(alignDepth({ asset_a: 'CHN', asset_b: 'GOLD', asset_a_id: GOLD, asset_b_id: CHN_ID, depth }, pool)).toBe(depth);
   });
 });
 
@@ -129,20 +134,15 @@ describe('liquidity by a pool id', () => {
       { id: GOLD, units: 1050n, text: (u) => amountParam(u, 2) },
       { id: CHN_ID, units: 0n, text: (u) => amountParam(u, 8) },
     ])).toEqual({ [`0x${GOLD}`]: '10.5' });
-    expect(depositAmounts([{ id: CHN_ID, units: 50_000_000n, text: (u) => amountParam(u, 8) }, { id: GOLD, units: null, text: () => 'x' }])).toEqual({ CHN: '0.5' });
+    expect(depositAmounts([{ id: CHN_ID, units: 50_000_000n, text: (u) => amountParam(u, 8) }, { id: GOLD, units: null, text: () => 'x' }])).toEqual({ ECX: '0.5' });
   });
 
-  it('estimates the shares of a deposit: as amm::Provide in proportion, less the fee on the part out of it', () => {
-    const pool = { reserveA: 50_000n, reserveB: 5_000_000_000n, shares: 15_811_388n, price: 5_000_000_000 / 50_000, fee: 0.3 };
-    const exact = provide({ reserve0: pool.reserveA, reserve1: pool.reserveB, shares: pool.shares }, 1_000n, 100_000_000n);
-    const est = estimateDepositShares(pool, 1_000n, 100_000_000n);
-    expect(Number(est)).toBeCloseTo(Number(exact?.shares), -1);
-    // One side alone, worth as much: about half of it is traded to the pool's proportions, paying the fee on that.
-    const one = estimateDepositShares(pool, 2_000n, 0n);
-    expect(one).toBeLessThan(est);
-    expect(Number(one)).toBeGreaterThan(Number(est) * (1 - 0.003));
-    expect(estimateDepositShares(pool, 0n, 0n)).toBe(0n);
-    expect(estimateDepositShares({ ...pool, shares: 0n }, 1n, 1n)).toBe(0n);
+  it('reads the amounts of a quote of quotepoolliquidity in the order of the lists', () => {
+    const pool = { asset_a: 'GOLD', asset_b: 'CHN', asset_b_id: CHN_ID };
+    expect(quoteAmounts({ CHN: 1, GOLD: 10 }, pool)).toEqual({ a: 10, b: 1 });
+    // Labels alike: the node's order, CHN first.
+    expect(quoteAmounts({ X: 1, Y: 10 }, { asset_a: 'X', asset_b: 'X', asset_b_id: CHN_ID })).toEqual({ a: 10, b: 1 });
+    expect(quoteAmounts({ X: 1, Y: 10 }, { asset_a: 'X', asset_b: 'X', asset_b_id: USDX })).toEqual({ a: 1, b: 10 });
   });
 
   it('takes a percentage of the shares held, all of them at 100', () => {

@@ -23,10 +23,17 @@ uint256 PoolIdOf(const AssetId& a, const AssetId& b, const PoolParams& params)
 
 std::optional<std::string> WhyNotPoolKind(uint8_t curve, uint32_t fee, uint32_t amp, uint8_t weight_a, uint8_t flags)
 {
-    if (curve > MAX_CURVE) return "an unknown curve";
+    if (!CreatableCurve(curve)) return "an unknown curve";
     if (std::find(FEE_TIERS.begin(), FEE_TIERS.end(), fee) == FEE_TIERS.end()) return "a fee that is not a tier (0.01, 0.05, 0.3 or 1 %)";
-    if (flags != 0) return "unknown flags";
+    if ((flags & ~POOL_FLAG_DYNAMIC_FEE) != 0) return "unknown flags";
     switch (static_cast<Curve>(curve)) {
+    case Curve::CONCENTRATED:
+        if (amp != 0 || weight_a != 0) return "an amplification or a weight for a concentrated pool";
+        break;
+    case Curve::LAUNCH:
+        return "a launch's curve (launchtoken makes those)";
+    case Curve::BOOK:
+        return "an order book (placeorder makes those)";
     case Curve::CONSTANT_PRODUCT:
         if (amp != 0 || weight_a != 0) return "an amplification or a weight for a constant-product pool";
         break;
@@ -178,6 +185,20 @@ BigUint BigUint::operator<<(unsigned shift) const
     return result;
 }
 
+BigUint BigUint::operator>>(unsigned shift) const
+{
+    BigUint result;
+    const size_t limbs{shift / 64}, bits{shift % 64};
+    if (limbs >= m_limbs.size()) return result;
+    result.m_limbs.assign(m_limbs.size() - limbs, 0);
+    for (size_t i{limbs}; i < m_limbs.size(); ++i) {
+        result.m_limbs[i - limbs] = m_limbs[i] >> bits;
+        if (bits != 0 && i + 1 < m_limbs.size()) result.m_limbs[i - limbs] |= m_limbs[i + 1] << (64 - bits);
+    }
+    result.Trim();
+    return result;
+}
+
 BigUint operator/(const BigUint& a, const BigUint& b)
 {
     BigUint quotient;
@@ -280,6 +301,8 @@ std::strong_ordering StablePhi(uint32_t amp, const BigUint& a, const BigUint& p,
 
 /** The first-degree units of a level: D (stable) or the geometric mean (the others), as the ratio num/den of a level. */
 } // namespace
+
+uint64_t SearchMaxU64(uint64_t lo, uint64_t hi, const std::function<bool(uint64_t)>& ok) { return SearchMax<uint64_t>(lo, hi, ok); }
 
 std::pair<uint32_t, uint32_t> ReducedWeights(const PoolParams& params)
 {
@@ -564,8 +587,8 @@ std::optional<dex::Clearing> ClearPoolOf(const PoolParams& params, uint32_t fee,
     static_assert(PROTOCOL_FEE_SHARE == 0, "the protocol's part of the fees has no destination: the clearing leaves all of it to the liquidity providers");
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     if (params.GetCurve() == Curve::CONSTANT_PRODUCT) return ClearConstantProduct(fee, reserve0, reserve1, orders);
-    // A launch curve clears with its record (ClearLaunch), never here.
-    if (params.GetCurve() == Curve::LAUNCH) return std::nullopt;
+    // A launch curve clears with its record (ClearLaunch), a concentrated pool with its state (State::ClearCl), never here.
+    if (params.GetCurve() == Curve::LAUNCH || params.GetCurve() == Curve::CONCENTRATED || params.GetCurve() == Curve::BOOK) return std::nullopt;
     return ClearInvariant(params, fee, reserve0, reserve1, orders);
 }
 
@@ -649,7 +672,9 @@ uint256 SpotPriceQ64(const PoolParams& params, uint64_t reserve0, uint64_t reser
     switch (params.GetCurve()) {
     case Curve::CONSTANT_PRODUCT:
     case Curve::LAUNCH:
-        // A launch curve is a constant product of its (virtual) reserves.
+    case Curve::CONCENTRATED:
+        // A launch curve is a constant product of its (virtual) reserves; a concentrated pool's price is its state's
+        // (State::GetClState), not of its reserves: this is what it holds, for those who ask without the state.
         return inverse ? dex::PriceQ64(reserve0, reserve1) : dex::PriceQ64(reserve1, reserve0);
     case Curve::WEIGHTED: {
         const auto [wa, wb]{ReducedWeights(params)};
@@ -690,6 +715,8 @@ std::string CurveName(Curve curve)
     case Curve::STABLE: return "stable";
     case Curve::WEIGHTED: return "weighted";
     case Curve::LAUNCH: return "launch";
+    case Curve::CONCENTRATED: return "concentrated";
+    case Curve::BOOK: return "book";
     }
     return "unknown";
 }
@@ -699,6 +726,7 @@ std::optional<Curve> ParseCurve(const std::string& name)
     if (name == "constant_product" || name == "cp" || name == "xyk") return Curve::CONSTANT_PRODUCT;
     if (name == "stable" || name == "stableswap") return Curve::STABLE;
     if (name == "weighted") return Curve::WEIGHTED;
+    if (name == "concentrated" || name == "cl") return Curve::CONCENTRATED;
     return std::nullopt;
 }
 

@@ -61,10 +61,11 @@ export function categoryText(e: Pick<AssetTx, 'category' | 'sign'>): string {
 }
 
 /**
- * The operations of Layers' DEX (createpool, addpoolliquidity, removepoolliquidity, swappools, swaproute) that
+ * The operations of Layers' DEX (createpool, addpoolliquidity, removepoolliquidity, swappools, swaproute; launchtoken,
+ * claimlaunch; buys and sales on a launch's curve are routes) that
  * listassettransactions lists as moves of the assets (sent, received): named as listassetactivity names them.
  */
-const DEX_OPERATIONS = new Set(['create pool', 'add liquidity', 'remove liquidity', 'route']);
+const DEX_OPERATIONS = new Set(['create pool', 'add liquidity', 'remove liquidity', 'route', 'launch', 'claim launch']);
 
 /** The words of a move, with the operation listassetactivity says of its transaction (if read). */
 export function operationText(e: Pick<AssetTx, 'category' | 'sign'>, operation: string | undefined): string {

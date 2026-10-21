@@ -212,6 +212,15 @@ uint256 RegistrationHash(const std::string& name, const uint256& pubkey, const u
 bool CheckRegistration(const std::string& name, const uint256& pubkey, const uint256& genesis, const std::array<unsigned char, 64>& proof);
 /** The id of an event, by its description (any text). */
 uint256 EventId(const std::string& event);
+
+/**
+ * Verified issuers (not a rule: what wallets show). A curator is an oracle; it verifies an asset by attesting the event
+ * "Layers verification <asset id> #<round>" (rounds from 1) with 1, and takes it back with 0 at the next round. Its
+ * word on an asset is that of its last round attested (rounds read in order until one is not, at most
+ * MAX_VERIFICATION_ROUNDS).
+ */
+inline constexpr int MAX_VERIFICATION_ROUNDS{64};
+std::string VerificationEvent(const AssetId& asset, int round);
 /** What an oracle signs (BIP340) to attest `value` for `event` from `height` on. */
 uint256 AttestationHash(const uint256& oracle, const uint256& event, int64_t value, int32_t height);
 /** Whether `signature` is the oracle's key's over AttestationHash. */

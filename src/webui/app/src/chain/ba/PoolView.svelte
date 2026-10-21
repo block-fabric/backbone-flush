@@ -3,7 +3,8 @@
   // holds and traded, the share of this wallet; its price as this app saw it, its depth (getpoolcurve: what trades of
   // growing size do to its price, each way), its curve for a constant-product pool. And liquidity by its id: put in
   // either asset or both (addpoolliquidity: out of the pool's proportions, the fee is paid on the part a swap would
-  // trade), take shares out for both assets or for one alone (removepoolliquidity), each quoted first. The pool of the
+  // trade), take shares out for both assets or for one alone (removepoolliquidity), each quoted first by the node as the
+  // rules work it out (quotepoolliquidity). The pool of the
   // kind addliquidity makes keeps its ways in besides (Add liquidity, My assets).
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
@@ -18,10 +19,11 @@
   import Chart from './Chart.svelte';
   import DepthChart from './DepthChart.svelte';
   import PoolKind from './PoolKind.svelte';
+  import RangePicker from './RangePicker.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
-  import { alignDepth, CURVE_HELP, depositAmounts, estimateDepositShares, kindOf, sharesOf, type MarketQuote, type PoolCurve } from './kinds';
-  import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, withdraw, type Amount, type Pool } from './model';
+  import { alignDepth, CURVE_HELP, DYNAMIC_FEE_HELP, feeNow, feePercent, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
+  import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
   import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, tradeIntent } from './store.svelte';
 
   let { pool, back }: { pool: Pool; back: () => void } = $props();
@@ -32,8 +34,9 @@
   const position = $derived(ba.mine?.liquidity.find((l) => l.pool === pool.pool) ?? null);
   const series = $derived(priceSeries(pool, pool.asset_a_id).map((p) => ({ x: p.h, y: p.p })));
   /** The pool kinds apply from the next block: liquidity by the pool's id (getdexinfo). */
-  const curves = $derived(ba.dex?.curves_active === true);
-  const units = $derived({ a: unitsOf(pool.reserve_a, da), b: unitsOf(pool.reserve_b, db), shares: unitsOf(pool.shares, 0) });
+  const curves = $derived(ba.dex?.curves_active === true && kind.curve !== 'launch' && kind.curve !== 'concentrated' && kind.curve !== 'book');
+  /** An order book (Layers' DEX: ba/book.ts): no liquidity, no depth curve; its orders on its own page. */
+  const book = $derived(kind.curve === 'book');
 
   // --- Its depth (getpoolcurve), again with each block ---
   let depth = $state<PoolCurve | null>(null);
@@ -41,6 +44,7 @@
   $effect(() => {
     const id = pool.pool;
     void ba.version;
+    if (book) return;
     let live = true;
     rpc
       .raw<PoolCurve>('getpoolcurve', [id, 16])
@@ -63,6 +67,11 @@
     tradeIntent.get = pool.asset_a_id;
     nav.tab = 'swap';
   }
+  function openBook() {
+    tradeIntent.bookBase = isChn(pool.asset_a_id) ? pool.asset_b_id : pool.asset_a_id;
+    tradeIntent.bookQuote = isChn(pool.asset_a_id) ? pool.asset_a_id : pool.asset_b_id;
+    nav.tab = 'book';
+  }
   function addDefault() {
     tradeIntent.a = pool.asset_a_id;
     tradeIntent.b = pool.asset_b_id;
@@ -82,12 +91,45 @@
   let addBText = $state('');
   let addSlippage = $state(1);
   let busy = $state(false);
-  const priceUnits = $derived(approx(pool.price) * 10 ** (db - da));
-  const addShares = $derived(pool.abandoned ? 0n : estimateDepositShares({ reserveA: units.a, reserveB: units.b, shares: units.shares, price: priceUnits, fee: kind.fee }, addA ?? 0n, addB ?? 0n));
+  // The node's quote of the deposit (quotepoolliquidity), a moment after the last change and with each block.
+  let addQuote = $state<LiquidityQuote | null>(null);
+  let addQuoteError = $state('');
+  $effect(() => {
+    const id = pool.pool;
+    const amounts = depositAmounts([
+      { id: pool.asset_a_id, units: addA, text: (u) => amountParam(u, da) },
+      { id: pool.asset_b_id, units: addB, text: (u) => amountParam(u, db) },
+    ]);
+    void ba.version;
+    addQuoteError = '';
+    if (Object.keys(amounts).length === 0) {
+      addQuote = null;
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      rpc
+        .raw<LiquidityQuote>('quotepoolliquidity', [id, amounts])
+        .then((q) => {
+          if (live) addQuote = q && typeof q === 'object' ? q : null;
+        })
+        .catch((e) => {
+          if (live) {
+            addQuote = null;
+            addQuoteError = errorText(e);
+          }
+        });
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  });
+  const addShares = $derived(addQuote ? unitsOf(addQuote.shares, 0) : 0n);
   const addProblem = $derived.by(() => {
     if ((addA ?? 0n) === 0n && (addB ?? 0n) === 0n) return '';
     if (pool.abandoned && ((addA ?? 0n) === 0n || (addB ?? 0n) === 0n)) return 'Nobody provides liquidity to this pool any more: both amounts reopen it, at their price (or make it again in Create pool).';
-    if (!pool.abandoned && addShares === 0n) return 'Too little: it makes no shares.';
+    if (addQuote && addShares === 0n) return 'Too little: it makes no shares.';
     return '';
   });
   const oneSided = $derived(((addA ?? 0n) === 0n) !== ((addB ?? 0n) === 0n));
@@ -102,6 +144,7 @@
     const sDa = da;
     const sDb = db;
     const sSlippage = addSlippage;
+    const sShares = addShares;
     const amounts = depositAmounts([
       { id: pool.asset_a_id, units: sA, text: (u) => amountParam(u, sDa) },
       { id: pool.asset_b_id, units: sB, text: (u) => amountParam(u, sDb) },
@@ -113,7 +156,7 @@
     const r = await ask({
       title: t('Add liquidity'),
       message: t('Put %1 into this pool?', what),
-      informative: addShares > 0n ? t('About %1 shares; at least %2% fewer should the pool move first. Out of the pool\'s proportions, the part a swap would trade pays the pool\'s fee (%3).', addShares.toString(), String(sSlippage), String(kind.fee) + '%') : undefined,
+      informative: sShares > 0n ? t('About %1 shares; at least %2% fewer should the pool move first. Out of the pool\'s proportions, the part a swap would trade pays the pool\'s fee (%3).', sShares.toString(), String(sSlippage), feePercent(feeNow(kind))) : undefined,
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -141,38 +184,39 @@
   let only = $state<'' | 'a' | 'b'>('');
   let outSlippage = $state(1);
   const removing = $derived(position ? sharesOf(unitsOf(position.shares, 0), percent) : 0n);
-  /** Both assets in proportion to the shares, CHN dust left in (amm::WithdrawPaid). */
-  const both = $derived.by(() => {
-    const [a, b] = withdraw({ reserve0: units.a, reserve1: units.b, shares: units.shares, chn0: isChn(pool.asset_a_id), chn1: isChn(pool.asset_b_id) }, removing);
-    return { a, b };
-  });
-  // One asset alone: its part, and what the other part buys of it in this pool (getswapquote, this pool's quote).
-  let swapped = $state<bigint | null>(null);
-  let swapError = $state('');
+  // The node's quote of what the shares take out (quotepoolliquidity), both assets or one alone.
+  let outQuote = $state<{ a: bigint; b: bigint } | null>(null);
+  let outQuoteError = $state('');
   $effect(() => {
-    const side = only;
     const id = pool.pool;
-    const other = side === 'a' ? both.b : both.a;
+    const shares = removing;
+    const side = only;
+    const onlyArg = side === 'a' ? assetArg(pool.asset_a_id) : side === 'b' ? assetArg(pool.asset_b_id) : null;
+    const decimals = { a: da, b: db };
     void ba.version;
-    swapped = null;
-    swapError = '';
-    if (!side || other <= 0n) return;
-    const from = side === 'a' ? pool.asset_b_id : pool.asset_a_id;
-    const to = side === 'a' ? pool.asset_a_id : pool.asset_b_id;
-    const fromDecimals = side === 'a' ? db : da;
-    const toDecimals = side === 'a' ? da : db;
+    outQuoteError = '';
+    if (shares <= 0n) {
+      outQuote = null;
+      return;
+    }
     let live = true;
     const timer = setTimeout(() => {
       rpc
-        .raw<MarketQuote>('getswapquote', [assetArg(from), amountParam(other, fromDecimals), assetArg(to), { max_hops: 0 }])
+        .raw<LiquidityQuote>('quotepoolliquidity', onlyArg ? [id, null, Number(shares), onlyArg] : [id, null, Number(shares)])
         .then((q) => {
           if (!live) return;
-          const mine = q?.pools?.find((x) => x.pool === id);
-          if (mine) swapped = unitsOf(mine.amount_out, toDecimals);
-          else swapError = t('No quote of this pool for the other part.');
+          if (!q || typeof q !== 'object' || !q.amounts) {
+            outQuote = null;
+            return;
+          }
+          const got = quoteAmounts(q.amounts, pool);
+          outQuote = { a: unitsOf(got.a, decimals.a), b: unitsOf(got.b, decimals.b) };
         })
         .catch((e) => {
-          if (live) swapError = errorText(e);
+          if (live) {
+            outQuote = null;
+            outQuoteError = errorText(e);
+          }
         });
     }, 250);
     return () => {
@@ -180,18 +224,18 @@
       clearTimeout(timer);
     };
   });
-  const outOnly = $derived(only === 'a' ? both.a + (swapped ?? 0n) : only === 'b' ? both.b + (swapped ?? 0n) : 0n);
 
   async function takeOut() {
     const wallet = wallets.current;
-    if (wallet === null || !position || busy || removing === 0n) return;
+    if (wallet === null || !position || busy || removing === 0n || !outQuote) return;
     const sPool = pool.pool;
     const sPercent = percent;
     const sOnly = only;
     const sSlippage = outSlippage;
     const la = nameOf(pool.asset_a_id, pool.asset_a);
     const lb = nameOf(pool.asset_b_id, pool.asset_b);
-    const quote = sOnly === 'a' ? t('About %1 %2', formatUnits(outOnly, da), la) : sOnly === 'b' ? t('About %1 %2', formatUnits(outOnly, db), lb) : t('About %1 %2 and %3 %4', formatUnits(both.a, da), la, formatUnits(both.b, db), lb);
+    const q = outQuote ?? { a: 0n, b: 0n };
+    const quote = sOnly === 'a' ? t('About %1 %2', formatUnits(q.a, da), la) : sOnly === 'b' ? t('About %1 %2', formatUnits(q.b, db), lb) : t('About %1 %2 and %3 %4', formatUnits(q.a, da), la, formatUnits(q.b, db), lb);
     const r = await ask({
       title: t('Take liquidity out'),
       message: t('Take %1% of your shares of this pool out?', String(sPercent)),
@@ -230,14 +274,14 @@
   </header>
   <section class="ba-figures">
     <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(pool.price)}</strong><span class="faint"><SafeText text={pool.asset_b} /> for 1 <SafeText text={pool.asset_a} /></span></div>
-    <div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, da, { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, db, { max: 4 })} <SafeText text={pool.asset_b} /></span></div>
+    {#if !book}<div class="panel ba-figure"><span class="muted">Holds</span><strong>{formatAmount(pool.reserve_a, da, { max: 4 })}</strong><span class="faint"><SafeText text={pool.asset_a} /> and {formatAmount(pool.reserve_b, db, { max: 4 })} <SafeText text={pool.asset_b} /></span></div>{/if}
     <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatCount(pool.swaps)}</strong><span class="faint">trades since block {formatCount(pool.created)}</span></div>
-    <div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>
+    {#if !book}<div class="panel ba-figure"><span class="muted">Your share</span><strong>{position ? formatPercent(position.percent) : '–'}</strong><span class="faint">{position ? t('%1 shares', formatAmount(position.shares, 0)) : t('of %1 shares', formatAmount(pool.shares, 0))}</span></div>{/if}
   </section>
   <section class="panel kind-panel" aria-label="Its kind">
     <dl class="ba-lines">
       <dt>Kind</dt><dd><PoolKind {kind} showDefault /></dd>
-      <dt>Fee</dt><dd>{kind.fee}% of what goes in, to its providers</dd>
+      {#if !book}<dt>Fee</dt><dd>{feeNow(kind)}% of what goes in, to its providers{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>{/if}
       {#if kind.curve === 'stable' && kind.amp !== undefined}<dt>Amplification</dt><dd>A = {kind.amp}: the higher, the flatter its price near the balance</dd>{/if}
       {#if kind.curve === 'weighted' && kind.weight_a !== undefined}<dt>Weights</dt><dd>{kind.weight_a}% <SafeText text={pool.asset_a} /> · {kind.weight_b ?? 100 - kind.weight_a}% <SafeText text={pool.asset_b} /></dd>{/if}
       <dt>Pool id</dt><dd class="id"><span class="mono break" translate="no">{pool.pool}</span> <CopyButton text={pool.pool} label="Copy the pool id" /></dd>
@@ -245,7 +289,7 @@
     <p class="ba-help">{t(CURVE_HELP[kind.curve])}</p>
   </section>
   <div class="ba-cols">
-    <section class="panel">
+    {#if !book}<section class="panel">
       <div class="panel-head"><h3>Depth</h3><span class="muted small">a trade alone in its block, each way</span></div>
       <div class="panel-body">
         {#if aligned.length}
@@ -256,7 +300,7 @@
           <p class="ba-empty">The node gives no depth of this pool.</p>
         {/if}
       </div>
-    </section>
+    </section>{/if}
     <section class="panel">
       <div class="panel-head"><h3>Price</h3><span class="muted small">as this app saw it</span></div>
       <div class="panel-body">
@@ -274,7 +318,11 @@
     {/if}
   </div>
 
-  {#if curves}
+  {#if kind.curve === 'concentrated'}
+    <div class="ba-cols">
+      <RangePicker {pool} />
+    </div>
+  {:else if curves}
     <div class="ba-cols">
       <form class="panel ba-form card" aria-label="Add liquidity to this pool" onsubmit={(e) => { e.preventDefault(); void addLiquidity(); }}>
         <h3>Add liquidity</h3>
@@ -286,12 +334,13 @@
           <select id="pv-add-slippage" bind:value={addSlippage}><option value={0.5}>0.5%</option><option value={1}>1%</option><option value={2}>2%</option><option value={5}>5%</option></select>
         </div>
         {#if addProblem}<p class="ba-problems" role="status">{t(addProblem)}</p>
-        {:else if addShares > 0n}
+        {:else if addQuoteError}<p class="ba-problems" role="status"><SafeText text={addQuoteError} /></p>
+        {:else if addQuote && addShares > 0n}
           <dl class="ba-lines">
-            <dt>Shares</dt><dd class="strong">≈ {addShares.toString()}</dd>
-            <dt>Share of the pool</dt><dd>{formatPercent((Number(addShares) / Number(units.shares + addShares || 1n)) * 100)}</dd>
+            <dt>Shares</dt><dd class="strong">{addShares.toString()}</dd>
+            <dt>Share of the pool</dt><dd>{formatPercent(approx(addQuote.share_of_pool))}</dd>
           </dl>
-          {#if oneSided}<p class="ba-help">One asset alone: the part a swap would trade to the pool's proportions pays its fee ({kind.fee}%). An estimate: the wallet says the shares when it sends.</p>{:else}<p class="ba-help">An estimate at the pool's price: the wallet says the shares when it sends.</p>{/if}
+          {#if oneSided}<p class="ba-help">One asset alone: the part a swap would trade to the pool's proportions pays its fee ({feeNow(kind)}%), included above.</p>{/if}
         {/if}
         <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || ((addA ?? 0n) === 0n && (addB ?? 0n) === 0n) || !!addProblem}><Icon name="pool" size={16} /> {busy ? 'Adding…' : 'Add liquidity'}</button></div>
       </form>
@@ -318,20 +367,25 @@
             <label for="pv-out-slippage">Slippage</label>
             <select id="pv-out-slippage" bind:value={outSlippage}><option value={0.5}>0.5%</option><option value={1}>1%</option><option value={2}>2%</option><option value={5}>5%</option></select>
           </div>
-          <dl class="ba-lines">
-            {#if only === ''}
-              <dt>You get about</dt><dd>{formatUnits(both.a, da)} <SafeText text={pool.asset_a} /></dd>
-              <dt></dt><dd>{formatUnits(both.b, db)} <SafeText text={pool.asset_b} /></dd>
-            {:else}
-              <dt>You get about</dt><dd class="strong">{formatUnits(outOnly, only === 'a' ? da : db)} <SafeText text={only === 'a' ? pool.asset_a : pool.asset_b} /></dd>
-            {/if}
-          </dl>
-          {#if only !== '' && swapError}<p class="ba-problems"><SafeText text={swapError} /></p>
-          {:else if only !== ''}<p class="ba-help">Your part of it, and what your part of the other buys of it in this pool, its fee paid.</p>{/if}
-          <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || removing === 0n}>{busy ? 'Taking out…' : 'Take out'}</button></div>
+          {#if outQuote}
+            <dl class="ba-lines">
+              {#if only === ''}
+                <dt>You get</dt><dd>{formatUnits(outQuote.a, da)} <SafeText text={pool.asset_a} /></dd>
+                <dt></dt><dd>{formatUnits(outQuote.b, db)} <SafeText text={pool.asset_b} /></dd>
+              {:else}
+                <dt>You get</dt><dd class="strong">{formatUnits(only === 'a' ? outQuote.a : outQuote.b, only === 'a' ? da : db)} <SafeText text={only === 'a' ? pool.asset_a : pool.asset_b} /></dd>
+              {/if}
+            </dl>
+            {#if only !== ''}<p class="ba-help">Your part of it, and what your part of the other buys of it in this pool, its fee paid.</p>{/if}
+          {:else if outQuoteError}<p class="ba-problems"><SafeText text={outQuoteError} /></p>{/if}
+          <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || removing === 0n || !outQuote}>{busy ? 'Taking out…' : 'Take out'}</button></div>
         {/if}
       </form>
     </div>
+  {:else if book}
+    <p class="ba-help">An order book: limit orders to buy or sell at a price, which trade at the end of each block in one batch. <button type="button" class="btn small" onclick={openBook}><Icon name="book" size={14} /> Its order book</button></p>
+  {:else if kind.curve === 'launch'}
+    <p class="ba-help">A launch's curve: buy and sell the token on its page (Launches), until it graduates into its pool with ECX. <button type="button" class="btn small" onclick={() => { tradeIntent.launch = pool.asset_a_id; nav.tab = 'launches'; }}>Its launch</button></p>
   {:else if !kind.default_kind || (ba.dex && ba.dex.curves_height >= 0)}
     <p class="ba-help">Liquidity by a pool's id (one asset alone, pools of other kinds) comes with the pool kinds{#if ba.dex && ba.dex.curves_height >= 0}, from block {formatCount(ba.dex.curves_height)}{/if}.</p>
   {/if}

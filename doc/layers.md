@@ -371,6 +371,74 @@ amp, weight_a}`, `addpoolliquidity pool {asset: amount}`, `removepoolliquidity p
 **Store keys:** `0x8a` the kind of each pool made by CreatePool (none for the default kind); during a block only
 `0x8b` the work of the pool kinds (`MAX_BLOCK_CURVE_WORK`).
 
+## Concentrated liquidity
+
+A pool kind of its own (`Curve::CONCENTRATED`, with the pool kinds: same height; markers 24 and 25;
+`src/bitassets/clmath.{h,cpp}`, `State::ClearCl`, `State::PlanPosition`), after Uniswap v3.
+
+**Arithmetic.** Prices are square roots in Q64.96 (√(asset1 per asset0, in units)·2^96); ticks are powers of
+1.0001 (the price at tick t is 1.0001^t, −887272 ≤ t ≤ 887272); liquidity L is 128 bits. `SqrtRatioAtTick` is
+Uniswap v3's `TickMath.getSqrtRatioAtTick` bit for bit (its twenty constants, each 2^128·1.0001^(−2^(k−1)) to within
+one unit, are checked against an exact computation by `contrib/dex-curves/reference.py`); `TickAtSqrtRatio` is the
+largest tick whose ratio is at most the price. The amounts between two prices for a liquidity, the price after an
+amount, and a step of a swap are `SqrtPriceMath` and `SwapMath`'s, rounded as they round (in up, out down), with
+every product exact. 80 vectors (`src/test/data/dex_cl.json`) are checked by the reference too.
+
+**Pools and positions.** `createpool a x b y {"curve":"concentrated","fee":…}` makes a pool at the price y/x,
+nothing in; its tick spacing follows its fee tier (0.01 %: 1, 0.05 %: 10, 0.30 %: 60, 1.00 %: 200). Liquidity comes
+by *positions*: `OpenPosition` (24) puts a liquidity L between two ticks (multiples of the spacing), paying what L
+needs at the pool's price (rounded up; at most the amounts the transaction offers, the rest back); a range above the
+price holds asset0 alone, below it asset1 alone. A position is a token of its own (`Token::Kind::POSITION`, id
+`PositionId(txid)`): it can be sent, and whoever spends it changes it. `ChangePosition` (25) adds liquidity, takes
+some out (its amounts at the price, rounded down, paid at once), collects its fees, or closes it (all out, all
+collected, the token gone). The pool keeps Uniswap v3's state: the price, its tick, the liquidity in range, the
+fees per unit of liquidity ever (`ClState`, table `0x93`); each tick in use, its liquidity in all, what crossing it
+changes, the fees on its other side (`ClTick`, `0x94` in order and `0x97` reversed, so the next one either way is
+one ordered read); each position (`ClPosition`, `0x95`). The fees a position earned are its liquidity times the
+growth of the fees inside its range since it last counted them (Uniswap's fee growth inside).
+
+**Batch clearing.** A concentrated pool's round has one uniform price, as every pool's: with A', B' the inputs
+less the fee, the pool's net trade is walked through its ticks (each tick crossed brings its liquidity in or out
+and turns its fees over, as Uniswap's swap does; at most `MAX_CL_CROSSINGS`, 64, a round), and the net out is the
+largest dy that the walk gives for the net in it gets, ⌊A'·dy/(dy + B')⌋ (bisection over that predicate, the
+same procedure for every implementation: a walk's output is monotone in its input, up to one unit of rounding at a
+tick, where the procedure decides). Every order then gets the price P = (dy + B')/A' (or the reverse), rounded down.
+The walk is computed once a round, a stretch per tick, so each step of the search is one swap step. What the pool
+kept beyond the walk (the fees, the roundings, the matched orders' differences) is credited to the liquidity in
+range at the price after the round (or, if none, at the price before): its positions earn the round's fees; a
+position out of range earns nothing. The reserves are what went in less what came out; every position can always be
+closed (property-tested: positions in and out of range, twenty blocks of trades and batches crossing ticks, then
+all closed; the pool never owes more than it holds). A hop through a concentrated pool counts two units of the
+block's work (`MAX_BLOCK_CURVE_WORK`). Routes and quotes go through them as through every pool; their prices feed
+the TWAP (the square root price, squared, as it was before each block that changed the pool).
+
+**RPCs.** `getpool` (its `concentrated` state), `getpoolticks pool` (the liquidity by price: a distribution chart),
+`previewposition pool lower upper {amounts}`, `getposition id`; wallet `openposition pool lower upper {amounts}`,
+`changeposition id {add|remove|collect|close}`, `listpositions` (in range or not, amounts, fees owed). Prices are of
+the pool's asset0 (the lower id; CHN in a pool with CHN) in its asset1, whole units.
+
+**Security review (2026-10-21) and how it is met.** (1) *Liquidity bounds*: a tick carries at most
+`MaxLiquidityPerTick(spacing)` = (2^128 − 1) / (the ticks of the spacing), as Uniswap v3's maxLiquidityPerTick, so the
+liquidity in range, a sum over ticks, never overflows; a position or tick past it is refused (`bad-ba-position`), every
+change of the liquidity in range is checked both ways, and a crossing that would take it below zero or past 128 bits is
+not clamped: the round fails and its orders are refunded (a state the caps make impossible; failing the round rather
+than the block keeps a chain with such a state from stopping for good). (2) *Fees across ranges*: a round's fees and
+roundings are credited stretch by stretch along the walk, in proportion to the input each stretch took, to that
+stretch's liquidity, before the tick at its end is crossed (tested against a computation by hand across two
+ranges). (3) *The search's arithmetic*: Â·dy is computed in 256 bits (it overflows 128). (4) *Tokens*: position and
+order tokens parse in a marker's outputs as their serialization writes them, and a marker that names one is not valid
+before the pool kinds' height (`CheckCurvesActivation`); both tested.
+
+## Dynamic fees
+
+A pool of any kind may be made with `POOL_FLAG_DYNAMIC_FEE` (`createpool … {"dynamic_fee": true}`; another pool
+than the one without it, its id names the flag). Its fee in a block is its tier's plus half its *volatility*, at
+most `DYNAMIC_MAX_EXTRA` (2 %) more: the volatility is a moving average (window `DYNAMIC_WINDOW`, 8) of the change of
+the pool's price, in millionths, from one block that changed it to the next (`FeeState`, table `0x8f`), halving
+every `DYNAMIC_HALF_LIFE` (40) blocks without a change. The fee of a block is fixed by the state before it (the
+clearing reads it once per pool); quotes take it as of the next block. A pool whose price moves 1 % a block charges
+about 0.5 % more; quiet, it returns to its tier.
+
 ## Launches
 
 Bonding-curve token launches, with the pool kinds (same height, `dex_curves_height`; markers 22 and 23).
@@ -443,6 +511,81 @@ ticker {display_name, logo, info, allocation, first_buy, min_buy, max_buy}`, `bu
 `selltolaunch token amount`, `claimlaunch token`. Tests: `dex_launch_tests`, `feature_layers_launch.py` (launch,
 buys and a sale, graduation at 500 into a locked pool, a reorganisation across it, the creator's claim).
 
+## Order books
+
+Limit orders beside the pools, with the pool kinds (same height, `dex_curves_height`; markers 26 `PlaceOrder` and 27
+`SettleOrder`). `src/bitassets/state.cpp` (`PlanPools`, `ClearBook`, `CrossBooks`, `SweepBooks`).
+
+**The book.** The first order of a pair makes its book: a pool record of curve `BOOK` (fee 0) at `BookId(a, b)`; its
+reserves are what its orders hold (what is left to sell, what they got and not collected, the roundings), its shares
+`MIN_LIQUIDITY` plus its open orders. An order sells `amount` of one asset for the other at a limit `price_num /
+price_den` (units bought per unit sold, at least), until a block `expiry` (at most `MAX_ORDER_DURATION` ahead); its id
+is `OrderId(txid)`, and a token of kind `ORDER` (one unit) is its holder's: it collects and cancels. Open orders are
+indexed by book, side, limit (UQ128.128, big-endian: best first) and id (table `0x99`), and by expiry (`0x9b`).
+
+**Clearing: a call auction.** In a block's batch a book is a venue as a pool is (`swappools`, routes, quotes): a round
+of the book has one price, chosen among the limits of the best `MAX_BOOK_ROUND` (256) live orders of each side: the one
+that trades the most of asset0 (min of what sells at it and what buys at it), then the least imbalance, then the lowest.
+Takers (orders of the batch through the book) fill whole or not at all (they miss, and are refunded, if the book cannot
+take them whole); makers fill by limit, then id, partially. What the buy side gets is ⌊paid/P⌋, what each seller gets
+⌊sold·P⌋: the roundings stay in the book, which never pays more than its orders hold (`random_books_stay_solvent`).
+At a block's end, the books it placed orders in clear once more without takers: resting orders that cross trade
+(`CrossBooks`). A book's hop costs 2 units of `MAX_BLOCK_CURVE_WORK`, as does the first order of a block in a book
+(its crossing at the block's end); a worst round (256 + 256 orders at different limits) takes about 0.8 ms.
+
+**Settling.** `settleorder order (cancel)` spends the order's token: it pays what the order got and has not collected;
+cancelled, expired or filled, what is left of what it sells comes back too and the order is gone; else its token comes
+back. CHN goes by the coinbase (`MIN_CHN_PAYOUT` at least; less waits).
+
+**Security.** (1) *A side's limit is a count of its index*: each side's entries are counted in the state (table
+`0x9c`: one more when placed, one less when filled, settled, swept or evicted; undone with a block like the rest), and a
+side never holds more than `MAX_BOOK_SIDE` (1000) entries, live or expired. Should the index not show as many entries as
+counted, a placement is refused (fail closed). (2) *Expired orders never crowd out live ones, nor lock a book*: the end
+of each block sweeps expired orders out of their books' indexes, oldest first, at most `MAX_BOOK_SWEEP` (5000) a
+block, the rest at the next (a backlog; no cap on how many may expire at a height, so nobody can fill a height for
+others); and an order placed on a full side first takes that side's own expired entries out itself, so no backlog
+elsewhere can keep a book full. A side is read with expired, filled and evicted entries skipped before a round's limit
+counts them (`BookSide`; a side has at most 1000 entries, within `MAX_BOOK_SCAN`). (3) *A full side is no lock, and
+no cheap grief*: full of live orders, an order takes the place of the side's worst (the highest limit, then the highest
+id) only if its limit is better and it sells at least what the worst has left (the same asset: worth as much at least);
+the worst leaves the book flagged `evicted` (`getorder`'s `evicted_height`, `listorders`' `evicted`) and its holder
+settles it for all it holds, nothing lost; anything else is refused (`bad-ba-book-full`). (4) *No dust*: an order buys
+something at its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair,
+it sells a whole unit (10^decimals) at least (`bad-ba-order-dust`). (5) *State written before the counts*: orders can
+exist only from the pool kinds' height, which no running network has reached; a store with orders and without the
+books' layout marker (`0x9d`, written with the first order: a development build) is not current
+(`StoreLayoutCurrent`), so the node derives it again from the blocks, counts included; an order record without its
+`evicted` field reads as never evicted. Tests: `stuffed_with_expiring_orders`, `full_of_unswept_expired_orders`,
+`dust_refused`, `full_side_evicts_its_worst` (with the block undone: the eviction, the counts and the shares back),
+`layout_of_books`, `sweep_bounded`, `worst_round`.
+
+RPCs: `getbook a b (levels)` (the ladder of each side, best bid and ask), `getorder order`; wallet `placeorder sell
+amount buy price (blocks)`, `settleorder order (cancel)`, `listorders`.
+
+## Verified issuers
+
+Not a rule: what wallets show. A *curator* is an oracle (above): it verifies an asset by attesting the event
+`Layers verification <asset id> #<round>` (rounds from 1) with 1, and takes the verification back with 0 at the next
+round; its word on an asset is that of its last round attested (rounds read in order until one is not, at most
+`dex::MAX_VERIFICATION_ROUNDS`, 64). Nobody can verify in a curator's name (the attestation is its key's signature),
+and a curator can only say yes or no of an asset id (not of a ticker or a look-alike). Each wallet chooses the curators
+it trusts (none by default: no badges); the app shows a badge on an asset that one of them verifies now. RPCs:
+`getverifications asset curators` (only the curators named count, 1 to 200: anyone can register an oracle, so there is
+no verification without the user's own list; the result says which of them verify it); wallet `verifyasset curator asset (verified)` (the next round, signed with the wallet's key of the oracle).
+
+## The market index
+
+The search index (`src/bitassets/index.{h,cpp}`, derived data kept with the state, not a rule) keeps a row per pool:
+its reserves, the reserves at the start of the volume window (`asset_volume_window` blocks, about a day), its volume in
+the window and its last block; `searchpools text filters sort cursor limit` pages through them sorted by depth (the CHN
+it holds), volume (CHN traded in the window), `price_change` (over the window) or newest, with each pool's state as
+`getpool` gives it. The price change is the change of reserve0/reserve1, so for a pool of another curve than constant
+product the index keeps the second reserve as the first times its spot price (`PricedReserve1`: the curve's slope; a
+concentrated pool's square root price squared; 0 for a book, which has no price of its own): the ratio is then its
+price, as for the others, and the rows of constant-product pools are what they always were. Volumes are counted in CHN,
+so for pools with CHN only (a pair without CHN shows 0; its all-time volumes are `getpool`'s `volume_a`/`volume_b`). The
+app's Markets tab is this index: price, 24-hour change, volume and liquidity, searchable and sortable.
+
 ## Logos of assets
 
 Layers has BitAssets' logos whole (doc/bitassets.md, "Logos"): a PNG or JPEG of exactly 256 x 256 pixels, at most
@@ -512,7 +655,8 @@ state back, finality with assets, and the peg balance with CHN in pools and auct
 product never falls; the accumulators' wrap; the oracles' signatures; routes, batches, refunds,
 the bound of orders, observations, oracles and contracts on a state) and
 `dex_curves_tests` (the pool kinds' arithmetic: properties, extremes, determinism vectors, the worst case) and
-`dex_pools_tests` (their activation, pools of every kind side by side, batches, routes across kinds, one-sided
+`dex_book_tests` and `feature_layers_book.py` (order books: crossing, takers, routes, expiry, solvency, the
+security cases), `dex_pools_tests` (their activation, pools of every kind side by side, batches, routes across kinds, one-sided
 liquidity, retiring an asset, the per-block bound), `feature_layers_dex_curves.py` (before and after their
 height: pools of each kind, a swap and a batch against the Python reference, a route across kinds, one-sided
 liquidity, the TWAP, a reorganisation across a clearing).

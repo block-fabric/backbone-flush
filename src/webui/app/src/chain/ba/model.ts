@@ -68,7 +68,11 @@ export type Amount = number | string;
 /** The RPC methods of BitAssets whose results carry amounts: read exactly (audit 7 E-BA6). */
 export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 'listauctions', 'getauction', 'listmyassets', 'listassetactivity', 'listassettransactions', 'getbitassetsinfo', 'getassethistory', 'quoteswap', 'quotebid', 'swapasset', 'addliquidity', 'removeliquidity', 'bidauction',
   // Layers' DEX: the pool kinds' quotes, previews and depth, and what the wallet does with them.
-  'searchpools', 'getswapquote', 'quoteroute', 'previewpool', 'getpoolcurve', 'simulateclearing', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute'];
+  'searchpools', 'getswapquote', 'quoteroute', 'previewpool', 'getpoolcurve', 'simulateclearing', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute',
+  'getposition', 'getpoolticks', 'previewposition', 'listpositions', 'openposition', 'changeposition',
+  'quotepoolliquidity', 'getlaunch', 'listlaunches', 'quotelaunch', 'getlaunchstats', 'getlaunchlog', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch',
+  // Order books: the ladder, the orders, and what the wallet does with them.
+  'getbook', 'getorder', 'listorders', 'placeorder', 'settleorder'];
 
 /** An amount as a double: for a ratio, a chart, an order; never for what is shown or sent. */
 export function approx(value: Amount | undefined | null): number {
@@ -136,6 +140,10 @@ export interface Pool {
   weight_a?: number;
   weight_b?: number;
   default_kind?: boolean;
+  dynamic_fee?: boolean;
+  fee_now?: number;
+  /** A concentrated pool's state (ba/cl.ts). */
+  concentrated?: { sqrt_price_x96: string; tick: number; liquidity: string; tick_spacing: number };
 }
 
 export type AuctionStatus = 'upcoming' | 'open' | 'sold out' | 'ended' | 'closed';
@@ -819,6 +827,8 @@ export const OPERATIONS: Record<string, string> = {
   'remove liquidity': 'Remove liquidity',
   'create pool': 'Create pool',
   route: 'Trade along a route',
+  launch: 'Launch a token',
+  'claim launch': 'Pay a launch\'s creator',
   auction: 'Auction',
   bid: 'Bid',
   collect: 'Collect',

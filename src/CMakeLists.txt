@@ -122,6 +122,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   bitassets/index.cpp
   bitassets/logo.cpp
   bitassets/state.cpp
+  bitassets/clmath.cpp
   bitassets/curves.cpp
   bitassets/dex.cpp
   sidechain/script.cpp

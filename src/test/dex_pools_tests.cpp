@@ -9,6 +9,7 @@
 #include <addresstype.h>
 #include <bitassets/curves.h>
 #include <bitassets/dex.h>
+#include <bitassets/index.h>
 #include <bitassets/state.h>
 #include <consensus/params.h>
 #include <primitives/transaction.h>
@@ -399,6 +400,35 @@ BOOST_AUTO_TEST_CASE(curve_work_budget)
     // The next block starts afresh.
     chain.Require(MakeTx({g[2 + MAX_BLOCK_CURVE_WORK]}, SwapPools{GOLD, {stable}, 1000, 1, CScript{}}, {std::nullopt}));
     chain.EndBlock();
+}
+
+BOOST_AUTO_TEST_CASE(index_prices_of_kinds)
+{
+    // The search index keeps a pool's second reserve as its first times its spot price (PricedReserve1): the reserves'
+    // ratio is the price for every kind, as for constant product (whose rows are as they always were).
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")}, SILVER{HashName("SILVER")};
+    const auto g{chain.Issue("GOLD", 100'000'000, {10'000'000, 10'000'000, 10'000'000})};
+    const auto s{chain.Issue("SILVER", 100'000'000, {10'000'000, 2'000'000, 30'000'000})};
+    chain.Create(g[0], GOLD, 10'000'000, s[0], SILVER, 10'000'000, Curve::CONSTANT_PRODUCT, 500);
+    // An unbalanced stable pool: its price is near 1, its reserves' ratio 5.
+    chain.Create(g[1], GOLD, 10'000'000, s[1], SILVER, 2'000'000, Curve::STABLE, 100, 200);
+    chain.Create(g[2], GOLD, 10'000'000, s[2], SILVER, 30'000'000, Curve::WEIGHTED, 3000, 0, GOLD < SILVER ? 25 : 75);
+    const auto state{chain.Assets()};
+    for (const auto& [id, pool] : state.PoolsOf(GOLD)) {
+        const PoolParams params{state.GetPoolParams(id)};
+        const uint64_t priced{index::PricedReserve1(state, id, pool)};
+        if (params.GetCurve() == Curve::CONSTANT_PRODUCT) {
+            BOOST_CHECK_EQUAL(priced, pool.reserve1);
+        } else {
+            BOOST_CHECK_CLOSE(static_cast<double>(priced) / pool.reserve0, curves::SpotPrice(params, pool.reserve0, pool.reserve1), 1e-4);
+        }
+        if (params.GetCurve() == Curve::STABLE) {
+            const double ratio{static_cast<double>(pool.reserve1) / pool.reserve0};
+            BOOST_CHECK(std::abs(static_cast<double>(priced) / pool.reserve0 - 1) < 0.1);
+            BOOST_CHECK(std::abs(ratio - 1) > 0.5);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
