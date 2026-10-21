@@ -120,6 +120,33 @@ mainchaingrpc=127.0.0.1:8123
 addnode=<peer>:48255
 ```
 
+## Trying it: the local playground
+
+One command starts a whole Starbase on your computer, on regtest with eCash's rules: `backboned -regtest
+-testecash -grpc` (Backbone's eCash regtest serving the enforcer's interface), three Starbase validators that
+follow it through that interface alone (`-mainchaingrpc`, as against a plain eCash node with the enforcer), a
+mainchain block every 5 seconds, and `starbase-app` as validator 0.
+
+```sh
+contrib/playground/starbase-playground.sh start      # about a minute: slot 46 activated, 100 ECX deposited,
+                                                     # the token STAR with a STAR/ECX pool, a swap
+contrib/playground/starbase-playground.sh status
+contrib/playground/starbase-playground.sh withdraw-demo   # request -> bundle -> Submitted -> votes -> paid, under a minute
+contrib/playground/starbase-playground.sh cli 0 getbalance   # any RPC: node main, 0, 1 or 2
+contrib/playground/starbase-playground.sh mine 10            # ten mainchain blocks now
+contrib/playground/starbase-playground.sh stop        # stops exactly what it started
+contrib/playground/starbase-playground.sh reset       # stop, and delete the playground
+```
+
+Options of `start`: `--block-seconds 5` (a mainchain block every so often), `--slot-seconds 2` (the slots of
+the blocks of stake; 15 on eCash), `--no-app` (validator 0 without a window), `--no-demo` (no activation,
+deposit or token), `--base-port 49500` (it and the 22 ports after it must be free), `--starbase-bin` (default
+`build/bin`), `--backbone-bin` (default `$BACKBONE_BIN_DIR`, else `../chains-ecash/build_node/bin`). Data in
+`~/.starbase-playground` (`--dir`, or `$STARBASE_PLAYGROUND`), with each node's log; on WSLg the app runs with
+`LIBGL_ALWAYS_SOFTWARE=1`. The playground uses regtest's short windows: a slot activates with more than 5
+acks in 10 blocks, a bundle is paid with more than 5 votes in 10 blocks, handed over at depth 2. Its validator
+keys are fixed test keys: never use them elsewhere.
+
 ## Proposing the sidechain (M1)
 
 Slot 46 is taken on eCash by a proposal (M1) that miners ack (M2): on eCash's main network more than 1,815
