@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <webui/assets.h>
+#include <webui/chainconfig.h>
 #include <webui/dialog.h>
 #include <webui/guard.h>
 
@@ -11,6 +12,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -123,10 +125,12 @@ BOOST_AUTO_TEST_CASE(look_from_prefs)
     BOOST_CHECK(look.find_value("unit").isNull());
     BOOST_CHECK(look.find_value("customThemes").isNull());
 
-    // A built-in theme: no theme of the user; nothing kept yet: Midnight.
+    // A built-in theme: no theme of the user; nothing kept yet: the chain's look of a first start (chain.json:
+    // defaultTheme; Midnight by default, Launchpad in Flush).
     BOOST_CHECK(dialog::Look(Obj(R"({"theme":"light","customThemes":[{"id":"custom-abc"}]})"), false, "").find_value("custom").isNull());
-    BOOST_CHECK_EQUAL(dialog::Look(UniValue{UniValue::VOBJ}, false, "").find_value("theme").get_str(), "midnight");
-    BOOST_CHECK_EQUAL(dialog::Look(Obj(R"({"theme":12})"), false, "").find_value("theme").get_str(), "midnight");
+    const std::string first{webui::chain::DEFAULT_THEME};
+    BOOST_CHECK_EQUAL(dialog::Look(UniValue{UniValue::VOBJ}, false, "").find_value("theme").get_str(), first);
+    BOOST_CHECK_EQUAL(dialog::Look(Obj(R"({"theme":12})"), false, "").find_value("theme").get_str(), first);
     BOOST_CHECK_EQUAL(dialog::Look(Obj(R"({"fontAdjust":-50})"), false, "").find_value("fontAdjust").getInt<int>(), -6);
     // A theme of the user too large is left out (the page draws its base then, Midnight).
     UniValue big{Obj(R"({"theme":"custom-big","customThemes":[{"id":"custom-big","name":"Big","base":"light","colors":{}}]})")};
@@ -149,6 +153,11 @@ BOOST_AUTO_TEST_CASE(scheme_of_look)
     BOOST_CHECK(dialog::SchemeOf(Obj(R"({"theme":"light"})")) == Scheme::LIGHT);
     BOOST_CHECK(dialog::SchemeOf(Obj(R"({"theme":"system"})")) == Scheme::DESKTOP);
     BOOST_CHECK(dialog::SchemeOf(UniValue{UniValue::VOBJ}) == Scheme::DARK);
+    // The looks of a chain (chain.json: exclusiveThemes): Launchpad dark, Launchpad Day light, where the chain has them;
+    // elsewhere what the page draws for a look it does not know (the default, dark).
+    const bool launchpad{std::ranges::find(webui::chain::EXCLUSIVE_THEMES, "launchpad") != webui::chain::EXCLUSIVE_THEMES.end()};
+    BOOST_CHECK(dialog::SchemeOf(Obj(R"({"theme":"launchpad"})")) == Scheme::DARK);
+    BOOST_CHECK(dialog::SchemeOf(Obj(R"({"theme":"launchpadday"})")) == (launchpad ? Scheme::LIGHT : Scheme::DARK));
     // A theme of the user: its page colour when it is #rgb or #rrggbb, else its base.
     const std::string themes{R"x("customThemes":[{"id":"custom-a","base":"midnight","colors":{"bg":"#f8f8f8"}},{"id":"custom-b","base":"light","colors":{"bg":"rgb(0 0 0)"}},{"id":"custom-c","base":"dracula","colors":{}}])x"};
     BOOST_CHECK(dialog::SchemeOf(Obj(R"({"theme":"custom-a",)" + themes + "}")) == Scheme::LIGHT);

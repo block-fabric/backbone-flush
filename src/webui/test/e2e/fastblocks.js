@@ -96,7 +96,7 @@
     await host('test.confirmAnswer', { always: true });
     await waitFor('the node to run', () => T() && T().app.phase === 'ready' && T().node.tip, 120000);
     await waitFor('the node to reach the mainchain', async () => (await rpc('getmainchaininfo')).connected, 60000);
-    await check(`Flush (the pages of FastBlocks), the dashboard and Midnight by default (${W} px)`, T().app.info.name === 'Flush' && T().prefs.layout === 'dashboard', `${T().app.info.name} ${T().prefs.layout}`);
+    await check(`Flush (the pages of FastBlocks), the dashboard and Launchpad by default (${W} px)`, T().app.info.name === 'Flush' && T().prefs.layout === 'dashboard' && T().prefs.theme === 'launchpad', `${T().app.info.name} ${T().prefs.layout}`);
 
     // --- A wallet that sees the validator's income, and coins ---
     await rpc('createwallet', [W_]);

@@ -116,6 +116,16 @@
     </ol>
   {/if}
 
+  {#if node.tip}
+    <!-- The Launchpad looks (styles/launchpad.css) show the chain as mission-control readouts instead of its links;
+         the same facts as the bar's own (hidden from screen readers, which have those). -->
+    <dl class="telemetry" aria-hidden="true">
+      <div><dt>Height</dt><dd class="num">{formatCount(node.tip.height)}</dd></div>
+      <div><dt>Peers</dt><dd class="num">{node.networkActive ? node.connections : '—'}</dd></div>
+      <div><dt>Sync</dt><dd class="num">{(Math.min(1, node.tip.progress ?? 1) * 100).toFixed(1)}%</dd></div>
+    </dl>
+  {/if}
+
   <div class="spacer"></div>
 
   {#if node.warnings.length}
@@ -269,6 +279,27 @@
   }
   .spacer {
     flex: 1;
+  }
+  .telemetry {
+    display: none;
+    margin: 0;
+    gap: 1.4rem;
+  }
+  .telemetry div {
+    display: flex;
+    align-items: baseline;
+    gap: 0.45rem;
+  }
+  .telemetry dt {
+    color: var(--text-faint);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+  }
+  .telemetry dd {
+    margin: 0;
+    color: var(--text);
+    font-size: 0.8rem;
   }
   .net {
     position: relative;

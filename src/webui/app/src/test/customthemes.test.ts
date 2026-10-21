@@ -32,7 +32,7 @@ import { bytesToBase64 } from '../lib/files';
 import { nav } from '../lib/nav.svelte';
 import { draft } from '../lib/settingsdraft.svelte';
 import { app, applyPrefs, prefs } from '../lib/state.svelte';
-import { THEMES } from '../lib/themes';
+import { DEFAULT_THEME, THEMES } from '../lib/themes';
 import { copyTheme, deleteTheme, duplicateTheme, exportFile, importFile, importText, look, newTheme, saveTheme } from '../lib/themestore.svelte';
 
 const CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../styles/themes.css'), 'utf8');
@@ -298,7 +298,7 @@ describe('the themes of the user in the preferences', () => {
     expect(root.style.getPropertyValue('--chevron')).toBe('');
     // A theme that no longer exists: the default look.
     applyLook(doc, 'custom-gone', [], null, 0, false);
-    expect(root.dataset.theme).toBe('midnight');
+    expect(root.dataset.theme).toBe(DEFAULT_THEME);
   });
 });
 

@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <webui/dialog.h>
+#include <webui/chainconfig.h>
 
 #include <support/cleanse.h>
 #include <tinyformat.h>
@@ -30,12 +31,34 @@ constexpr size_t MAX_PASSPHRASE{1024};
 //! The largest theme of the user passed to the page (bytes of its JSON); the page checks it again.
 constexpr size_t MAX_THEME_JSON{16 * 1024};
 
-//! The built-in themes drawn dark (src/webui/app/src/lib/themes.ts).
-constexpr std::array<std::string_view, 7> DARK_THEMES{"midnight", "dark", "ocean", "matrix", "qdarkstyle", "mocha", "dracula"};
+//! The built-in themes drawn dark (src/webui/app/src/lib/themes.ts); Launchpad only in the app of a chain that has it
+//! (chain.json: exclusiveThemes), drawn as the default there otherwise, as the page does.
+constexpr std::array<std::string_view, 8> DARK_THEMES{"midnight", "dark", "ocean", "matrix", "qdarkstyle", "mocha", "dracula", "launchpad"};
+//! The built-in themes drawn light.
+constexpr std::array<std::string_view, 2> LIGHT_THEMES{"light", "launchpadday"};
+
+bool HasTheme(std::string_view id)
+{
+    return std::ranges::find(chain::EXCLUSIVE_THEMES, id) != chain::EXCLUSIVE_THEMES.end();
+}
 
 bool IsDarkTheme(std::string_view id)
 {
+    if (id == "launchpad" && !HasTheme(id)) return false;
     return std::ranges::find(DARK_THEMES, id) != DARK_THEMES.end();
+}
+
+bool IsLightTheme(std::string_view id)
+{
+    if (id == "launchpadday" && !HasTheme(id)) return false;
+    return std::ranges::find(LIGHT_THEMES, id) != LIGHT_THEMES.end();
+}
+
+//! The theme of a first start (chain.json: defaultTheme; Midnight by default).
+const std::string& DefaultTheme()
+{
+    static const std::string theme{chain::DEFAULT_THEME};
+    return theme;
 }
 
 std::string Str(const UniValue& value, size_t max_bytes, const std::string& fallback = {})
@@ -215,7 +238,7 @@ std::string FallbackText(const UniValue& page)
 UniValue Look(const UniValue& prefs, bool rtl, const std::string& language)
 {
     UniValue out{UniValue::VOBJ};
-    const std::string theme{prefs.isObject() ? Str(prefs.find_value("theme"), 40, "midnight") : std::string{"midnight"}};
+    const std::string theme{prefs.isObject() ? Str(prefs.find_value("theme"), 40, DefaultTheme()) : DefaultTheme()};
     out.pushKV("theme", theme);
     if (prefs.isObject()) {
         if (const UniValue* custom{CustomTheme(prefs, theme)}; custom && custom->write().size() <= MAX_THEME_JSON) {
@@ -237,9 +260,9 @@ UniValue Look(const UniValue& prefs, bool rtl, const std::string& language)
 
 Scheme SchemeOf(const UniValue& prefs)
 {
-    const std::string theme{prefs.isObject() ? Str(prefs.find_value("theme"), 40, "midnight") : std::string{"midnight"}};
+    const std::string theme{prefs.isObject() ? Str(prefs.find_value("theme"), 40, DefaultTheme()) : DefaultTheme()};
     if (theme == "system") return Scheme::DESKTOP;
-    if (theme == "light") return Scheme::LIGHT;
+    if (IsLightTheme(theme)) return Scheme::LIGHT;
     if (IsDarkTheme(theme)) return Scheme::DARK;
     const UniValue* custom{CustomTheme(prefs, theme)};
     // A look (Look) carries the theme of the user it names as "custom".
@@ -252,11 +275,11 @@ Scheme SchemeOf(const UniValue& prefs)
         if (colors.isObject()) {
             if (const auto dark{HexIsDark(Str(colors.find_value("bg"), 16))}) return *dark ? Scheme::DARK : Scheme::LIGHT;
         }
-        const std::string base{Str(custom->find_value("base"), 40, "midnight")};
-        return base == "light" ? Scheme::LIGHT : Scheme::DARK;
+        const std::string base{Str(custom->find_value("base"), 40, DefaultTheme())};
+        return IsLightTheme(base) ? Scheme::LIGHT : Scheme::DARK;
     }
-    // What the page draws for a theme it does not know: the default, Midnight.
-    return Scheme::DARK;
+    // What the page draws for a theme it does not know: the default (Midnight, or the chain's, both dark).
+    return IsLightTheme(DefaultTheme()) ? Scheme::LIGHT : Scheme::DARK;
 }
 
 bool Serves(std::string_view path)

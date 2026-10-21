@@ -3,6 +3,7 @@ import './styles/fonts.css';
 import './styles/themes.css';
 import './styles/base.css';
 import './styles/side.css';
+import './styles/launchpad.css';
 import App from './App.svelte';
 import { CHAIN } from './chain/config';
 

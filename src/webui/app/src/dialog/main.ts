@@ -2,6 +2,7 @@
 import '../styles/fonts.css';
 import '../styles/themes.css';
 import './dialog.css';
+import '../styles/launchpad.css';
 import { start, type DialogBridge } from './dialog';
 
 declare global {

@@ -322,6 +322,92 @@
   --radius-xl: 20px;
 }
 
+/* Launchpad (Flush's own look, chain.json: exclusiveThemes; styles/launchpad.css draws its type, lines and
+   shapes): near-black and stark white, one cool blue-grey for what acts, amber only for warnings; no glow,
+   no shadow, hairlines rather than boxes, Barlow for words and JetBrains Mono for numbers and hashes.
+   Launchpad Day: the same in black on white. */
+:root[data-theme='launchpad'] {
+  --bg: #000000;
+  --surface: #0a0a0a;
+  --surface-2: #101113;
+  --raised: #1a1c1f;
+  --line: #1f2226;
+  --line-strong: #3a3f45;
+  --text: #f5f6f7;
+  --text-muted: #adb3bb;
+  /* The chevron of the dropdowns (Icon "chevron"), in --text-muted: test/controls.test.ts keeps them equal. */
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23adb3bb' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  color-scheme: dark;
+  --text-faint: #8d939b;
+  --accent: #d5dee7;
+  --accent-strong: #eef2f6;
+  --accent-soft: #1b2128;
+  --accent-fg: #bccad8;
+  --on-accent: #000000;
+  --link: #c6d4e2;
+  --positive: #a9d8bd;
+  --negative: #f0a39b;
+  --warning: #ffb547;
+  --warning-soft: #241806;
+  --danger-soft: #2a1412;
+  --focus: #ffffff;
+  --shadow: 0 0 0 1px #2a2e33;
+  --shadow-card: none;
+  --overlay: rgb(0 0 0 / 80%);
+  --chain-link: #3a3f45;
+  --ambient: rgb(0 0 0 / 0%);
+  --ambient-2: rgb(0 0 0 / 0%);
+  --card-top: rgb(0 0 0 / 0%);
+  --chart-fill: rgb(213 222 231 / 16%);
+  --font-ui: 'Barlow', 'Segoe UI', 'Noto Sans', system-ui, sans-serif;
+  --font-num: 'JetBrains Mono Variable', 'DejaVu Sans Mono', ui-monospace, monospace;
+  --radius-s: 2px;
+  --radius-m: 2px;
+  --radius-l: 3px;
+  --radius-xl: 3px;
+}
+
+:root[data-theme='launchpadday'] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f5f6f7;
+  --raised: #eaecef;
+  --line: #e2e5e9;
+  --line-strong: #b9bec5;
+  --text: #000000;
+  --text-muted: #474d55;
+  /* The chevron of the dropdowns (Icon "chevron"), in --text-muted: test/controls.test.ts keeps them equal. */
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23474d55' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  color-scheme: light;
+  --text-faint: #5c636c;
+  --accent: #0b0d10;
+  --accent-strong: #000000;
+  --accent-soft: #e6ebf0;
+  --accent-fg: #2c3d4f;
+  --on-accent: #ffffff;
+  --link: #21374d;
+  --positive: #17643f;
+  --negative: #ad2a21;
+  --warning: #8a4600;
+  --warning-soft: #fff0d9;
+  --danger-soft: #fce6e3;
+  --focus: #000000;
+  --shadow: 0 0 0 1px #d5d9de;
+  --shadow-card: none;
+  --overlay: rgb(255 255 255 / 78%);
+  --chain-link: #b9bec5;
+  --ambient: rgb(255 255 255 / 0%);
+  --ambient-2: rgb(255 255 255 / 0%);
+  --card-top: rgb(255 255 255 / 0%);
+  --chart-fill: rgb(44 61 79 / 14%);
+  --font-ui: 'Barlow', 'Segoe UI', 'Noto Sans', system-ui, sans-serif;
+  --font-num: 'JetBrains Mono Variable', 'DejaVu Sans Mono', ui-monospace, monospace;
+  --radius-s: 2px;
+  --radius-m: 2px;
+  --radius-l: 3px;
+  --radius-xl: 3px;
+}
+
 /* A font chosen apart from the colours (Settings, Display: the custom look of chains-qt). */
 :root[data-theme][data-font='inter'] {
   --font-ui: 'Inter Variable', 'Segoe UI', 'Noto Sans', system-ui, sans-serif;

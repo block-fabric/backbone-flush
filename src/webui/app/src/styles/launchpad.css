@@ -1,0 +1,435 @@
+/* Launchpad and Launchpad Day: the looks of Flush (chain.json: exclusiveThemes, defaultTheme), drawn where the
+   root says data-look="launchpad" (lib/themes.ts: applyTheme). Their colours are in themes.css; here is what
+   goes beyond colours, on the kit's own building blocks:
+
+   - type: Barlow (OFL 1.1) for words, headings and labels in wide-tracked capitals; JetBrains Mono for
+     numbers, amounts and hashes;
+   - lines rather than boxes: panels and cards lose their fill, border and shadow for a hairline above them;
+     tabs are words over an underline; no glow, no gradient, no ambient light;
+   - sharp corners (2–3 px), pills squared;
+   - telemetry: thin progress lines, the status bar as a row of readouts (height, peers, sync);
+   - focus: a 2 px ring of the text colour (white on black, black on white), always visible.
+
+   Nothing moves: no animation, no transition beyond the kit's colour changes (software GL, WSLg). */
+
+:root[data-look='launchpad'] {
+  --glow: none;
+  --glow-strong: none;
+  --track: 0.14em;
+  --track-wide: 0.22em;
+}
+
+/* --- Type --- */
+:root[data-look='launchpad'] body {
+  font-feature-settings: 'tnum' 0;
+  letter-spacing: 0.01em;
+}
+
+:root[data-look='launchpad'] body::before {
+  display: none;
+}
+
+:root[data-look='launchpad'] h1,
+:root[data-look='launchpad'] h2,
+:root[data-look='launchpad'] h3 {
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+}
+
+:root[data-look='launchpad'] h1 {
+  font-size: 1.85rem;
+  font-weight: 400;
+  letter-spacing: var(--track-wide);
+}
+
+:root[data-look='launchpad'] h2 {
+  font-size: 1.05rem;
+}
+
+:root[data-look='launchpad'] h3 {
+  font-size: 0.9rem;
+}
+
+:root[data-look='launchpad'] .caps {
+  font-weight: 500;
+  letter-spacing: var(--track-wide);
+}
+
+:root[data-look='launchpad'] .num,
+:root[data-look='launchpad'] code,
+:root[data-look='launchpad'] .mono {
+  letter-spacing: 0;
+}
+
+/* Labels of facts and fields as the names of readouts. */
+:root[data-look='launchpad'] .facts dt,
+:root[data-look='launchpad'] .field > label,
+:root[data-look='launchpad'] .field > .label,
+:root[data-look='launchpad'] legend.label {
+  font-size: 0.74rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+}
+
+:root[data-look='launchpad'] .facts dt {
+  color: var(--text-faint);
+  padding-top: 0.12rem;
+}
+
+/* --- Lines, not boxes --- */
+:root[data-look='launchpad'] .panel {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+:root[data-look='launchpad'] .panel-head {
+  padding: 1.1rem 0 0.7rem;
+}
+
+:root[data-look='launchpad'] .panel-body {
+  padding: 0 0 1.4rem;
+}
+
+:root[data-look='launchpad'] .page {
+  padding: 1.6rem 2.2rem 2rem;
+}
+
+:root[data-look='launchpad'] .page-head {
+  margin-bottom: 0.9rem;
+}
+
+/* --- Controls --- */
+:root[data-look='launchpad'] .btn {
+  border-radius: var(--radius-s);
+  background: transparent;
+  font-weight: 500;
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+}
+
+:root[data-look='launchpad'] .btn:hover:not(:disabled) {
+  background: var(--raised);
+  border-color: var(--text-muted);
+}
+
+:root[data-look='launchpad'] .btn.primary,
+:root[data-look='launchpad'] .btn.primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  box-shadow: none;
+  filter: none;
+}
+
+:root[data-look='launchpad'] .btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+:root[data-look='launchpad'] .btn.cta,
+:root[data-look='launchpad'] .btn.cta:hover:not(:disabled) {
+  border-radius: var(--radius-s);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: var(--track-wide);
+  box-shadow: none;
+  filter: none;
+}
+
+:root[data-look='launchpad'] .btn.cta:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+:root[data-look='launchpad'] .btn.ghost,
+:root[data-look='launchpad'] .btn.ghost:hover:not(:disabled) {
+  border-color: transparent;
+}
+
+:root[data-look='launchpad'] .btn.round {
+  border-radius: var(--radius-s);
+  background: transparent;
+}
+
+:root[data-look='launchpad'] .btn.danger {
+  border-color: var(--negative);
+}
+
+:root[data-look='launchpad'] .pill,
+:root[data-look='launchpad'] select.pill {
+  border-radius: var(--radius-s);
+  background-color: transparent;
+  font-weight: 500;
+}
+
+:root[data-look='launchpad'] .status,
+:root[data-look='launchpad'] .badge {
+  border-radius: var(--radius-s);
+  font-weight: 500;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+}
+
+:root[data-look='launchpad'] .status::before {
+  border-radius: 0;
+  width: 0.35rem;
+  height: 0.35rem;
+}
+
+:root[data-look='launchpad'] input[type='text'],
+:root[data-look='launchpad'] input[type='number'],
+:root[data-look='launchpad'] input[type='password'],
+:root[data-look='launchpad'] input[type='search'],
+:root[data-look='launchpad'] input:not([type]),
+:root[data-look='launchpad'] select,
+:root[data-look='launchpad'] textarea {
+  border-radius: var(--radius-s);
+  background-color: transparent;
+}
+
+:root[data-look='launchpad'] option,
+:root[data-look='launchpad'] optgroup {
+  background-color: var(--surface);
+}
+
+/* Tabs: words over a hairline, the one shown underlined in the text colour. */
+:root[data-look='launchpad'] .tabs {
+  gap: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: none;
+  width: 100%;
+}
+
+:root[data-look='launchpad'] .tabs button {
+  padding: 0.55rem 0 0.6rem;
+  border-radius: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+  box-shadow: inset 0 -2px 0 transparent;
+}
+
+:root[data-look='launchpad'] .tabs button[aria-selected='true'] {
+  background: none;
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--text);
+}
+
+/* Switches: a squared track. */
+:root[data-look='launchpad'] .switch .track,
+:root[data-look='launchpad'] .switch .track::after {
+  border-radius: 1px;
+}
+
+:root[data-look='launchpad'] kbd {
+  border-radius: 1px;
+  border-bottom-width: 1px;
+}
+
+/* --- Telemetry: progress as a thin line --- */
+:root[data-look='launchpad'] progress {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 2px;
+  border: 0;
+  border-radius: 0;
+  background: var(--line-strong);
+  color: var(--text);
+}
+
+:root[data-look='launchpad'] progress::-webkit-progress-bar {
+  background: var(--line-strong);
+}
+
+:root[data-look='launchpad'] progress::-webkit-progress-value {
+  background: var(--text);
+}
+
+:root[data-look='launchpad'] progress::-moz-progress-bar {
+  background: var(--text);
+}
+
+/* --- Focus: high contrast, never only a colour change --- */
+:root[data-look='launchpad'] :focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+:root[data-look='launchpad'] input:focus-visible,
+:root[data-look='launchpad'] select:focus-visible,
+:root[data-look='launchpad'] textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  border-color: var(--focus);
+  box-shadow: none;
+}
+
+:root[data-look='launchpad'] .switch input:focus-visible + .track {
+  outline: 2px solid var(--focus);
+}
+
+:root[data-look='launchpad'] ::selection {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* --- Scroll bars: a thin rule --- */
+:root[data-look='launchpad'] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:root[data-look='launchpad'] ::-webkit-scrollbar-thumb {
+  border-width: 3px;
+  border-radius: 0;
+}
+
+/* --- The kit's rounded parts, squared --- */
+:root[data-look='launchpad'] .mode-switch,
+:root[data-look='launchpad'] .mode-switch button,
+:root[data-look='launchpad'] .frames,
+:root[data-look='launchpad'] .frames button,
+:root[data-look='launchpad'] .count,
+:root[data-look='launchpad'] .avatar,
+:root[data-look='launchpad'] span.icon {
+  border-radius: var(--radius-s);
+  box-shadow: none;
+}
+
+:root[data-look='launchpad'] .frames button {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+}
+
+/* --- The sidebar: names, a hairline under the wallet, the page shown marked by a rule at its left --- */
+:root[data-look='launchpad'] .sidebar .wallet-card {
+  border: 0;
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  padding: 0.6rem 0.4rem 0.9rem;
+}
+
+:root[data-look='launchpad'] .sidebar .entry {
+  border-radius: 0;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+:root[data-look='launchpad'] .sidebar .entry.current,
+:root[data-look='launchpad'] .sidebar .entry.current:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--text);
+}
+
+:root[data-look='launchpad'] .sidebar .caption {
+  letter-spacing: var(--track-wide);
+}
+
+/* The tables of the home: rows over hairlines, not cards. */
+:root[data-look='launchpad'] .tables td,
+:root[data-look='launchpad'] .tables td:first-child,
+:root[data-look='launchpad'] .tables td:last-child {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+}
+
+:root[data-look='launchpad'] .tables tr:hover td {
+  background: var(--surface-2);
+}
+
+:root[data-look='launchpad'] .tables tr.selected td {
+  background: var(--accent-soft);
+  border-color: var(--accent-fg);
+}
+
+:root[data-look='launchpad'] .tables tr {
+  border-radius: 0;
+}
+
+:root[data-look='launchpad'] .tables th {
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+  color: var(--text-faint);
+}
+
+/* --- The status bar as readouts: height, peers, sync (components/StatusBar.svelte: .telemetry) --- */
+:root[data-look='launchpad'] .statusbar {
+  background: var(--bg);
+  border-top-color: var(--line-strong);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+:root[data-look='launchpad'] .statusbar .telemetry {
+  display: flex;
+}
+
+:root[data-look='launchpad'] .statusbar .chain {
+  display: none;
+}
+
+:root[data-look='launchpad'] .statusbar progress {
+  height: 2px;
+  border-radius: 0;
+}
+
+:root[data-look='launchpad'] .statusbar .label.ok {
+  text-transform: uppercase;
+  letter-spacing: var(--track);
+  font-size: 0.72rem;
+}
+
+:root[data-look='launchpad'] .statusbar .hd {
+  border-radius: 1px;
+  font-weight: 500;
+}
+
+:root[data-look='launchpad'] .tab-row .group {
+  gap: 1.6rem;
+}
+
+:root[data-look='launchpad'] .tab-row .sub button {
+  padding: 0.55rem 0 0.6rem;
+}
+
+/* The chips, tags and bars of the chain's own pages (chain/ba, chain/fb), squared. */
+:root[data-look='launchpad'] .ba-chip,
+:root[data-look='launchpad'] .ba-tag,
+:root[data-look='launchpad'] .ba-bar,
+:root[data-look='launchpad'] .ba-bar > span,
+:root[data-look='launchpad'] .ba-steps li,
+:root[data-look='launchpad'] .fb-share .bar,
+:root[data-look='launchpad'] .fb-share .bar span,
+:root[data-look='launchpad'] .fb-finality .stack,
+:root[data-look='launchpad'] .chip,
+:root[data-look='launchpad'] .chips li,
+:root[data-look='launchpad'] .custom {
+  border-radius: var(--radius-s);
+}
+
+:root[data-look='launchpad'] .ba-chip,
+:root[data-look='launchpad'] .ba-tag {
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}

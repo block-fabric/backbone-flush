@@ -76,7 +76,7 @@ describe('dropdowns', () => {
       expect(chevron, theme.id).toBeTruthy();
       expect(decodeURIComponent(chevron!.replace('data:image/svg+xml,', ''))).toContain(`stroke='${muted}'`);
       expect(chevron).toContain('M6 9l6 6 6-6');
-      expect(block).toMatch(new RegExp(`color-scheme:\\s*${theme.id === 'light' ? 'light' : 'dark'}`));
+      expect(block).toMatch(new RegExp(`color-scheme:\\s*${theme.dark ? 'dark' : 'light'}`));
       expect(block).toMatch(/--line-strong:\s*#/);
     });
   }

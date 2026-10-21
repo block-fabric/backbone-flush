@@ -60,7 +60,8 @@
     (async () => {
       if (import.meta.env.DEV && !hasHost()) {
         const mock = await import('./lib/mock');
-        mock.installMock();
+        // ?phase=init shows the splash in the browser preview.
+        mock.installMock({ phase: new URLSearchParams(location.search).get('phase') ?? undefined });
       }
       try {
         // The phase the host says now; a phase event that comes while the page gets ready (the

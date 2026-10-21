@@ -15,7 +15,7 @@ export interface NetworkInfo {
   script: number;
 }
 
-/** Starbase: the eCash networks (ecash, ecashbeta, ecashtest) are its own; main, test and signet are Chains' (development). */
+/** Flush: the eCash networks (ecash, ecashbeta, ecashtest) are its own; main, test and signet are Chains' (development). */
 export type NetworkId = 'main' | 'test' | 'signet' | 'regtest' | 'ecash' | 'ecashbeta' | 'ecashtest';
 
 export interface MainchainInfo {
@@ -32,7 +32,7 @@ export interface ChainConfig {
   role: 'mainchain' | 'sidechain';
   coin: { ticker: string; name: string };
   uriScheme: string;
-  brand: { color: string; iconHue: number; mark: string[] };
+  brand: { color: string; iconHue: number; mark: string[]; iconColor?: string };
   networks: Record<NetworkId, NetworkInfo>;
   /** The chain a sidechain is pegged to. */
   mainchain?: MainchainInfo;
@@ -41,6 +41,10 @@ export interface ChainConfig {
   blockWeight?: number;
   /** The time between blocks this chain aims at, in seconds, for the ribbon of the explorer; Chains' 60 when not set (chain/explorer.ts may say the node's own). */
   blockTarget?: number;
+  /** Looks of the kit offered only in the app of a chain that names them (lib/themes.ts: exclusive), such as Flush's Launchpad. */
+  exclusiveThemes?: string[];
+  /** The look of a first start (Midnight when not set, or not offered). */
+  defaultTheme?: string;
   /** Pages of the kit this chain does not have (a sidechain: no sidechains of its own, no solo mining). */
   drop: PageId[];
 }

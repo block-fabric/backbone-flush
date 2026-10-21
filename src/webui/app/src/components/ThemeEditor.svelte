@@ -11,7 +11,7 @@
   import { host } from '../lib/rpc';
   import { prefs, toast } from '../lib/state.svelte';
   import { stagePrefs } from '../lib/settingsdraft.svelte';
-  import { THEMES } from '../lib/themes';
+  import { DEFAULT_THEME, THEMES } from '../lib/themes';
   import {
     BASE_THEMES,
     baseColors,
@@ -38,7 +38,7 @@
   /** Colour values typed that are not colours yet, by token (shown, not drawn). */
   let typed = $state<Partial<Record<TokenName, string>>>({});
   let nameError = $state('');
-  let startFrom = $state<string>(prefs.theme === 'system' ? 'midnight' : prefs.theme);
+  let startFrom = $state<string>(prefs.theme === 'system' ? DEFAULT_THEME : prefs.theme);
   let pasteOpen = $state(false);
   let pasted = $state('');
   let importError = $state('');

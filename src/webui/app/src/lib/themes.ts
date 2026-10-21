@@ -1,17 +1,31 @@
 // The looks of the app: Midnight (the default, the look of chains-app), the themes of chains-qt
 // (theme.cpp), as sets of CSS variables (styles/themes.css), plus the look of the desktop.
+//
+// A chain may have looks of its own (chain.json: exclusiveThemes), which the kit knows but offers only in
+// the app of a chain that names them, and a look of a first start other than Midnight (chain.json:
+// defaultTheme). Launchpad and Launchpad Day (styles/launchpad.css) are Flush's.
+import { CHAIN } from '../chain/config';
 
-export type ThemeId = 'system' | 'midnight' | 'light' | 'dark' | 'ocean' | 'matrix' | 'qdarkstyle' | 'mocha' | 'dracula';
+export type ThemeId = 'system' | 'midnight' | 'light' | 'dark' | 'ocean' | 'matrix' | 'qdarkstyle' | 'mocha' | 'dracula' | 'launchpad' | 'launchpadday';
 
 export interface Theme {
   id: ThemeId;
   name: string;
   /** Whether the theme is dark (for the colour scheme of form controls). */
   dark: boolean | 'auto';
+  /** Offered only in the app of a chain that names it in chain.json (exclusiveThemes). */
+  exclusive?: boolean;
+  /** The family of looks it belongs to, beyond colours (root[data-look]: its own type, lines and shapes). */
+  look?: 'launchpad';
+  /** Its light (or dark) counterpart, for the quick switch of the top bars. */
+  pair?: ThemeId;
 }
 
-export const THEMES: readonly Theme[] = [
+/** Every look the kit knows (themes.css has the colours of each). */
+export const ALL_THEMES: readonly Theme[] = [
   { id: 'system', name: 'Same as the desktop', dark: 'auto' },
+  { id: 'launchpad', name: 'Launchpad', dark: true, exclusive: true, look: 'launchpad', pair: 'launchpadday' },
+  { id: 'launchpadday', name: 'Launchpad Day', dark: false, exclusive: true, look: 'launchpad', pair: 'launchpad' },
   { id: 'midnight', name: 'Midnight', dark: true },
   { id: 'light', name: 'Light', dark: false },
   { id: 'dark', name: 'Dark', dark: true },
@@ -22,8 +36,13 @@ export const THEMES: readonly Theme[] = [
   { id: 'dracula', name: 'Dracula', dark: true },
 ];
 
-/** The look of a first start. */
-export const DEFAULT_THEME: ThemeId = 'midnight';
+const OWN_THEMES: readonly string[] = CHAIN.exclusiveThemes ?? [];
+
+/** The looks this app offers: those of the kit, and the chain's own (chain.json: exclusiveThemes) first. */
+export const THEMES: readonly Theme[] = ALL_THEMES.filter((t) => !t.exclusive || OWN_THEMES.includes(t.id));
+
+/** The look of a first start: the chain's (chain.json: defaultTheme), if this app offers it; else Midnight. */
+export const DEFAULT_THEME: ThemeId = THEMES.find((t) => t.id === CHAIN.defaultTheme && t.id !== 'system')?.id ?? 'midnight';
 
 export const MIN_FONT_ADJUST = -6;
 export const MAX_FONT_ADJUST = 12;
@@ -46,6 +65,9 @@ export function isDark(id: ThemeId, prefersDark: boolean): boolean {
 
 /** The quick switch of the top bar: a dark look goes light; the light one goes back to the dark look last used (Midnight at first). */
 export function toggledTheme(id: ThemeId, prefersDark: boolean, lastDark: ThemeId | null): ThemeId {
+  // A look with a counterpart (Launchpad, Launchpad Day) goes to it, and back.
+  const pair = THEMES.find((t) => t.id === id)?.pair;
+  if (pair && isTheme(pair)) return pair;
   if (isDark(id, prefersDark)) return 'light';
   return lastDark && lastDark !== 'light' && lastDark !== 'system' ? lastDark : DEFAULT_THEME;
 }
@@ -74,6 +96,8 @@ export function applyTheme(doc: Document, id: ThemeId, fontAdjust: number, prefe
   root.dataset.themeChoice = id;
   const theme = THEMES.find((t) => t.id === resolved);
   root.style.colorScheme = theme?.dark ? 'dark' : 'light';
+  if (theme?.look) root.dataset.look = theme.look;
+  else delete root.dataset.look;
   root.style.fontSize = `${BASE_FONT_PX + clampFontAdjust(fontAdjust)}px`;
   if (font) root.dataset.font = font;
   else delete root.dataset.font;

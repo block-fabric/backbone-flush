@@ -74,7 +74,7 @@
     await host('test.confirmAnswer', { always: true });
     await waitFor('the node to run', () => T() && T().app.phase === 'ready' && T().node.tip, 120000);
     await waitFor('the node to reach the mainchain', async () => (await rpc('getmainchaininfo')).connected, 60000);
-    await check('Flush (the pages of BitAssets), the dashboard and Midnight by default', T().app.info.name === 'Flush' && T().prefs.layout === 'dashboard' && (T().prefs.theme ?? 'midnight') === 'midnight', `${T().app.info.name} ${T().prefs.layout}`);
+    await check('Flush (the pages of BitAssets), the dashboard and Launchpad by default', T().app.info.name === 'Flush' && T().prefs.layout === 'dashboard' && T().prefs.theme === 'launchpad', `${T().app.info.name} ${T().prefs.layout}`);
 
     // --- A wallet with coins ---
     await rpc('createwallet', [W]);
@@ -151,7 +151,7 @@
     await waitFor('the page to say it waits for the confirmation', () => text('.issue').includes('Waiting for your confirmation'));
     const facts = await dialog('eval', { script: `({ title: document.querySelector('#dialog-title').textContent, text: document.body.innerText, theme: document.documentElement.dataset.theme })` });
     await check('one question shows both steps, the details and the fees', /Step 1 of 2/.test(facts.text) && /Step 2 of 2/.test(facts.text) && /registerasset/.test(facts.text) && /1000/.test(facts.text) && /One gram of gold/.test(facts.text) && /Step 2, at most/.test(facts.text), facts.text);
-    await check('in the theme of the app (Midnight)', facts.theme === 'midnight', facts.theme);
+    await check("in the theme of the app (Launchpad, Flush's default)", facts.theme === 'launchpad', facts.theme);
     await dialog('snapshot', { name: 'ba-issue-one-confirmation' });
     await sleep(1500);
     await dialog('eval', { script: `document.getElementById('dialog-accept').click(); true` });

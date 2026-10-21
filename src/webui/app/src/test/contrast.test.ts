@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { contrastRatio, themeTokens } from '../lib/contrast';
-import { DEFAULT_THEME, THEMES } from '../lib/themes';
+import { CHAIN } from '../chain/config';
+import { ALL_THEMES, DEFAULT_THEME, THEMES } from '../lib/themes';
 
 const tokens = themeTokens(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../styles/themes.css'), 'utf8'));
 
@@ -32,10 +33,11 @@ const PAIRS: [fg: string, bg: string, min: number][] = [
 ];
 
 describe('the themes', () => {
-  it('are all in the style sheet, Midnight the default', () => {
-    const drawn = THEMES.filter((t) => t.id !== 'system').map((t) => t.id);
+  it("are all in the style sheet, the chain's own only where chain.json names them, Midnight the default unless the chain has its own", () => {
+    const drawn = ALL_THEMES.filter((t) => t.id !== 'system').map((t) => t.id);
     expect(Object.keys(tokens).sort()).toEqual([...drawn].sort());
-    expect(DEFAULT_THEME).toBe('midnight');
+    for (const t of ALL_THEMES) expect(THEMES.includes(t)).toBe(!t.exclusive || (CHAIN.exclusiveThemes ?? []).includes(t.id));
+    expect(DEFAULT_THEME).toBe(CHAIN.defaultTheme ?? 'midnight');
   });
 
   for (const [theme, vars] of Object.entries(tokens)) {

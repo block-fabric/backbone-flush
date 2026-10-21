@@ -10,7 +10,7 @@ a 32 grid, stroked) in white on a rounded tile of the chain's colour, and writes
   src/webui/res/icons/app.ico        the program, its window and its tray icon on Windows (chains-app-res.rc),
                                      the installer
 
-Run it after a change of brand.mark or brand.color (from the root of the repository):
+Run it after a change of brand.mark, brand.color or brand.iconColor (from the root of the repository):
   python3 src/webui/app/scripts/appicon.py [--brand '{"mark": [...], "color": "#..."}']
 Needs Pillow. The paths may use M L H V C A Z, absolute or relative, with implicit repeats.
 """
@@ -180,7 +180,8 @@ def main():
     args = ap.parse_args()
     root = Path(args.root)
     brand = json.loads(args.brand) if args.brand else json.loads((root / 'src/webui/app/src/chain/chain.json').read_text())['brand']
-    big = draw(brand['mark'], brand['color'])
+    # The tile in brand.iconColor when the chain sets one (Flush: near-black, its mark in white), else brand.color.
+    big = draw(brand['mark'], brand.get('iconColor', brand['color']))
     png = root / 'src/webui/app/public/icon-256.png'
     big.resize((256, 256), Image.LANCZOS).save(png, optimize=True)
     ico = root / 'src/webui/res/icons/app.ico'

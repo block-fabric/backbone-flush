@@ -21,7 +21,7 @@ export function installMock(options: MockOptions = {}): void {
       phase: options.phase ?? 'ready',
       phaseData: {},
       dialogs: [],
-      info: { name: 'Chains', version: 'v32.0.0-dev (preview)', bugreport: '', network: 'regtest', networkLabel: 'regtest', datadir: '/tmp/preview', walletEnabled: true, devtools: true, test: false, platform: 'browser', blockSpacing: 600 },
+      info: { name: 'Chains', version: 'v32.0.0-dev (preview)', bugreport: '', network: 'regtest', networkLabel: 'regtest', datadir: '/tmp/preview', walletEnabled: true, devtools: true, test: typeof location !== 'undefined' && new URLSearchParams(location.search).has('test'), platform: 'browser', blockSpacing: 600 },
     }),
     'app.help': () => ({ usage: 'Usage: chains-app [options] [URI]', options: 'Options:\n\n  -?\n       Print this help message and exit' }),
     'app.about': () => ({ name: 'Chains', version: 'preview', license: 'Distributed under the MIT software license.' }),

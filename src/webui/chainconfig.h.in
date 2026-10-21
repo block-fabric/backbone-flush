@@ -28,6 +28,9 @@ inline constexpr std::string_view TICKER{"@WEBUI_CHAIN_TICKER@"};
 inline constexpr std::string_view COIN_NAME{"@WEBUI_CHAIN_COIN_NAME@"};
 //! The hue the icon of the app is turned by (degrees), before the tint of a test network.
 inline constexpr int ICON_HUE{@WEBUI_CHAIN_ICON_HUE@};
+//! The looks of the kit only this app offers (chain.json: exclusiveThemes), and the look of a first start (defaultTheme).
+inline constexpr std::array<std::string_view, @WEBUI_CHAIN_EXCLUSIVE_THEMES_COUNT@> EXCLUSIVE_THEMES{{@WEBUI_CHAIN_EXCLUSIVE_THEMES@}};
+inline constexpr std::string_view DEFAULT_THEME{"@WEBUI_CHAIN_DEFAULT_THEME@"};
 //! The name of the mainchain (the chain a sidechain is pegged to).
 inline constexpr std::string_view MAINCHAIN_NAME{"@WEBUI_MAINCHAIN_NAME@"};
 

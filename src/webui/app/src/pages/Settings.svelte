@@ -637,6 +637,12 @@
   [data-swatch='system'] .swatch span:nth-child(1) { background: #eef1f4; }
   [data-swatch='system'] .swatch span:nth-child(2) { background: #1b1e22; }
   [data-swatch='system'] .swatch span:nth-child(3) { background: #5aa6ff; }
+  [data-swatch='launchpad'] .swatch span:nth-child(1) { background: #000000; }
+  [data-swatch='launchpad'] .swatch span:nth-child(2) { background: #1a1c1f; }
+  [data-swatch='launchpad'] .swatch span:nth-child(3) { background: #d5dee7; }
+  [data-swatch='launchpadday'] .swatch span:nth-child(1) { background: #ffffff; }
+  [data-swatch='launchpadday'] .swatch span:nth-child(2) { background: #eaecef; }
+  [data-swatch='launchpadday'] .swatch span:nth-child(3) { background: #0b0d10; }
   [data-swatch='midnight'] .swatch span:nth-child(1) { background: #111413; }
   [data-swatch='midnight'] .swatch span:nth-child(2) { background: #272d29; }
   [data-swatch='midnight'] .swatch span:nth-child(3) { background: #b5f27e; }

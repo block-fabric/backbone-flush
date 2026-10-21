@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyDialogLook, ARM_MS, DIALOG_TOKENS, dialogColors, isImageDataUrl, legible, MIN_TEXT_CONTRAST, MIN_UI_CONTRAST, readData, render, start, TEXT_PAIRS, UI_PAIRS, wire, type DialogData, type DialogToken } from './dialog';
 import { BASE_THEMES, contrastOf, parseColor } from '../lib/customthemes';
+import { DEFAULT_THEME } from '../lib/themes';
 
 function data(over: Partial<DialogData> = {}): DialogData {
   return readData({
@@ -42,7 +43,7 @@ describe('what the host sends', () => {
     expect(d.cancel).toBe('Cancel');
     expect(d.level).toBe('warning');
     expect(d.passphrase).toBe(false);
-    expect(d.look).toMatchObject({ theme: 'midnight', fontAdjust: 12, fontFamily: '', moneyFont: 'embedded', lang: '', rtl: false });
+    expect(d.look).toMatchObject({ theme: DEFAULT_THEME, fontAdjust: 12, fontFamily: '', moneyFont: 'embedded', lang: '', rtl: false });
     expect(readData({ level: 'danger', look: { rtl: true, lang: 'he' } }).look).toMatchObject({ rtl: true, lang: 'he' });
   });
 });
@@ -164,7 +165,7 @@ describe('the look of the app', () => {
     expect(document.documentElement.dataset.theme).toBe('dark');
     // A theme it does not know: the default.
     applyDialogLook(document, data({ look: { theme: 'neon' } as never }).look, false);
-    expect(document.documentElement.dataset.theme).toBe('midnight');
+    expect(document.documentElement.dataset.theme).toBe(DEFAULT_THEME);
   });
 
   it('draws a theme of the user, its colours set one by one on known tokens', () => {
@@ -179,7 +180,7 @@ describe('the look of the app', () => {
   it('checks a theme of the user as strictly as a theme file: anything else and it is not drawn', () => {
     for (const colors of [{ accent: 'url(https://evil.example/x)' }, { accent: 'red; background: red' }, { nope: '#fff' }]) {
       applyDialogLook(document, data({ look: { theme: 'custom-bad', custom: { id: 'custom-bad', name: 'Bad', base: 'light', colors } } as never }).look, false);
-      expect(document.documentElement.dataset.theme).toBe('midnight');
+      expect(document.documentElement.dataset.theme).toBe(DEFAULT_THEME);
       expect(document.documentElement.getAttribute('style') ?? '').not.toMatch(/url|evil|background/);
     }
   });
