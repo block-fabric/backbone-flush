@@ -417,6 +417,18 @@ the TWAP (the square root price, squared, as it was before each block that chang
 `changeposition id {add|remove|collect|close}`, `listpositions` (in range or not, amounts, fees owed). Prices are of
 the pool's asset0 (the lower id; CHN in a pool with CHN) in its asset1, whole units.
 
+**Security review (2026-10-21) and how it is met.** (1) *Liquidity bounds*: a tick carries at most
+`MaxLiquidityPerTick(spacing)` = (2^128 − 1) / (the ticks of the spacing), as Uniswap v3's maxLiquidityPerTick, so the
+liquidity in range, a sum over ticks, never overflows; a position or tick past it is refused (`bad-ba-position`), every
+change of the liquidity in range is checked both ways, and a crossing that would take it below zero or past 128 bits is
+not clamped: the round fails and its orders are refunded (a state the caps make impossible; failing the round rather
+than the block keeps a chain with such a state from stopping for good). (2) *Fees across ranges*: a round's fees and
+roundings are credited stretch by stretch along the walk, in proportion to the input each stretch took, to that
+stretch's liquidity, before the tick at its end is crossed (tested against a computation by hand across two
+ranges). (3) *The search's arithmetic*: Â·dy is computed in 256 bits (it overflows 128). (4) *Tokens*: position and
+order tokens parse in a marker's outputs as their serialization writes them, and a marker that names one is not valid
+before the pool kinds' height (`CheckCurvesActivation`); both tested.
+
 ## Dynamic fees
 
 A pool of any kind may be made with `POOL_FLAG_DYNAMIC_FEE` (`createpool … {"dynamic_fee": true}`; another pool

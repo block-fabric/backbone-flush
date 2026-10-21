@@ -411,4 +411,143 @@ BOOST_AUTO_TEST_CASE(vectors)
     for (size_t i{0}; i < cases.size(); ++i) BOOST_CHECK_MESSAGE(committed[i].write() == cases[i].write(), "vector " << i);
 }
 
+BOOST_AUTO_TEST_CASE(fees_by_the_ranges_the_walk_went_through)
+{
+    // Two adjacent ranges, [0, 600) and [600, 1200), the price at 0: a buy of asset0 that crosses 600. Each position earns
+    // the fees of the input the walk took in its range (security review: not all to the range it ends in).
+    Chain chain;
+    const AssetId A{HashName("AAA")}, B{HashName("BBB")};
+    const auto a{chain.Issue("AAA", 10'000'000'000, std::vector<uint64_t>(6, 100'000'000))};
+    const auto b{chain.Issue("BBB", 10'000'000'000, std::vector<uint64_t>(6, 100'000'000))};
+    const bool a0{A < B};
+    CreatePool create;
+    create.asset_a = A;
+    create.asset_b = B;
+    create.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    create.fee = 3000;
+    create.amount_a = 1000;
+    create.amount_b = 1000;
+    chain.Require(MakeTx({}, create, {}));
+    PoolParams kind;
+    kind.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    kind.fee = 3000;
+    const uint256 id{PoolIdOf(A, B, kind)};
+    const unsigned __int128 l{static_cast<unsigned __int128>(1) << 30};
+    std::vector<uint256> ids;
+    for (const auto& [lo, hi] : std::vector<std::pair<int32_t, int32_t>>{{0, 600}, {600, 1200}}) {
+        OpenPosition open;
+        open.pool = id;
+        open.tick_lower = lo;
+        open.tick_upper = hi;
+        open.liquidity_hi = static_cast<uint64_t>(l >> 64);
+        open.liquidity_lo = static_cast<uint64_t>(l);
+        open.max0 = 100'000'000;
+        open.max1 = 100'000'000;
+        const auto needed{cl::AmountsForLiquidity(UintToArith256(chain.Assets().GetClState(id)->sqrt_price), cl::SqrtRatioAtTick(lo), cl::SqrtRatioAtTick(hi), l, true)};
+        std::vector<std::optional<Token>> outs{std::nullopt};
+        if (needed->first < 100'000'000) outs.emplace_back();
+        if (needed->second < 100'000'000) outs.emplace_back();
+        const CTransaction tx{MakeTx({a[ids.size()], b[ids.size()]}, open, outs)};
+        chain.Require(tx);
+        ids.push_back(PositionId(tx.GetHash()));
+    }
+    chain.EndBlock();
+    // The input to cross the first range, then some in the second: asset1 in, the price up (asset0 bought).
+    const AssetId in_asset{a0 ? B : A};
+    const uint64_t to_cross{static_cast<uint64_t>(*(a0 ? cl::Amount1Delta(cl::SqrtRatioAtTick(0), cl::SqrtRatioAtTick(600), l, true)
+                                                     : cl::Amount0Delta(cl::SqrtRatioAtTick(0), cl::SqrtRatioAtTick(600), l, true)).ToU128())};
+    BOOST_REQUIRE(a0); // (asset0 sorts first for these names; the arithmetic below reads asset1 in)
+    // Half again what crossing the first range takes: the walk ends inside the second.
+    const uint64_t pay{to_cross * 3 / 2};
+    std::vector<std::optional<Token>> split{AssetToken(in_asset, pay), AssetToken(in_asset, 100'000'000 - pay)};
+    const CTransaction cut{MakeTx({b[2]}, std::nullopt, split)};
+    chain.Require(cut);
+    chain.Require(MakeTx({COutPoint{cut.GetHash(), 0}}, SwapPools{in_asset, {id}, pay, 1, CScript{}}, {std::nullopt}));
+    chain.EndBlock();
+    BOOST_CHECK_GT(chain.Assets().GetClState(id)->tick, 600);
+    // What the fee was and how the walk's input split: the reference.
+    const uint64_t fee{pay - pay * (1'000'000 - 3000) / 1'000'000};
+    const uint64_t used{pay * (1'000'000 - 3000) / 1'000'000};
+    const auto f0{chain.Assets().PositionFees(*chain.Assets().GetPosition(ids[0]))}, f1{chain.Assets().PositionFees(*chain.Assets().GetPosition(ids[1]))};
+    const double expect0{double(fee) * to_cross / used}, expect1{double(fee) * (used - to_cross) / used};
+    BOOST_CHECK_MESSAGE(std::abs(double(f0.second) - expect0) <= 2, f0.second << " vs " << expect0);
+    BOOST_CHECK_MESSAGE(std::abs(double(f1.second) - expect1) <= 2, f1.second << " vs " << expect1);
+    // Every fee charged is credited (up to the floors of the fee growth).
+    BOOST_CHECK_LE(f0.second + f1.second, fee);
+    BOOST_CHECK_GE(f0.second + f1.second + 2, fee);
+}
+
+BOOST_AUTO_TEST_CASE(extremes_and_tokens)
+{
+    // Position tokens in a marker's outputs: written and read the same, not valid before the pool kinds' height.
+    Marker marker;
+    marker.operation = ChangePosition{};
+    marker.outputs.push_back({0, Token{Token::Kind::POSITION, uint256::ONE, 1}});
+    marker.outputs.push_back({1, Token{Token::Kind::ORDER, uint256{2}, 1}});
+    const auto parsed{ParseMarkerScript(MarkerScript(marker))};
+    BOOST_REQUIRE(parsed);
+    BOOST_CHECK(*parsed == marker);
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    mtx.vout.emplace_back(0, HOLDER);
+    mtx.vout.emplace_back(0, HOLDER);
+    Marker plain;
+    plain.outputs.push_back({0, Token{Token::Kind::POSITION, uint256::ONE, 1}});
+    mtx.vout.emplace_back(0, MarkerScript(plain));
+    std::string reason;
+    BOOST_CHECK(!CheckCurvesActivation(CTransaction{mtx}, /*active=*/false, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-marker");
+    BOOST_CHECK(CheckCurvesActivation(CTransaction{mtx}, /*active=*/true, reason));
+
+    // A pool with liquidity near the largest a position may carry, orders of the largest amounts both ways: no overflow,
+    // the pool never pays more than it holds.
+    Chain chain;
+    const AssetId A{HashName("AAA")}, B{HashName("BBB")};
+    const uint64_t big{uint64_t{1} << 61};
+    const auto a{chain.Issue("AAA", MAX_AMOUNT, {big, big / 2, big / 2})};
+    const auto b{chain.Issue("BBB", MAX_AMOUNT, {big, big / 2, big / 2})};
+    CreatePool create;
+    create.asset_a = A;
+    create.asset_b = B;
+    create.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    create.fee = 100;
+    create.amount_a = 7;
+    create.amount_b = 3;
+    chain.Require(MakeTx({}, create, {}));
+    PoolParams kind;
+    kind.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    kind.fee = 100;
+    const uint256 id{PoolIdOf(A, B, kind)};
+    const auto cl{*chain.Assets().GetClState(id)};
+    const arith_uint256 sa{cl::SqrtRatioAtTick(-887200)}, sb{cl::SqrtRatioAtTick(887200)};
+    const unsigned __int128 l{cl::LiquidityForAmounts(UintToArith256(cl.sqrt_price), sa, sb, big, big)};
+    OpenPosition open;
+    open.pool = id;
+    open.tick_lower = -887200;
+    open.tick_upper = 887200;
+    open.liquidity_hi = static_cast<uint64_t>(l >> 64);
+    open.liquidity_lo = static_cast<uint64_t>(l);
+    open.max0 = big;
+    open.max1 = big;
+    const auto needed{cl::AmountsForLiquidity(UintToArith256(cl.sqrt_price), sa, sb, l, true)};
+    std::vector<std::optional<Token>> outs{std::nullopt};
+    if (needed->first < big) outs.emplace_back();
+    if (needed->second < big) outs.emplace_back();
+    chain.Require(MakeTx({a[0], b[0]}, open, outs));
+    // Liquidity past what a tick may carry: refused.
+    OpenPosition huge{open};
+    huge.liquidity_hi = uint64_t{1} << 63;
+    BOOST_CHECK(chain.Refused(MakeTx({a[1], b[1]}, huge, {std::nullopt, std::nullopt, std::nullopt})).starts_with("bad-ba-position"));
+    chain.EndBlock();
+    const CTransaction sell0{MakeTx({a[1]}, SwapPools{A, {id}, big / 2, 1, CScript{}}, {std::nullopt})};
+    const CTransaction sell1{MakeTx({b[1]}, SwapPools{B, {id}, big / 2, 1, CScript{}}, {std::nullopt})};
+    chain.Require(sell0);
+    chain.Require(sell1);
+    chain.EndBlock();
+    const auto pool{*chain.Assets().GetPool(id)};
+    BOOST_CHECK(pool.reserve0 > 0 && pool.reserve1 > 0);
+    BOOST_CHECK(chain.TokenAt(COutPoint{sell0.GetHash(), 0}).has_value());
+    BOOST_CHECK(chain.TokenAt(COutPoint{sell1.GetHash(), 0}).has_value());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

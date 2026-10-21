@@ -614,6 +614,19 @@ std::string ResolvedPool(const confirm::Call& call, const UniValue& value)
     return strprintf("%s / %s — %s (pool %s…%s)", side("asset_a_id"), side("asset_b_id"), kind, value.get_str().substr(0, 8), value.get_str().substr(56));
 }
 
+/** A position of concentrated liquidity as a confirmation shows it: its pool resolved, its range, what it holds. Throws if there is none. */
+std::string ResolvedPosition(const confirm::Call& call, const UniValue& value)
+{
+    if (!value.isStr() || value.get_str().size() != 64 || !IsHex(value.get_str())) throw HostError(BRIDGE_INVALID_REQUEST, "A position is named by its id (64 hex digits)");
+    UniValue args{UniValue::VARR};
+    args.push_back(value.get_str());
+    const UniValue position{call.Read("getposition", args)};
+    if (!position.isObject() || !position.find_value("pool").isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "No such position");
+    return strprintf("%s, from %s to %s (%s %s and %s %s now; position %s…)", ResolvedPool(call, position.find_value("pool")), position.find_value("price_lower").getValStr(),
+                     position.find_value("price_upper").getValStr(), position.find_value("amount0").getValStr(), position.find_value("asset0").getValStr(),
+                     position.find_value("amount1").getValStr(), position.find_value("asset1").getValStr(), value.get_str().substr(0, 8));
+}
+
 /** Which parameters of a call name assets or pools: one each, an array of them, or an object keyed by them. */
 struct AssetParams {
     std::vector<size_t> assets;
@@ -621,6 +634,7 @@ struct AssetParams {
     std::vector<size_t> asset_keys;
     std::vector<size_t> pools;
     std::vector<size_t> pool_arrays;
+    std::vector<size_t> positions;
 };
 
 /**
@@ -653,6 +667,8 @@ std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> WithAs
                 for (const std::string& key : arg.getKeys()) rows.push_back(confirm::Text(strprintf("%s of", label(i)), strprintf("%s %s", confirm::ValueText(arg[key]), ResolvedAsset(call, UniValue{key}))));
             } else if (contains(which.pools, i) && !arg.isNull()) {
                 rows.push_back(confirm::Text(label(i), ResolvedPool(call, arg)));
+            } else if (contains(which.positions, i) && !arg.isNull()) {
+                rows.push_back(confirm::Text(label(i), ResolvedPosition(call, arg)));
             } else if (contains(which.pool_arrays, i) && !arg.isNull()) {
                 if (!arg.isArray()) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s: a list of pools", label(i)));
                 for (size_t k{0}; k < arg.size(); ++k) rows.push_back(confirm::Text(strprintf("Pool %u", k + 1), ResolvedPool(call, arg[k])));
@@ -714,7 +730,7 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},
         // Concentrated liquidity: the pool shown resolved (its assets and kind); a position by its id.
         {"openposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Open a position", "Open", "The wallet puts liquidity into the pool shown between the two prices shown, for at most the amounts shown (the rest back): a position, a token of its own, which earns the pool's fees while the price is in its range.", {}, {}), {.asset_keys = {3}, .pools = {0}}), /*fee_unknown=*/true}},
-        {"changeposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Change a position", "Change", "The wallet changes its position shown: adds liquidity, takes some out, collects its fees, or closes it (all out, all collected)."), /*fee_unknown=*/true}},
+        {"changeposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Change a position", "Change", "The wallet changes its position shown: adds liquidity, takes some out, collects its fees, or closes it (all out, all collected)."), {.positions = {0}}), /*fee_unknown=*/true}},
         {"createauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create an auction", "Create", "The wallet puts units of an asset up for auction.", {}, {"amount"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"bidauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Bid in an auction", "Bid", "The wallet pays a bid in an auction.", {}, {"amount"}), /*fee_unknown=*/true}},
         {"collectauction", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, confirm::Generic("Collect an auction", "Collect", "The wallet collects what an auction owes it."), /*fee_unknown=*/true}},

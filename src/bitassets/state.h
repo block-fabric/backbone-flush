@@ -230,6 +230,7 @@ struct Token {
         LP = 3,          //!< `amount` shares of the pool `id`
         RECEIPT = 4,     //!< the right to what the auction `id` (the transaction that made it) brings in
         POSITION = 5,    //!< a position of concentrated liquidity, `id` (OpenPosition; the DEX's pool kinds only)
+        ORDER = 6,       //!< a limit order resting in a book, `id` (PlaceOrder; the DEX's pool kinds only)
     };
     Kind kind{Kind::ASSET};
     uint256 id;
@@ -240,7 +241,7 @@ struct Token {
     {
         uint8_t k{static_cast<uint8_t>(obj.kind)};
         READWRITE(k, obj.id, VARINT(obj.amount));
-        SER_READ(obj, if (k > static_cast<uint8_t>(Kind::POSITION)) throw std::ios_base::failure("unknown token kind"));
+        SER_READ(obj, if (k > static_cast<uint8_t>(Kind::ORDER)) throw std::ios_base::failure("unknown token kind"));
         SER_READ(obj, obj.kind = static_cast<Kind>(k));
     }
     friend bool operator==(const Token&, const Token&) = default;
@@ -721,9 +722,42 @@ struct ChangePosition {
     unsigned __int128 Liquidity() const { return (static_cast<unsigned __int128>(liquidity_hi) << 64) | liquidity_lo; }
 };
 
+/**
+ * A limit order (doc/layers.md "Order books"): `amount` of `asset_sell` for `asset_buy`, at `price_num/price_den` of
+ * asset_buy per asset_sell at least, until the block at `expiry` (included). It rests in the book of the pair (a venue
+ * of the batch, as a pool is: Curve::BOOK) and fills, wholly or in part, at the uniform price of the book's rounds,
+ * never below its limit. Result: the order, a token of its own (ORDER, id OrderId(txid)), which collects what it got
+ * and cancels it (SettleOrder).
+ */
+struct PlaceOrder {
+    static constexpr uint8_t KIND{26};
+    AssetId asset_sell;
+    AssetId asset_buy;
+    uint64_t amount{0};
+    uint64_t price_num{0};
+    uint64_t price_den{0};
+    int32_t expiry{0};
+    SERIALIZE_METHODS(PlaceOrder, obj) { READWRITE(obj.asset_sell, obj.asset_buy, VARINT(obj.amount), VARINT(obj.price_num), VARINT(obj.price_den), obj.expiry); }
+    friend bool operator==(const PlaceOrder&, const PlaceOrder&) = default;
+};
+
+/**
+ * Collect what a limit order got, by whoever spends its token; `cancel` (or the order expired, or filled): what is left
+ * of what it sells too, and the order is gone. Results: the order's token back (unless gone), then what it got, then
+ * what is left (asset coins; CHN by the coinbase to `chn_to`), amounts of nothing left out.
+ */
+struct SettleOrder {
+    static constexpr uint8_t KIND{27};
+    uint256 order;
+    bool cancel{false};
+    CScript chn_to;
+    SERIALIZE_METHODS(SettleOrder, obj) { READWRITE(obj.order, obj.cancel, obj.chn_to); }
+    friend bool operator==(const SettleOrder&, const SettleOrder&) = default;
+};
+
 using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
                                Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract, SetLogo, SetDisplayName,
-                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition>;
+                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition, PlaceOrder, SettleOrder>;
 
 /** The registration an operation makes: a Register's, or a LaunchToken's (nullptr: none). */
 const Register* RegisterOf(const Operation& op);
@@ -1056,6 +1090,34 @@ struct ClPosition {
 /** The id of the position OpenPosition `txid` makes. */
 uint256 PositionId(const Txid& txid);
 
+/** A limit order resting in a book (PlaceOrder), by its id. Its side: it sells the book's asset0 (an ask) or asset1 (a bid). */
+struct BookOrder {
+    uint256 book;
+    bool sells0{false};
+    uint64_t amount{0};
+    uint64_t remaining{0};
+    //! Its limit: price_num/price_den of what it buys per unit of what it sells, at least.
+    uint64_t price_num{0};
+    uint64_t price_den{0};
+    int32_t expiry{0};
+    //! What it got and not collected yet, and in all.
+    uint64_t proceeds{0};
+    uint64_t got{0};
+    Txid txid;
+    int32_t height{0};
+    SERIALIZE_METHODS(BookOrder, obj) { READWRITE(obj.book, obj.sells0, obj.amount, obj.remaining, obj.price_num, obj.price_den, obj.expiry, obj.proceeds, obj.got, obj.txid, obj.height); }
+    friend bool operator==(const BookOrder&, const BookOrder&) = default;
+};
+
+/** The id of the order PlaceOrder `txid` makes; the id of the book of two assets (a pool record of Curve::BOOK). */
+uint256 OrderId(const Txid& txid);
+uint256 BookId(const AssetId& a, const AssetId& b);
+/** Most open orders a side of a book holds, and most a round considers (the best). */
+inline constexpr uint32_t MAX_BOOK_SIDE{1000};
+inline constexpr size_t MAX_BOOK_ROUND{256};
+/** Latest an order may expire, in blocks after the one that places it: about a year of 15-second blocks. */
+inline constexpr int32_t MAX_ORDER_DURATION{2'102'400};
+
 /**
  * The volatility of a pool with a dynamic fee (POOL_FLAG_DYNAMIC_FEE): the last block's clearing price (UQ64.64) and a
  * moving average of the change of the price from one block that traded to the next, in millionths (dex::PoolFee).
@@ -1094,6 +1156,7 @@ enum class Curve : uint8_t {
     WEIGHTED = 2,         //!< x^w0 · y^w1 = k (Balancer), two weights
     LAUNCH = 3,           //!< a launch's bonding curve (LaunchToken): constant product of virtual reserves; made by a launch only
     CONCENTRATED = 4,     //!< concentrated liquidity (Uniswap v3): positions over price ranges, ticks
+    BOOK = 5,             //!< the order book of a pair: limit orders (PlaceOrder), made by the first order
 };
 /** The curves CreatePool makes (LAUNCH is made by launches only). */
 inline constexpr bool CreatableCurve(uint8_t curve) { return curve <= static_cast<uint8_t>(Curve::WEIGHTED) || curve == static_cast<uint8_t>(Curve::CONCENTRATED); }
@@ -1427,6 +1490,16 @@ public:
     std::optional<int32_t> NextClTick(const uint256& pool, int32_t tick, bool up) const;
     /** The fees a position earned and not yet counted in its record (Uniswap's fee growth inside), and its amounts at the pool's price (rounded down). */
     std::pair<uint64_t, uint64_t> PositionFees(const ClPosition& position) const;
+    // Order books.
+    std::optional<BookOrder> GetOrder(const uint256& id) const;
+    /** The open orders of a side of a book (asks: those selling asset0), best price first, `max` at most. */
+    std::vector<std::pair<uint256, BookOrder>> BookSide(const uint256& book, bool asks, size_t max) const;
+    /**
+     * A round of a book (doc/layers.md "Order books"): the takers `orders` (each all or nothing) and the book's best
+     * resting orders (`resting`: those the round changed, by id, which it updates) at one uniform price; nullopt as
+     * ClearPool's. `height`: orders that expired before it do not trade.
+     */
+    std::optional<dex::Clearing> ClearBook(const uint256& id, const Pool& pool, std::map<uint256, BookOrder>& resting, const std::vector<dex::HopIn>& orders, int height) const;
     // Dynamic fees.
     std::optional<FeeState> GetFeeState(const uint256& pool) const;
     /** The fee a pool charges in the block at `height` (its kind's; with POOL_FLAG_DYNAMIC_FEE, rising with its volatility). */
