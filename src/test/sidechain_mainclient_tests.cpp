@@ -181,12 +181,12 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
     BOOST_CHECK_EQUAL(MainchainDataSubdir(ChainType::ECASH_TESTNET), "testnet4");
     BOOST_CHECK_EQUAL(MainchainName(ChainType::ECASH), "Backbone");
     BOOST_CHECK_EQUAL(MainchainName(ChainType::TESTNET), "Chains");
-    // Starbase: the eCash networks in its data directory (~/.starbase), its default; the Chains networks (development)
+    // Flush: the eCash networks in its data directory (~/.flush), its default; the Chains networks (development)
     // in its folder "chains".
     BOOST_CHECK(GetDefaultDataDir(/*ecash=*/true) != GetDefaultDataDir(/*ecash=*/false));
     BOOST_CHECK(GetDefaultDataDir() == GetDefaultDataDir(/*ecash=*/true));
     BOOST_CHECK(GetDefaultDataDir(/*ecash=*/false) == GetDefaultDataDir(/*ecash=*/true) / "chains");
-    BOOST_CHECK(fs::PathToString(GetDefaultDataDir(/*ecash=*/true).filename()).find("tarbase") != std::string::npos);
+    BOOST_CHECK(fs::PathToString(GetDefaultDataDir(/*ecash=*/true).filename()).find("lush") != std::string::npos);
 
     // Identities of their own: genesis, message start, ports, address prefix; no two networks alike.
     std::set<uint256> genesis;
@@ -235,13 +235,13 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
         }
     }
 
-    // Starbase's identities on eCash: slot 46, its address prefixes and message starts.
+    // Flush's identities on eCash: slot 46, its address prefixes and message starts.
     for (const auto& [type, hrp, last] : std::vector<std::tuple<ChainType, std::string, uint8_t>>{
-             {ChainType::ECASH, "sbx", 0x21}, {ChainType::ECASH_BETANET, "bsbx", 0x22}, {ChainType::ECASH_TESTNET, "tsbx", 0x23}}) {
+             {ChainType::ECASH, "flx", 0x21}, {ChainType::ECASH_BETANET, "bflx", 0x22}, {ChainType::ECASH_TESTNET, "tflx", 0x23}}) {
         const auto params{CreateChainParams(m_args, type)};
         BOOST_CHECK_EQUAL(params->GetConsensus().sidechain.slot, 46U);
         BOOST_CHECK_EQUAL(params->Bech32HRP(), hrp);
-        const MessageStartChars magic{0x73, 0x62, 0x73, last};
+        const MessageStartChars magic{0x66, 0x6c, 0x78, last};
         BOOST_CHECK(params->MessageStart() == magic);
     }
 
@@ -406,12 +406,12 @@ BOOST_AUTO_TEST_CASE(peg_info_both_ways)
 
     const UniValue rpc{PegInfoFromRpc(46,
         read(R"({"withdrawalperiod":60,"withdrawalminscore":30,"rules":"enforcer","bundlethreshold":5,"bundlemaxage":10,"height":211,"activesidechains":1,"proposals":0,"escrowtotal":"115.98000000"})"),
-        read(strprintf(R"({"slot":46,"title":"Starbase","proposalhash":"%s","activationheight":118,"escrow":{"txid":"%s","n":0,"amount":"115.98000000"}})", proposal_hash, ctip.GetHex())),
+        read(strprintf(R"({"slot":46,"title":"Flush","proposalhash":"%s","activationheight":118,"escrow":{"txid":"%s","n":0,"amount":"115.98000000"}})", proposal_hash, ctip.GetHex())),
         read(strprintf(R"([{"slot":46,"hash":"%s","index":0,"height":205,"score":3,"lastupvote":210,"blocksleft":4,"payable":false,"known":true,"vote":"upvote"}])", m6id.GetHex())))};
     const UniValue grpc{PegInfoFromEnforcer(46, EnforcerPegReplies{
         .chain_info = read(R"({"network":"NETWORK_REGTEST","bip300Constants":{"withdrawalBundleMaxAge":10,"withdrawalBundleInclusionThreshold":5}})"),
         .tip_height = 211,
-        .sidechains = read(strprintf(R"({"sidechains":[{"sidechainNumber":46,"description":{"hex":"04%s"},"activationHeight":118,"declaration":{"v0":{"title":"Starbase"}}}]})", HexStr(description))),
+        .sidechains = read(strprintf(R"({"sidechains":[{"sidechainNumber":46,"description":{"hex":"04%s"},"activationHeight":118,"declaration":{"v0":{"title":"Flush"}}}]})", HexStr(description))),
         .proposals = read(R"({})"),
         .ctip = read(strprintf(R"({"ctip":{"txid":{"hex":"%s"},"value":"11598000000","sequenceNumber":"3"}})", ctip.GetHex())),
         .bundles = read(strprintf(R"({"proposals":[{"m6id":{"hex":"%s"},"voteCount":3,"proposalHeight":205}]})", HexStr(m6id))),
@@ -427,7 +427,7 @@ BOOST_AUTO_TEST_CASE(peg_info_both_ways)
         BOOST_CHECK(v["sidechain"]["active"].get_bool());
         BOOST_CHECK_EQUAL(v["sidechain"]["activationheight"].getInt<int>(), 118);
         BOOST_CHECK_EQUAL(v["sidechain"]["proposalhash"].get_str(), proposal_hash);
-        BOOST_CHECK_EQUAL(v["sidechain"]["title"].get_str(), "Starbase");
+        BOOST_CHECK_EQUAL(v["sidechain"]["title"].get_str(), "Flush");
         BOOST_CHECK_EQUAL(v["escrow"]["txid"].get_str(), ctip.GetHex());
         BOOST_CHECK_EQUAL(v["escrow"]["amount"].getValStr(), "115.98000000");
         BOOST_REQUIRE_EQUAL(v["bundles"].size(), 1U);

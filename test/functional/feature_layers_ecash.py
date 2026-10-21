@@ -97,7 +97,7 @@ class LayersEcashTest(SidechainEcashTest):
 
         self.log.info("Activate the slot on Backbone's eCash regtest: proposal and acks")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Flush", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(UNUSED_SLOT_THRESHOLD + 2)
         assert_equal([s["slot"] for s in main.listactivesidechains()], [SLOT])
         assert_equal(main.getsidechain(SLOT)["escrowscript"], f"b701{SLOT:02x}51")

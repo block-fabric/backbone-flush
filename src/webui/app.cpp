@@ -98,7 +98,7 @@ int64_t SteadySeconds()
 
 std::string NetworkLabel(const std::string& network)
 {
-    if (network == "main" || network == "ecash") return ""; // Starbase: eCash's main network as the main one
+    if (network == "main" || network == "ecash") return ""; // Flush: eCash's main network as the main one
     if (network == "test") return "testnet";
     return network;
 }

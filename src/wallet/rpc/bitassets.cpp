@@ -1199,7 +1199,7 @@ RPCMethod swaproute()
 {
     return RPCMethod{
         "swaproute",
-        "Starbase's DEX: trade through several pools in one transaction, from the first asset of a path to its last (quoteroute finds one), "
+        "Flush's DEX: trade through several pools in one transaction, from the first asset of a path to its last (quoteroute finds one), "
         "for at least the quote less the slippage. The order clears at the end of its block with every other order of the block, at each pool's "
         "uniform price; if it would give less than its least, what went in comes back (its fee paid)." + HELP_REQUIRING_PASSPHRASE,
         {
@@ -1268,7 +1268,7 @@ RPCMethod registeroracle()
 {
     return RPCMethod{
         "registeroracle",
-        "Starbase's DEX: register an oracle under a name, with the key it signs its attestations with. Registering costs " + FormatMoney(bitassets::ORACLE_REGISTRATION_FEE) +
+        "Flush's DEX: register an oracle under a name, with the key it signs its attestations with. Registering costs " + FormatMoney(bitassets::ORACLE_REGISTRATION_FEE) +
             " ECX, paid to mainchain miners." + HELP_REQUIRING_PASSPHRASE,
         {
             {"name", RPCArg::Type::STR, RPCArg::Optional::NO, "Its name (1 to 64 printable characters): a label, which other oracles may share"},
@@ -1333,7 +1333,7 @@ RPCMethod publishoracle()
 {
     return RPCMethod{
         "publishoracle",
-        "Starbase's DEX: publish an oracle's attestation of an event: its value, signed (BIP340) over the tagged hash of (oracle, event, value, height). "
+        "Flush's DEX: publish an oracle's attestation of an event: its value, signed (BIP340) over the tagged hash of (oracle, event, value, height). "
         "Signed by this wallet's key of the oracle, or given signed. Once per event." + HELP_REQUIRING_PASSPHRASE,
         {
             {"oracle", RPCArg::Type::STR, RPCArg::Optional::NO, "The oracle: its id, or its key"},
@@ -1388,7 +1388,7 @@ RPCMethod createoraclecontract()
 {
     return RPCMethod{
         "createoraclecontract",
-        "Starbase's DEX: lock an amount of an asset (ECX included) until an oracle attests an event; then the first outcome whose range holds the value "
+        "Flush's DEX: lock an amount of an asset (ECX included) until an oracle attests an event; then the first outcome whose range holds the value "
         "gets it all (none: the refund address). With no attestation in a block up to the expiry, the refund address gets it after. Anyone settles it "
         "(settleoraclecontract). The oracle can lie, but can pay none but the addresses named here." + HELP_REQUIRING_PASSPHRASE,
         {
@@ -1455,7 +1455,7 @@ RPCMethod settleoraclecontract()
 {
     return RPCMethod{
         "settleoraclecontract",
-        "Starbase's DEX: pay an oracle contract out to whom the oracle's attestation (or the expiry) names; anyone may (this wallet pays the fee). "
+        "Flush's DEX: pay an oracle contract out to whom the oracle's attestation (or the expiry) names; anyone may (this wallet pays the fee). "
         "ECX are paid by the coinbase of the block." + HELP_REQUIRING_PASSPHRASE,
         {
             {"contract", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The transaction that made it"},

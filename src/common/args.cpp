@@ -365,7 +365,7 @@ bool ArgsManager::EcashFamily_() const
 {
     AssertLockHeld(cs_args);
     // What the arguments so far name (the command line, before the configuration file in the data directory is read).
-    // Starbase: without -chain (and without -regtest, -testnet, -signet), the default network, ecashbeta.
+    // Flush: without -chain (and without -regtest, -testnet, -signet), the default network, ecashbeta.
     const auto chain{SettingToString(GetSetting_("-chain"))};
     if (!chain) {
         for (const char* flag : {"-regtest", "-testnet", "-signet"}) {
@@ -893,7 +893,7 @@ fs::path ChooseWindowsDataDir(const fs::path& legacy, const fs::path& local, con
 
 fs::path GetDefaultDataDir()
 {
-    // Starbase: that of its default network, on eCash.
+    // Flush: that of its default network, on eCash.
     return GetDefaultDataDir(/*ecash=*/IsEcashChain(DEFAULT_CHAIN_TYPE));
 }
 
@@ -904,8 +904,8 @@ fs::path GetDefaultDataDir(bool ecash)
     //   new: C:\Users\Username\AppData\Local\Chains
     // macOS: ~/Library/Application Support/<name> (Chains, Thunder...)
     // Unix-like: ~/.<name> (~/.chains, ~/.thunder...)
-    // Starbase: the eCash networks at ~/.starbase (Windows %LOCALAPPDATA%\Starbase), the Chains networks (a
-    // development option, -chainsnetworks; and regtest) in its folder "chains" (~/.starbase/chains).
+    // Flush: the eCash networks at ~/.flush (Windows %LOCALAPPDATA%\Flush), the Chains networks (a
+    // development option, -chainsnetworks; and regtest) in its folder "chains" (~/.flush/chains).
     if (!ecash) return GetDefaultDataDir(/*ecash=*/true) / "chains";
     const std::string name{CLIENT_NAME};
 #ifdef WIN32
@@ -954,7 +954,7 @@ ChainType ArgsManager::GetChainType() const
 {
     std::variant<ChainType, std::string> arg = GetChainArg();
     if (auto* parsed = std::get_if<ChainType>(&arg)) {
-        // Starbase runs on eCash: the Chains networks only for development.
+        // Flush runs on eCash: the Chains networks only for development.
         if (IsChainsDevChain(*parsed) && !GetBoolArg("-chainsnetworks", false)) {
             throw std::runtime_error(strprintf("%s runs on the eCash networks (-chain=ecash, ecashbeta, ecashtest); the Chains network %s needs -chainsnetworks (development only).",
                                                CLIENT_NAME, ChainTypeToString(*parsed)));

@@ -126,7 +126,7 @@ BOOST_AUTO_TEST_CASE(tickers)
     for (const char* bad : {"", "G", "ABCDEFGHIJKLM", "gold", "Gold", "GO LD", "GO-LD", "GO_LD", "GOLD.", "#1", "(A)", "1739-0029", "ÄB"}) BOOST_CHECK_MESSAGE(!IsTicker(bad), bad);
     // Tickers are names: the look-alike rules hold them too.
     BOOST_CHECK(ReadsAsAnotherAsset("CHN"));
-    BOOST_CHECK(ReadsAsAnotherAsset("ECX")); // Starbase: the coin is shown as ECX
+    BOOST_CHECK(ReadsAsAnotherAsset("ECX")); // Flush: the coin is shown as ECX
     BOOST_CHECK(ReadsAsAnotherAsset("0XAB"));
     BOOST_CHECK(!NameMimicsNumber("17390029"));
 }

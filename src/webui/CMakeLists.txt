@@ -31,7 +31,7 @@ else()
   message(FATAL_ERROR "${webui_chain_json}: role is sidechain or mainchain, not ${webui_chain_role}")
 endif()
 set(WEBUI_CHAIN_NETWORKS "")
-# Starbase: the eCash networks too (its own), after those of Chains (development) and regtest.
+# Flush: the eCash networks too (its own), after those of Chains (development) and regtest.
 set(WEBUI_CHAIN_NETWORK_IDS main test signet regtest ecash ecashbeta ecashtest)
 list(LENGTH WEBUI_CHAIN_NETWORK_IDS WEBUI_CHAIN_NETWORKS_COUNT)
 foreach(network IN LISTS WEBUI_CHAIN_NETWORK_IDS)

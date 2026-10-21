@@ -16,7 +16,7 @@ IconTint TintOf(const std::string& network)
     // apart by its colour), then that of the network.
     IconTint tint{};
     if (network == "test" || network == "testnet4" || network == "ecashtest") tint = {70, 30};
-    if (network == "ecashbeta") tint = {35, 15}; // Starbase: betanet, as signet
+    if (network == "ecashbeta") tint = {35, 15}; // Flush: betanet, as signet
     if (network == "signet") tint = {35, 15};
     if (network == "regtest") tint = {160, 30};
     tint.hue_shift = ((tint.hue_shift + chain::ICON_HUE) % 360 + 360) % 360;

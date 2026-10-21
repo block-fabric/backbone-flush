@@ -234,7 +234,7 @@ BOOST_AUTO_TEST_CASE(asset_arg_number_never_a_name)
     BOOST_CHECK_THROW(ParseAssetArg(UniValue{number}, lookup), UniValue);
     BOOST_CHECK(ParseAssetArg(UniValue{"GOLD"}, lookup) == gold);
     BOOST_CHECK(ParseAssetArg(UniValue{"chn"}, lookup) == CHN);
-    BOOST_CHECK(ParseAssetArg(UniValue{"ECX"}, lookup) == CHN); // Starbase: the coin by eCash's ticker
+    BOOST_CHECK(ParseAssetArg(UniValue{"ECX"}, lookup) == CHN); // Flush: the coin by eCash's ticker
 }
 
 BOOST_AUTO_TEST_CASE(register_and_conserve)

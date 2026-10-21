@@ -472,7 +472,7 @@ describe('the journal of the app', () => {
 });
 
 // Layers: the pages of BitAssets on Layers (its Staking first).
-describe.runIf(CHAIN.name === 'Starbase')('the pages of BitAssets', () => {
+describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
   it('are in the Chain section and the menus, before the tools, with their quick actions', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
     expect(own).toEqual(['staking', 'assets', 'my-assets', 'issue', 'trade', 'auctions']);
@@ -491,7 +491,7 @@ describe.runIf(CHAIN.name === 'Starbase')('the pages of BitAssets', () => {
     // Alt+6 opened Assets in bitassets-qt (audit port-2 #8); on Layers Alt+6 is Staking, Alt+7 Assets.
     expect(handleShortcut(new KeyboardEvent('keydown', { key: '7', altKey: true }))).toBe(true);
     expect(nav.page).toBe('assets');
-    expect(CHAIN.uriScheme).toBe('starbase');
+    expect(CHAIN.uriScheme).toBe('flush');
   });
 
   it('Assets: the cards, searched and filtered; an asset opened whole, its markets and the history of its data', async () => {

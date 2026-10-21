@@ -903,7 +903,7 @@ RPCMethod getdexinfo()
 {
     return RPCMethod{
         "getdexinfo",
-        "Starbase's DEX: whether its rules apply to the next block, and its bounds (doc/layers.md, \"The DEX\").",
+        "Flush's DEX: whether its rules apply to the next block, and its bounds (doc/layers.md, \"The DEX\").",
         {},
         RPCResult{RPCResult::Type::OBJ, "", "",
         {

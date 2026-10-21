@@ -44,7 +44,7 @@ class LayersDescribeConfirmationTest(LayersTest):
 
         self.log.info("Setup: the slot, a deposit, an asset and a pool")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Flush", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 50)
         self.mine_main()

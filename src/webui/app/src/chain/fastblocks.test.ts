@@ -487,8 +487,8 @@ describe('the pages of FastBlocks', () => {
       expect(handleShortcut(new KeyboardEvent('keydown', { key, altKey: true }))).toBe(true);
       expect(nav.page).toBe(page);
     }
-    expect(CHAIN.name).toBe('Starbase');
-    expect(CHAIN.uriScheme).toBe('starbase');
+    expect(CHAIN.name).toBe('Flush');
+    expect(CHAIN.uriScheme).toBe('flush');
     expect(CHAIN.networks.test.p2p).toBe(19255);
     expect(CHAIN.networks.main.hrp).toBe('ly');
     // The menus' items of the views of Network open Staking there.

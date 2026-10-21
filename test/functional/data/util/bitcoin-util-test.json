@@ -54,7 +54,7 @@
     ],
     "return_code": 0,
     "output_cmp": "getchainparams-ecashbeta.json",
-    "description": "getchainparams returns ecashbeta info (Starbase's default network)"
+    "description": "getchainparams returns ecashbeta info (Flush's default network)"
   },
   {
     "exec": "./bitcoin-util",

@@ -132,7 +132,7 @@ class LayersTest(SidechainTest):
 
         self.log.info("Activate the slot on the mainchain, deposits")
         self.mine_main(110)
-        main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
+        main.createsidechainproposal(SLOT, "Flush", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         assert_equal([s["slot"] for s in main.listactivesidechains()], [SLOT])
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 50)

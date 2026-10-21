@@ -1012,7 +1012,7 @@ BOOST_AUTO_TEST_CASE(prune_raised_to_the_least_of_the_chain)
 {
     ArgsManager main;
     main.ForceSetArg("-chain", "main");
-    main.ForceSetArg("-chainsnetworks", "1"); // Starbase: a Chains network, for development only
+    main.ForceSetArg("-chainsnetworks", "1"); // Flush: a Chains network, for development only
     auto node{interfaces::MakeNode(m_node)};
     node->updateRwSetting("prune", common::SettingsValue{"1907"});
     BOOST_CHECK_EQUAL(webui::NodeOptions::RaiseLowPrune(*node, main).value_or(-1), 1907);

@@ -2,31 +2,31 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""A local Starbase playground on regtest with eCash's rules, in one command.
+"""A local Flush playground on regtest with eCash's rules, in one command.
 
-    starbase-playground.sh start [--block-seconds 5] [--no-app] [--no-demo]
-    starbase-playground.sh status | stop | reset
-    starbase-playground.sh mine N          N mainchain blocks now
-    starbase-playground.sh withdraw-demo   a withdrawal from request to payout
-    starbase-playground.sh cli <node> <method> [args...]   node: main, 0, 1, 2
+    flush-playground.sh start [--block-seconds 5] [--no-app] [--no-demo]
+    flush-playground.sh status | stop | reset
+    flush-playground.sh mine N          N mainchain blocks now
+    flush-playground.sh withdraw-demo   a withdrawal from request to payout
+    flush-playground.sh cli <node> <method> [args...]   node: main, 0, 1, 2
 
-`start` runs, under the playground folder (~/.starbase-playground, or --dir):
+`start` runs, under the playground folder (~/.flush-playground, or --dir):
 
 - the mainchain: backboned -regtest -testecash -grpc (eCash's drivechain rules with the enforcer's regtest
   thresholds: a slot activates with more than 5 acks in 10 blocks, a bundle is paid with more than 5 votes and
   fails older than 10 blocks), its wallet "miner" behind the enforcer's interface;
-- three Starbase validators on regtest as a sidechain in slot 46 (-sidechainslot=46 -testmainenforcer), each
+- three Flush validators on regtest as a sidechain in slot 46 (-sidechainslot=46 -testmainenforcer), each
   with its key in the genesis validator set (-posvalidators), following the mainchain through the enforcer's
   interface alone (-mainchaingrpc), as on eCash with a plain eCash node and bip300301_enforcer. Validator 0 is
-  starbase-app (unless --no-app), the others starbased;
+  flush-app (unless --no-app), the others flushd;
 - a miner that makes a mainchain block every --block-seconds (default 5); validator 0 asks for anchors (BMM).
 
 Then (unless --no-demo) it activates slot 46 (M1 and acks), deposits 100 ECX to validator 0 and 20 ECX to
-validator 1, registers the demo token STAR and opens a STAR/ECX pool, and has validator 1 swap ECX for STAR.
+validator 1, registers the demo token FLUX and opens a FLUX/ECX pool, and has validator 1 swap ECX for FLUX.
 
 Every process it starts has its pid in <dir>/pids; `stop` stops exactly those and waits for them. Ports:
 --base-port (default 49500) and the 22 after it, which must be free (not 49x54 nor 49660-49669).
-The programs: --starbase-bin (default: build/bin of this tree), --backbone-bin (default: $BACKBONE_BIN_DIR,
+The programs: --flush-bin (default: build/bin of this tree), --backbone-bin (default: $BACKBONE_BIN_DIR,
 else ../chains-ecash/build_node/bin next to this tree).
 """
 
@@ -190,7 +190,7 @@ def find_bin(path, name):
 
 
 def pubkeys():
-    """The x-only public keys of KEYS (starbase-util has no such command: computed here, BIP340)."""
+    """The x-only public keys of KEYS (flush-util has no such command: computed here, BIP340)."""
     p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
     n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
     g = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798, 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
@@ -221,21 +221,21 @@ def pubkeys():
 def start(args):
     d = Path(args.dir).expanduser()
     if d.exists() and read_pids(d) and any(pid_alive(pid) for pid in read_pids(d).values()):
-        sys.exit(f"a playground runs already in {d}: stop it first (starbase-playground.sh stop)")
+        sys.exit(f"a playground runs already in {d}: stop it first (flush-playground.sh stop)")
     if d.exists():
         shutil.rmtree(d)
     d.mkdir(parents=True)
     p = ports(args.base_port)
     check_ports(p)
-    sb = Path(args.starbase_bin)
+    sb = Path(args.flush_bin)
     bb = Path(args.backbone_bin)
-    starbased, starbase_app = find_bin(sb, "starbased"), sb / "starbase-app"
+    flushd, flush_app = find_bin(sb, "flushd"), sb / "flush-app"
     backboned = find_bin(bb, "backboned")
     if "-testecash" not in subprocess.run([backboned, "-help-debug"], capture_output=True, text=True).stdout:
         sys.exit(f"{backboned} has no eCash regtest mode (-testecash)")
-    use_app = not args.no_app and starbase_app.is_file() and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    use_app = not args.no_app and flush_app.is_file() and (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     t0 = time.time()
-    state = {"ports": p, "block_seconds": args.block_seconds, "app": bool(use_app), "starbase_bin": str(sb), "started": t0}
+    state = {"ports": p, "block_seconds": args.block_seconds, "app": bool(use_app), "flush_bin": str(sb), "started": t0}
     (d / STATE).write_text(json.dumps(state, indent=1))
 
     print(f"Playground in {d}, ports {args.base_port}-{args.base_port + 22}")
@@ -272,7 +272,7 @@ def start(args):
         nd.mkdir()
         (nd / "validator.key").write_text("# validator key (regtest playground only)\n" + KEYS[i] + "\n")
         # Its wallet "w" made beforehand, loaded at the start: the producer's share of the fees goes to it.
-        subprocess.run([str(sb / "starbase-wallet"), "-regtest", f"-datadir={nd}", "-wallet=w", "create"], check=True, capture_output=True)
+        subprocess.run([str(sb / "flush-wallet"), "-regtest", f"-datadir={nd}", "-wallet=w", "create"], check=True, capture_output=True)
         argv = common + [f"-datadir={nd}", f"-port={p[f'p2p{i}']}", f"-rpcport={p[f'rpc{i}']}", "-wallet=w",
                          f"-validatorkeyfile={nd / 'validator.key'}"]
         argv += [f"-addnode=127.0.0.1:{p[f'p2p{j}']}" for j in range(3) if j != i]
@@ -280,27 +280,27 @@ def start(args):
         if i == 0 and use_app:
             env = dict(os.environ)
             env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")  # WSLg
-            spawn(d, "starbase-app", [str(starbase_app)] + argv + [f"-webuiconfig={nd / 'starbase-app.json'}"], env=env)
+            spawn(d, "flush-app", [str(flush_app)] + argv + [f"-webuiconfig={nd / 'flush-app.json'}"], env=env)
         else:
-            spawn(d, f"starbased{i}", [str(starbased)] + argv)
+            spawn(d, f"flushd{i}", [str(flushd)] + argv)
     (d / STATE).write_text(json.dumps(state, indent=1))
     main_side, sides = nodes(state)
     for i in range(3):
         wait_rpc(Rpc(p[f"rpc{i}"]), f"validator {i}")
-    print(f"  3 Starbase validators (slot {SLOT}, through the enforcer's interface), RPC {p['rpc0']}, {p['rpc1']}, {p['rpc2']}"
-          + (" — validator 0 is starbase-app" if use_app else ""))
+    print(f"  3 Flush validators (slot {SLOT}, through the enforcer's interface), RPC {p['rpc0']}, {p['rpc1']}, {p['rpc2']}"
+          + (" — validator 0 is flush-app" if use_app else ""))
 
     spawn(d, "miner", [sys.executable, __file__, "_miner", "--dir", str(d)])
     print(f"  miner: a mainchain block every {args.block_seconds} s")
     if not args.no_demo:
         demo(d, state)
-    print(f"Ready in {time.time() - t0:.0f} s. Try: starbase-playground.sh status | withdraw-demo | cli 0 getbalance | stop")
+    print(f"Ready in {time.time() - t0:.0f} s. Try: flush-playground.sh status | withdraw-demo | cli 0 getbalance | stop")
 
 
 def demo(d, state):
     main, (n0, n1, n2) = nodes(state)
     print(f"Activating slot {SLOT} (M1, then acks of the next blocks)")
-    main.createsidechainproposal(SLOT, "Starbase", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
+    main.createsidechainproposal(SLOT, "Flush", "Tokens, assets and a DEX on a fast chain over eCash", "11" * 32, "22" * 20)
     wait_for(lambda: SLOT in [s["slot"] for s in main.listactivesidechains()], "the slot's activation", timeout=180)
     print("Deposits: 100 ECX to validator 0, 20 ECX to validator 1 (M5)")
     main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 100)
@@ -312,26 +312,26 @@ def demo(d, state):
     wait_for(lambda: n0.getbalance() >= 100 and n1.getbalance() >= 20, "the deposits", timeout=240)
     # Anchors (BMM tickets) asked for by validator 0 in every mainchain block.
     n0.setbmm(True, n0.getnewaddress(), True, Decimal("0.0001"))
-    print(f"  validator 0: {n0.getbalance()} ECX, validator 1: {n1.getbalance()} ECX (Starbase height {n0.getblockcount()})")
-    print("The demo token STAR: reserved, registered (1,000,000, 2 decimals), a STAR/ECX pool")
-    n0.reserveasset("STAR")
+    print(f"  validator 0: {n0.getbalance()} ECX, validator 1: {n1.getbalance()} ECX (Flush height {n0.getblockcount()})")
+    print("The demo token FLUX: reserved, registered (1,000,000, 2 decimals), a FLUX/ECX pool")
+    n0.reserveasset("FLUX")
     height = n0.getblockcount()
     wait_for(lambda: n0.getblockcount() >= height + 3, "two blocks for the reservation", timeout=120)
     for _ in range(60):
         try:
-            n0.registerasset("STAR", 1000000, 2, {"info": "The demo token of the Starbase playground"})
+            n0.registerasset("FLUX", 1000000, 2, {"info": "The demo token of the Flush playground"})
             break
         except RuntimeError as e:
             if "deep" not in str(e) and "wait" not in str(e).lower() and "reveal" not in str(e).lower():
                 raise
             time.sleep(2)
-    wait_for(lambda: holding(n0, "STAR") > 0, "STAR in the wallet", timeout=120)
-    n0.addliquidity("STAR", 100000, "ECX", 10)
+    wait_for(lambda: holding(n0, "FLUX") > 0, "FLUX in the wallet", timeout=120)
+    n0.addliquidity("FLUX", 100000, "ECX", 10)
     wait_for(lambda: len(n0.listpools()) == 1, "the pool", timeout=180)
-    quote = n1.quoteswap("ECX", "1", "STAR")
-    n1.swapasset("ECX", "1", "STAR")
-    wait_for(lambda: holding(n1, "STAR") > 0, "validator 1's swap", timeout=180)
-    print(f"  validator 1 swapped 1 ECX for {quote['amount_out']} STAR")
+    quote = n1.quoteswap("ECX", "1", "FLUX")
+    n1.swapasset("ECX", "1", "FLUX")
+    wait_for(lambda: holding(n1, "FLUX") > 0, "validator 1's swap", timeout=180)
+    print(f"  validator 1 swapped 1 ECX for {quote['amount_out']} FLUX")
 
 
 def holding(node, label):
@@ -401,7 +401,7 @@ def stop(args):
             os.kill(pid, signal.SIGTERM)
         elif state is not None:
             try:
-                port = state["ports"]["main_rpc"] if name == "backboned" else state["ports"][f"rpc{0 if name == 'starbase-app' else int(name[-1])}"]
+                port = state["ports"]["main_rpc"] if name == "backboned" else state["ports"][f"rpc{0 if name == 'flush-app' else int(name[-1])}"]
                 Rpc(port).stop()
             except (OSError, RuntimeError, urllib.error.URLError, ValueError):
                 os.kill(pid, signal.SIGTERM)
@@ -450,7 +450,7 @@ def withdraw_demo(args):
     print(f"1. Request: validator 0 withdraws 2 ECX to {to} on eCash (fee 0.01 for eCash miners)")
     w = n0.createwithdrawal(to, 2, Decimal("0.01"))
     wait_for(lambda: n0.gettransaction(w["txid"])["confirmations"] > 0, "the withdrawal in a block", timeout=120)
-    print(f"   in a Starbase block ({time.time() - t0:.0f} s)")
+    print(f"   in a Flush block ({time.time() - t0:.0f} s)")
     seen = set()
     end = time.time() + 900
     paid = False
@@ -482,20 +482,20 @@ def withdraw_demo(args):
         sys.exit("the bundle was not paid in 15 minutes: see status")
     wait_for(lambda: main.getreceivedbyaddress(to, 0) >= 2, "the payout", timeout=120)
     print(f"4. Succeeded: {to} received {main.getreceivedbyaddress(to, 0)} ECX on eCash (M6) — {time.time() - t0:.0f} s in all")
-    wait_for(lambda: n0.listwithdrawals() == [], "the withdrawal closed on Starbase", timeout=120)
-    print("   closed on Starbase")
+    wait_for(lambda: n0.listwithdrawals() == [], "the withdrawal closed on Flush", timeout=120)
+    print("   closed on Flush")
 
 
 def main():
     default_bb = os.environ.get("BACKBONE_BIN_DIR", str(SRCDIR.parent / "chains-ecash" / "build_node" / "bin"))
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dir", default=os.environ.get("STARBASE_PLAYGROUND", "~/.starbase-playground"))
+    parser.add_argument("--dir", default=os.environ.get("FLUSH_PLAYGROUND", "~/.flush-playground"))
     sub = parser.add_subparsers(dest="command", required=True)
     s = sub.add_parser("start")
     s.add_argument("--block-seconds", type=float, default=5)
     s.add_argument("--slot-seconds", type=int, default=2, help="seconds of a slot of the blocks of stake (default 2; 15 on eCash)")
     s.add_argument("--base-port", type=int, default=49500)
-    s.add_argument("--starbase-bin", default=str(SRCDIR / "build" / "bin"))
+    s.add_argument("--flush-bin", default=str(SRCDIR / "build" / "bin"))
     s.add_argument("--backbone-bin", default=default_bb)
     s.add_argument("--no-app", action="store_true")
     s.add_argument("--no-demo", action="store_true")

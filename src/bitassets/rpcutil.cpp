@@ -168,7 +168,7 @@ AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<A
 {
     const std::string text{value.get_str()};
     if (text.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "The asset is empty");
-    // The coin of the chain: eCash's, ECX (Starbase), or by the name Layers gave it, CHN.
+    // The coin of the chain: eCash's, ECX (Flush), or by the name Layers gave it, CHN.
     if (ToUpper(text) == "ECX" || ToUpper(text) == "CHN") return CHN;
     if (text.size() == 66 && text.starts_with("0x")) {
         if (const auto hash{uint256::FromHex(text.substr(2))}) return *hash;

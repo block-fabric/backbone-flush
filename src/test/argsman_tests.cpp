@@ -740,7 +740,7 @@ BOOST_AUTO_TEST_CASE(util_GetChainTypeString)
     const char* testnetconf = "signet=1\nregtest=0\n[signet]\nregtest=1";
     std::string error;
 
-    // Starbase: without a network, its default, ecashbeta.
+    // Flush: without a network, its default, ecashbeta.
     BOOST_CHECK(test_args.ParseParameters(0, argv_signet, error));
     BOOST_CHECK_EQUAL(test_args.GetChainTypeString(), "ecashbeta");
 

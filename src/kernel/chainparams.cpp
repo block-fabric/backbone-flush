@@ -826,19 +826,19 @@ public:
         consensus.sidechain.main_behind_margin = 2;
         switch (chain) {
         case ChainType::ECASH:
-            // Starbase on eCash: slot 46 (doc/ecash-sidechains.md). Its own identity on each eCash network (first
-            // block, message start "sbs" + 0x21/0x22/0x23, address prefixes sbx, bsbx, tsbx); the ports of Layers on
-            // eCash, which Starbase is.
-            MakeSidechain({.slot = 46, .genesis_message = "Starbase: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1792540800,
-                           .message_start = {0x73, 0x62, 0x73, 0x21}, .default_port = 8255, .bech32_hrp = "sbx"});
+            // Flush on eCash: slot 46 (doc/ecash-sidechains.md). Its own identity on each eCash network (first
+            // block, message start "flx" + 0x21/0x22/0x23, address prefixes flx, bflx, tflx); the ports of Layers on
+            // eCash, which Flush (formerly Starbase) is.
+            MakeSidechain({.slot = 46, .genesis_message = "Flush: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1792540800,
+                           .message_start = {0x66, 0x6c, 0x78, 0x21}, .default_port = 8255, .bech32_hrp = "flx"});
             break;
         case ChainType::ECASH_BETANET:
-            MakeSidechain({.slot = 46, .genesis_message = "Starbase on eCash betanet 21/Oct/2026", .genesis_time = 1792540800,
-                           .message_start = {0x73, 0x62, 0x73, 0x22}, .default_port = 38255, .bech32_hrp = "bsbx"});
+            MakeSidechain({.slot = 46, .genesis_message = "Flush on eCash betanet 21/Oct/2026", .genesis_time = 1792540800,
+                           .message_start = {0x66, 0x6c, 0x78, 0x22}, .default_port = 38255, .bech32_hrp = "bflx"});
             break;
         case ChainType::ECASH_TESTNET:
-            MakeSidechain({.slot = 46, .genesis_message = "Starbase on the eCash test network 21/Oct/2026", .genesis_time = 1792540800,
-                           .message_start = {0x73, 0x62, 0x73, 0x23}, .default_port = 48255, .bech32_hrp = "tsbx"});
+            MakeSidechain({.slot = 46, .genesis_message = "Flush on the eCash test network 21/Oct/2026", .genesis_time = 1792540800,
+                           .message_start = {0x66, 0x6c, 0x78, 0x23}, .default_port = 48255, .bech32_hrp = "tflx"});
             break;
         default:
             assert(false);
