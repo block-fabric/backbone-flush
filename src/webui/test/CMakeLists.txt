@@ -24,6 +24,10 @@ add_executable(test_chains-app
   windowframe_tests.cpp
   $<$<BOOL:${ENABLE_WALLET}>:walletapi_tests.cpp>
 )
+# The links the public API builds, read by the app's parser (both in the build).
+if(WITH_PUBLICAPI AND ENABLE_WALLET)
+  target_sources(test_chains-app PRIVATE publicapi_links_tests.cpp)
+endif()
 # The tests of the host side of the chain's own pages (local.cpp), when it has some: test/local_tests.cpp.
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/local_tests.cpp)
   target_sources(test_chains-app PRIVATE local_tests.cpp)

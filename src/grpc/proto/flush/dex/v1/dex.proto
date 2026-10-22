@@ -1,0 +1,899 @@
+// Copyright (c) 2026 The Chains developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+// The public, read-only API of Flush's DEX (doc/public-api.md), served by flushd itself (-publicapi): over gRPC
+// (HTTP/2), gRPC-Web and the Connect protocol (JSON or binary, GET for the reads), and as plain REST/JSON under
+// /api/v1 (the same messages, printed with these field names and every field present: what flush.markets reads).
+//
+// Conventions:
+//  - Assets by id: 64 lowercase hex digits; ECX, the chain's coin, has none ("" here, null in REST).
+//  - Display amounts are doubles in whole units (ECX, tokens); exact amounts are `*_units` strings of integers in
+//    the asset's smallest unit (satoshis for ECX). Builds and min-receive amounts are exact.
+//  - Heights are Flush block heights; times Unix seconds.
+//  - Lists page with an opaque `cursor` (from `next_cursor`, absent at the end).
+//  - Nothing here reads or writes a wallet. Text written by creators (names, descriptions, links) is plain data:
+//    links are https only (others dropped), as the site requires.
+syntax = "proto3";
+
+package flush.dex.v1;
+
+// ---------------------------------------------------------------------------------------------------------
+// The chain
+
+message GetStatusRequest {}
+
+message FlushTip {
+  uint32 height = 1;
+  uint32 time = 2;
+  string hash = 3;
+  // Seconds between blocks the chain aims at.
+  uint32 block_target = 4;
+}
+
+message EcashTip {
+  uint32 height = 1;
+  // The mainchain block's time, if this node knows it (0 otherwise).
+  uint32 time = 2;
+  string hash = 3;
+}
+
+message ChainStatus {
+  // ecash, ecashbeta, ecashtest or regtest.
+  string network = 1;
+  FlushTip flush = 2;
+  // The last eCash block this node has on record; null before the first.
+  EcashTip ecash = 3;
+  uint32 slot = 4;
+  bool slot_active = 5;
+  // ECX in slot 46's escrow on eCash (its CTIP), as the mainchain node last said; null if not known.
+  optional double escrow_ecx = 6;
+  uint32 launches_today = 7;
+  // Blocks the indexes are behind the tip (0: they are derived with each block).
+  uint32 indexer_lag = 8;
+  uint32 updated = 9;
+  // Whether this node keeps the DEX's market index (-dexindex): trades, candles, holders.
+  bool market_index = 10;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Fees and the launches' rules
+
+message FeeShare {
+  // Who gets it: creator, pool (the liquidity it graduates into), liquidity_providers, validators, bidder, treasury.
+  string to = 1;
+  // In basis points of the fee.
+  double bps = 2;
+}
+
+message Fees {
+  // The fee of a trade on a launch curve, in basis points of its ECX side.
+  optional double trade_bps = 1;
+  // How the launch fee is shared (its creator's part, the rest into the pool at graduation).
+  repeated FeeShare split = 2;
+  // The fee of a swap in a pool of the kind AddLiquidity makes (constant product).
+  double pool_fee_bps = 3;
+  // What creating a launch costs beyond the network fee (none on this chain: 0).
+  optional double launch_fee_ecx = 4;
+}
+
+message CurveParams {
+  double supply = 1;
+  double sale_supply = 2;
+  double pool_supply = 3;
+  double virtual_ecx = 4;
+  double virtual_tokens = 5;
+  double graduation_ecx = 6;
+  // Token decimals (6).
+  uint32 decimals = 7;
+  // The most a creator's allocation is, in percent of the supply.
+  double max_allocation_percent = 8;
+}
+
+message GetStatsRequest {}
+
+message Stats {
+  uint32 launches = 1;
+  uint32 live = 2;
+  uint32 graduated = 3;
+  double volume_24h = 4;
+  double volume_total = 5;
+  double graduation_ecx = 6;
+  Fees fees = 7;
+  CurveParams curve = 8;
+  // ECX the curves hold now plus what those graduated raised.
+  double raised_total = 9;
+  // Pools (every kind), and those with ECX someone provides for.
+  uint32 pools = 10;
+  double liquidity_ecx = 11;
+}
+
+message GetFeesRequest {}
+
+message PoolKindInfo {
+  // constant_product, stable, weighted, concentrated (made by CreatePool); launch and book are made otherwise.
+  string curve = 1;
+  // Fee tiers it is made with, in millionths of what goes in.
+  repeated uint32 fee_tiers_ppm = 2;
+}
+
+message FeeSchedule {
+  // The pools' fee tiers (millionths: 100, 500, 3000, 10000) and the default pool's fee.
+  repeated uint32 pool_fee_tiers_ppm = 1;
+  uint32 default_pool_fee_ppm = 2;
+  repeated PoolKindInfo kinds = 3;
+  // A dynamic fee's bounds, if pools may have one.
+  bool dynamic_fees = 4;
+  // Launch curves: the fee (millionths of the ECX side) and how it is shared.
+  uint32 launch_fee_ppm = 5;
+  repeated FeeShare launch_split = 6;
+  double launch_graduation_ecx = 7;
+  // The protocol's (the treasury's) part of every pool fee, in millionths of it.
+  uint32 protocol_fee_share_ppm = 8;
+  // How the network fees of a block are shared (the PoS fee split): the BMM bidder's share now, in basis points,
+  // the rest to the validators; null before the split's height.
+  optional double network_bidder_bps = 9;
+  // The relay fee of this node's mempool, in ECX per kvB (what broadcast transactions must pay at least).
+  double min_relay_fee_ecx_per_kvb = 10;
+  // How every swap fee is split (millionths of the fee as bps): liquidity_providers, security (the BMM bidder and the
+  // validators, with the block's fees), treasury. Order books charge none.
+  repeated FeeShare swap_split = 11;
+}
+
+message GetTreasuryRequest {}
+
+message TreasuryInflow {
+  uint32 height = 1;
+  uint32 time = 2;
+  // The asset (ECX: the chain's coin) and what came in: the protocol's parts of swap fees and of launch fees, and the
+  // security parts of swap fees paid in an asset (held: no coinbase pays them).
+  string asset = 5;
+  double amount_ecx = 3;
+  string source = 4;
+  double from_swaps = 6;
+  double from_launches = 7;
+  double security_held = 8;
+}
+
+message TreasuryBalance {
+  string asset = 1;
+  optional string asset_id = 2;
+  double balance = 3;
+  double from_swaps = 4;
+  double from_launches = 5;
+  double security_held = 6;
+}
+
+message Treasury {
+  // Whether this chain's rules have a treasury (they do: held by the chain itself, no key, no output).
+  bool available = 1;
+  string reason = 2;
+  // None: the treasury is no address (the chain holds it).
+  optional string address = 3;
+  // ECX held, and what came in over the last 24 hours (the market index).
+  double balance_ecx = 4;
+  double inflow_24h_ecx = 5;
+  repeated TreasuryInflow inflows = 6;
+  repeated TreasuryBalance balances = 7;
+  // The security parts paid with the blocks' fees (to the BMM bidder and the validators), in all.
+  double security_paid_ecx = 8;
+  // Whether a rule spends from it: false (none yet; a change of the rules would add one).
+  bool spending_rule = 9;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Launches
+
+message PoolRef {
+  string pool = 1;
+  string asset_a = 2;
+  string asset_b = 3;
+}
+
+message LaunchLink {
+  string label = 1;
+  string url = 2;
+}
+
+// LaunchSummary and LaunchDetail share their field numbers (a detail is a summary and more).
+message LaunchSummary {
+  string id = 1;
+  string ticker = 2;
+  string name = 3;
+  optional string logo = 4;
+  string creator = 5;
+  uint32 created_height = 6;
+  uint32 created_time = 7;
+  // curve, graduating (its curve reached the end in the last block), graduated.
+  string state = 8;
+  double raised_ecx = 9;
+  double sold = 10;
+  double price_ecx = 11;
+  double mcap_ecx = 12;
+  double volume_24h = 13;
+  uint32 trades_24h = 14;
+  uint32 holders = 15;
+  optional double change_24h = 16;
+  optional uint32 graduated_height = 17;
+  PoolRef pool = 18;
+  // Percent of the graduation amount raised.
+  double progress = 19;
+  // The curve's pool (before graduation) or the graduated pool.
+  string pool_id = 20;
+  double volume_total = 21;
+  uint32 trades_total = 22;
+}
+
+message LaunchDetail {
+  string id = 1;
+  string ticker = 2;
+  string name = 3;
+  optional string logo = 4;
+  string creator = 5;
+  uint32 created_height = 6;
+  uint32 created_time = 7;
+  string state = 8;
+  double raised_ecx = 9;
+  double sold = 10;
+  double price_ecx = 11;
+  double mcap_ecx = 12;
+  double volume_24h = 13;
+  uint32 trades_24h = 14;
+  uint32 holders = 15;
+  optional double change_24h = 16;
+  optional uint32 graduated_height = 17;
+  PoolRef pool = 18;
+  double progress = 19;
+  string pool_id = 20;
+  double volume_total = 21;
+  uint32 trades_total = 22;
+
+  string description = 30;
+  repeated LaunchLink links = 31;
+  CurveParams curve = 32;
+  optional double trade_fee_bps = 33;
+  string create_txid = 34;
+  double first_buy_ecx = 35;
+  double creator_share_percent = 36;
+  // The other parts of its fee (percent of it): the treasury's and the chain's security; the rest goes into the pool.
+  double protocol_share_percent = 44;
+  double security_share_percent = 45;
+  double creator_fees_owed_ecx = 37;
+  double creator_fees_paid_ecx = 38;
+  double allocation_percent = 39;
+  bool allocation_claimed = 40;
+  double min_buy_ecx = 41;
+  double max_buy_ecx = 42;
+  double curve_tokens_left = 43;
+}
+
+message ListLaunchesRequest {
+  // all (default), new (on the curve, made in the last day), near (on the curve, >= 70 % raised), graduated, curve.
+  string filter = 1;
+  // newest (default; progress for near), oldest, progress, mcap, volume (24 h), trades (24 h).
+  string sort = 2;
+  // Text in the ticker or the name, or the start of an asset id.
+  string q = 3;
+  string cursor = 4;
+  // 1 to 100 (default 50).
+  uint32 limit = 5;
+}
+
+message LaunchPage {
+  repeated LaunchSummary items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+}
+
+message GetLaunchRequest {
+  // Its ticker (any case) or its asset id.
+  string id = 1;
+}
+
+message Trade {
+  string txid = 1;
+  uint32 height = 2;
+  uint32 time = 3;
+  // buy or sell (of the token, against ECX); for a pair without ECX: of asset_b, against asset_a.
+  string side = 4;
+  double ecx = 5;
+  double tokens = 6;
+  double price_ecx = 7;
+  // Who got what came out (the result output's or the ECX payout's address).
+  string address = 8;
+  // curve, pool, book.
+  string venue = 9;
+  string pool = 10;
+  string asset_in = 11;
+  string asset_out = 12;
+  string amount_in_units = 13;
+  string amount_out_units = 14;
+  // Pools the order went through (a route: more than one; amounts are the order's own, end to end).
+  uint32 hops = 15;
+}
+
+message TradePage {
+  repeated Trade items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+}
+
+message ListTradesRequest {
+  // A launch (ListLaunchTrades: ticker or id) or a pool (ListPoolTrades: its id).
+  string id = 1;
+  // Trades of blocks below this height only.
+  uint32 before = 2;
+  string cursor = 3;
+  // 1 to 100 (default 50).
+  uint32 limit = 4;
+}
+
+message Candle {
+  uint32 t = 1;
+  double o = 2;
+  double h = 3;
+  double l = 4;
+  double c = 5;
+  // Volume in ECX (in asset_a for a pair without ECX).
+  double v = 6;
+  uint32 n = 7;
+}
+
+message GetCandlesRequest {
+  string id = 1;
+  // 5m, 1h, 4h, 1d.
+  string interval = 2;
+  uint32 from = 3;
+  uint32 to = 4;
+}
+
+message CandleList {
+  repeated Candle items = 1;
+  string interval = 2;
+}
+
+message Holder {
+  string address = 1;
+  double amount = 2;
+  double share = 3;
+  // creator, curve, pool, or null.
+  optional string tag = 4;
+}
+
+message ListHoldersRequest {
+  string id = 1;
+  string cursor = 2;
+  // 1 to 100 (default 20).
+  uint32 limit = 3;
+}
+
+message HolderPage {
+  repeated Holder items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+}
+
+message QuoteLaunchRequest {
+  string id = 1;
+  // buy (ECX in) or sell (tokens in).
+  string side = 2;
+  // Decimal: ECX for a buy (fee included), tokens for a sale.
+  string amount = 3;
+  // The floor below the quote, in basis points (default 100, at most 5000).
+  uint32 slippage_bps = 4;
+}
+
+message LaunchQuote {
+  string side = 1;
+  double ecx = 2;
+  double tokens = 3;
+  double fee_ecx = 4;
+  double avg_price = 5;
+  double price_after = 6;
+  double impact = 7;
+  double raised_after = 8;
+  double refund_ecx = 9;
+  string amount_in_units = 10;
+  string amount_out_units = 11;
+  // What the order asks at least (amount_out less the slippage, rounded down): the hand-off's floor.
+  string min_out_units = 12;
+  double min_out = 13;
+  uint32 slippage_bps = 14;
+  bool graduates = 15;
+  double progress_after = 16;
+  double spot_price = 17;
+  // The tip the quote is of.
+  uint32 height = 18;
+  string id = 19;
+  string ticker = 20;
+}
+
+message GetLogoRequest {
+  string id = 1;
+}
+
+// A logo's bytes (REST: served as the image itself, after its magic bytes are checked).
+message Logo {
+  bytes data = 1;
+  // image/png or image/jpeg.
+  string content_type = 2;
+  string sha256 = 3;
+}
+
+message GetLaunchStatsRequest {}
+
+message LaunchStats {
+  uint32 launches = 1;
+  uint32 on_curve = 2;
+  uint32 graduated = 3;
+  double volume_ecx = 4;
+  double raised_ecx = 5;
+  double graduation_ecx = 6;
+  double fee_percent = 7;
+  double creator_share_percent = 8;
+  CurveParams curve = 9;
+  bool active = 10;
+  uint32 launches_24h = 11;
+  uint32 graduated_24h = 12;
+  double volume_24h = 13;
+}
+
+message GetLaunchLogRequest {
+  uint32 from_height = 1;
+  // At most 1000 blocks (default from_height).
+  uint32 to_height = 2;
+}
+
+message LaunchLogRow {
+  uint32 height = 1;
+  string id = 2;
+  string ticker = 3;
+  bool created = 4;
+  bool graduated = 5;
+  uint32 orders = 6;
+  double coin_in = 7;
+  double coin_out = 8;
+  double tokens_in = 9;
+  double tokens_out = 10;
+  double fees = 11;
+  double reserve_coin = 12;
+  double reserve_tokens = 13;
+}
+
+message LaunchLog {
+  repeated LaunchLogRow items = 1;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Pools, positions, books, the market index
+
+message ConcentratedState {
+  string sqrt_price_x96 = 1;
+  int32 tick = 2;
+  string liquidity = 3;
+  int32 tick_spacing = 4;
+}
+
+message Pool {
+  string pool = 1;
+  string asset_a = 2;
+  string asset_b = 3;
+  optional string asset_a_id = 4;
+  optional string asset_b_id = 5;
+  double reserve_a = 6;
+  double reserve_b = 7;
+  optional double price = 8;
+  double shares = 9;
+  double volume_a = 10;
+  double volume_b = 11;
+  uint32 swaps = 12;
+  uint32 created = 13;
+  bool abandoned = 14;
+  string name = 15;
+  optional string logo = 16;
+  double liquidity_ecx = 17;
+  double volume_24h = 18;
+  optional double change_24h = 19;
+  // The launch it graduated from (its ticker), or null for a pool made by hand.
+  optional string launch = 20;
+  // Its shares are nobody's (a graduated launch's pool): its liquidity stays for good.
+  bool locked = 21;
+
+  // Its kind: constant_product, stable, weighted, concentrated, launch, book.
+  string curve = 30;
+  uint32 fee_ppm = 31;
+  double fee_bps = 32;
+  optional uint32 amp = 33;
+  optional uint32 weight_a = 34;
+  optional uint32 weight_b = 35;
+  bool default_kind = 36;
+  bool dynamic_fee = 37;
+  optional double fee_now_bps = 38;
+  ConcentratedState concentrated = 39;
+  // The market index's measures (searchpools): ECX held, ECX traded in its window, the change of price over it.
+  double depth_ecx = 40;
+  double volume_window_ecx = 41;
+  double price_change_window = 42;
+  uint32 last_activity = 43;
+  string shares_units = 44;
+  string reserve_a_units = 45;
+  string reserve_b_units = 46;
+}
+
+message ListPoolsRequest {
+  // liquidity (default), volume, change, newest.
+  string sort = 1;
+  string q = 2;
+  // Only pools of this kind (constant_product, stable, weighted, concentrated, book, launch); default all but launch curves.
+  string kind = 3;
+  // Only this fee tier, in millionths (100, 500, 3000, 10000).
+  uint32 fee_ppm = 4;
+  bool ecx_only = 5;
+  bool include_abandoned = 6;
+  string cursor = 7;
+  // 1 to 200 (default 50).
+  uint32 limit = 8;
+}
+
+message PoolPage {
+  repeated Pool items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+  // The search stopped at its budget: next_cursor goes on.
+  bool partial = 4;
+}
+
+message GetPoolRequest {
+  // A pool's id; or the two assets (tickers, ids, ECX) of the default pool of the pair.
+  string pool = 1;
+  string asset_a = 2;
+  string asset_b = 3;
+}
+
+message ListPoolTicksRequest {
+  string pool = 1;
+  // 1 to 500 (default 200).
+  uint32 limit = 2;
+}
+
+message Tick {
+  int32 tick = 1;
+  // asset_b per whole asset_a at the tick.
+  double price = 2;
+  string liquidity_net = 3;
+  string liquidity_gross = 4;
+}
+
+message PoolTicks {
+  string pool = 1;
+  int32 tick = 2;
+  string sqrt_price_x96 = 3;
+  string liquidity = 4;
+  int32 tick_spacing = 5;
+  repeated Tick items = 6;
+}
+
+message GetPositionRequest {
+  string id = 1;
+}
+
+message Position {
+  string id = 1;
+  string pool = 2;
+  int32 tick_lower = 3;
+  int32 tick_upper = 4;
+  double price_lower = 5;
+  double price_upper = 6;
+  string liquidity = 7;
+  double amount_a = 8;
+  double amount_b = 9;
+  double fees_a = 10;
+  double fees_b = 11;
+  bool in_range = 12;
+  string txid = 13;
+  uint32 height = 14;
+  string asset_a = 15;
+  string asset_b = 16;
+}
+
+message GetBookRequest {
+  // The asset sold by asks (the base), and what it is priced in (default ECX).
+  string base = 1;
+  string quote = 2;
+  // Price levels a side (1 to 100, default 20).
+  uint32 depth = 3;
+}
+
+message BookLevel {
+  double price = 1;
+  double amount = 2;
+  uint32 orders = 3;
+  double total = 4;
+}
+
+message Book {
+  string book = 1;
+  string base = 2;
+  string quote = 3;
+  repeated BookLevel asks = 4;
+  repeated BookLevel bids = 5;
+  optional double best_ask = 6;
+  optional double best_bid = 7;
+  optional double spread = 8;
+  uint32 ask_orders = 9;
+  uint32 bid_orders = 10;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Assets and addresses
+
+message GetTickerRequest {
+  string ticker = 1;
+}
+
+message TickerAvailability {
+  string ticker = 1;
+  bool available = 2;
+  // Why not: invalid, taken, retired-in-use...
+  string reason = 3;
+}
+
+message GetHoldingsRequest {
+  string address = 1;
+}
+
+message Holding {
+  string ticker = 1;
+  double amount = 2;
+  double value_ecx = 3;
+  string asset_id = 4;
+  // asset, lp, position, order.
+  string kind = 5;
+  string amount_units = 6;
+}
+
+message Holdings {
+  repeated Holding items = 1;
+  string address = 2;
+}
+
+message GetVerificationsRequest {
+  // Assets (tickers or ids, 1 to 50) and the curators the client trusts (oracle ids or keys, 1 to 20): verification
+  // is per curator list, the API keeps none of its own.
+  repeated string assets = 1;
+  repeated string curators = 2;
+}
+
+message CuratorWord {
+  string curator = 1;
+  string name = 2;
+  bool verified = 3;
+  uint32 round = 4;
+  optional uint32 height = 5;
+}
+
+message Verification {
+  string asset = 1;
+  bool verified = 2;
+  repeated CuratorWord curators = 3;
+}
+
+message Verifications {
+  repeated Verification items = 1;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Quotes: the node's own (the same code as the app's quoteswap, getswapquote, quoteroute, quotelaunch,
+// quotepoolliquidity, previewposition), each as the only order of its block would get it.
+
+message QuoteSwapRequest {
+  string from = 1;
+  string to = 2;
+  // Decimal, in `from`.
+  string amount = 3;
+  uint32 slippage_bps = 4;
+  // Most pools on a route, 0 to 4 (default 3; 0: the pair's own pools only).
+  uint32 max_hops = 5;
+}
+
+message Hop {
+  string pool = 1;
+  string curve = 2;
+  double fee_bps = 3;
+  string asset_in = 4;
+  string asset_out = 5;
+  double amount_out = 6;
+}
+
+message SwapOption {
+  // pool (one pool of the pair: a pool of any kind, or the pair's book) or route.
+  string venue = 1;
+  repeated string pools = 2;
+  // Asset ids of the path ("" for ECX), and their tickers.
+  repeated string path_ids = 3;
+  repeated string path = 4;
+  double amount_out = 5;
+  string amount_out_units = 6;
+  double price = 7;
+  double price_impact = 8;
+  repeated Hop hops = 9;
+  bool default_pools = 10;
+}
+
+message SwapQuote {
+  string from = 1;
+  string to = 2;
+  string from_id = 3;
+  string to_id = 4;
+  double amount_in = 5;
+  string amount_in_units = 6;
+  // The best option's.
+  double amount_out = 7;
+  string amount_out_units = 8;
+  string min_out_units = 9;
+  double min_out = 10;
+  uint32 slippage_bps = 11;
+  SwapOption best = 12;
+  repeated SwapOption options = 13;
+  uint32 height = 14;
+}
+
+message QuoteLiquidityRequest {
+  string pool = 1;
+  // deposit (amount_a and/or amount_b, decimals of the pool's asset_a/asset_b) or withdraw (shares; `only`: a or b
+  // to take one side alone).
+  string action = 2;
+  string amount_a = 3;
+  string amount_b = 4;
+  string shares = 5;
+  string only = 6;
+  uint32 slippage_bps = 7;
+}
+
+message LiquidityQuote {
+  string pool = 1;
+  string action = 2;
+  string asset_a = 3;
+  string asset_b = 4;
+  double amount_a = 5;
+  double amount_b = 6;
+  string amount_a_units = 7;
+  string amount_b_units = 8;
+  double shares = 9;
+  string shares_units = 10;
+  // The floors the action asks (shares for a deposit, each asset for a withdrawal).
+  string min_shares_units = 11;
+  string min_a_units = 12;
+  string min_b_units = 13;
+  double share_of_pool = 14;
+  uint32 slippage_bps = 15;
+  uint32 height = 16;
+}
+
+message QuotePositionRequest {
+  string pool = 1;
+  double price_lower = 2;
+  double price_upper = 3;
+  string amount_a = 4;
+  string amount_b = 5;
+}
+
+message PositionQuote {
+  string pool = 1;
+  int32 tick_lower = 2;
+  int32 tick_upper = 3;
+  double price_lower = 4;
+  double price_upper = 5;
+  string liquidity = 6;
+  double amount_a = 7;
+  double amount_b = 8;
+  string amount_a_units = 9;
+  string amount_b_units = 10;
+  bool in_range = 11;
+  uint32 height = 12;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The write path: builds (unsigned, fully specified actions for the Flush app or a wallet extension) and the
+// broadcast of transactions signed elsewhere. The server holds no key and signs nothing.
+
+message BuildActionRequest {
+  // buy, sell, swap, deposit, withdraw, launch.
+  string verb = 1;
+  // buy, sell: the launch (ticker or id).
+  string launch = 2;
+  // buy: ECX to pay (fee included); sell: tokens; swap: what goes in; decimal.
+  string amount = 3;
+  // swap: the assets (tickers, ids or ECX).
+  string from = 4;
+  string to = 5;
+  // deposit, withdraw: the pool.
+  string pool = 6;
+  string amount_a = 7;
+  string amount_b = 8;
+  string shares = 9;
+  string only = 10;
+  uint32 slippage_bps = 11;
+  uint32 max_hops = 12;
+  // How long the action stays good, in seconds (60 to 3600, default 600).
+  uint32 expires_in = 13;
+  // launch: the request (ticker, display name, description, https links, logo hash, first buy).
+  string ticker = 14;
+  string name = 15;
+  string description = 16;
+  repeated string links = 17;
+  string logo_sha256 = 18;
+  string first_buy_ecx = 19;
+}
+
+message BuiltAction {
+  string verb = 1;
+  string network = 2;
+  // The flush: URI (doc/public-api.md; flush.markets docs/uri.md) for the app, a link or a QR code.
+  string uri = 3;
+  // The same action as canonical JSON (keys sorted, no spaces, amounts as decimal strings): what a wallet
+  // extension signs for, its hash shown by the wallet beside the action.
+  string payload = 4;
+  // SHA-256 of "flush-action/v1\n" and the payload, hex; and its first 8 digits, the check code the app shows.
+  string payload_hash = 5;
+  string check_code = 6;
+  uint32 expires = 7;
+  uint32 height = 8;
+  // A sentence of what it does, for the page.
+  string summary = 9;
+  // The quote it was built from (one of these).
+  LaunchQuote launch_quote = 10;
+  SwapQuote swap_quote = 11;
+  LiquidityQuote liquidity_quote = 12;
+  // Whether the Flush app's links take this verb today (buy, sell, swap through one pool, launch); the others (route,
+  // deposit, withdraw) are built for wallet extensions and later apps, which the current app refuses (it fails closed).
+  bool app_ready = 13;
+}
+
+message BroadcastRequest {
+  // The signed transaction, hex.
+  string hex = 1;
+}
+
+message BroadcastReply {
+  string txid = 1;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+
+service DexService {
+  rpc GetStatus(GetStatusRequest) returns (ChainStatus) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetStats(GetStatsRequest) returns (Stats) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetFees(GetFeesRequest) returns (FeeSchedule) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetTreasury(GetTreasuryRequest) returns (Treasury) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  rpc ListLaunches(ListLaunchesRequest) returns (LaunchPage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetLaunch(GetLaunchRequest) returns (LaunchDetail) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListLaunchTrades(ListTradesRequest) returns (TradePage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetLaunchCandles(GetCandlesRequest) returns (CandleList) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListLaunchHolders(ListHoldersRequest) returns (HolderPage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc QuoteLaunch(QuoteLaunchRequest) returns (LaunchQuote) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetLaunchLogo(GetLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetLaunchStats(GetLaunchStatsRequest) returns (LaunchStats) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetLaunchLog(GetLaunchLogRequest) returns (LaunchLog) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  rpc ListPools(ListPoolsRequest) returns (PoolPage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetPool(GetPoolRequest) returns (Pool) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListPoolTrades(ListTradesRequest) returns (TradePage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetPoolCandles(GetCandlesRequest) returns (CandleList) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListPoolTicks(ListPoolTicksRequest) returns (PoolTicks) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetPosition(GetPositionRequest) returns (Position) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetBook(GetBookRequest) returns (Book) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  rpc GetTicker(GetTickerRequest) returns (TickerAvailability) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetHoldings(GetHoldingsRequest) returns (Holdings) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetVerifications(GetVerificationsRequest) returns (Verifications) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetAssetLogo(GetLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  rpc QuoteSwap(QuoteSwapRequest) returns (SwapQuote) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc QuoteLiquidity(QuoteLiquidityRequest) returns (LiquidityQuote) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc QuotePosition(QuotePositionRequest) returns (PositionQuote) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc BuildAction(BuildActionRequest) returns (BuiltAction) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  rpc Broadcast(BroadcastRequest) returns (BroadcastReply);
+}

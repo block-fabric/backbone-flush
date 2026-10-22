@@ -5,6 +5,7 @@
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
 #include <bitassets/state.h>
+#include <bitassets/market.h>
 
 #include <bitassets/clmath.h>
 #include <bitassets/curves.h>
@@ -3012,6 +3013,8 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         std::map<uint256, std::map<int32_t, ClTick>> ticks;
         //! Books: their resting orders the pass changed.
         std::map<uint256, std::map<uint256, BookOrder>> books;
+        //! For the market index (bitassets/market.h, not a rule): what went into each order's first hop, then what came out of each.
+        std::vector<std::vector<uint64_t>> hops;
         //! The security and protocol parts of the swap fees the pass took out of the pools, by asset.
         std::map<AssetId, FeeParts> parts;
     };
@@ -3036,9 +3039,13 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     // in the order of their ids; what each gets (nullopt: it misses).
     const auto pass{[&](const std::vector<bool>& active, Pools& pools, Effects& effects) {
         effects.refunds.assign(n, 0);
+        effects.hops.assign(n, {});
         std::vector<std::optional<uint64_t>> amount(n);
         for (size_t i{0}; i < n; ++i) {
-            if (active[i]) amount[i] = orders[i].amount_in;
+            if (active[i]) {
+                amount[i] = orders[i].amount_in;
+                effects.hops[i] = {orders[i].amount_in};
+            }
         }
         for (size_t hop{0}; hop + 1 < MAX_ROUTE_ASSETS; ++hop) {
             std::map<uint256, std::vector<size_t>> by_pool;
@@ -3145,6 +3152,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                         amount[members[j]].reset();
                     } else {
                         amount[members[j]] = cleared->outs[j];
+                        effects.hops[members[j]].push_back(cleared->outs[j]);
                     }
                 }
             }
@@ -3162,12 +3170,36 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             SetToken(COutPoint{order.txid, order.result_n}, Token{Token::Kind::ASSET, asset, amount});
         }
     }};
-    const auto fill{[&](size_t i, uint64_t out, uint64_t back) {
+    // The market index (derived data, no rule reads it): each order's outcome, for its trades.
+    const auto note{[&](size_t i, bool filled, const std::vector<uint64_t>& hops, uint64_t back) {
+        if (!market::Enabled()) return;
+        market::Fill f;
+        f.txid = orders[i].txid;
+        f.result_n = orders[i].result_n;
+        f.chn_to = orders[i].chn_to;
+        f.path = orders[i].path;
+        for (size_t hop{0}; hop + 1 < orders[i].path.size(); ++hop) {
+            const uint256 id{hop_pool(i, hop)};
+            f.pools.push_back(id);
+            const auto kind{kinds.find(id)};
+            f.curves.push_back(kind != kinds.end() ? kind->second.params.curve : 0);
+            f.launches.push_back(kind != kinds.end() && kind->second.launch ? kind->second.token : AssetId{});
+        }
+        f.amounts = filled ? hops : std::vector<uint64_t>{orders[i].amount_in};
+        f.filled = filled;
+        f.back = back;
+        market::NoteFill(Writable(), static_cast<uint32_t>(i), f);
+    }};
+    const auto fill{[&](size_t i, uint64_t out, uint64_t back, const std::vector<uint64_t>& hops) {
         pay(orders[i], orders[i].path.back(), out);
         // What a launch curve at its end gave back of what was paid in (the chain's coin, by the coinbase).
         if (back > 0) pay(orders[i], CHN, back);
+        note(i, true, hops, back);
     }};
-    const auto refund{[&](size_t i) { pay(orders[i], orders[i].path.front(), orders[i].amount_in); }};
+    const auto refund{[&](size_t i) {
+        pay(orders[i], orders[i].path.front(), orders[i].amount_in);
+        note(i, false, {}, 0);
+    }};
     // The block's security parts in the chain's coin (paid with its fees: BlockSecurityFees), and the treasury's accruals.
     uint64_t security{0};
     const auto accrue{[&](const AssetId& asset, uint64_t protocol, uint64_t held, bool launch) {
@@ -3250,7 +3282,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         commit(pools, effects);
         for (size_t i{0}; i < n; ++i) {
             if (active[i]) {
-                fill(i, *got[i], effects.refunds[i]);
+                fill(i, *got[i], effects.refunds[i], effects.hops[i]);
             } else {
                 refund(i);
             }
@@ -3299,7 +3331,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             e.reserve_coin = entry.reserve_coin;
             e.reserve_tokens = entry.reserve_tokens;
         }
-        fill(i, *got[i], effects.refunds[i]);
+        fill(i, *got[i], effects.refunds[i], effects.hops[i]);
     }
     commit(pools, all);
     record_security();

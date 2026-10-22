@@ -57,6 +57,8 @@ add_executable(test_bitcoin
   dex_book_tests.cpp
   dex_curves_tests.cpp
   dex_launch_tests.cpp
+  dex_market_tests.cpp
+  publicapi_tests.cpp
   dex_pools_tests.cpp
   dex_tests.cpp
   sidechain_state_golden_tests.cpp
@@ -195,6 +197,10 @@ target_link_libraries(test_bitcoin
   Boost::headers
   $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
+if(WITH_PUBLICAPI)
+  # publicapi_tests: an HTTP/2 client (nghttp2's) against the server.
+  target_link_libraries(test_bitcoin nghttp2)
+endif()
 
 function(add_boost_test source_file)
   if(NOT EXISTS ${source_file})

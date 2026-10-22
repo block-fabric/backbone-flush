@@ -83,6 +83,8 @@
 #include <rpc/extra.h>
 #include <rpc/register.h>
 #include <rpc/server.h>
+#include <publicapi/init.h>
+#include <bitassets/market.h>
 #include <rpc/util.h>
 #include <scheduler.h>
 #include <script/sigcache.h>
@@ -332,6 +334,7 @@ void Shutdown(NodeContext& node)
 
     StopHTTPRPC();
     StopREST();
+    StopPublicApi();
     StopRPC();
     StopHTTPServer();
     if (node.cpu_miner) node.cpu_miner->Stop();
@@ -750,6 +753,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
     argsman.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    AddPublicApiOptions(argsman);
     argsman.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid values for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). RFC4193 is allowed only if -cjdnsreachable=0. This option can be specified multiple times", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     argsman.AddArg("-rpcauth=<userpw>", "Username and HMAC-SHA-256 hashed password for JSON-RPC connections. The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. A canonical python script is included in share/rpcauth. The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. This option can be specified multiple times", ArgsManager::ALLOW_ANY | ArgsManager::SENSITIVE, OptionsCategory::RPC);
     argsman.AddArg("-rpcbind=<addr>[:port]", "Bind to given address to listen for JSON-RPC connections. Do not expose the RPC server to untrusted networks such as the public internet! This option is ignored unless -rpcallowip is also passed. Port is optional and overrides -rpcport. Use [host]:port notation for IPv6. This option can be specified multiple times (default: 127.0.0.1 and ::1 i.e., localhost)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::RPC);
@@ -1995,6 +1999,8 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // FastBlocks: its blocks of stake, anchors and order of chains, on the template's hooks, for a chain
     // that is a sidechain (before any block is read).
     pos::InstallHooks(chainparams);
+    // The DEX's market index (derived with the state: before it is loaded, which derives it again if it is new).
+    bitassets::market::SetEnabled(args.GetBoolArg("-dexindex", PublicApiRequested(args)));
     // Chainstate initialization and loading may be retried once with reindexing by GUI users
     auto [status, error] = InitAndLoadChainstate(
         node,
@@ -2581,6 +2587,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // that the RPC's view of the best block is valid and consistent with
     // ChainstateManager's active tip.
     SetRPCWarmupFinished();
+
+    // The public DEX API (-publicapi), once the RPC methods it quotes through answer.
+    if (!StartPublicApi(node, args)) return false;
 
     uiInterface.InitMessage(_("Done loading"));
 
