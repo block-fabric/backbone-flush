@@ -20,6 +20,7 @@
   import { clock } from './clock.svelte';
   import { anchorsTime, incomeTotal, bondProblem, dailyEstimate, joinEpoch, nodeState, secondsUntilEpoch, simpleState, simpleTone, stakeSats, untilText, type Income } from './model';
   import { fb, refreshFb } from './store.svelte';
+  import { TICKER } from '../config';
 
   let { income }: { income: Income | null } = $props();
 
@@ -158,7 +159,7 @@
   </div>
   <div class="panel-body body">
     <p class="muted lead">
-      Lock some ECX so that your node takes turns making the blocks of this chain, and earns part of their fees. You can stop at any time; the coins then come back after a waiting time.
+      Lock some {TICKER} so that your node takes turns making the blocks of this chain, and earns part of their fees. You can stop at any time; the coins then come back after a waiting time.
       <Term id="bond">stake</Term> · <Term id="validator">validator</Term> · <Term id="slot">slot</Term>
     </p>
 

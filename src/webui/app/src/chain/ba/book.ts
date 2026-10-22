@@ -5,6 +5,7 @@
 // wallet is now (open, filled, expired, evicted). Prices are of a whole asset_a (the base) in asset_b (the quote).
 // Pure: no state, no calls (tested in chain/ba/book.test.ts).
 import { approx, isChn, MAX_AMOUNT, type Amount } from './model';
+import { TICKER } from '../config';
 
 /** The least an order of a pair with CHN is worth on its CHN side: 0.01 CHN (bitassets::MIN_BOOK_CHN). */
 export const MIN_BOOK_CHN = 1_000_000n;
@@ -264,9 +265,9 @@ export function planOrder(side: 'buy' | 'sell', base: OrderAsset, quote: OrderAs
   if (buysAtLeast === 0n) return { ok: false, error: 'Too little: at this price it buys nothing.' };
   if (isChn(sell.id) || isChn(buy.id)) {
     const chn = isChn(sell.id) ? sellUnits : buysAtLeast;
-    if (chn < MIN_BOOK_CHN) return { ok: false, error: 'Too little: an order of a pair with ECX is worth 0.01 ECX at least on its ECX side.' };
+    if (chn < MIN_BOOK_CHN) return { ok: false, error: `Too little: an order of a pair with ${TICKER} is worth 0.01 ${TICKER} at least on its ${TICKER} side.` };
   } else if (sellUnits < 10n ** BigInt(sell.decimals)) {
-    return { ok: false, error: 'Too little: an order of a pair without ECX sells a whole unit at least of what it sells.' };
+    return { ok: false, error: `Too little: an order of a pair without ${TICKER} sells a whole unit at least of what it sells.` };
   }
   return { ok: true, sell, buy, amount: decimalText(sellUnits, sell.decimals), price: decimalText(limit.mantissa, limit.scale), sellUnits, buysAtLeast };
 }

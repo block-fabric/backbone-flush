@@ -6,6 +6,7 @@
 #define BITCOIN_WEBUI_LINKS_H
 
 #include <uint256.h>
+#include <webui/chainconfig.h>
 
 #include <cstdint>
 #include <optional>
@@ -63,8 +64,8 @@ inline constexpr int64_t CLOCK_SKEW{120};
 inline constexpr std::string_view CONNECT_ORIGIN{"https://flush.markets"};
 inline constexpr std::string_view CONNECT_CALLBACK{"https://flush.markets/connect"};
 
-//! The ticker of the chain's coin in a swap (from, to).
-inline constexpr std::string_view COIN_TICKER{"ECX"};
+//! The ticker of the chain's coin in a swap (from, to): the chain's own (chain.json).
+inline constexpr std::string_view COIN_TICKER{chain::TICKER};
 
 /** A request read from a link or a launch file. Amounts are kept as their exact decimal text (Units converts them). */
 struct Request {

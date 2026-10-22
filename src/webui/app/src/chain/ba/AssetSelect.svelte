@@ -5,6 +5,7 @@
   import AssetPicker from './AssetPicker.svelte';
   import { CHN_ID } from './model';
   import type { PickChoice } from './picker';
+  import { TICKER } from '../config';
 
   let {
     id,
@@ -24,7 +25,7 @@
     disabled?: boolean;
     placeholder?: string;
   } = $props();
-  const list = $derived(chn ? [{ id: CHN_ID, label: 'ECX', seq: '' } as PickChoice, ...choices.filter((c) => c.id !== CHN_ID)] : choices);
+  const list = $derived(chn ? [{ id: CHN_ID, label: TICKER, seq: '' } as PickChoice, ...choices.filter((c) => c.id !== CHN_ID)] : choices);
 </script>
 
 <AssetPicker {id} {label} bind:value choices={list} {disabled} placeholder={placeholder || undefined} />

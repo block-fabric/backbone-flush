@@ -17,6 +17,7 @@
 #include <common/messages.h>
 #include <consensus/consensus.h>
 #include <node/types.h>
+#include <policy/feerate.h>
 #include <consensus/amount.h>
 #include <core_io.h>
 #include <grpc/standard.h>
@@ -159,8 +160,7 @@ std::string LinkLabel(const std::string& url)
 
 const std::string& Coin()
 {
-    static const std::string coin{"ECX"};
-    return coin;
+    return CURRENCY_UNIT;
 }
 
 } // namespace
@@ -360,7 +360,7 @@ private:
     /** An asset a client names: ECX, a ticker or name (any case for a ticker), 64 hex digits, or its number. */
     static AssetId Resolve(const bitassets::State& state, const std::string& text)
     {
-        if (text.empty() || text.size() > 128) Fail(Code::INVALID_ARGUMENT, "name an asset: ECX, a ticker, or its id");
+        if (text.empty() || text.size() > 128) Fail(Code::INVALID_ARGUMENT, "name an asset: " + CURRENCY_UNIT + ", a ticker, or its id");
         if (text == "ECX" || text == "ecx" || text == "CHN") return AssetId{};
         if (text.size() == 64 && IsHex(text)) return AssetId{*uint256::FromHex(ToLower(text))};
         if (bitassets::IsTicker(ToUpper(text))) {
@@ -390,7 +390,7 @@ private:
         return {id, *launch};
     }
 
-    static std::string ArgOf(const AssetId& asset) { return asset.IsNull() ? "CHN" : "0x" + asset.GetHex(); }
+    static std::string ArgOf(const AssetId& asset) { return asset.IsNull() ? CURRENCY_UNIT : "0x" + asset.GetHex(); }
 
     static std::optional<std::string> LogoUrl(const bitassets::State& state, const AssetId& asset, bool launch)
     {
@@ -941,7 +941,7 @@ private:
         const UniValue& amounts{q["amounts"]};
         const auto amount_of{[&](const AssetId& asset) {
             const std::string label{Label(state, asset)};
-            return amounts.exists(label) ? amounts[label] : amounts[std::string{"CHN"}];
+            return amounts.exists(label) ? amounts[label] : amounts[std::string{CURRENCY_UNIT}];
         }};
         const uint64_t u0{UnitsOf(amount_of(A), d0)};
         const uint64_t u1{UnitsOf(amount_of(B), d1)};
@@ -1013,8 +1013,8 @@ private:
             payload["asset"] = UniValue{Hex(token)};
             payload[buy ? "ecx" : "tokens"] = UniValue{Decimal(in, din)};
             payload[buy ? "min_tokens" : "min_ecx"] = UniValue{Decimal(floor, dout)};
-            summary = buy ? strprintf("Buy at least %s %s for %s ECX on its curve", Decimal(floor, dout), ticker, Decimal(in, din))
-                          : strprintf("Sell %s %s to its curve for at least %s ECX", Decimal(in, din), ticker, Decimal(floor, dout));
+            summary = buy ? strprintf("Buy at least %s %s for %s %s on its curve", Decimal(floor, dout), ticker, Decimal(in, din), CURRENCY_UNIT)
+                          : strprintf("Sell %s %s to its curve for at least %s %s", Decimal(in, din), ticker, Decimal(floor, dout), CURRENCY_UNIT);
             built.Mutable("launch_quote") = q;
             built.SetBool("app_ready", true);
         } else if (verb == "swap") {
@@ -1143,7 +1143,7 @@ private:
                 uri.emplace_back("min_tokens", Decimal(floor, bitassets::LAUNCH_DECIMALS));
                 payload["ecx"] = UniValue{Decimal(ecx, 8)};
                 payload["min_tokens"] = UniValue{Decimal(floor, bitassets::LAUNCH_DECIMALS)};
-                summary += strprintf(", buying at least %s for %s ECX", Decimal(floor, bitassets::LAUNCH_DECIMALS), Decimal(ecx, 8));
+                summary += strprintf(", buying at least %s for %s %s", Decimal(floor, bitassets::LAUNCH_DECIMALS), Decimal(ecx, 8), CURRENCY_UNIT);
                 (void)back;
             }
             uri.emplace_back("slippage_bps", util::ToString(slippage));
@@ -1535,7 +1535,7 @@ private:
                 params.push_back(req.GetString("q"));
                 UniValue filters(UniValue::VOBJ);
                 filters.pushKV("exclude_abandoned", !req.GetBool("include_abandoned"));
-                filters.pushKV("chn_only", req.GetBool("ecx_only"));
+                filters.pushKV(bitassets::CoinOnlyFilter(), req.GetBool("ecx_only"));
                 params.push_back(filters);
                 params.push_back(sorts.at(sort_in));
                 params.push_back(cursor);
@@ -1627,8 +1627,8 @@ private:
             m.SetBool("in_range", r["in_range"].get_bool());
             m.SetString("txid", r["txid"].get_str());
             m.SetUInt("height", r["height"].getInt<uint64_t>());
-            m.SetString("asset_a", r["asset0"].get_str() == "CHN" ? Coin() : r["asset0"].get_str());
-            m.SetString("asset_b", r["asset1"].get_str() == "CHN" ? Coin() : r["asset1"].get_str());
+            m.SetString("asset_a", r["asset0"].get_str() == Coin() ? Coin() : r["asset0"].get_str());
+            m.SetString("asset_b", r["asset1"].get_str() == Coin() ? Coin() : r["asset1"].get_str());
             (void)state;
             return m;
         });
@@ -1753,7 +1753,7 @@ private:
             Message out{New("Verifications")};
             for (size_t i{0}; i < assets; ++i) {
                 const AssetId asset{ResolveRegistered(state, req.StringAt("assets", i))};
-                if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, "ECX is the chain's coin: nothing to verify");
+                if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, CURRENCY_UNIT + " is the chain's coin: nothing to verify");
                 UniValue params(UniValue::VARR);
                 params.push_back(ArgOf(asset));
                 params.push_back(named);

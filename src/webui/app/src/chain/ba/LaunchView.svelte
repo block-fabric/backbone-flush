@@ -23,6 +23,7 @@
   import { claimable, curvePointAt, curveSeries, curveShape, LAUNCH_DECIMALS, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   let { token, back }: { token: string; back: () => void } = $props();
 
@@ -155,10 +156,10 @@
   const backUnits = $derived(quote ? unitsOf(quote.back, 8) : 0n);
   const problem = $derived.by(() => {
     if (!launch || amount === null) return '';
-    if (side === 'buy' && amount < MIN_CHN_PAYOUT) return 'A buy pays 0.0005 ECX at least.';
+    if (side === 'buy' && amount < MIN_CHN_PAYOUT) return `A buy pays 0.0005 ${TICKER} at least.`;
     if (side === 'buy' && approx(launch.min_buy) > 0 && amount < unitsOf(launch.min_buy, 8)) return 'Less than the least a buy of this launch pays: it would be refunded.';
     if (side === 'buy' && approx(launch.max_buy) > 0 && amount > unitsOf(launch.max_buy, 8)) return 'More than the most a buy of this launch pays: it would be refunded.';
-    if (side === 'sell' && out !== null && out < MIN_CHN_PAYOUT) return 'Too little: the least ECX paid out is 0.0005 ECX.';
+    if (side === 'sell' && out !== null && out < MIN_CHN_PAYOUT) return `Too little: the least ${TICKER} paid out is 0.0005 ${TICKER}.`;
     if (out === 0n) return 'Too little: it buys nothing.';
     return '';
   });
@@ -179,8 +180,8 @@
     const label = nameOf(token, launch.ticker);
     const r = await ask({
       title: sSide === 'buy' ? t('Buy from a launch') : t('Sell to a launch'),
-      message: sSide === 'buy' ? t('Pay %1 ECX for about %2 %3?', formatUnits(sAmount, sIn), formatUnits(sOut, sOutD), label) : t('Sell %1 %2 for about %3 ECX?', formatUnits(sAmount, sIn), label, formatUnits(sOut, sOutD)),
-      informative: t('At least %1, should the curve move first (slippage %2%). The order clears at the end of its block, at one price for all of the block. %3', formatUnits(sLeast, sOutD), String(sSlip), sBack > 0n ? t('It passes the curve\'s end: about %1 ECX comes back, and the launch graduates.', formatUnits(sBack, 8)) : sGraduates ? t('It takes the launch to graduation.') : ''),
+      message: sSide === 'buy' ? t('Pay %1 %4 for about %2 %3?', formatUnits(sAmount, sIn), formatUnits(sOut, sOutD), label, TICKER) : t('Sell %1 %2 for about %3 %4?', formatUnits(sAmount, sIn), label, formatUnits(sOut, sOutD), TICKER),
+      informative: t('At least %1, should the curve move first (slippage %2%). The order clears at the end of its block, at one price for all of the block. %3', formatUnits(sLeast, sOutD), String(sSlip), sBack > 0n ? t('It passes the curve\'s end: about %1 %2 comes back, and the launch graduates.', formatUnits(sBack, 8), TICKER) : sGraduates ? t('It takes the launch to graduation.') : ''),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -208,7 +209,7 @@
     const r = await ask({
       title: t('Pay a launch\'s creator'),
       message: t('Send the creator of %1 what it is owed?', nameOf(token, launch.ticker)),
-      informative: t('Its fees (%1 ECX)%2. Anyone may send this: nothing goes anywhere but to the creator.', formatAmount(launch.creator_fees_owed, 8), owed.allocation ? t(', and its allocation of %1% of the supply, minted now', String(launch.allocation)) : ''),
+      informative: t('Its fees (%1 %3)%2. Anyone may send this: nothing goes anywhere but to the creator.', formatAmount(launch.creator_fees_owed, 8), owed.allocation ? t(', and its allocation of %1% of the supply, minted now', String(launch.allocation)) : '', TICKER),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -220,7 +221,7 @@
     try {
       const done = await walletRpc<{ txid: string; fees: Amount; allocation: Amount }>(wallet, 'claimlaunch', [assetArg(token)]);
       if (!done) return;
-      toast('success', t('Paying the creator'), t('%1 ECX, with the next block.', formatAmount(done.fees, 8)));
+      toast('success', t('Paying the creator'), t('%1 %2, with the next block.', formatAmount(done.fees, 8), TICKER));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Pay a launch\'s creator'), errorText(e), 'error');
@@ -261,7 +262,7 @@
 
     {#if graduated}
       <section class="panel graduated" data-testid="launch-graduated">
-        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} ECX; that and the tokens left went into its pool with ECX (constant product, 0.3%), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
+        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} {TICKER}; that and the tokens left went into its pool with {TICKER} (constant product, 0.3%), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
       </section>
     {/if}
 
@@ -269,11 +270,11 @@
       <div class="panel ba-figure">
         <span class="muted">To graduation</span><strong>{formatPercent(Number(launch.progress))}</strong>
         <span class="ba-bar"><span use:barWidth={Number(launch.progress) / 100}></span></span>
-        <span class="faint">{formatAmount(launch.raised, 8, { max: 4 })} of {formatAmount(launch.graduation, 8)} ECX raised</span>
+        <span class="faint">{formatAmount(launch.raised, 8, { max: 4 })} of {formatAmount(launch.graduation, 8)} {TICKER} raised</span>
       </div>
-      <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(Number(launch.price))}</strong><span class="faint">ECX for 1 <SafeText text={launch.ticker} /></span></div>
-      <div class="panel ba-figure"><span class="muted">Market value</span><strong>{formatAmount(launch.market_cap, 8, { max: 2 })}</strong><span class="faint">ECX, the price times the supply</span></div>
-      <div class="panel ba-figure"><span class="muted">Volume</span><strong>{formatAmount(launch.volume, 8, { max: 2 })}</strong><span class="faint">ECX in {formatCount(launch.trades)} blocks</span></div>
+      <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(Number(launch.price))}</strong><span class="faint">{TICKER} for 1 <SafeText text={launch.ticker} /></span></div>
+      <div class="panel ba-figure"><span class="muted">Market value</span><strong>{formatAmount(launch.market_cap, 8, { max: 2 })}</strong><span class="faint">{TICKER}, the price times the supply</span></div>
+      <div class="panel ba-figure"><span class="muted">Volume</span><strong>{formatAmount(launch.volume, 8, { max: 2 })}</strong><span class="faint">{TICKER} in {formatCount(launch.trades)} blocks</span></div>
     </section>
 
     <div class="ba-cols">
@@ -281,7 +282,7 @@
         <div class="panel-head"><h3>The curve</h3><span class="muted small">price by tokens sold</span></div>
         <div class="panel-body">
           <Chart points={series} marks={[{ x: now.sold, y: now.price }]} area label={t('The bonding curve of the launch: its price by the tokens it sold, and where it is')} formatX={(x) => compactNumber(x, 3)} formatY={(y) => formatPrice(y, 4)} />
-          <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} ECX a token, 9 times more, over {compactNumber(shape.curveSupply, 3)} tokens; then {compactNumber(shape.poolSupply, 3)} go into its pool with the ECX raised, at the curve's last price. {#if !graduated}It sold {compactNumber(Math.max(0, now.sold), 3)} so far.{/if}</p>
+          <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} a token, 9 times more, over {compactNumber(shape.curveSupply, 3)} tokens; then {compactNumber(shape.poolSupply, 3)} go into its pool with the {TICKER} raised, at the curve's last price. {#if !graduated}It sold {compactNumber(Math.max(0, now.sold), 3)} so far.{/if}</p>
         </div>
       </section>
 
@@ -291,9 +292,9 @@
             <button type="button" class="ba-chip" aria-pressed={side === 'buy'} onclick={() => { side = 'buy'; amountText = ''; }}>Buy</button>
             <button type="button" class="ba-chip" aria-pressed={side === 'sell'} onclick={() => { side = 'sell'; amountText = ''; }}>Sell</button>
           </div>
-          <UnitsInput id="launch-amount" label={side === 'buy' ? t('You pay') : t('You sell')} decimals={inDecimals} bind:units={amount} bind:text={amountText} max={held} unit={side === 'buy' ? 'ECX' : launch.ticker} />
+          <UnitsInput id="launch-amount" label={side === 'buy' ? t('You pay') : t('You sell')} decimals={inDecimals} bind:units={amount} bind:text={amountText} max={held} unit={side === 'buy' ? TICKER : launch.ticker} />
           {#if side === 'buy' && (approx(launch.min_buy) > 0 || approx(launch.max_buy) > 0)}
-            <p class="ba-help">A buy pays {#if approx(launch.min_buy) > 0}at least {formatAmount(launch.min_buy, 8)} ECX{/if}{#if approx(launch.min_buy) > 0 && approx(launch.max_buy) > 0} and {/if}{#if approx(launch.max_buy) > 0}at most {formatAmount(launch.max_buy, 8)} ECX{/if}: outside, it is refunded.</p>
+            <p class="ba-help">A buy pays {#if approx(launch.min_buy) > 0}at least {formatAmount(launch.min_buy, 8)} {TICKER}{/if}{#if approx(launch.min_buy) > 0 && approx(launch.max_buy) > 0} and {/if}{#if approx(launch.max_buy) > 0}at most {formatAmount(launch.max_buy, 8)} {TICKER}{/if}: outside, it is refunded.</p>
           {/if}
           <div class="field">
             <span class="label">Slippage</span>
@@ -305,15 +306,15 @@
           {:else if problem}<p class="ba-problems" role="status">{t(problem)}</p>{/if}
           {#if quote && out !== null && least !== null}
             <dl class="ba-lines" data-testid="launch-quote">
-              <dt>You get about</dt><dd class="strong">{formatUnits(out, outDecimals)} {#if side === 'buy'}<SafeText text={launch.ticker} />{:else}ECX{/if}</dd>
+              <dt>You get about</dt><dd class="strong">{formatUnits(out, outDecimals)} {#if side === 'buy'}<SafeText text={launch.ticker} />{:else}{TICKER}{/if}</dd>
               <dt>At least</dt><dd>{formatUnits(least, outDecimals)}</dd>
-              {#if backUnits > 0n}<dt>Back</dt><dd class="ba-warn">{formatUnits(backUnits, 8)} ECX: the buy passes the curve's end</dd>{/if}
-              <dt>Price</dt><dd>{formatPrice(Number(quote.price))} ECX a token</dd>
+              {#if backUnits > 0n}<dt>Back</dt><dd class="ba-warn">{formatUnits(backUnits, 8)} {TICKER}: the buy passes the curve's end</dd>{/if}
+              <dt>Price</dt><dd>{formatPrice(Number(quote.price))} {TICKER} a token</dd>
               <dt>Price impact</dt><dd class:ba-good={Number(quote.price_impact) <= 1} class:ba-warn={Number(quote.price_impact) > 1}>{Number(quote.price_impact).toFixed(2)}%</dd>
-              <dt>Fee ({launch.fee}%)</dt><dd>{formatAmount(quote.fee, 8)} ECX</dd>
+              <dt>Fee ({launch.fee}%)</dt><dd>{formatAmount(quote.fee, 8)} {TICKER}</dd>
               <dt>To graduation after</dt><dd>{formatPercent(Number(quote.progress_after))}</dd>
             </dl>
-            {#if quote.graduates}<p class="ba-help strong" data-testid="launch-graduates"><Icon name="check" size={14} /> This trade takes the launch to graduation: its token then trades in its pool with ECX.</p>{/if}
+            {#if quote.graduates}<p class="ba-help strong" data-testid="launch-graduates"><Icon name="check" size={14} /> This trade takes the launch to graduation: its token then trades in its pool with {TICKER}.</p>{/if}
           {/if}
           <div class="row"><button type="submit" class="btn primary wide" disabled={busy || wallets.current === null || amount === null || out === null || !!problem || !!quoteError}>{busy ? t('Sending…') : side === 'buy' ? t('Buy') : t('Sell')}</button></div>
         </form>
@@ -338,14 +339,14 @@
         <div class="panel-body">
           <p class="mono break" translate="no"><SafeText text={launch.creator} /></p>
           <dl class="ba-lines">
-            <dt>Fees owed</dt><dd>{formatAmount(launch.creator_fees_owed, 8)} ECX</dd>
-            <dt>Fees paid</dt><dd>{formatAmount(launch.creator_fees_paid, 8)} ECX</dd>
-            {#if launch.protocol_fees !== undefined}<dt>To the treasury</dt><dd>{formatAmount(launch.protocol_fees, 8)} ECX</dd>{/if}
-            {#if launch.security_fees !== undefined}<dt>To the chain's security</dt><dd>{formatAmount(launch.security_fees, 8)} ECX</dd>{/if}
+            <dt>Fees owed</dt><dd>{formatAmount(launch.creator_fees_owed, 8)} {TICKER}</dd>
+            <dt>Fees paid</dt><dd>{formatAmount(launch.creator_fees_paid, 8)} {TICKER}</dd>
+            {#if launch.protocol_fees !== undefined}<dt>To the treasury</dt><dd>{formatAmount(launch.protocol_fees, 8)} {TICKER}</dd>{/if}
+            {#if launch.security_fees !== undefined}<dt>To the chain's security</dt><dd>{formatAmount(launch.security_fees, 8)} {TICKER}</dd>{/if}
           </dl>
           {#if owed.fees || owed.allocation}
             <div class="row"><button type="button" class="btn small" disabled={busy || wallets.current === null} onclick={claim}>Pay the creator what it is owed</button></div>
-            <p class="ba-help">Anyone may send it: the ECX go to the creator's address, by the coinbase{#if owed.allocation}, and its allocation is minted to it{/if}.</p>
+            <p class="ba-help">Anyone may send it: the {TICKER} go to the creator's address, by the coinbase{#if owed.allocation}, and its allocation is minted to it{/if}.</p>
           {/if}
         </div>
       </section>
@@ -358,7 +359,7 @@
       {:else}
         <div class="ba-wrap">
           <table class="ba-table" aria-label="Recent blocks">
-            <thead><tr><th>Block</th><th class="end">Orders</th><th class="end">ECX in</th><th class="end">ECX out</th><th class="end">Bought</th><th class="end">Sold</th><th class="end">Fees</th><th></th></tr></thead>
+            <thead><tr><th>Block</th><th class="end">Orders</th><th class="end">{TICKER} in</th><th class="end">{TICKER} out</th><th class="end">Bought</th><th class="end">Sold</th><th class="end">Fees</th><th></th></tr></thead>
             <tbody>
               {#each log as r (r.height)}
                 <tr>

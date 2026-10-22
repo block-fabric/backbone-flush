@@ -5,6 +5,7 @@
 // to (3/2·G, 3/8·S), G the graduation, S the supply), for its chart and the review of a launch; the queries of the
 // list; the options of launchtoken. Pure: no state, no calls (tested in chain/ba/launch.test.ts).
 import { approx, type Amount } from './model';
+import { TICKER } from '../config';
 
 /** A launch's token has 6 decimals and a billion units, fixed (bitassets::LAUNCH_DECIMALS, LAUNCH_SUPPLY). */
 export const LAUNCH_DECIMALS = 6;
@@ -233,7 +234,7 @@ export function launchProblems(o: { allocation: number; maxAllocation: number; f
   const out: string[] = [];
   if (!(o.allocation >= 0 && o.allocation <= o.maxAllocation)) out.push(`The allocation is 0 to ${o.maxAllocation}%.`);
   if (o.infoBytes > o.maxInfo) out.push(`The description is at most ${o.maxInfo} bytes.`);
-  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push('The first buy pays 0.0005 ECX at least.');
+  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push(`The first buy pays 0.0005 ${TICKER} at least.`);
   if (o.minBuy !== null && o.maxBuy !== null && o.maxBuy > 0n && o.maxBuy < o.minBuy) out.push('The most a buy pays is less than the least.');
   if (o.firstBuy !== null && o.firstBuy > 0n && ((o.minBuy !== null && o.minBuy > 0n && o.firstBuy < o.minBuy) || (o.maxBuy !== null && o.maxBuy > 0n && o.firstBuy > o.maxBuy))) out.push('The first buy is outside the least and the most a buy pays: it would be refunded.');
   return out;

@@ -26,6 +26,7 @@
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import '../ba/terms';
+  import { TICKER } from '../config';
 
   $effect(() => startBitAssets());
 
@@ -55,7 +56,7 @@
   <header class="page-head">
     <h1>{simple ? 'Swap' : 'Trade'}</h1>
     {#if simple}
-      <span class="muted">Pay ECX, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
+      <span class="muted">Pay {TICKER}, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
     {:else}
       <span class="muted">{tn('%n pool(s) with liquidity', open)} · {#if ba.dex?.curves_active && tiers.length}a fee of {Math.min(...tiers)}% to {Math.max(...tiers)}% per trade, by pool{:else}0.3% fee per trade{/if}: {swapFeeSplit(swapParts())}</span>
     {/if}

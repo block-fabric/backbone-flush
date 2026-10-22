@@ -11,6 +11,7 @@
   import { rpc } from '../../lib/rpc';
   import { curatorWarnings, idPrefix, isCuratorId, type OracleSeen, type Verifications } from './verify';
   import { addCurator, loadCurators, removeCurator, verify } from './verify.svelte';
+  import { TICKER } from '../config';
 
   interface Oracle {
     oracle: string;
@@ -56,7 +57,7 @@
     }
     busy = true;
     try {
-      const v = await rpc.raw<Verifications>('getverifications', ['ECX', [key]]);
+      const v = await rpc.raw<Verifications>('getverifications', [TICKER, [key]]);
       const found = v?.curators?.find((c) => c.curator.toLowerCase() === key);
       const candidate: OracleSeen = { oracle: key, name: found?.name ?? '' };
       pending = { ...candidate, warnings: curatorWarnings(candidate, oracles ?? [], verify.curators) };

@@ -11,6 +11,7 @@
   import { launchFeeSplit, formatShare, swapFeeSplit, treasuryRows, type Treasury } from './fees';
   import { formatAmount } from './model';
   import { ba, decimalsOf } from './store.svelte';
+  import { TICKER } from '../config';
 
   let treasury = $state<Treasury | null>(null);
   let error = $state('');
@@ -48,11 +49,11 @@
       <div class="panel ba-figure"><span class="muted">A swap's fee</span><strong>{formatShare(parts.swap_liquidity_providers)}% · {formatShare(parts.swap_security)}% · {formatShare(parts.swap_protocol)}%</strong><span class="faint">{swapFeeSplit({ liquidity_providers: parts.swap_liquidity_providers, security: parts.swap_security, protocol: parts.swap_protocol })}</span></div>
       <div class="panel ba-figure"><span class="muted">A launch's fee</span><strong>{formatShare(parts.launch_fee)}%</strong><span class="faint">{launchFeeSplit({ fee: parts.launch_fee, creator: parts.launch_creator, protocol: parts.launch_protocol, security: parts.launch_security })}</span></div>
     {/if}
-    <div class="panel ba-figure"><span class="muted">Security paid</span><strong>{formatAmount(treasury.security_paid ?? 0, 8, { max: 4 })}</strong><span class="faint">ECX, with the blocks' fees, to the BMM bidders and the validators</span></div>
+    <div class="panel ba-figure"><span class="muted">Security paid</span><strong>{formatAmount(treasury.security_paid ?? 0, 8, { max: 4 })}</strong><span class="faint">{TICKER}, with the blocks' fees, to the BMM bidders and the validators</span></div>
   </section>
   <section class="panel">
     <div class="panel-head"><h3>Treasury</h3><span class="muted small">by asset</span></div>
-    <p class="ba-help note">Held by the chain itself: no keys; no rule spends from it yet. The security parts of swap fees in ECX are paid with the blocks; in another asset, the treasury holds them.</p>
+    <p class="ba-help note">Held by the chain itself: no keys; no rule spends from it yet. The security parts of swap fees in {TICKER} are paid with the blocks; in another asset, the treasury holds them.</p>
     {#if rows.length === 0}
       <p class="ba-empty">Nothing yet: the treasury fills with the fees of swaps and launches.</p>
     {:else}

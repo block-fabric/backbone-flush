@@ -19,6 +19,7 @@ import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo } from './kinds';
 import { EXACT_METHODS, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
 setExactMethods(EXACT_METHODS);
@@ -765,7 +766,7 @@ export function decimalsOf(id: string): number {
 
 /** The label of an asset, by id. Text of the chain. */
 export function labelOf(id: string): string {
-  if (/^0+$/.test(id)) return 'ECX';
+  if (/^0+$/.test(id)) return TICKER;
   return assetById(id)?.label ?? holdingOf(id)?.label ?? `0x${id.slice(0, 12)}…`;
 }
 
@@ -777,7 +778,7 @@ export function labelOf(id: string): string {
  * (audit 7 E-BA4). Text of the chain.
  */
 export function nameOf(id: string, label?: string): string {
-  if (/^0+$/.test(id)) return 'ECX';
+  if (/^0+$/.test(id)) return TICKER;
   const listed = assetById(id);
   const text = label ?? listed?.label ?? holdingOf(id)?.label ?? '';
   const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;

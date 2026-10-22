@@ -15,6 +15,7 @@
   import { checkProofCoins, formatProof, parseProof, proofCoinLine, proofMessage, proofVerdict, simplified, unitsToCoins, type ProofCoin, type TxOutNow } from '../lib/tools';
   import { walletApi, type Coin, type Outpoint } from '../lib/wallet';
   import { node } from '../lib/state.svelte';
+  import { TICKER } from '../chain/config';
 
   // A tab of a page that holds it (Tools, Advanced transactions): without a title of its own.
   let { embedded = false }: { embedded?: boolean } = $props();
@@ -211,7 +212,7 @@
         const check = checkProofCoins(parsed.coins, now, valid);
         coinsGood = check.good.length;
         coinsBad = parsed.coins.length - coinsGood;
-        report += `\nCoins listed in the proof: ${parsed.coins.length}. Unspent now, on addresses that signed: ${check.good.length}, holding ${unitsToCoins(check.total)} CHN.\n`;
+        report += `\nCoins listed in the proof: ${parsed.coins.length}. Unspent now, on addresses that signed: ${check.good.length}, holding ${unitsToCoins(check.total)} ${TICKER}.\n`;
         for (const c of check.spent) report += `SPENT or not on the chain: ${proofCoinLine(c)}\n`;
         for (const c of check.unsigned) report += `NOT ON A SIGNED ADDRESS: ${proofCoinLine(c)} (paid to ${c.address || 'no address'})\n`;
         for (const c of check.wrongAmount) report += `WRONG AMOUNT: ${proofCoinLine(c)} (it holds ${unitsToCoins(c.now)})\n`;

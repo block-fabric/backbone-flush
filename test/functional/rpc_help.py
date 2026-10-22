@@ -157,8 +157,13 @@ class HelpRpcTest(BitcoinTestFramework):
         dump_dir = os.path.join(self.options.tmpdir, 'rpc_help_dump')
         os.mkdir(dump_dir)
         calls = [line.split(' ', 1)[0] for line in self.nodes[0].help().splitlines() if line and not line.startswith('==')]
+        # The coin of the chain is named by its ticker alone (CURRENCY_UNIT): ECX on Flush, CHN on Layers, which
+        # share the DEX's help; never the other's name (user feedback 2026-10-22: Flush's help said CHN).
+        coin_names = {}
         for call in calls:
             help_text = self.nodes[0].help(call)
+            for name in re.findall(r'\b(ECX|CHN)\b', help_text):
+                coin_names.setdefault(name, call)
             with open(os.path.join(dump_dir, call), 'w') as f:
                 # Make sure the node can generate the help at runtime without crashing
                 f.write(help_text)
@@ -169,6 +174,7 @@ class HelpRpcTest(BitcoinTestFramework):
                     json.loads(payload)
                 except json.JSONDecodeError as e:
                     raise AssertionError(f"HelpExampleRpc for '{call}' is not valid JSON: {payload!r}\n{e}")
+        assert len(coin_names) <= 1, f"The help names the chain's coin both ways: {coin_names}"
 
     def wallet_help(self):
         assert 'getnewaddress ( "label" "address_type" )' in self.nodes[0].help('getnewaddress')

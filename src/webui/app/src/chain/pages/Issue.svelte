@@ -25,6 +25,7 @@
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import '../ba/terms';
+  import { TICKER } from '../config';
 
   /** Shown as a tab of My assets, under its heading. */
   let { embedded = false }: { embedded?: boolean } = $props();
@@ -259,7 +260,7 @@
               {:else if availability === 'taken'}<span class="error"><SafeText text={name} /> is taken</span>
               {:else if availability === 'mine'}<span class="error">This wallet is creating <SafeText text={name} /> already: see My assets.</span>
               {:else if tickers}<span class="hint" id="issue-name-hint"><span translate="no">{MIN_TICKER}–{MAX_TICKER}</span> letters A–Z and digits 0–9, such as GOLD or BTC2; unique, first come first served.</span>
-              {:else}<span class="hint" id="issue-name-hint">1 to 64 plain characters (ASCII), no space at either end; not ECX, not "0x…", not like a number such as 1739-0029.</span>{/if}
+              {:else}<span class="hint" id="issue-name-hint">1 to 64 plain characters (ASCII), no space at either end; not {TICKER}, not "0x…", not like a number such as 1739-0029.</span>{/if}
             </div>
             {#if tickers}
               <div class="field">

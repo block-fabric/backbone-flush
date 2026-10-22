@@ -31,8 +31,8 @@ const MESSAGE_CALLS: Record<string, { args: number[]; props: string[] }> = {
   ask: { args: [], props: ['title', 'message', 'informative'] },
   warn: { args: [0], props: [] },
 };
-/** The name of the app (from the host), put in sentences of the app: not text from outside. */
-const ALLOWED = new Set(["app.info?.name ?? 'Chains'", 'app.info?.name ?? CHAIN.name', 'CHAIN.name', 'CHAIN.mainchain?.name']);
+/** The name of the app (from the host) and the ticker of its coin (chain.json), put in sentences of the app: not text from outside. */
+const ALLOWED = new Set(["app.info?.name ?? 'Chains'", 'app.info?.name ?? CHAIN.name', 'CHAIN.name', 'CHAIN.mainchain?.name', 'CHAIN.coin.ticker', 'TICKER']);
 
 interface Finding {
   file: string;

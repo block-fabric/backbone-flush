@@ -6,6 +6,7 @@
 // Pure: no state, no calls (tested in chain/ba/kinds.test.ts).
 import type { SwapFeeParts } from './fees';
 import { approx, assetArg, isChn, unitsOf, type Amount } from './model';
+import { TICKER } from '../config';
 
 /**
  * The curves of pools; 'concentrated' takes its liquidity by positions between two prices (ba/cl.ts); 'launch' is a launch's
@@ -103,7 +104,7 @@ export const CURVE_HELP: Record<Curve, string> = {
   stable: 'For two assets meant to be worth about the same (two stablecoins, a token and its wrapped twin): far less slippage near the balance; A sets how flat it is there.',
   weighted: 'For a pool that holds more of one asset than of the other (such as 80/20): less exposure to the price of the lighter one, and more slippage.',
   concentrated: 'Liquidity between two prices you choose (positions), as Uniswap v3: far deeper where the price trades, and earning only while the price is in your range. Made at a price, empty: positions bring its liquidity.',
-  launch: 'The bonding curve of a launched token: it sells the token for ECX until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.',
+  launch: `The bonding curve of a launched token: it sells the token for ${TICKER} until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.`,
   book: 'The order book of a pair: limit orders to buy or sell at a price, for some blocks, which trade at the end of each block in one batch. Nobody puts liquidity into it: place an order instead.',
 };
 

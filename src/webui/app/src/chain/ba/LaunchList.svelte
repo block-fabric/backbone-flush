@@ -18,6 +18,7 @@
   import { appendLaunches, launchQuery, type Launch, type LaunchFilter, type LaunchPage, type LaunchSort, type LaunchStats } from './launch';
   import { formatAmount, formatPercent, formatPrice } from './model';
   import { ba, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   const PAGE = 50;
   let filter = $state<LaunchFilter>('all');
@@ -109,9 +110,9 @@
   {#if stats}
     <section class="ba-figures">
       <div class="panel ba-figure"><span class="muted">Launches</span><strong>{formatCount(stats.launches)}</strong><span class="faint">{formatCount(stats.on_curve)} on their curves · {formatCount(stats.graduated)} graduated</span></div>
-      <div class="panel ba-figure"><span class="muted">Raised</span><strong>{formatAmount(stats.raised, 8, { max: 2 })}</strong><span class="faint">ECX, in curves and graduated</span></div>
-      <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatAmount(stats.volume, 8, { max: 2 })}</strong><span class="faint">ECX on the curves</span></div>
-      <div class="panel ba-figure"><span class="muted">Graduation</span><strong>{formatAmount(stats.rules.graduation, 8)}</strong><span class="faint">ECX raised, then a locked pool</span></div>
+      <div class="panel ba-figure"><span class="muted">Raised</span><strong>{formatAmount(stats.raised, 8, { max: 2 })}</strong><span class="faint">{TICKER}, in curves and graduated</span></div>
+      <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatAmount(stats.volume, 8, { max: 2 })}</strong><span class="faint">{TICKER} on the curves</span></div>
+      <div class="panel ba-figure"><span class="muted">Graduation</span><strong>{formatAmount(stats.rules.graduation, 8)}</strong><span class="faint">{TICKER} raised, then a locked pool</span></div>
     </section>
   {/if}
   <section class="panel">

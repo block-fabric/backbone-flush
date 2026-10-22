@@ -22,6 +22,7 @@
   import { assetArg, CHN_ID, formatPrice, formatUnits, isChn, unitsAtMost } from './model';
   import { assetById, ba, decimalsOf, labelOf, nameOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import { hiddenAsset } from './visible.svelte';
+  import { TICKER } from '../config';
 
   let base = $state('');
   let quote = $state(CHN_ID);
@@ -250,7 +251,7 @@
           <dt>Its limit</dt><dd translate="no">{plan.price} <SafeText text={labelOf(plan.buy.id)} /> / <SafeText text={labelOf(plan.sell.id)} /></dd>
         </dl>
       {/if}
-      <p class="ba-help">The least an order is worth: 0.01 ECX on its ECX side for a pair with ECX; a whole unit of what it sells otherwise. It trades in each block's batch, wholly or in part; what it got waits in My orders.</p>
+      <p class="ba-help">The least an order is worth: 0.01 {TICKER} on its {TICKER} side for a pair with {TICKER}; a whole unit of what it sells otherwise. It trades in each block's batch, wholly or in part; what it got waits in My orders.</p>
       <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || !plan || !plan.ok || !durationOk}><Icon name="book" size={16} /> {busy ? 'Placing…' : 'Place order'}</button></div>
     </form>
   </div>

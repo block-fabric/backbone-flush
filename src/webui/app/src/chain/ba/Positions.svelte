@@ -17,6 +17,7 @@
   import { depositAmounts, kindOf } from './kinds';
   import { amountParam, approx, formatAmount, formatPrice, isChn, unitsAtMost, type Pool } from './model';
   import { ba, decimalsOf, poolById, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   let list = $state<Position[] | null>(null);
   let error = $state('');
@@ -107,7 +108,7 @@
     const r = await ask({
       title: t('Change a position'),
       message,
-      informative: t('ECX comes by the coinbase of the next block; assets as coins of the transaction.'),
+      informative: t('%1 comes by the coinbase of the next block; assets as coins of the transaction.', TICKER),
       level: what === 'close' ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Cancel' },

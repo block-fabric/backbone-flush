@@ -52,6 +52,7 @@
   import { simpleMode } from '../../lib/uimode.svelte';
   import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
+  import { TICKER } from '../config';
 
   $effect(() => startBitAssets());
 
@@ -210,7 +211,7 @@
     const r = await ask({
       title: t('Take liquidity out'),
       message: t('Take %1% of your shares of the %2 / %3 pool out?', String(percent), nameOf(pos.asset_a_id, pos.asset_a), nameOf(pos.asset_b_id, pos.asset_b)),
-      informative: out ? t('About %1 %2 and %3 %4, at least %5% less should the pool move first. ECX comes by the coinbase of the next block; assets as coins of the transaction.', formatUnits(out.a, da), nameOf(pos.asset_a_id, pos.asset_a), formatUnits(out.b, db), nameOf(pos.asset_b_id, pos.asset_b), String(slippage)) : undefined,
+      informative: out ? t('About %1 %2 and %3 %4, at least %5% less should the pool move first. %6 comes by the coinbase of the next block; assets as coins of the transaction.', formatUnits(out.a, da), nameOf(pos.asset_a_id, pos.asset_a), formatUnits(out.b, db), nameOf(pos.asset_b_id, pos.asset_b), String(slippage), TICKER) : undefined,
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -262,7 +263,7 @@
         action === 'cancel'
           ? t('Cancel the auction of %1 %2? Nobody bid yet: everything comes back.', formatAmount(a.remaining, decimalsOf(a.base_id)), nameOf(a.base_id, a.base))
           : t('Collect %1 %2 and the %3 %4 left?', formatAmount(a.proceeds, decimalsOf(a.quote_id)), nameOf(a.quote_id, a.quote), formatAmount(a.remaining, decimalsOf(a.base_id)), nameOf(a.base_id, a.base)),
-      informative: t('ECX comes by the coinbase of the next block; assets as coins of the transaction.'),
+      informative: t('%1 comes by the coinbase of the next block; assets as coins of the transaction.', TICKER),
       level: 'question',
       choices: [
         { id: 'no', label: 'Back' },
@@ -273,7 +274,7 @@
     try {
       const done = await walletRpc<{ txid: string }>(wallet, 'collectauction', [a.auction]);
       if (!done) return;
-      toast('success', t('Collecting an auction'), t('With the next block: ECX by its coinbase, assets as coins.'));
+      toast('success', t('Collecting an auction'), t('With the next block: %1 by its coinbase, assets as coins.', TICKER));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Collect the auction'), errorText(e), 'error');
@@ -307,7 +308,7 @@
 
     <section class="ba-figures">
       <div class="panel ba-figure"><span class="muted">Assets held</span><strong>{holdings.filter((h) => approx(h.balance) > 0).length}</strong><span class="faint">{tn('%n controlled', holdings.filter((h) => h.control).length)}</span></div>
-      <div class="panel ba-figure"><span class="muted">Worth</span><strong>{formatPrice(worth)} ECX</strong><span class="faint">{priced} of {holdings.length} with a market</span></div>
+      <div class="panel ba-figure"><span class="muted">Worth</span><strong>{formatPrice(worth)} {TICKER}</strong><span class="faint">{priced} of {holdings.length} with a market</span></div>
       {#if simple}
         <div class="panel ba-figure"><span class="muted">Being created</span><strong>{issuingCount}</strong><span class="faint">in your assets once registered</span></div>
       {:else}
@@ -324,7 +325,7 @@
       <HiddenToggle count={visible.hidden} bind:show={showHidden} />
       {#if holdings.length === 0}
         <div class="panel ba-empty">
-          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap ECX for a token, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
+          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap {TICKER} for a token, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
           <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>{simple ? 'Create a token' : 'Register new asset'}</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>{simple ? 'Swap' : 'Trade'}</button></div>
         </div>
       {:else}
@@ -345,7 +346,7 @@
                     </span>
                     <span class="side">
                       <strong class="num">{formatAmount(h.balance, h.decimals, { max: 6 })}</strong>
-                      {#if approx(h.pending) > 0}<span class="ba-warn small">+{formatAmount(h.pending, h.decimals, { max: 6 })} waiting</span>{:else if price !== undefined}<span class="faint small">≈ {formatPrice(price * approx(h.balance))} ECX</span>{/if}
+                      {#if approx(h.pending) > 0}<span class="ba-warn small">+{formatAmount(h.pending, h.decimals, { max: 6 })} waiting</span>{:else if price !== undefined}<span class="faint small">≈ {formatPrice(price * approx(h.balance))} {TICKER}</span>{/if}
                     </span>
                   </button>
                 </li>
@@ -444,7 +445,7 @@
                       <dt>You get about</dt><dd>{formatUnits(out.a, decimalsOf(pos.asset_a_id))} <SafeText text={pos.asset_a} /></dd>
                       <dt></dt><dd>{formatUnits(out.b, decimalsOf(pos.asset_b_id))} <SafeText text={pos.asset_b} /></dd>
                     </dl>
-                    {#if out.a === 0n || out.b === 0n}<p class="ba-help">A side that rounds to nothing (or to less ECX than the least paid out, 0.0005) stays in the pool.</p>{/if}
+                    {#if out.a === 0n || out.b === 0n}<p class="ba-help">A side that rounds to nothing (or to less {TICKER} than the least paid out, 0.0005) stays in the pool.</p>{/if}
                   {/if}
                   <div class="row"><button type="button" class="btn primary small" onclick={() => removeLiquidity(pos)}>Take out</button><button type="button" class="btn small" onclick={() => (removing = null)}>Cancel</button></div>
                 </div>

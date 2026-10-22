@@ -1,3 +1,4 @@
+import { TICKER } from '../config';
 // BitAssets as the pages see it: the shapes of what the node and the wallet answer (src/rpc/bitassets.cpp,
 // src/wallet/rpc/bitassets.cpp), amounts in units of an asset's decimals (bigint, exact), the rules of names
 // and data as the chain checks them (src/bitassets/state.cpp, rpcutil.cpp), and the arithmetic of the pools
@@ -284,7 +285,7 @@ export function isChn(id: string): boolean {
  * asset registered under a name like "ECX" or like the number of another shares (as chains-qt did).
  */
 export function assetArg(id: string): string {
-  return isChn(id) ? 'ECX' : `0x${id}`;
+  return isChn(id) ? TICKER : `0x${id}`;
 }
 
 /** The id of an asset of this name (bitassets::HashName): its SHA-256, written as the node writes a hash (reversed). */
@@ -478,7 +479,7 @@ export function tickerProblem(name: string): string {
   if (name.length < MIN_TICKER) return `A ticker is at least ${MIN_TICKER} characters.`;
   if (name.length > MAX_TICKER) return `A ticker is at most ${MAX_TICKER} characters.`;
   const upper = tickerOf(name);
-  if (upper === 'ECX' || upper === 'CHN') return 'ECX is the coin of the chain (CHN, its name on Layers, is reserved too).';
+  if (upper === 'ECX' || upper === 'CHN') return `That name is reserved: it names ${TICKER}, the coin of the chain.`;
   if (/^0X/.test(upper)) return 'A ticker does not start with "0X": that is how a hash is written.';
   return '';
 }
@@ -525,7 +526,7 @@ export function nameProblem(name: string): string {
   if (name.length > MAX_NAME) return `A name is at most ${MAX_NAME} characters.`;
   if (name.startsWith(' ') || name.endsWith(' ')) return 'A name has no space at either end.';
   if (!isAssetName(name)) return 'A name is plain characters: letters, digits, punctuation and spaces (ASCII).';
-  if (name.toLowerCase() === 'ecx' || name.toLowerCase() === 'chn') return 'ECX is the coin of the chain (CHN, its name on Layers, is reserved too).';
+  if (name.toLowerCase() === 'ecx' || name.toLowerCase() === 'chn') return `That name is reserved: it names ${TICKER}, the coin of the chain.`;
   if (/^0[xX]/.test(name)) return 'A name does not start with "0x": that is how a hash is written.';
   if (readsAsAnotherAsset(name)) return 'A name does not read as the number of an asset (such as 1739-0029).';
   if (nameMimicsNumber(name)) return 'A name holds no "#", "(" or ")", nor four digits, a dash and four digits: shown with its number, it would read as the number of another asset.';
@@ -788,7 +789,7 @@ export function auctionProblems(f: {
   if (f.sameAsset) out.push('An auction sells one asset for another.');
   if (!f.amount.ok) out.push(f.amount.error);
   else if (f.held !== undefined && f.held !== null && f.amount.units > f.held) out.push('This wallet holds less than that.');
-  else if (f.sellsChn && f.amount.units < MIN_CHN_PAYOUT) out.push('An auction sells 0.0005 ECX at least (the least ECX paid out).');
+  else if (f.sellsChn && f.amount.units < MIN_CHN_PAYOUT) out.push(`An auction sells 0.0005 ${TICKER} at least (the least ${TICKER} paid out).`);
   if (!f.start.ok) out.push(`Start price: ${f.start.error}`);
   if (!f.end.ok) out.push(`End price: ${f.end.error}`);
   if (f.start.ok && f.end.ok && f.end.units > f.start.units) out.push('The price falls: the end price is at most the start price.');

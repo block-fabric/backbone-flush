@@ -40,6 +40,7 @@
   import { depositFeeEstimate } from '../lib/wallet';
   import { depositAgain, isDropped, makeDepositAgain } from '../lib/deposits.svelte';
   import { current } from '../lib/walletdata.svelte';
+  import { TICKER } from '../chain/config';
 
   const TABS = [
     { id: 'sidechains', label: 'Sidechains' },
@@ -346,7 +347,7 @@
 <div class="page sidechains">
   <header class="page-head"><h1>Sidechains</h1></header>
   {#if simple}
-    <p class="summary muted">Move CHN to a <Term id="sidechain">sidechain</Term> to use what it adds (markets, names, private payments…), and bring it back when you are done.</p>
+    <p class="summary muted">Move {TICKER} to a <Term id="sidechain">sidechain</Term> to use what it adds (markets, names, private payments…), and bring it back when you are done.</p>
   {:else if dc}
     <p class="summary muted">{summaryText(dc.info, formatAmount(escrowTotal, prefs.unit, { withUnit: true }))}</p>
   {:else}

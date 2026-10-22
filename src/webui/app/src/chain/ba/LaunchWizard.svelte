@@ -23,6 +23,7 @@
   import { curveShape, DEFAULT_RULES, launchOptions, launchProblems, rulesOf, supplySplit, type LaunchStats } from './launch';
   import { amountParam, displayNameProblem, formatPrice, formatUnits, MAX_INFO, MIN_CHN_PAYOUT, nameProblem, normalizeDisplayName, tickerOf, tickerProblem } from './model';
   import { ba, pendingOf, refreshBitAssets, tickersActive, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   let stats = $state<LaunchStats | null>(null);
   $effect(() => {
@@ -150,7 +151,7 @@
     const r = await ask({
       title: t('Launch a token'),
       message: t('Launch %1 on a bonding curve?', sTicker),
-      informative: t('%1 tokens, fixed, sold from the curve until it raises %2 ECX, then in a locked pool. The fee: %3. %4', compactNumber(shape.supply, 3), String(rules.graduation), launchFeeSplit(feeParts, true), allocation > 0 ? t('Your allocation of %1% is minted to you at graduation, and shown to everyone.', String(allocation)) : ''),
+      informative: t('%1 tokens, fixed, sold from the curve until it raises %2 %5, then in a locked pool. The fee: %3. %4', compactNumber(shape.supply, 3), String(rules.graduation), launchFeeSplit(feeParts, true), allocation > 0 ? t('Your allocation of %1% is minted to you at graduation, and shown to everyone.', String(allocation)) : '', TICKER),
       level: allocation > 0 ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -238,9 +239,9 @@
         </form>
       {:else if step === 'options'}
         <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
-          <UnitsInput id="launch-first" label="First buy (optional)" decimals={8} bind:units={firstBuy} bind:text={firstBuyText} unit="ECX" allowZero hint="Bought in the launch's own block, at that block's price, like every buy of it" />
-          <UnitsInput id="launch-min" label="Least a buy pays (optional)" decimals={8} bind:units={minBuy} bind:text={minBuyText} unit="ECX" allowZero hint="A smaller buy is refunded: no dust orders" />
-          <UnitsInput id="launch-max" label="Most a buy pays (optional)" decimals={8} bind:units={maxBuy} bind:text={maxBuyText} unit="ECX" allowZero hint="A larger buy is refunded: no one buys the curve in one go" />
+          <UnitsInput id="launch-first" label="First buy (optional)" decimals={8} bind:units={firstBuy} bind:text={firstBuyText} unit={TICKER} allowZero hint="Bought in the launch's own block, at that block's price, like every buy of it" />
+          <UnitsInput id="launch-min" label="Least a buy pays (optional)" decimals={8} bind:units={minBuy} bind:text={minBuyText} unit={TICKER} allowZero hint="A smaller buy is refunded: no dust orders" />
+          <UnitsInput id="launch-max" label="Most a buy pays (optional)" decimals={8} bind:units={maxBuy} bind:text={maxBuyText} unit={TICKER} allowZero hint="A larger buy is refunded: no one buys the curve in one go" />
           <div class="field allocation">
             <label for="launch-allocation">Creator allocation: {allocation}%</label>
             <input id="launch-allocation" type="range" min="0" max={rules.maxAllocation} step="0.1" bind:value={allocation} />
@@ -261,15 +262,15 @@
           <dl class="ba-lines" data-testid="launch-review">
             <dt>Supply</dt><dd>{compactNumber(shape.supply, 3)} tokens, 6 decimals, fixed</dd>
             <dt>On the curve</dt><dd>{compactNumber(split.curve, 3)} ({formatPrice((split.curve / shape.supply) * 100, 3)}%)</dd>
-            <dt>Into the pool</dt><dd>{compactNumber(split.pool, 3)} ({formatPrice((split.pool / shape.supply) * 100, 3)}%), with the ECX raised, locked for good</dd>
+            <dt>Into the pool</dt><dd>{compactNumber(split.pool, 3)} ({formatPrice((split.pool / shape.supply) * 100, 3)}%), with the {TICKER} raised, locked for good</dd>
             {#if allocation > 0}<dt>Your allocation</dt><dd class="ba-warn">{compactNumber(split.allocation, 3)} ({allocation}%), minted at graduation: dilution</dd>{/if}
-            <dt>Graduation</dt><dd>at {rules.graduation} ECX raised</dd>
-            <dt>Price</dt><dd>from {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} ECX a token (9 times)</dd>
-            <dt>Market value</dt><dd>from {formatPrice(shape.startCap)} to {formatPrice(shape.endCap)} ECX</dd>
+            <dt>Graduation</dt><dd>at {rules.graduation} {TICKER} raised</dd>
+            <dt>Price</dt><dd>from {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} a token (9 times)</dd>
+            <dt>Market value</dt><dd>from {formatPrice(shape.startCap)} to {formatPrice(shape.endCap)} {TICKER}</dd>
             <dt>Fee</dt><dd data-testid="launch-fee-split">{launchFeeSplit(feeParts, true)}</dd>
-            {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} ECX</dd>{/if}
-            {#if minBuyText.trim() && minBuy}<dt>Least a buy</dt><dd>{formatUnits(minBuy, 8)} ECX</dd>{/if}
-            {#if maxBuyText.trim() && maxBuy}<dt>Most a buy</dt><dd>{formatUnits(maxBuy, 8)} ECX</dd>{/if}
+            {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} {TICKER}</dd>{/if}
+            {#if minBuyText.trim() && minBuy}<dt>Least a buy</dt><dd>{formatUnits(minBuy, 8)} {TICKER}</dd>{/if}
+            {#if maxBuyText.trim() && maxBuy}<dt>Most a buy</dt><dd>{formatUnits(maxBuy, 8)} {TICKER}</dd>{/if}
           </dl>
           {#if !ready}<p class="ba-help">The reservation is not deep enough yet: ready in {tn('%n block(s)', reservation?.wait ?? 0)}.</p>{/if}
           <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={busy || wallets.current === null || !ready || problems.length > 0}><Icon name="issue" size={16} /> {busy ? 'Launching…' : 'Launch'}</button></div>
@@ -281,8 +282,8 @@
       <div class="panel-head"><h3>How a launch works</h3></div>
       <div class="panel-body">
         <ul class="how">
-          <li>A billion tokens, fixed. None goes to you at launch: the curve sells {compactNumber(shape.curveSupply, 3)} of them for ECX, its price rising 9 times, and buys them back at its price.</li>
-          <li>When it has raised {rules.graduation} ECX it graduates: that ECX and the last {compactNumber(shape.poolSupply, 3)} tokens go into the token's pool with ECX, whose shares nobody holds. That liquidity is locked for good.</li>
+          <li>A billion tokens, fixed. None goes to you at launch: the curve sells {compactNumber(shape.curveSupply, 3)} of them for {TICKER}, its price rising 9 times, and buys them back at its price.</li>
+          <li>When it has raised {rules.graduation} {TICKER} it graduates: that {TICKER} and the last {compactNumber(shape.poolSupply, 3)} tokens go into the token's pool with {TICKER}, whose shares nobody holds. That liquidity is locked for good.</li>
           <li>The fee of the trades on the curve: {launchFeeSplit(feeParts, true)}.</li>
           <li>Every buy of a block gets one price: being first in a block gains nothing.</li>
         </ul>

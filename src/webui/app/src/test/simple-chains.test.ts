@@ -9,7 +9,7 @@ import { setTransport, type BridgeRequest } from '../lib/bridge';
 import { dialogs } from '../lib/dialogs.svelte';
 import { nav } from '../lib/nav.svelte';
 import { app, node, prefs, wallets } from '../lib/state.svelte';
-import { SIDECHAIN } from '../chain/config';
+import { SIDECHAIN, TICKER } from '../chain/config';
 
 beforeAll(() => {
   const proto = HTMLDialogElement.prototype as unknown as Record<string, unknown>;
@@ -81,7 +81,7 @@ function withWallet() {
 }
 
 describe('Move coins (the Sidechains page in Simple mode)', () => {
-  it('moves CHN to a sidechain in four steps, with the call of Advanced', async () => {
+  it('moves the chain\'s coin to a sidechain in four steps, with the call of Advanced', async () => {
     withWallet();
     const calls = drivechain({ createsidechaindeposit: () => ({ txid: 'cd'.repeat(32), total: 5 }) });
     render(DialogHost);
@@ -94,7 +94,7 @@ describe('Move coins (the Sidechains page in Simple mode)', () => {
     // 1: the sidechain, by its name.
     await fireEvent.click(await waitFor(() => screen.getByRole('button', { name: /Testchain/ })));
     // 2: the amount, at most what is available.
-    await waitFor(() => screen.getByText(/How much CHN should go to/));
+    await waitFor(() => screen.getByText(new RegExp(`How much ${TICKER} should go to`)));
     expect(document.body.textContent).toMatch(/You have 10\.00000000\sECX available/);
     const next = () => screen.getByRole('button', { name: 'Next' });
     expect((next() as HTMLButtonElement).disabled).toBe(true);
@@ -133,7 +133,7 @@ describe('Move coins (the Sidechains page in Simple mode)', () => {
     render(Sidechains);
     await waitFor(() => expect(document.querySelectorAll('.slot').length).toBe(256));
     expect(screen.getByRole('tab', { name: 'Proposals' })).toBeTruthy();
-    expect(screen.queryByText('Move CHN to a sidechain')).toBeNull();
+    expect(screen.queryByText(`Move ${TICKER} to a sidechain`)).toBeNull();
     // Simple mode, opened on the withdrawals (a link, the palette): shown, not hidden.
     prefs.uiMode = 'simple';
     nav.tab = 'withdrawals';
