@@ -170,9 +170,11 @@ struct Clearing {
     std::vector<uint64_t> outs;
     uint64_t reserve0{0};
     uint64_t reserve1{0};
-    //! The protocol's part of the fees (PROTOCOL_FEE_SHARE): always 0, in the reserves above; a hook.
-    uint64_t protocol0{0};
-    uint64_t protocol1{0};
+    //! What a concentrated pool's round took out of its fees for the chain's security and the protocol (State::ClearCl's
+    //! `take`, at most what the round kept beyond the walk), out of the reserves above. Other kinds: 0 (the clearing
+    //! takes those parts out itself: ClearOrders).
+    uint64_t taken0{0};
+    uint64_t taken1{0};
     //! A launch curve (curves::ClearLaunch): its fees, in the chain's coin, taken out of the curve (to the
     //! creator and to the liquidity of the pool it graduates to), what each order gets back of what it paid
     //! when the round reached the curve's end (in the chain's coin), and whether it did.

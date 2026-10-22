@@ -19,7 +19,8 @@
   import LogoPicker, { type PickedLogo } from './LogoPicker.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
-  import { curveShape, feeSplit, launchOptions, launchProblems, rulesOf, supplySplit, type LaunchStats } from './launch';
+  import { launchFeeParts, launchFeeSplit } from './fees';
+  import { curveShape, DEFAULT_RULES, launchOptions, launchProblems, rulesOf, supplySplit, type LaunchStats } from './launch';
   import { amountParam, displayNameProblem, formatPrice, formatUnits, MAX_INFO, MIN_CHN_PAYOUT, nameProblem, normalizeDisplayName, tickerOf, tickerProblem } from './model';
   import { ba, pendingOf, refreshBitAssets, tickersActive, tradeIntent } from './store.svelte';
 
@@ -118,7 +119,8 @@
   let allocation = $state(0);
   const problems = $derived(launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: MIN_CHN_PAYOUT }));
   const split = $derived(supplySplit(shape, allocation));
-  const fees = $derived(feeSplit(rules.fee, rules.creatorShare));
+  /** The fee of a trade on the curve and its parts: the creator's, the treasury's, the chain's security's. */
+  const feeParts = $derived(launchFeeParts(stats?.rules ?? DEFAULT_RULES));
   const maxInfo = MAX_INFO;
   const chnText = (units: bigint | null, text: string) => (text.trim() && units !== null ? amountParam(units, 8) : '');
 
@@ -148,7 +150,7 @@
     const r = await ask({
       title: t('Launch a token'),
       message: t('Launch %1 on a bonding curve?', sTicker),
-      informative: t('%1 tokens, fixed, sold from the curve until it raises %2 CHN, then in a locked pool. The fee of each trade is %3%, %4% of it to you. %5', compactNumber(shape.supply, 3), String(rules.graduation), String(rules.fee), String(rules.creatorShare), allocation > 0 ? t('Your allocation of %1% is minted to you at graduation, and shown to everyone.', String(allocation)) : ''),
+      informative: t('%1 tokens, fixed, sold from the curve until it raises %2 CHN, then in a locked pool. The fee: %3. %4', compactNumber(shape.supply, 3), String(rules.graduation), launchFeeSplit(feeParts, true), allocation > 0 ? t('Your allocation of %1% is minted to you at graduation, and shown to everyone.', String(allocation)) : ''),
       level: allocation > 0 ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -264,7 +266,7 @@
             <dt>Graduation</dt><dd>at {rules.graduation} CHN raised</dd>
             <dt>Price</dt><dd>from {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} CHN a token (9 times)</dd>
             <dt>Market value</dt><dd>from {formatPrice(shape.startCap)} to {formatPrice(shape.endCap)} CHN</dd>
-            <dt>Fee</dt><dd>{rules.fee}% of each trade on the curve: {formatPrice(fees.creator)}% to you, {formatPrice(fees.pool)}% into the pool at graduation</dd>
+            <dt>Fee</dt><dd data-testid="launch-fee-split">{launchFeeSplit(feeParts, true)}</dd>
             {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} CHN</dd>{/if}
             {#if minBuyText.trim() && minBuy}<dt>Least a buy</dt><dd>{formatUnits(minBuy, 8)} CHN</dd>{/if}
             {#if maxBuyText.trim() && maxBuy}<dt>Most a buy</dt><dd>{formatUnits(maxBuy, 8)} CHN</dd>{/if}
@@ -281,7 +283,7 @@
         <ul class="how">
           <li>A billion tokens, fixed. None goes to you at launch: the curve sells {compactNumber(shape.curveSupply, 3)} of them for CHN, its price rising 9 times, and buys them back at its price.</li>
           <li>When it has raised {rules.graduation} CHN it graduates: that CHN and the last {compactNumber(shape.poolSupply, 3)} tokens go into the token's pool with CHN, whose shares nobody holds. That liquidity is locked for good.</li>
-          <li>Each trade on the curve pays {rules.fee}%: {formatPrice(fees.creator)}% to you, the rest into the pool at graduation.</li>
+          <li>The fee of the trades on the curve: {launchFeeSplit(feeParts, true)}.</li>
           <li>Every buy of a block gets one price: being first in a block gains nothing.</li>
         </ul>
       </div>

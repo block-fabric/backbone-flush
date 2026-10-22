@@ -75,7 +75,7 @@ stretch's liquidity: fee_growth += ⌊fees·2^128/L⌋ (modulo 2^256). A positio
 L·(growth_inside − growth_inside_last)/2^128, growth_inside as Uniswap v3's (outside values flipped at each crossing).
 A tick carries at most (2^128 − 1)/(number of ticks at the spacing) liquidity, so the in-range sum never overflows.
 
-**Launch curve** (`ClearLaunch`): a constant product of virtual reserves (x, y). With the fee taken in the coin
+**Launch curve** (`ClearLaunch`): a constant product of virtual reserves (x, y). With the fee (1 % on Layers, 1.15 % on Flush) taken in the coin
 (buyers: on the way in; sellers: on the way out, rounded up), a round is ClearPool's formula on the fee-free amounts,
 unless it would sell past yE. Then it goes exactly to the end at the chord price P = Δx/Δy with Δy = y − yE,
 Δx = ⌈x·y/yE⌉ − x; sellers get ⌊b·P⌋; direct buyers share Δy + B tokens pro rata, rounded down, the units left given
@@ -113,7 +113,15 @@ in a book 2).
 
 ## Fees
 
-- Tiers to the providers; `PROTOCOL_FEE_SHARE` = 0 (computed, always 0).
+- A swap fee's parts, per round and per asset: fee = ⌊in·f/F⌋; security = ⌊fee·s/F⌋, protocol = ⌊fee·p/F⌋ (s, p the
+  network's `dex_fee_security_share`, `dex_fee_protocol_share`); providers = fee − security − protocol (the remainder
+  theirs). Both parts leave the reserves after the round (a concentrated pool: out of what it kept beyond its walk,
+  security first, at most that; its positions are credited the rest).
+- A launch fee's parts: creator ⌊fee·c/F⌋, protocol ⌊fee·p/F⌋, security ⌊fee·s/F⌋, the remainder to the pool at
+  graduation. Flush: fee 1.15 % (11 500), c = 50 %, p = 30 %, s = 20 %: of 1 ECX, 1 150 000 satoshis = 575 000 +
+  345 000 + 230 000. Layers: 1 %, c = 80 %, s = 20 %, p = 0.
+- The block's security parts in the chain's coin E join its ordinary fees F: the bidder gets ⌊(F + E)·bps/10^4⌋ (the
+  fee curve: bps = 5000 at S ≤ 60 s, 5000 − ⌈500(S − 60)/60⌉ to 2000 at S ≥ 420 s), the validators the rest.
 - Dynamic: fee(h) = f + min(⌊vol(h)/2⌋, 20000), vol updated in each block that changes the pool:
   step = min(⌊|p1 − p0|·10^6/p0⌋, 10^6) (p the UQ64.64 spot price), vol ← ⌊(decayed·7 + step)/8⌋, decayed =
   vol >> ⌊(gap − 1)/40⌋ for a gap of blocks since the last change.

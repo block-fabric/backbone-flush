@@ -175,7 +175,11 @@ std::function<std::string(const Call&)> AfterDepth(std::string info_method, std:
         const UniValue& depth{info.isObject() ? info.find_value(depth_field) : NullUniValue};
         if (!depth.isNum()) return std::string{"once the reservation is deep enough"};
         const int64_t blocks{depth.getInt<int64_t>()};
-        const int64_t seconds{(blocks + 1) * Params().GetConsensus().nPowTargetSpacing};
+        // The chain's own blocks: a block of stake each slot where the chain has slots (FastBlocks), else its target spacing
+        // (not Bitcoin's ten minutes of a regtest's parameters).
+        const auto& consensus{Params().GetConsensus()};
+        const int64_t spacing{consensus.pos.slot_seconds > 0 ? int64_t{consensus.pos.slot_seconds} : int64_t{consensus.nPowTargetSpacing}};
+        const int64_t seconds{(blocks + 1) * spacing};
         const std::string about{seconds < 90 ? strprintf("about %d s", seconds) : strprintf("about %d min", (seconds + 30) / 60)};
         return strprintf("once the reservation is %d block%s deep (%s)", blocks, blocks == 1 ? "" : "s", about);
     };

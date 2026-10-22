@@ -104,6 +104,7 @@ export const LOCAL_COMMANDS = [
   { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
   { id: 'ba.markets', label: 'Markets', page: 'trade', tab: 'markets', tip: 'Every pair: its price, its change and volume over a day, its liquidity', keywords: 'market index pairs volume liquidity price change verified curators issuers' },
   { id: 'ba.book', label: 'Order book…', page: 'trade', tab: 'book', tip: 'The order book of two assets: limit orders to buy or sell at a price', keywords: 'order book limit orders bid ask spread' },
+  { id: 'ba.treasury', label: 'Treasury', page: 'trade', tab: 'treasury', tip: 'Where the fees go, and what the treasury holds per asset', keywords: 'treasury fees protocol security providers split' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
   { id: 'ba.positions', label: 'Positions', page: 'trade', tab: 'positions', tip: 'Your positions of concentrated liquidity: in range or not, fees earned; collect, add, remove, close', keywords: 'concentrated liquidity position range ticks uniswap v3 fees collect' },
   { id: 'ba.launches', label: 'Launches', page: 'trade', tab: 'launches', tip: 'Tokens sold from a bonding curve until they graduate into a locked pool', keywords: 'launch bonding curve token new graduate pump fair' },

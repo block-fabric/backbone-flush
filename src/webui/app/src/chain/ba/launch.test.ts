@@ -1,7 +1,7 @@
 // Layers' launches as the pages see them (ba/launch.ts): the bonding curve from the rules, the split of the supply and
 // of the fee, the queries of the list, the options of launchtoken and what is wrong with them, what a creator is owed.
 import { describe, expect, it } from 'vitest';
-import { appendLaunches, claimable, curvePointAt, curveSeries, curveShape, feeSplit, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
+import { appendLaunches, claimable, curvePointAt, curveSeries, curveShape, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
 
 describe('the bonding curve', () => {
   const shape = curveShape(500, 1_000_000_000);
@@ -40,7 +40,6 @@ describe('the bonding curve', () => {
     expect(two.allocation).toBe(20_000_000);
     expect(two.total).toBe(1_020_000_000);
     expect(two.dilution).toBeCloseTo((2 / 102) * 100, 9);
-    expect(feeSplit(1, 30)).toEqual({ creator: 0.3, pool: 0.7 });
   });
 
   it('reads the rules as numbers, those of every network until the node answers', () => {

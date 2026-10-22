@@ -295,7 +295,7 @@ public:
     bool CheckFees(const sidechain::State& state, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step, const std::vector<CAmount>& fees,
                    std::string& reject_reason) const override;
     /** The validators' share of a merged mined block's ordinary fees, to the pool output. */
-    CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const override;
+    CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs, CAmount extra = 0) const override;
     /** Whether the block at `height` takes the fee split (PosParams::fee_split_height). */
     bool FeeSplitActive(int height) const { return height >= m_params.fee_split_height; }
     /** The curve of the bidder's share the block at `height` takes (the second from PosParams::fee_curve2_height). */

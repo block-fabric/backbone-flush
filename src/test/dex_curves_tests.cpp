@@ -241,7 +241,7 @@ BOOST_AUTO_TEST_CASE(clearing_properties)
             BOOST_CHECK(cleared->reserve0 == r0 + in0 - out0);
             BOOST_CHECK(cleared->reserve1 == r1 + in1 - out1);
             BOOST_CHECK(cleared->reserve0 > 0 && cleared->reserve1 > 0);
-            BOOST_CHECK_EQUAL(cleared->protocol0 + cleared->protocol1, 0U);
+            BOOST_CHECK_EQUAL(cleared->taken0 + cleared->taken1, 0U);
             // The invariant never falls (the fees and the rounding raise it).
             CheckNeverFalls(p, r0, r1, cleared->reserve0, cleared->reserve1);
             // One price: of two orders of a side, the larger never gets less, and out/in is the same up to rounding.

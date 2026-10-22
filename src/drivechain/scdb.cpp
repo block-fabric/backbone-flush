@@ -40,7 +40,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // Every field: a parameter added later has to be added here as well.
     // BitAssets' own rules (the reveal depth) count as well.
     // (Not asset_volume_window: no rule, only the search index of the assets, which has a layout of its own.)
-    static_assert(sizeof(Consensus::SidechainParams) == 80, "a new sidechain parameter goes into the fingerprint");
+    static_assert(sizeof(Consensus::SidechainParams) == 96, "a new sidechain parameter goes into the fingerprint");
     HashWriter hasher{};
     hasher << std::string{"Sidechain parameters"} << ParamsFingerprint(params) << sidechain.slot << sidechain.min_withdrawal
            << sidechain.max_bundle_withdrawals << sidechain.bundle_retry_delay << sidechain.main_activation_height
@@ -58,6 +58,8 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
         hasher << std::string{"dexcurves"} << sidechain.dex_curves_height;
         // Launches come with them.
         hasher << std::string{"launch"} << sidechain.launch_graduation << sidechain.launch_fee << sidechain.launch_creator_share;
+        // The fee splits of launches and swaps.
+        hasher << std::string{"feeparts"} << sidechain.launch_protocol_share << sidechain.launch_security_share << sidechain.dex_fee_security_share << sidechain.dex_fee_protocol_share;
     }
     return hasher.GetHash();
 }

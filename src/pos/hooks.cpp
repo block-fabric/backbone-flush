@@ -1101,7 +1101,7 @@ int64_t FastBlocksHooks::FeeSplitSpacing(int main_height) const
     return MedianSpacingAt(*chainman->m_mainchain, main_height, m_params.main_activation_height);
 }
 
-bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step,
+bool FastBlocksHooks::CheckFees(const sidechain::State& state, const CBlock& block, int height, const std::optional<sidechain::PegStep>& step,
                                 const std::vector<CAmount>& fees, std::string& reject_reason) const
 {
     if (!FeeSplitActive(height)) return true;
@@ -1110,7 +1110,8 @@ bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, in
     if (!pos_block && !step) return Fail(reject_reason, "bad-pos-context");
     const auto main_height{FeeSplitMainHeight(pos_block, SlotOf(block.nTime, m_params), step ? step->main_height : -1)};
     if (!main_height) return Fail(reject_reason, "pos-seed-unknown");
-    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/false, FeeSplitSpacing(*main_height), FeeCurveAt(height))};
+    // The DEX's security parts of its fees (in the chain's coin) are ordinary fees of the block (pos/feesplit.h).
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/false, FeeSplitSpacing(*main_height), FeeCurveAt(height), state.BitAssets().BlockSecurityFees(height))};
     CAmount pot{0}, pool{0};
     for (const CTxOut& txout : block.vtx.at(0)->vout) {
         if (IsPotScript(txout.scriptPubKey)) pot += txout.nValue;
@@ -1123,10 +1124,10 @@ bool FastBlocksHooks::CheckFees(const sidechain::State&, const CBlock& block, in
     return true;
 }
 
-CAmount FastBlocksHooks::MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const
+CAmount FastBlocksHooks::MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs, CAmount extra) const
 {
     if (!FeeSplitActive(height)) return 0;
-    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/true, FeeSplitSpacing(main_height), FeeCurveAt(height))};
+    const FeeSplit split{SplitFees(block.vtx, fees, /*fees_without_coinbase=*/true, FeeSplitSpacing(main_height), FeeCurveAt(height), extra)};
     if (split.validators > 0) outputs.emplace_back(split.validators, PoolScript());
     return split.validators;
 }

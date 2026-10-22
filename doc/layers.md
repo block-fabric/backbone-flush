@@ -271,10 +271,9 @@ the pools AddLiquidity makes keep their id (`PoolId`), record, fee and arithmeti
 | StableSwap (Curve) | 4A(X+Y) + D = 4AD + D³/(4XY) | amplification A, 1 to 10000 | assets meant to trade near one for one |
 | Weighted (Balancer) | x^wa · y^wb = k | weight of an asset: 2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95 or 98 % | a pool that holds mostly one asset (80/20: less loss to price moves of the 80) |
 
-Fee tiers: 0.01 %, 0.05 %, 0.30 %, 1.00 % (`FEE_TIERS`, in millionths: 100, 500, 3000, 10000). Every fee stays
-in the pool, for its liquidity providers. `PROTOCOL_FEE_SHARE` is the protocol's part of the fees: 0 (a hook:
-the clearing works out that part, `dex::Clearing::protocol0/1`, always 0; a rule giving it a destination would
-be a change of the rules). A 50/50 weighted pool is the constant product: it is made as one.
+Fee tiers: 0.01 %, 0.05 %, 0.30 %, 1.00 % (`FEE_TIERS`, in millionths: 100, 500, 3000, 10000). Most of a fee stays
+in the pool, for its liquidity providers; the chain's security and the protocol's parts leave it ("Fees of the DEX").
+A 50/50 weighted pool is the constant product: it is made as one.
 
 A pair has a pool of each kind. Its id is `PoolIdOf(a, b, kind)`: `PoolId(a, b)` for constant product at
 0.30 %, otherwise `SHA256(ser("Layers pool") ‖ asset0 ‖ asset1 ‖ curve ‖ fee ‖ amp ‖ weight of asset0 ‖ flags)`
@@ -484,10 +483,10 @@ Its shares (isqrt of the product) are held by nobody, and nobody can ever hold t
 for good. Anyone may add liquidity on top (their own shares). The raised coin at graduation is G plus a few
 satoshis of rounding (the chord's ceiling); `getlaunch` says it exactly.
 
-**Fees** (proposals, not decided tokenomics: consensus parameters, `SidechainParams`, kept by each launch as
-made): `launch_fee` 1 % of every trade on the curve; `launch_creator_share` 30 % of that to the creator
-(`ClaimLaunch`, kind 23, sent by anyone: CHN by the coinbase to the creator's script), the other 70 % into the
-pool at graduation (deepening its locked liquidity). No protocol token, no buybacks. A creator's allocation is
+**Fees** (consensus parameters, kept by each launch as made; see "Fees of the DEX"): `launch_fee` of every trade on the
+curve, split between the creator (`ClaimLaunch`, kind 23, sent by anyone: the coin by the coinbase to the creator's
+script), the protocol (the treasury) and the chain's security (the block's BMM bidder and validators), the remainder into
+the pool at graduation. No protocol token, no buybacks (the treasury has no spending rule yet). A creator's allocation is
 optional, at most `MAX_LAUNCH_ALLOCATION` (5 %), minted only at graduation (to the creator, by a claim): until
 then no token exists but those the curve sold, so the curve always holds the coin to buy them back; the
 allocation is shown on every launch (`allocation`). Anti-abuse: the ticker rules of assets (reservation and
@@ -495,8 +494,8 @@ reveal, no look-alikes), per-launch `min_buy` and `max_buy` (CHN; a buy outside 
 itself (every buy of a block, the creator's first included, at one price).
 
 **Parameters.** `launch_graduation` = 500 coins on every network (Layers: 500 CHN, the "CHN equivalent" until a
-rate is chosen; the eCash chain: 500 ECX), `launch_fee` = 10 000 millionths, `launch_creator_share` = 300 000
-millionths of the fee; in the drivechain database's fingerprint with the pool kinds' height.
+rate is chosen; the eCash chain: 500 ECX), `launch_fee` and its parts as in "Fees of the DEX"; in the drivechain
+database's fingerprint with the pool kinds' height.
 
 **State.** `0x8c` launches (`LaunchRecord`), `0x8d` the log (height, token) of the last `LAUNCH_LOG_BLOCKS`
 (10 080) blocks, `0x8e` launches by height; the curve's pool and kind in `0x34`/`0x8a`. `HeldChn` counts a curve's
@@ -585,6 +584,52 @@ concentrated pool's square root price squared; 0 for a book, which has no price 
 price, as for the others, and the rows of constant-product pools are what they always were. Volumes are counted in CHN,
 so for pools with CHN only (a pair without CHN shows 0; its all-time volumes are `getpool`'s `volume_a`/`volume_b`). The
 app's Markets tab is this index: price, 24-hour change, volume and liquidity, searchable and sortable.
+
+## Fees of the DEX
+
+Consensus parameters of each network (`Consensus::SidechainParams`, in the drivechain database's fingerprint with the
+pool kinds' height), in millionths of a fee; each part is the floor of its share, and the remainder of the roundings
+goes to a party named below, so that the parts add up to the fee, exactly.
+
+| | Layers (CHN) | Flush (ECX) |
+|---|---|---|
+| Swap fees (every pool kind and tier; order books charge none) | providers 89 %, security 11 %, protocol 0 | providers 85 %, security 11 %, protocol 4 % |
+| Launch curves: the fee of a trade | 1 % | 1.15 % |
+| … its parts | creator 80 %, security 20 %, protocol 0 | creator 50 %, protocol 30 %, security 20 % |
+| Network fees of transactions | the BMM bidder and the validators, by the fee curve; peg fees the bidder's | the same |
+
+(`dex_fee_security_share`, `dex_fee_protocol_share`, `launch_fee`, `launch_creator_share`, `launch_protocol_share`,
+`launch_security_share`; the rest of a swap fee is the providers', the rest of a launch's fee goes with its curve into
+the pool at graduation. A launch keeps the parts it was made under.)
+
+**Swap fees.** In a pool's round of a block's batch, the fee of what came in of an asset is ⌊in·fee/F⌋ (F = 10^6; the
+dynamic fee when the pool has one); its security part is ⌊fee·s/F⌋ and its protocol part ⌊fee·p/F⌋ (`SwapFeeParts`);
+both leave the pool after the round (its reserves less them: the pool still holds its level, since its worst point is
+net of all the fees), and the providers keep the rest, the remainder included. A concentrated pool's round takes them
+out of what it kept beyond its walk (at most that: the security part first) and credits its positions the rest.
+**Launch fees**: the creator's ⌊fee·c/F⌋, the protocol's ⌊fee·p/F⌋, the security part ⌊fee·s/F⌋ (`LaunchFeeParts`),
+the remainder into the pool at graduation.
+
+**Security parts** paid in the chain's coin are fees of the block: `bitassets::State::BlockSecurityFees(height)` (cell
+`0x9f`) joins the ordinary fees of its transactions in the fee split (`pos::SplitFees`'s `extra_ordinary`): the BMM
+bidder and the validators share them by the same curve as network fees (50/50 at the target spacing, down to 20/80),
+into the pot or kept by the merged miner, and into the validator pool (`CheckFees`, `bad-pos-fee-split`). The coinbase
+may pay them beyond its transactions' fees (they are counted with what it mints: the DEX's coin, which the state held,
+paid out); a block of stake's `AfterBlock` counts them in the pot and pool outputs. Security parts of fees paid in an
+asset (not the chain's coin) cannot be paid by a coinbase: the treasury holds them per asset (`security_held`), to be
+paid by a later rule.
+
+**The treasury** (table `0x9e`, `TreasuryEntry` per asset): the protocol's parts (from swaps, from launches) and the
+assets' security parts, held by the chain itself: no key, no output; its coin is in the peg balance (`HeldChn`). No
+rule spends from it yet: the hook is `TreasurySpend` (state.cpp), which refuses everything; a spending rule (an
+emission, buybacks, a multisig) is a change of the rules, to be decided. `gettreasury` (balances, inflows by source,
+the security parts paid, the parts in force); `getdexinfo`'s `swap_fee_parts`; `getlaunch`/`getlaunchstats`' shares.
+
+**Conservation, reorganisations.** Every part is an integer: the parts and the remainder add up to the fee charged
+(`fee_parts_exact`); a block's pools, treasury and security parts add up to what its orders paid in and got
+(`fee_parts_conserved_and_undone`, launches: `launch_trade_graduate_claim`); a block taken back takes the treasury's
+accruals and its security parts back with the rest of its changes (the store's journal). The bidder/validators split of
+the security parts is the fee split's, to the satoshi (`security_parts_split_as_fees`).
 
 ## Logos of assets
 

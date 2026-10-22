@@ -26,7 +26,8 @@
   import { clampAmp, CURVE_HELP, CURVE_NAMES, CURVES, DEFAULT_AMP, defaultFee, DYNAMIC_FEE_HELP, FEE_TIERS, flipKind, isDefaultKind, kindOf, kindParam, MAX_AMP, MIN_AMP, WEIGHTS, type MadeCurve, type PoolPreview } from './kinds';
   import { priceAmounts } from './cl';
   import { amountParam, assetArg, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, unitsAtMost, type Amount } from './model';
-  import { assetById, ba, decimalsOf, labelOf, nameOf, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { swapFeeSplit } from './fees';
+  import { assetById, ba, decimalsOf, labelOf, nameOf, poolsOf, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
 
   const dex = $derived(ba.dex);
   const active = $derived(dex?.curves_active === true);
@@ -273,7 +274,7 @@
             <div class="ba-chips" role="group" aria-label="Fee tier">
               {#each tiers as f (f)}<button type="button" class="ba-chip" aria-pressed={fee === f} onclick={() => (fee = f)}>{f}%</button>{/each}
             </div>
-            <span class="hint">What each trade leaves in the pool, all to its providers. Low for assets that hold their price against each other; high for those that swing.{#if cl} A concentrated pool's positions are ranges of ticks spaced by its tier (0.01%: 1 tick, 0.05%: 10, 0.3%: 60, 1%: 200).{/if}</span>
+            <span class="hint">What each trade pays: {swapFeeSplit(swapParts())}. Low for assets that hold their price against each other; high for those that swing.{#if cl} A concentrated pool's positions are ranges of ticks spaced by its tier (0.01%: 1 tick, 0.05%: 10, 0.3%: 60, 1%: 200).{/if}</span>
           </div>
           <label class="check dynamic"><input type="checkbox" bind:checked={dynamic} /> <span><strong>Dynamic fee</strong> <span class="faint small">{t(DYNAMIC_FEE_HELP)} Another pool than the one without it.</span></span></label>
           {#if curve === 'stable'}
@@ -376,7 +377,7 @@
         {:else}
           <ul class="how">
             {#each CURVES as c (c)}<li><strong>{t(CURVE_NAMES[c])}.</strong> {t(CURVE_HELP[c])}</li>{/each}
-            <li>Each trade pays the pool's fee, all to its providers, in proportion to their shares.</li>
+            <li>Each trade pays the pool's fee: {swapFeeSplit(swapParts())}; the providers' part to each in proportion to their shares.</li>
             <li>Swaps compare every pool of a pair, and routes go through pools of any kind.</li>
           </ul>
         {/if}

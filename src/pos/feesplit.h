@@ -113,9 +113,10 @@ struct FeeSplit {
 };
 /**
  * The split of a block's fees. `fees[i]` is the fee of `vtx[i]` (entry 0, the coinbase's, is not read;
- * `fees` may be one shorter than `vtx`, without it: then `fees[i - 1]` is that of `vtx[i]`).
+ * `fees` may be one shorter than `vtx`, without it: then `fees[i - 1]` is that of `vtx[i]`). `extra_ordinary`: ordinary
+ * fees no transaction paid (the security parts of the DEX's fees of the block, in the chain's coin), split with the others.
  */
-FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve = FeeCurve::FIRST);
+FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve = FeeCurve::FIRST, CAmount extra_ordinary = 0);
 
 /** A validator of the set of an epoch whose pool is paid. */
 struct PoolMember {

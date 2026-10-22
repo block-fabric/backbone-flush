@@ -350,9 +350,11 @@ public:
      * Block assembly of a merged mined block: outputs of the sidechain's own for the fees of its
      * transactions (`fees[i]` the fee of block.vtx[i + 1]), put last in the coinbase, and the amount they
      * take from its first output (FastBlocks: the validators' share of the fees, to the validator pool).
-     * `main_height`: the mainchain block before the one that is to commit to it. By default none.
+     * `main_height`: the mainchain block before the one that is to commit to it. `extra`: fees of the block that
+     * no transaction paid, split as ordinary ones (the security parts of the DEX's fees: bitassets
+     * State::BlockSecurityFees). By default none.
      */
-    virtual CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs) const { return 0; }
+    virtual CAmount MergeMinedFeeOutputs(const CBlock& block, int height, int main_height, const std::vector<CAmount>& fees, std::vector<CTxOut>& outputs, CAmount extra = 0) const { return 0; }
 
     /**
      * Called by the Follower each round, once the record is up to date, in place of its own merged

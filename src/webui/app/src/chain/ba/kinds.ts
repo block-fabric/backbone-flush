@@ -4,6 +4,7 @@
 // the trades over every pool of a pair and the routes through several, and how the wallet sends the one chosen; the
 // depth of a pool (what trades of growing size do to its price), for its chart and its table of slippage.
 // Pure: no state, no calls (tested in chain/ba/kinds.test.ts).
+import type { SwapFeeParts } from './fees';
 import { approx, assetArg, isChn, unitsOf, type Amount } from './model';
 
 /**
@@ -58,7 +59,8 @@ export interface DexInfo {
   min_amp: number;
   max_amp: number;
   weights: number[];
-  protocol_fee_share: number;
+  /** The parts of every swap fee, in percent of it (consensus parameters; older nodes: absent, all to the providers). */
+  swap_fee_parts?: SwapFeeParts;
 }
 
 export function isCurve(value: unknown): value is Curve {

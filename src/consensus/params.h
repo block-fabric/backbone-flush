@@ -125,12 +125,25 @@ struct SidechainParams {
     /**
      * Launches (bitassets LaunchToken, with the pool kinds): what a launch's curve raises before it graduates into a
      * locked pool, in the chain's coin (even: the curve's virtual coin is half of it); the fee of a trade on a curve
-     * (millionths); the creator's part of that fee (millionths of it), the rest going with the curve into the pool.
-     * A launch keeps the values it was made under. Proposals, not decided tokenomics (doc/layers.md "Launches").
+     * (millionths); the parts of that fee (millionths of it): the creator's, the protocol's (to the treasury) and the
+     * chain's security (the block's BMM bidder and validators, by the curve of the network fees: pos/feesplit.h); the
+     * rest, the rounding's remainder, goes with the curve into the pool. A launch keeps the values it was made under.
+     * Layers: creator 80 %, protocol 0, security 20 % of a 1 % fee (doc/layers.md "Fees of the DEX").
      */
     int64_t launch_graduation{int64_t{500} * 100'000'000};
     uint32_t launch_fee{10'000};
-    uint32_t launch_creator_share{300'000};
+    uint32_t launch_creator_share{800'000};
+    uint32_t launch_protocol_share{0};
+    uint32_t launch_security_share{200'000};
+    /**
+     * The parts of every DEX swap fee (all pool kinds and tiers; order books charge none), in millionths of the fee: the
+     * chain's security (paid with the block's fees: the BMM bidder and the validators by the curve of the network fees,
+     * when the fee is in the chain's coin; held by the treasury per asset otherwise) and the protocol's (to the
+     * treasury); the liquidity providers keep the rest, the roundings' remainders included. Layers: security 11 %,
+     * protocol 0 (the providers keep 89 %).
+     */
+    uint32_t dex_fee_security_share{110'000};
+    uint32_t dex_fee_protocol_share{0};
     /**
      * Height of the mainchain block that activated this sidechain in its slot (activationheight in
      * the mainchain's getsidechain). What the mainchain did up to that block, deposits included, was

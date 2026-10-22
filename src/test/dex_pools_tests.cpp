@@ -12,6 +12,7 @@
 #include <bitassets/index.h>
 #include <bitassets/state.h>
 #include <consensus/params.h>
+#include <pos/feesplit.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <sidechain/state.h>
@@ -150,6 +151,16 @@ PoolParams Kind(Curve curve, uint32_t fee, uint32_t amp = 0, uint8_t weight0 = 0
 }
 } // namespace
 
+namespace {
+/** The security and protocol parts of the fee on `in` at `fee` (the network's shares): what leaves the pool. */
+uint64_t Taken(uint64_t in, uint32_t fee)
+{
+    const auto& rules{Params().GetConsensus().sidechain};
+    const FeeParts parts{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(in) * fee / FEE_DENOMINATOR), rules.dex_fee_security_share, rules.dex_fee_protocol_share)};
+    return parts.security + parts.protocol;
+}
+} // namespace
+
 BOOST_FIXTURE_TEST_SUITE(dex_pools_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(activation)
@@ -244,8 +255,9 @@ BOOST_AUTO_TEST_CASE(kinds_side_by_side)
     BOOST_REQUIRE(both);
     BOOST_CHECK(chain.TokenAt(COutPoint{buy.GetHash(), 0}) == AssetToken(SILVER, both->outs[0]));
     BOOST_CHECK(chain.TokenAt(COutPoint{sell.GetHash(), 0}) == AssetToken(GOLD, both->outs[1]));
-    BOOST_CHECK_EQUAL(chain.PoolAt(id_stable).reserve0, both->reserve0);
-    BOOST_CHECK_EQUAL(chain.PoolAt(id_stable).reserve1, both->reserve1);
+    // The round's reserves, less the security and protocol parts of each side's fee.
+    BOOST_CHECK_EQUAL(chain.PoolAt(id_stable).reserve0, both->reserve0 - Taken(gold0 ? 50'000 : s5->amount, 100));
+    BOOST_CHECK_EQUAL(chain.PoolAt(id_stable).reserve1, both->reserve1 - Taken(gold0 ? s5->amount : 50'000, 100));
     // A stable pool near balance: about 1:1, less the 0.01 % fee.
     BOOST_CHECK_GT(both->outs[0], 49'900U);
 
@@ -428,6 +440,112 @@ BOOST_AUTO_TEST_CASE(index_prices_of_kinds)
             BOOST_CHECK(std::abs(static_cast<double>(priced) / pool.reserve0 - 1) < 0.1);
             BOOST_CHECK(std::abs(ratio - 1) > 0.5);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fee_parts_exact)
+{
+    // Each part is the floor of its share of the fee; the liquidity providers (or a launch's pool) keep the remainder:
+    // the parts never exceed the fee and add up to it with the remainder, whatever the shares (Layers' and Flush's).
+    struct Shares {
+        uint32_t security, protocol;
+    };
+    for (const Shares sh : {Shares{110'000, 0}, Shares{110'000, 40'000}, Shares{0, 0}, Shares{1'000'000, 0}}) {
+        for (uint64_t fee : {uint64_t{0}, uint64_t{1}, uint64_t{9}, uint64_t{10}, uint64_t{1'000'003}, MAX_AMOUNT}) {
+            const FeeParts p{SwapFeeParts(fee, sh.security, sh.protocol)};
+            BOOST_CHECK_EQUAL(p.security, static_cast<uint64_t>(static_cast<unsigned __int128>(fee) * sh.security / FEE_DENOMINATOR));
+            BOOST_CHECK_EQUAL(p.protocol, static_cast<uint64_t>(static_cast<unsigned __int128>(fee) * sh.protocol / FEE_DENOMINATOR));
+            BOOST_CHECK_LE(p.security + p.protocol, fee);
+        }
+    }
+    // Flush: swaps 85 / 11 / 4 of a fee of 1 000 003 units: 110 000 and 40 000, the providers 850 003.
+    const FeeParts swap{SwapFeeParts(1'000'003, 110'000, 40'000)};
+    BOOST_CHECK_EQUAL(swap.security, 110'000U);
+    BOOST_CHECK_EQUAL(swap.protocol, 40'000U);
+    // Flush: a launch's 1.15 % of 1 ECX (1 150 000 satoshis): creator 50 %, protocol 30 %, security 20 %, nothing left.
+    const uint64_t fee{uint64_t{100'000'000} * 11'500 / FEE_DENOMINATOR};
+    BOOST_CHECK_EQUAL(fee, 1'150'000U);
+    const FeeParts launch{LaunchFeeParts(fee, 500'000, 300'000, 200'000)};
+    BOOST_CHECK_EQUAL(launch.creator, 575'000U);
+    BOOST_CHECK_EQUAL(launch.protocol, 345'000U);
+    BOOST_CHECK_EQUAL(launch.security, 230'000U);
+    // Of 115 satoshis: 57, 34, 23 and 1 left for the pool (the remainder rule).
+    const FeeParts small{LaunchFeeParts(115, 500'000, 300'000, 200'000)};
+    BOOST_CHECK_EQUAL(small.creator, 57U);
+    BOOST_CHECK_EQUAL(small.protocol, 34U);
+    BOOST_CHECK_EQUAL(small.security, 23U);
+    BOOST_CHECK_EQUAL(115 - small.creator - small.protocol - small.security, 1U);
+    // Layers: creator 80 %, security 20 %, protocol 0.
+    const FeeParts layers{LaunchFeeParts(1'000'001, 800'000, 0, 200'000)};
+    BOOST_CHECK_EQUAL(layers.creator + layers.security + layers.protocol, 1'000'000U);
+    // Shares of more than a whole together never take more than the fee.
+    const FeeParts over{LaunchFeeParts(1000, 900'000, 300'000, 200'000)};
+    BOOST_CHECK_LE(over.creator + over.protocol + over.security, 1000U);
+}
+
+BOOST_AUTO_TEST_CASE(fee_parts_conserved_and_undone)
+{
+    // A block of swaps both ways through a pool with the chain's coin and a stable pool: each pool keeps the round's
+    // reserves less the security and protocol parts of each side's fee; the coin's security part is the block's
+    // (BlockSecurityFees: paid with its fees), an asset's held by the treasury, the protocol's parts the treasury's. The
+    // block taken back takes all of it back.
+    Chain chain;
+    const auto& rules{Params().GetConsensus().sidechain};
+    const AssetId GOLD{HashName("GOLD")}, SILVER{HashName("SILVER")};
+    const auto g{chain.Issue("GOLD", 100'000'000, {10'000'000, 10'000'000, 70'000, 90'000})};
+    const auto s{chain.Issue("SILVER", 100'000'000, {10'000'000, 80'000})};
+    chain.Create(g[0], GOLD, 10'000'000, std::nullopt, CHN, 500'000'000, Curve::CONSTANT_PRODUCT, 10'000);
+    chain.Create(g[1], GOLD, 10'000'000, s[0], SILVER, 10'000'000, Curve::STABLE, 500, 100);
+    chain.EndBlock();
+    const uint256 cp{PoolIdOf(GOLD, CHN, Kind(Curve::CONSTANT_PRODUCT, 10'000))}, st{PoolIdOf(GOLD, SILVER, Kind(Curve::STABLE, 500, 100))};
+    const Pool cp_before{chain.PoolAt(cp)}, st_before{chain.PoolAt(st)};
+    const bool gold_first{GOLD < SILVER};
+    chain.Require(MakeTx({}, SwapPools{CHN, {cp}, 30'000'000, 1, HOLDER}, {std::nullopt}, 30'000'000));
+    chain.Require(MakeTx({g[2]}, SwapPools{GOLD, {cp}, 70'000, 1, HOLDER}, {std::nullopt}));
+    chain.Require(MakeTx({g[3]}, SwapPools{GOLD, {st}, 90'000, 1, CScript{}}, {std::nullopt}));
+    chain.Require(MakeTx({s[1]}, SwapPools{SILVER, {st}, 80'000, 1, CScript{}}, {std::nullopt}));
+    const uint256 hash_before{chain.state.Hash()};
+    chain.store.TakeUndo();
+    chain.EndBlock();
+    const int block{chain.height - 1};
+    const auto parts{[&](uint64_t in, uint32_t fee) { return SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(in) * fee / FEE_DENOMINATOR), rules.dex_fee_security_share, rules.dex_fee_protocol_share); }};
+    // The pool with CHN (asset0: CHN): 30 000 000 CHN and 70 000 GOLD in, at 1 %.
+    const FeeParts cp_chn{parts(30'000'000, 10'000)}, cp_gold{parts(70'000, 10'000)};
+    const auto cp_round{curves::ClearPoolOf(Kind(Curve::CONSTANT_PRODUCT, 10'000), 10'000, cp_before.reserve0, cp_before.reserve1, {{true, 30'000'000}, {false, 70'000}})};
+    BOOST_REQUIRE(cp_round);
+    BOOST_CHECK_EQUAL(chain.PoolAt(cp).reserve0, cp_round->reserve0 - cp_chn.security - cp_chn.protocol);
+    BOOST_CHECK_EQUAL(chain.PoolAt(cp).reserve1, cp_round->reserve1 - cp_gold.security - cp_gold.protocol);
+    // The stable pool: 90 000 GOLD and 80 000 SILVER in, at 0.05 %.
+    const FeeParts st_gold{parts(90'000, 500)}, st_silver{parts(80'000, 500)};
+    const auto st_round{curves::ClearPoolOf(Kind(Curve::STABLE, 500, 100), 500, st_before.reserve0, st_before.reserve1, {{gold_first, 90'000}, {!gold_first, 80'000}})};
+    BOOST_REQUIRE(st_round);
+    const FeeParts& st0{gold_first ? st_gold : st_silver};
+    const FeeParts& st1{gold_first ? st_silver : st_gold};
+    BOOST_CHECK_EQUAL(chain.PoolAt(st).reserve0, st_round->reserve0 - st0.security - st0.protocol);
+    BOOST_CHECK_EQUAL(chain.PoolAt(st).reserve1, st_round->reserve1 - st1.security - st1.protocol);
+    // Where the parts went, exactly.
+    BOOST_CHECK_EQUAL(chain.Assets().BlockSecurityFees(block), static_cast<CAmount>(cp_chn.security));
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{}).security_held, cp_gold.security + st_gold.security);
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(SILVER).value_or(TreasuryEntry{}).security_held, st_silver.security);
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{}).balance, cp_gold.protocol + st_gold.protocol);
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(CHN).value_or(TreasuryEntry{}).balance, cp_chn.protocol);
+    BOOST_CHECK_GT(cp_chn.security, 0U);
+    // The block taken back: the treasury, the block's security parts and the pools as they were.
+    chain.store.Revert(chain.store.TakeUndo());
+    BOOST_CHECK(chain.state.Hash() == hash_before);
+    BOOST_CHECK(!chain.Assets().GetTreasury(GOLD));
+    BOOST_CHECK_EQUAL(chain.Assets().BlockSecurityFees(block), 0);
+    BOOST_CHECK(chain.PoolAt(cp) == cp_before);
+}
+
+BOOST_AUTO_TEST_CASE(security_parts_split_as_fees)
+{
+    // The block's security parts join its ordinary fees: the bidder and the validators share them by the curve, to the satoshi.
+    for (const auto& [spacing, bidder_bps] : std::vector<std::pair<int64_t, int64_t>>{{60, 5000}, {240, 3500}, {420, 2000}, {900, 2000}}) {
+        const pos::FeeSplit split{pos::SplitFees({}, {}, /*fees_without_coinbase=*/true, spacing, pos::FeeCurve::LINEAR, /*extra_ordinary=*/1'000'001)};
+        BOOST_CHECK_EQUAL(split.ordinary, 1'000'001);
+        BOOST_CHECK_EQUAL(split.bidder_ordinary, 1'000'001 * bidder_bps / 10'000);
+        BOOST_CHECK_EQUAL(split.bidder_ordinary + split.validators, 1'000'001);
     }
 }
 

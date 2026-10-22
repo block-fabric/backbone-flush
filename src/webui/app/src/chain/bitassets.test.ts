@@ -242,7 +242,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' DEX: its pool kinds (src/rpc/bitassets.cpp), as the node answers them.
     case 'getdexinfo':
       if (!dexOn) fail('Method not found', -32601);
-      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], protocol_fee_share: 0 };
+      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], swap_fee_parts: { liquidity_providers: 89, security: 11, protocol: 0 } };
     case 'getswapquote': {
       // [asset_in, amount, asset_out, {max_hops}]: the pair's pools of every kind, best first.
       if (!dexOn) fail('Method not found', -32601);
@@ -304,7 +304,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
-      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1, creator_share: 30, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true } };
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true } };
     case 'listlaunches': {
       const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
       const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
@@ -1442,7 +1442,7 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
     const review = await screen.findByTestId('launch-review');
     expect(review.textContent).toMatch(/at 500 CHN raised/);
     expect(review.textContent).toMatch(/20M \(2%\), minted at graduation/);
-    expect(review.textContent).toMatch(/0\.3% to you, 0\.7% into the pool/);
+    expect(review.textContent).toMatch(/1\.15% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
     await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
     await answer('yes');
     await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron token.', allocation: 2, first_buy: '1' }]));

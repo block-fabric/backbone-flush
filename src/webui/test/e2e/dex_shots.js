@@ -8,7 +8,7 @@
 // a description, an allocation and a first buy; STAR, with a few buys), the list of launches, MOON's page on its curve with
 // a buy quoted, and once a buy of 600 CHN takes it past the curve's end, its page graduated; then limit orders of GOLD for
 // USDX in its order book (the ladder, the wallet's orders), the market index, and a curator that verifies GOLD, trusted
-// through the page: its Verified badge. Pictures in Midnight, Advanced.
+// through the page: its Verified badge; and the treasury, with the parts of the fees in force. Pictures in Midnight, Advanced.
 (async () => {
   const { host, log, rpc, sleep, T, waitFor, check, snapshot, text, finish } = E2E;
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -312,6 +312,15 @@
     await waitFor('the Verified badge', () => $('table[aria-label="Markets"] [data-testid="verified-badge"]'), 60000);
     await check('the badge names the curator', /curator/.test($('[data-testid="verified-badge"]').getAttribute('title') || ''), $('[data-testid="verified-badge"]').getAttribute('title'));
     await shot('verified-badge');
+
+    // --- The treasury: the parts of the fees in force, and what the swaps and launches above left it ---
+    const treasury = await rpc('gettreasury', []);
+    await check('the treasury holds something after the trades', treasury.balances.some((b) => Number(b.balance) > 0 || Number(b.security_held) > 0) || Number(treasury.security_paid) > 0, JSON.stringify(treasury));
+    await go('trade', 'swap');
+    await go('trade', 'treasury');
+    await waitFor('the parts of the fees', () => $('[aria-label="Fee parts"]') && /to its providers/.test(text('[aria-label="Fee parts"]')), 60000);
+    if (treasury.balances.length) await waitFor('the treasury by asset', () => $$('table[aria-label="Treasury"] [data-testid="treasury-row"]').length >= 1, 60000);
+    await shot('treasury');
     await finish();
   } catch (e) {
     // The page as it was when it failed, and what it said.

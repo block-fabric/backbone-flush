@@ -70,7 +70,7 @@ struct Chain {
     uint32_t time{1'800'000'000};
     std::vector<CTxOut> payouts, refunds, paid;
     //! The CHN markers burned and the coinbase paid: what the assets must hold (HeldChn) is the difference.
-    int64_t burned{0}, paid_out{0};
+    int64_t burned{0}, paid_out{0}, security{0};
 
     Chain()
     {
@@ -107,6 +107,9 @@ struct Chain {
     {
         state.FinishTxs(height, time, params, payouts);
         for (const CTxOut& out : payouts) paid_out += out.nValue;
+        // The security parts of the fees the block paid with its fees (out of what the assets held).
+        security += state.BitAssets().BlockSecurityFees(height);
+        paid_out += state.BitAssets().BlockSecurityFees(height);
         paid = payouts;
         payouts.clear();
         refunds.clear();
@@ -364,6 +367,23 @@ BOOST_AUTO_TEST_CASE(launch_trade_graduate_claim)
     BOOST_CHECK_LT(done->raised_at_graduation, G + 100);
     BOOST_CHECK(!chain.Assets().Launching(MOON));
     BOOST_CHECK(!chain.Assets().GetPool(record->pool));
+    // The curve's fees, every satoshi: the creator's, the protocol's (the treasury), the chain's security (paid with the
+    // blocks' fees), and the remainder of the roundings into the pool: their sum is what the log says it charged.
+    {
+        uint64_t charged{0};
+        for (int h{record->height}; h < chain.height; ++h) {
+            for (const auto& [token, entry] : chain.Assets().GetLaunchLog(h)) {
+                if (token == MOON) charged += entry.fees;
+            }
+        }
+        const uint64_t rest{charged - done->creator_fees - done->creator_paid - done->protocol_fees - done->security_fees};
+        BOOST_CHECK_EQUAL(done->creator_fees + done->creator_paid + done->protocol_fees + done->security_fees + rest, charged);
+        // Each part the floor of its share of each block's fees: the remainder is at most a few satoshis a block.
+        BOOST_CHECK_LE(rest, 3U * (chain.height - record->height));
+        BOOST_CHECK_EQUAL(done->creator_share, Params().GetConsensus().sidechain.launch_creator_share);
+        BOOST_CHECK_EQUAL(static_cast<int64_t>(done->security_fees), chain.security);
+        BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(CHN).value_or(TreasuryEntry{}).from_launches, done->protocol_fees);
+    }
     // Its pool with the coin: the raised coin and the fees for it, the tokens left and LAUNCH_POOL_SUPPLY; shares nobody holds.
     const auto pool{chain.Assets().FindPool(MOON, CHN)};
     BOOST_REQUIRE(pool);

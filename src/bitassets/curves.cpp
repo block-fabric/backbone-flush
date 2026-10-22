@@ -584,7 +584,6 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
 
 std::optional<dex::Clearing> ClearPoolOf(const PoolParams& params, uint32_t fee, uint64_t reserve0, uint64_t reserve1, const std::vector<dex::HopIn>& orders)
 {
-    static_assert(PROTOCOL_FEE_SHARE == 0, "the protocol's part of the fees has no destination: the clearing leaves all of it to the liquidity providers");
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     if (params.GetCurve() == Curve::CONSTANT_PRODUCT) return ClearConstantProduct(fee, reserve0, reserve1, orders);
     // A launch curve clears with its record (ClearLaunch), a concentrated pool with its state (State::ClearCl), never here.
