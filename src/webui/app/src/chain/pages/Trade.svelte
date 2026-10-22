@@ -4,7 +4,7 @@
   // (Layers' DEX: ba/CreatePool.svelte), the wallet's positions of concentrated liquidity (ba/Positions.svelte; a concentrated
   // pool's page opens them: ba/RangePicker.svelte); the launches of tokens on bonding curves (ba/LaunchList.svelte, a launch's page
   // ba/LaunchView.svelte) and launching one (ba/LaunchWizard.svelte); the market index of every pair (ba/Markets.svelte, with
-  // the curators trusted for the Verified badges) and the order books with their limit orders (ba/OrderBook.svelte). The
+  // the curators trusted for the Verified badges) and the order books with their limit orders (ba/OrderBook.svelte); the treasury and the parts of the fees (ba/Treasury.svelte). The
   // Trade tab of the Qt window of BitAssets.
   import SafeText from '../../components/SafeText.svelte';
   import TabRow from '../../components/TabRow.svelte';
@@ -18,16 +18,18 @@
   import LiquidityPanel from '../ba/LiquidityPanel.svelte';
   import Markets from '../ba/Markets.svelte';
   import OrderBook from '../ba/OrderBook.svelte';
+  import Treasury from '../ba/Treasury.svelte';
   import PoolsPanel from '../ba/PoolsPanel.svelte';
   import SwapPanel from '../ba/SwapPanel.svelte';
-  import { ba, startBitAssets } from '../ba/store.svelte';
+  import { swapFeeSplit } from '../ba/fees';
+  import { ba, startBitAssets, swapParts } from '../ba/store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import '../ba/terms';
 
   $effect(() => startBitAssets());
 
-  type Tab = 'swap' | 'markets' | 'book' | 'pools' | 'liquidity' | 'create' | 'positions' | 'launches' | 'launch';
+  type Tab = 'swap' | 'markets' | 'book' | 'pools' | 'liquidity' | 'create' | 'positions' | 'launches' | 'launch' | 'treasury';
   const TABS: { id: Tab; label: string }[] = [
     { id: 'swap', label: 'Swap' },
     { id: 'markets', label: 'Markets' },
@@ -38,6 +40,7 @@
     { id: 'positions', label: 'Positions' },
     { id: 'launches', label: 'Launches' },
     { id: 'launch', label: 'Launch a token' },
+    { id: 'treasury', label: 'Treasury' },
   ];
   const tab = $derived<Tab>(TABS.some((x) => x.id === nav.tab) ? (nav.tab as Tab) : 'swap');
   const open = $derived(ba.pools.filter((p) => !p.abandoned && p.curve !== 'book').length);
@@ -54,7 +57,7 @@
     {#if simple}
       <span class="muted">Pay ECX, get a <Term id="asset">token</Term>, at the price of its market. You see what you get before you confirm.</span>
     {:else}
-      <span class="muted">{tn('%n pool(s) with liquidity', open)} · {#if ba.dex?.curves_active && tiers.length}a fee of {Math.min(...tiers)}% to {Math.max(...tiers)}% per trade, by pool{:else}0.3% fee per trade{/if}, to their providers</span>
+      <span class="muted">{tn('%n pool(s) with liquidity', open)} · {#if ba.dex?.curves_active && tiers.length}a fee of {Math.min(...tiers)}% to {Math.max(...tiers)}% per trade, by pool{:else}0.3% fee per trade{/if}: {swapFeeSplit(swapParts())}</span>
     {/if}
   </header>
   {#if ba.error}<p class="ba-problems bad" role="alert"><SafeText text={ba.error} /></p>{/if}
@@ -73,6 +76,8 @@
     <Positions />
   {:else if tab === 'launches'}
     <LaunchList />
+  {:else if tab === 'treasury'}
+    <Treasury />
   {:else if tab === 'launch'}
     <LaunchWizard />
   {:else}

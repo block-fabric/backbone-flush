@@ -466,12 +466,17 @@ BOOST_AUTO_TEST_CASE(fees_by_the_ranges_the_walk_went_through)
     chain.EndBlock();
     BOOST_CHECK_GT(chain.Assets().GetClState(id)->tick, 600);
     // What the fee was and how the walk's input split: the reference.
-    const uint64_t fee{pay - pay * (1'000'000 - 3000) / 1'000'000};
+    // The positions earn the liquidity providers' part: the fee less its security and protocol parts (which left the pool).
+    const auto& rules{Params().GetConsensus().sidechain};
+    const FeeParts parts{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(pay) * 3000 / 1'000'000), rules.dex_fee_security_share, rules.dex_fee_protocol_share)};
+    const uint64_t fee{pay - pay * (1'000'000 - 3000) / 1'000'000 - parts.security - parts.protocol};
     const uint64_t used{pay * (1'000'000 - 3000) / 1'000'000};
     const auto f0{chain.Assets().PositionFees(*chain.Assets().GetPosition(ids[0]))}, f1{chain.Assets().PositionFees(*chain.Assets().GetPosition(ids[1]))};
     const double expect0{double(fee) * to_cross / used}, expect1{double(fee) * (used - to_cross) / used};
     BOOST_CHECK_MESSAGE(std::abs(double(f0.second) - expect0) <= 2, f0.second << " vs " << expect0);
     BOOST_CHECK_MESSAGE(std::abs(double(f1.second) - expect1) <= 2, f1.second << " vs " << expect1);
+    // The asset's security part is held by the treasury (asset1 is not the chain's coin).
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(in_asset)->security_held, parts.security);
     // Every fee charged is credited (up to the floors of the fee growth).
     BOOST_CHECK_LE(f0.second + f1.second, fee);
     BOOST_CHECK_GE(f0.second + f1.second + 2, fee);

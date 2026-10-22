@@ -143,7 +143,7 @@
 {:else if list === null}
   <section class="panel ba-empty">Reading the positions…</section>
 {:else if list.length === 0}
-  <section class="panel ba-empty">No position of concentrated liquidity. Open one on the page of a concentrated pool: liquidity between two prices, earning the pool's fees while its price is between them.<div class="row center"><button type="button" class="btn primary" onclick={() => (nav.tab = 'pools')}>Pools</button></div></section>
+  <section class="panel ba-empty">No position of concentrated liquidity. Open one on the page of a concentrated pool: liquidity between two prices, earning the providers' part of the pool's fees while its price is between them.<div class="row center"><button type="button" class="btn primary" onclick={() => (nav.tab = 'pools')}>Pools</button></div></section>
 {:else}
   <div class="ba-cols" aria-label="Positions">
     {#each list as p (p.position)}

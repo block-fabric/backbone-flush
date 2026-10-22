@@ -17,6 +17,9 @@ export interface LaunchRules {
   /** A trade's fee on a curve, in percent, and the creator's part of it, in percent of the fee. */
   fee: number;
   creator_share: number;
+  /** The treasury's and the chain's security's parts of it, in percent of the fee (newer nodes; ba/fees.ts). */
+  protocol_share?: number;
+  security_share?: number;
   /** Whole tokens of a launch, of which the curve sells, and go into the pool at graduation. */
   supply: Amount;
   curve_supply: Amount;
@@ -63,6 +66,11 @@ export interface Launch {
   curve_tokens_left: Amount;
   fee: number;
   creator_share: number;
+  /** The treasury's and the chain's security's parts of the fee, in percent of it, and what they were paid so far (CHN; newer nodes). */
+  protocol_share?: number;
+  security_share?: number;
+  protocol_fees?: Amount;
+  security_fees?: Amount;
   creator_fees_owed: Amount;
   creator_fees_paid: Amount;
   allocation: number;
@@ -184,12 +192,6 @@ export function supplySplit(shape: Pick<CurveShape, 'supply' | 'curveSupply' | '
   const allocation = (shape.supply * Math.max(0, allocationPercent)) / 100;
   const total = shape.supply + allocation;
   return { curve: shape.curveSupply, pool: shape.poolSupply, allocation, total, dilution: total > 0 ? (allocation / total) * 100 : 0 };
-}
-
-/** The split of the fee: the creator's part and the pool's, in percent of each trade. */
-export function feeSplit(fee: number, creatorShare: number): { creator: number; pool: number } {
-  const creator = (fee * creatorShare) / 100;
-  return { creator, pool: fee - creator };
 }
 
 /** The rules as numbers (the node gives amounts as text or numbers). */

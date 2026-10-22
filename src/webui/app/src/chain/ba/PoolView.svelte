@@ -24,7 +24,8 @@
   import { compactNumber } from './axis';
   import { alignDepth, CURVE_HELP, DYNAMIC_FEE_HELP, feeNow, feePercent, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
   import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
-  import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { swapFeeSplit } from './fees';
+  import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
 
   let { pool, back }: { pool: Pool; back: () => void } = $props();
 
@@ -281,7 +282,7 @@
   <section class="panel kind-panel" aria-label="Its kind">
     <dl class="ba-lines">
       <dt>Kind</dt><dd><PoolKind {kind} showDefault /></dd>
-      {#if !book}<dt>Fee</dt><dd>{feeNow(kind)}% of what goes in, to its providers{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>{/if}
+      {#if !book}<dt>Fee</dt><dd>{feeNow(kind)}% of what goes in: {swapFeeSplit(swapParts())}{#if kind.dynamic_fee} <span class="ba-tag warn">dynamic</span> its tier {kind.fee}%, at most {kind.fee + 2}%: {t(DYNAMIC_FEE_HELP)}{/if}</dd>{/if}
       {#if kind.curve === 'stable' && kind.amp !== undefined}<dt>Amplification</dt><dd>A = {kind.amp}: the higher, the flatter its price near the balance</dd>{/if}
       {#if kind.curve === 'weighted' && kind.weight_a !== undefined}<dt>Weights</dt><dd>{kind.weight_a}% <SafeText text={pool.asset_a} /> · {kind.weight_b ?? 100 - kind.weight_a}% <SafeText text={pool.asset_b} /></dd>{/if}
       <dt>Pool id</dt><dd class="id"><span class="mono break" translate="no">{pool.pool}</span> <CopyButton text={pool.pool} label="Copy the pool id" /></dd>

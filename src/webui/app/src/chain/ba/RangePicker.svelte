@@ -18,7 +18,8 @@
   import { chartDomain, flipped, fullRange, liquidityBars, presetRange, priceAtX, priceText, RANGE_PRESETS, sideAlone, turn, turnRange, visibleBars, xOfPrice, type PoolTicks, type PositionPreview, type RangePreset } from './cl';
   import { depositAmounts } from './kinds';
   import { amountParam, approx, formatAmount, formatPrice, isChn, unitsAtMost, type Pool } from './model';
-  import { ba, decimalsOf } from './store.svelte';
+  import { formatShare } from './fees';
+  import { ba, decimalsOf, swapParts } from './store.svelte';
 
   let { pool }: { pool: Pool } = $props();
 
@@ -183,7 +184,7 @@
     const r = await ask({
       title: t('Open a position'),
       message: t('Put about %1 %2 and %3 %4 between %5 and %6 %4 for 1 %2?', formatAmount(sSeen.a, da), pool.asset_a, formatAmount(sSeen.b, db), pool.asset_b, formatPrice(sSeen.lower), formatPrice(sSeen.upper)),
-      informative: t('It earns the pool\'s fees while the price is in that range, and holds one asset alone out of it. The position is a token of its own: take it out, add to it or collect its fees in Positions. Liquidity %1% less, so that the amounts suffice should the price move first; the rest comes back.', String(sSlippage)),
+      informative: t('It earns the providers\' part of the pool\'s fees (%2% of them) while the price is in that range, and holds one asset alone out of it. The position is a token of its own: take it out, add to it or collect its fees in Positions. Liquidity %1% less, so that the amounts suffice should the price move first; the rest comes back.', String(sSlippage), formatShare(swapParts()?.liquidity_providers ?? 100)),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
