@@ -268,6 +268,8 @@ public:
     size_t Buffered() const;
     /** Take nothing more from the calls while `hold` (backpressure: the socket does not take what is waiting). */
     void Hold(bool hold);
+    /** HTTP/2: bytes of output that are not the replies' DATA payload (control frames, frame headers), so far. */
+    uint64_t ControlBytes() const;
     /** Take no new request (HTTP/2: GOAWAY); the running calls go on. */
     void Drain();
     /** Requests begun, all in, and streams reset before their call was over. */

@@ -831,6 +831,28 @@ BOOST_AUTO_TEST_CASE(server_slow_reader_bounded)
         BOOST_CHECK_EQUAL(written.load(), 100U);
         BOOST_CHECK(!refused.load());
     }
+    {
+        // HTTP/2: a client that opens no window and pings all the time, reading every PING ACK: the ACKs are no progress
+        // on its replies: the stream is reset, or the connection closed, within the windows of 1 s. (The small events:
+        // a stream that stays under its bound, so that its replies keep waiting.)
+        small = true;
+        RawClient c{to};
+        H2Bytes client{{{NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 0}}};
+        client.Request("/grpc.health.v1.Health/Watch", GrpcEnvelope(""));
+        BOOST_REQUIRE(c.Send(client.Out()));
+        const std::string ping{std::string{"\0\0\x08\x06\0\0\0\0\0", 9} + std::string(8, 'p')};
+        const auto start{NodeClock::now()};
+        bool reset{false};
+        while (!c.closed && !reset && NodeClock::now() - start < 6s) {
+            if (!c.Send(ping)) break;
+            c.ReadFor(20ms);
+            reset = Has(FrameTypes(c.in), NGHTTP2_RST_STREAM);
+        }
+        BOOST_CHECK(reset || c.closed);
+        const double took{Seconds(NodeClock::now() - start)};
+        BOOST_CHECK_MESSAGE(took < 4, "pinging zero-window client ended after " << took << " s");
+        BOOST_CHECK(Has(FrameTypes(c.in), NGHTTP2_PING));
+    }
     server.Stop();
 }
 

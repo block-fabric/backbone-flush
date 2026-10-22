@@ -801,6 +801,9 @@ struct Connection::Impl {
     std::string m_out;
     //! Backpressure: nothing more is taken from the calls (Connection::Hold).
     bool m_hold{false};
+    //! HTTP/2: bytes put in m_out, and of them the replies' DATA payload; the rest (PING and SETTINGS ACKs, frame
+    //! headers, resets) a client can ask for at will, which is no progress on its replies (Connection::ControlBytes).
+    uint64_t m_serialized{0}, m_payload{0};
     Server& m_server;
     CService m_peer;
 };
@@ -989,6 +992,7 @@ private:
             if (n < 0) return false;
             if (n == 0) break;
             m_out.append(reinterpret_cast<const char*>(data), static_cast<size_t>(n));
+            m_serialized += static_cast<uint64_t>(n);
         }
         return nghttp2_session_want_read(m_session) || nghttp2_session_want_write(m_session) || !m_out.empty();
     }
@@ -1076,6 +1080,7 @@ private:
         Call& call{*stream.request.call};
         const std::string chunk{call.Take(length)};
         if (!chunk.empty()) {
+            self.m_payload += chunk.size();
             std::memcpy(buf, chunk.data(), chunk.size());
             return static_cast<ngssize>(chunk.size());
         }
@@ -1464,6 +1469,7 @@ std::optional<NodeClock::time_point> Connection::OldestRequest() const { return 
 size_t Connection::Undelivered() const { return m_impl->Undelivered(); }
 size_t Connection::Buffered() const { return m_impl->m_out.size() + m_impl->Undelivered(); }
 void Connection::Hold(bool hold) { m_impl->m_hold = hold; }
+uint64_t Connection::ControlBytes() const { return m_impl->m_serialized - m_impl->m_payload; }
 void Connection::Drain() { m_impl->Drain(); }
 Connection::Counts Connection::GetCounts() const { return {m_impl->m_begun, m_impl->m_completed, m_impl->m_abandoned}; }
 void Connection::CloseAll() { m_impl->CloseAll(); }
@@ -1650,6 +1656,7 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
     // Slow reads: from when replies wait for the client, what it took of them, timed over write_timeout_seconds.
     auto window_start{last_activity};
     size_t window_owed{0}, window_sent{0};
+    uint64_t window_control{0};
     Connection::Counts counts;
     std::optional<NodeClock::time_point> receiving_since;
     // Close, over HTTP/2 with a GOAWAY first (what it says sent if the client takes it at once).
@@ -1683,15 +1690,21 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
             window_start = now;
             window_owed = owed;
             window_sent = 0;
+            window_control = connection.ControlBytes();
         } else if (m_options.write_timeout_seconds > 0 && now - window_start > std::chrono::seconds{m_options.write_timeout_seconds}) {
             const size_t rate{m_options.min_read_bytes_per_second * static_cast<size_t>(m_options.write_timeout_seconds)};
-            if (window_sent < std::max<size_t>(1, std::min(window_owed, rate))) {
-                LogDebug(BCLog::HTTP, "%s: %s reads too little of its replies (%u bytes in %d s): closed\n", m_name, peer.ToStringAddrPort(), window_sent, m_options.write_timeout_seconds);
+            // Progress on the replies: what the socket took, less the control frames made meanwhile (a client asking for
+            // PING ACKs and reading only those makes none).
+            const uint64_t control{connection.ControlBytes() - window_control};
+            const size_t progress{window_sent > control ? static_cast<size_t>(window_sent - control) : 0};
+            if (progress < std::max<size_t>(1, std::min(window_owed, rate))) {
+                LogDebug(BCLog::HTTP, "%s: %s reads too little of its replies (%u bytes in %d s): closed\n", m_name, peer.ToStringAddrPort(), progress, m_options.write_timeout_seconds);
                 break;
             }
             window_start = now;
             window_owed = owed;
             window_sent = 0;
+            window_control = connection.ControlBytes();
         }
         // A request that takes too long to come in, however slowly it keeps coming, ends the connection (HTTP/2: each
         // stream from its own first bytes). Calls running on a worker are never cut for it.
