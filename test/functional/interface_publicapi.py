@@ -51,6 +51,13 @@ class PublicApiTest(LayersTest):
         ]
         self.common_args = common
 
+    def add_options(self, parser):
+        super().add_options(parser)
+        parser.add_argument("--site", help="a checkout of flush-web: its end-to-end test (scripts/e2e-live.mjs) against this chain's API")
+        parser.add_argument("--site-shots", help="where its pictures go")
+        parser.add_argument("--playwright", help="the playwright package (node) the site's test drives Chromium with")
+        parser.add_argument("--hold", help="(development) write the API's port to this file and wait until it is removed, the chain running")
+
     def run_test(self):
         super().run_test()
 
@@ -177,6 +184,7 @@ class PublicApiTest(LayersTest):
         got1 = self.holding(n1, "MOON")
         assert_equal(got1, rq["amount_out"])
         n2.buyfromlaunch("MOON", 3)
+        n2.buyfromlaunch("SUN", Decimal("0.5"))
         self.bmm()
         got2 = self.holding(n2, "MOON")
         sold = n1.selltolaunch("MOON", got1 / 4)
@@ -538,6 +546,22 @@ class PublicApiTest(LayersTest):
                 self.log.info("(no flush-grpc-client: gRPC's library not installed; gRPC round trips skipped)")
         else:
             self.log.info("(no protoc: binary round trips skipped)")
+
+        if self.options.hold:
+            with open(self.options.hold, "w") as f:
+                f.write(str(api_port(0)))
+            self.log.info(f"Holding: the API on {api_port(0)} until {self.options.hold} is removed")
+            self.wait_until(lambda: not os.path.exists(self.options.hold), timeout=7200)
+        if self.options.site:
+            self.log.info("The website against this API (flush-web scripts/e2e-live.mjs)")
+            import subprocess
+            env = dict(os.environ, E2E_API=f"http://127.0.0.1:{api_port(0)}", E2E_PORT=str(api_port(0) + 10), E2E_CURVE="SUN", E2E_GRADUATED="MOON",
+                       E2E_SHOTS=self.options.site_shots or os.path.join(self.options.tmpdir, "site-shots"), PLAYWRIGHT=self.options.playwright or "")
+            result = subprocess.run(["node", "scripts/e2e-live.mjs"], cwd=self.options.site, env=env, capture_output=True, text=True, timeout=600)
+            for line in result.stdout.splitlines():
+                self.log.info("site: " + line)
+            if result.returncode != 0:
+                raise AssertionError(result.stderr[-3000:])
 
         self.log.info("A node that turns -dexindex on derives the index again: the same trades and candles")
         self.sync_all()
