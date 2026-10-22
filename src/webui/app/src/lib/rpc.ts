@@ -233,6 +233,10 @@ export const host = {
   setTitleBar: (mode: 'integrated' | 'system') => request<WindowState>('host', 'window.setTitleBar', { mode }),
   copy: (text: string) => request<boolean>('host', 'clipboard.write', { text }),
   paste: () => request<string | null>('host', 'clipboard.read', {}),
+  // The action links of the site (src/webui/linkhost.h): handed over as they are; the host reads, resolves and confirms them.
+  openLink: (uri: string) => request<unknown>('host', 'links.open', { uri }),
+  /** A launch file: its text (dropped on the window), or without it a file chooser of the host; null when cancelled. */
+  importLaunch: (text?: string) => request<unknown>('host', 'links.importLaunch', text === undefined ? {} : { text }),
   // The node window (src/webui/nodeapi.cpp).
   consoleCheck: (line: string) => request<{ ok: boolean; filtered?: string; error?: string }>('host', 'console.check', { line }),
   consoleRun: (line: string, wallet: string | null, options?: CallOptions) =>

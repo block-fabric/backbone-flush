@@ -22,7 +22,8 @@
   import { host } from '../lib/rpc';
   import { app, node, prefs, savePrefs, toast, wallets } from '../lib/state.svelte';
   import { formatAmount, UNITS, type Unit } from '../lib/units';
-  import { parsePaymentUri } from '../lib/uri';
+  import { isActionUri, parsePaymentUri } from '../lib/uri';
+  import { openLink } from '../lib/links';
   import { CONF_TARGETS, isDust, nearestConfTarget, psbtFileName, walletApi, walletDisplayName, type Outpoint, type Prepared } from '../lib/wallet';
   import { current, refreshInfo } from '../lib/walletdata.svelte';
 
@@ -156,6 +157,10 @@
   });
 
   async function pasteUri(uri: string): Promise<boolean> {
+    if (isActionUri(uri)) {
+      await openLink(uri.trim());
+      return false;
+    }
     const parsed = parsePaymentUri(uri);
     if (!parsed.ok) {
       await inform(t('Payment request error'), parsed.error, 'error');
@@ -180,6 +185,12 @@
 
   async function openUri() {
     uriError = '';
+    // A link of the site (buy, sell, swap, launch, connect): the host reads it and asks in its own dialog.
+    if (isActionUri(uriText)) {
+      uriDialog = false;
+      await openLink(uriText.trim());
+      return;
+    }
     const parsed = parsePaymentUri(uriText);
     if (!parsed.ok) {
       uriError = parsed.error;
@@ -552,7 +563,7 @@
       openUri();
     }}
   >
-    <p>Open payment request from URI or file</p>
+    <p>Open payment request from URI or file, or paste a link of flush.markets (buy, sell, swap, launch, connect)</p>
     <div class="field">
       <label for="uri-input">URI</label>
       <input id="uri-input" type="text" class="mono" placeholder="{CHAIN.uriScheme}:" bind:value={uriText} autocomplete="off" spellcheck="false" aria-invalid={uriError ? 'true' : undefined} />
