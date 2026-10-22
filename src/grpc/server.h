@@ -9,11 +9,13 @@
 #include <netaddress.h>
 #include <sync.h>
 #include <util/threadinterrupt.h>
+#include <util/time.h>
 
 #include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
@@ -129,13 +131,24 @@ struct Options {
     bool cors{false};
     //! Largest reply body; a bigger one ends the call with RESOURCE_EXHAUSTED (0: no bound).
     size_t max_response_bytes{0};
-    //! Close a connection that has no call running and sent nothing for this long (0: never).
+    //! Close a connection that has no call running and began or completed no request for this long (0: never; bytes
+    //! alone, PINGs, are not activity); over HTTP/2 with a GOAWAY first.
     int idle_timeout_seconds{0};
     //! Close a connection whose request (its headers and body) is not all in this long after its first byte, however
     //! slowly it keeps coming (slow clients holding connections); 0: never. Calls running on a worker are not counted.
     int request_timeout_seconds{0};
     //! Connections a client address may hold at once (0: no bound); the trusted proxies' own addresses are not bound.
     int max_connections_per_ip{0};
+    //! IPv6 clients are counted by this prefix (a client usually has a /64 to rotate addresses in); IPv4 by address.
+    int ipv6_prefix{64};
+    //! Close a connection whose replies the peer took no byte of for this long (slow reads: in the socket, the calls or
+    //! behind HTTP/2 flow control; a stream whose window stays closed so long is reset); 0: never.
+    int write_timeout_seconds{0};
+    //! Past this many requests (0: no bound), a connection takes no new one (HTTP/2: GOAWAY) and is closed once its
+    //! calls are over; past this many streams reset before their call was over (by the client, or by the server
+    //! because of it: Rapid Reset, MadeYouReset), it is closed at once.
+    uint64_t max_requests_per_connection{0};
+    uint64_t max_abandoned_requests{0};
     //! Messages a client-streaming call (server reflection) may send; each is checked by the guard again.
     size_t max_stream_messages{1024};
     //! The REST face: the prefix of its paths ("/api/v1/"), and how they map onto methods (empty: none).
@@ -184,6 +197,9 @@ public:
     const MethodEntry* Find(std::string_view path) const;
     const pb::Pool& Pool() const { return m_pool; }
     const Options& GetOptions() const { return m_options; }
+    const std::string& Name() const { return m_name; }
+    /** The key a client's connections are counted under (Options::max_connections_per_ip, ipv6_prefix). */
+    static std::string AddressKey(const CNetAddr& addr, int ipv6_prefix);
     void Run(std::function<void()> task);
 
 private:
@@ -229,6 +245,19 @@ public:
     bool Busy() const;
     /** Whether a request is being read: begun and not all in (its headers, or its body). */
     bool Receiving() const;
+    /** Before closing an idle connection: HTTP/2 says GOAWAY (no error), to be sent from TakeOutput. */
+    void Goodbye();
+    /** HTTP/2: when the oldest request still being read began (each stream timed on its own); else nothing. */
+    std::optional<NodeClock::time_point> OldestRequest() const;
+    /** Reply bytes the calls wrote and the connection has not taken yet (HTTP/2: held back by flow control). */
+    size_t Undelivered() const;
+    /** Take no new request (HTTP/2: GOAWAY); the running calls go on. */
+    void Drain();
+    /** Requests begun, all in, and streams reset before their call was over. */
+    struct Counts {
+        uint64_t begun{0}, completed{0}, abandoned{0};
+    };
+    Counts GetCounts() const;
     /** End every call of the connection (the client went away, or the server stops). */
     void CloseAll();
 

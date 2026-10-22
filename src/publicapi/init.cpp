@@ -65,6 +65,8 @@ void AddPublicApiOptions(ArgsManager& args)
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiproxyheader=<name>", "The header the proxies of -publicapiproxy set with the client's address (e.g. X-Real-IP; X-Forwarded-For: its right-most entry). The proxy must set it itself, overwriting what the client sent",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    args.AddArg("-publicapiipv6prefix=<bits>", "IPv6 clients of the public API are counted by this prefix for the 16 connections an address may hold (one client usually has a /64 to rotate addresses in; 16 to 128, default: 64)",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapireflection", "Serve gRPC server reflection on the public API (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapirate=<n>", "Calls a second each client of the public API may make on average (a quote counts 4, a list 2; default: 10)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiburst=<n>", "And at once (default: 40)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -142,6 +144,13 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     options.idle_timeout_seconds = 30;
     options.request_timeout_seconds = 15;
     options.max_connections_per_ip = 16;
+    const int64_t ipv6_prefix{args.GetIntArg("-publicapiipv6prefix", 64)};
+    if (ipv6_prefix < 16 || ipv6_prefix > 128) return InitError(Untranslated("-publicapiipv6prefix: a prefix length from 16 to 128"));
+    options.ipv6_prefix = static_cast<int>(ipv6_prefix);
+    // Slow reads (also behind HTTP/2 flow control), Rapid Reset and MadeYouReset, requests per connection.
+    options.write_timeout_seconds = 30;
+    options.max_requests_per_connection = 10000;
+    options.max_abandoned_requests = 100;
     options.max_stream_messages = 32;
     options.rest_prefix = publicapi::REST_PREFIX;
     options.rest = publicapi::MakeRestRouter(*g_pool);
