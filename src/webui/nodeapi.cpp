@@ -155,6 +155,8 @@ UniValue NodeApi::Call(const std::string& method, const UniValue& params)
         // given to the desktop, for each call (the line is checked as it runs, nested commands too), with the parameters
         // it runs with shown (audit 7 #3).
         const console::ExecuteFn execute{[&](const std::string& m, const UniValue& p, const std::string& uri) {
+            // Only what the caller may run itself (the RPC user's -rpcwhitelist, for the host over RPC), nested commands too.
+            CheckRpcCaller(m);
             if (!guard::ConsoleRunsQuietly(m)) {
                 const auto dialog{guard::ConsoleConfirmation(m, p, wallet_name, confirm::ArgNames(node, m))};
                 if (!dialog) throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
@@ -271,7 +273,7 @@ UniValue NodeApi::Call(const std::string& method, const UniValue& params)
     if (method == "timestamp.hashFile") {
         const std::string path{ParamStr(params, "path")};
         if (!m_readable(path)) throw HostError(BRIDGE_INVALID_REQUEST, "Only a file chosen by the user can be read");
-        std::ifstream file{static_cast<const std::filesystem::path&>(fs::PathFromString(path)), std::ios::binary};
+        std::ifstream file{static_cast<const std::filesystem::path&>(fs::PathFromString(UseChosenFile(path, /*write=*/false))), std::ios::binary};
         if (!file) throw HostError("The file cannot be read.");
         CSHA256 hasher;
         std::vector<char> chunk(1 << 20);

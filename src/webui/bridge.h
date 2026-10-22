@@ -36,6 +36,8 @@ enum BridgeError : int {
     BRIDGE_STOPPED = -9,
     //! A host method failed.
     BRIDGE_HOST_ERROR = -1,
+    //! The caller may not run that RPC method: the RPC user's -rpcwhitelist does not list it (the host over RPC, remotehost.h).
+    BRIDGE_NOT_ALLOWED = -32803,
 };
 
 //! The key of the result of a request asked {exact: true}: {"$rawjson": "<the result as JSON text>"} (Bridge::Request::exact).
@@ -47,6 +49,50 @@ struct HostError : std::runtime_error {
     HostError(int code_in, const std::string& message) : std::runtime_error(message), code(code_in) {}
     explicit HostError(const std::string& message) : HostError(BRIDGE_HOST_ERROR, message) {}
 };
+
+/**
+ * Who runs the request of this thread may name these RPC methods: in the daemon's host over RPC (remotehost.h), what the
+ * RPC user who called webuihost or describeconfirmation may call itself (its -rpcwhitelist), so that a method run
+ * inside them by name (an RPC method of the pages, the calls of rpc.confirmed, the commands of console.run) is never
+ * one that user could not call directly. Outside a scope (the app's own window): any.
+ */
+class RpcCallerScope
+{
+public:
+    using AllowedFn = std::function<bool(const std::string& method)>;
+    explicit RpcCallerScope(AllowedFn allowed);
+    ~RpcCallerScope();
+    RpcCallerScope(const RpcCallerScope&) = delete;
+    RpcCallerScope& operator=(const RpcCallerScope&) = delete;
+
+private:
+    AllowedFn m_allowed;
+    const AllowedFn* m_previous;
+};
+/** Throws HostError(BRIDGE_NOT_ALLOWED) when the caller of this thread's request may not run `method` (RpcCallerScope). */
+void CheckRpcCaller(const std::string& method);
+
+/**
+ * Where a host method reads or writes a file the user chose (after its own check that it was chosen): in the app's own
+ * window, the path itself; in the daemon's host over RPC (remotehost.h), a private copy made through the file opened
+ * when it was chosen, or a private file written back through what was opened when it was chosen once the request is
+ * done, never the path opened again.
+ */
+class ChosenFileScope
+{
+public:
+    using UseFn = std::function<std::string(const std::string& path, bool write)>;
+    explicit ChosenFileScope(UseFn use);
+    ~ChosenFileScope();
+    ChosenFileScope(const ChosenFileScope&) = delete;
+    ChosenFileScope& operator=(const ChosenFileScope&) = delete;
+
+private:
+    UseFn m_use;
+    const UseFn* m_previous;
+};
+/** The path to read (write: to write) for a file the user chose at `path` (ChosenFileScope); the path itself outside one. */
+std::string UseChosenFile(const std::string& path, bool write);
 
 /** The URI path of a wallet for the RPC dispatcher: "/wallet/<percent-encoded name>". */
 std::string WalletUri(const std::string& wallet_name);

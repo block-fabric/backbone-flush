@@ -653,12 +653,34 @@ only in `<bin>d`):
   `walletapi.cpp`, `local.cpp`) with a one-time token. The app shows it in its own trusted dialog and,
   accepted, sends exactly the same request with the token (and the passphrase typed there): it runs only
   if the token is that of this request, this question and this wallet, unused and not expired
-  (5 minutes). One confirmation per request.
+  (5 minutes). One confirmation per request. A request has one wallet, the one its method acts on: for a
+  host method the wallet of its parameters (`params.wallet`, also for `rpc.confirmed`); a `wallet` beside
+  them that differs is refused.
 - `describeconfirmation "method" [params] (wallet)` describes a confirmed RPC method and runs nothing.
 - `webuievents (since timeout)` gives the events of the node (tip, wallets) to the app, in order.
-- `webuichosenfile "path" (write)`: the app, right after its own native chooser answered, gets a one-time
+- `webuichosenfile "path" (write overwrite)`: the app, right after its own native chooser answered, gets a one-time
   token for that file (absolute and canonical paths only: no link, no `..`); a request names files only
   by such tokens (`webuihost … files`), never by a path, so the pages cannot name a file of their own.
+  Only the app's own chooser gives files: the RPC user named by `-webuichooser` (the app's own `-rpcauth`
+  user), or one that may call everything, and only one that may call `backupwallet` (a file to write) or
+  `restorewallet` (to read); a token is that user's alone and lasts 2 minutes. A file there already is
+  written over only with `overwrite` (the chooser asked) and only by a wallet backup; `-webuifiledir`
+  confines files to one folder. The file (for a new one, its folder) is opened when chosen, without
+  following a link, and kept open: the host method reads a private copy made through it, or writes a
+  private file that is then written through it (a new file made in the folder held, `openat` with
+  `O_CREAT|O_EXCL|O_NOFOLLOW`; on Windows the handles are held without sharing deletion), never by
+  opening the path again. A path that no longer names what is held (a link or another file put there)
+  is refused. The private files are in `<datadir>/webui-files`, removed after each request.
+- What runs **by name** inside `webuihost` and `describeconfirmation` (an RPC method of the pages, the
+  calls of `rpc.confirmed`, the commands of `console.run`) must be a method the calling RPC user may call
+  itself (`-rpcwhitelist`, checked as the RPC server does: `RpcUserMayCall`), or it is refused (-32803).
+  A **host method** runs for a user with a whitelist only when the whitelist names it, or every RPC
+  method whose privilege it exercises (`HostPrivileges` of remotehost.cpp: `wallet.send.*` needs `send`,
+  `wallet.backup` `backupwallet`, `peg.deposit` `createsidechaindeposit`, `bmm.set` `setbmm`...); a host
+  method of the chain's own (`local.cpp`), and one that proxies the mainchain connection or shows its
+  credentials (`peg.call`, `peg.connection`), only when named; `peg.call` also checks the mainchain
+  method it forwards by name (within its own list of reads). A user whitelisted for `webuihost` alone gets
+  nothing more through it.
 
 A host method that keeps something for its question (a prepared send) keeps it while the question is
 carried out to the app unanswered (`WalletApi`, `once`). `HOST_API` (remotehost.h and pack.mjs) is the
