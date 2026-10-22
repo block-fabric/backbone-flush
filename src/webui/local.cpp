@@ -709,6 +709,88 @@ std::function<std::optional<Window::ConfirmDialog>(const confirm::Call&)> WithAs
 }
 } // namespace
 
+namespace {
+/**
+ * launchtoken [ticker, options]: the ticker (WithNames), then each option as a row of its own (never the options as one block
+ * of JSON, a logo of 44 KB in it): the display name, the logo as a picture, the description and links, the allocation, the
+ * first buy and the least it gets, the bounds of a buy. An option this app does not know is refused (what is shown is what
+ * runs).
+ */
+std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
+{
+    const UniValue ticker{call.Arg(0)};
+    const UniValue options{call.Arg(1)};
+    if (!options.isNull() && !options.isObject()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: its options are an object");
+    UniValue first{UniValue::VARR};
+    first.push_back(ticker);
+    confirm::Call shown{call.node, call.wallet, call.method, first, call.fee_for};
+    auto dialog{WithNames(confirm::Generic("Launch a token", "Launch", "The wallet launches a token on a bonding curve, from its reservation of the ticker: a billion tokens, fixed; buyers pay ECX into its curve and sellers get ECX back from it, until it graduates into a locked pool. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false)(shown)};
+    if (!dialog || options.isNull()) return dialog;
+    const auto coins{[&](const char* key) {
+        try {
+            return confirm::Amount("", AmountFromValue(options.find_value(key)));
+        } catch (const UniValue&) {
+            throw HostError(BRIDGE_INVALID_REQUEST, strprintf("launchtoken: %s is an amount", key));
+        }
+    }};
+    for (const std::string& key : options.getKeys()) {
+        const UniValue& value{options.find_value(key)};
+        if (key == "display_name") {
+            if (!value.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: display_name is text");
+            if (value.get_str().empty()) continue;
+            if (const auto why{bitassets::WhyNotDisplayName(value.get_str())}) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("The rules refuse this display name: %s", *why));
+            dialog->rows.push_back(confirm::Text("Display name", value.get_str()));
+            if (!PlainAscii(value.get_str())) dialog->rows.push_back(confirm::Note("The display name holds characters beyond plain ASCII. Display names are not unique: the ticker and the number tell assets apart."));
+        } else if (key == "logo") {
+            if (value.isStr() && value.get_str().empty()) continue;
+            std::string reason;
+            const auto logo{ReadLogoParam(value, reason)};
+            if (!logo) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("The rules refuse this logo (%s): a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata", reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+            for (auto& row : LogoRows(*logo)) dialog->rows.push_back(std::move(row));
+        } else if (key == "info") {
+            if (!value.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: info is text");
+            if (!value.get_str().empty()) dialog->rows.push_back(confirm::Text("Description and links", value.get_str()));
+        } else if (key == "allocation") {
+            dialog->rows.push_back(confirm::Text("Creator's allocation", confirm::ValueText(value) + " % of the supply, minted to you at graduation (shown to everyone)"));
+        } else if (key == "first_buy") {
+            auto row{coins("first_buy")};
+            row.label = "First buy, paid now";
+            dialog->rows.push_back(std::move(row));
+        } else if (key == "first_min_out") {
+            dialog->rows.push_back(confirm::Text("First buy gets at least", confirm::ValueText(value) + " tokens (refused by the rules below it, its ECX back)"));
+        } else if (key == "min_buy" || key == "max_buy") {
+            auto row{coins(key.c_str())};
+            row.label = key == "min_buy" ? "Least a buy pays" : "Most a buy pays";
+            dialog->rows.push_back(std::move(row));
+        } else {
+            throw HostError(BRIDGE_INVALID_REQUEST, strprintf("launchtoken has no option %s", key.substr(0, 40)));
+        }
+    }
+    return dialog;
+}
+
+/** The second step of reserveasset for a launch: launchtoken of the same ticker, [ticker, options]. */
+confirm::Reveal LaunchAfterReserve()
+{
+    confirm::Reveal reveal;
+    reveal.method = "launchtoken";
+    reveal.title = "Launch a token";
+    reveal.accept = "Reserve and launch";
+    reveal.first_label = "Reservation";
+    reveal.second_label = "Launch";
+    reveal.what = "Two transactions: the reservation hides the ticker until it is deep enough, so that nobody who sees it coming can "
+                  "take it first; the launch then puts the token on its curve with what is below (and its first buy, if any).";
+    reveal.matches = confirm::SameFirstParam;
+    reveal.second_vsize = [](const UniValue& params) {
+        const UniValue& options{params.size() > 1 && params[1].isObject() ? params[1] : NullUniValue};
+        const UniValue& logo{options.isObject() ? options.find_value("logo") : NullUniValue};
+        return int64_t{450} + (options.isObject() ? static_cast<int64_t>(options.write().size()) : 0) - (logo.isStr() ? static_cast<int64_t>(logo.get_str().size() / 4) : 0);
+    };
+    reveal.when = confirm::AfterDepth("getbitassetsinfo", "reveal_depth");
+    return reveal;
+}
+} // namespace
+
 std::map<std::string, confirm::Method> ConfirmedRpcMethods()
 {
     // FastBlocks: none (bonds are made through fastblocks.bond and fastblocks.unbond, which the host confirms, below).
@@ -718,7 +800,7 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
     return {
         // Reserved and registered in one question: the registration, exactly as shown, is sent by the app without asking
         // again once the reservation is deep enough (confirm::Reveal).
-        {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), 0, SIZE_MAX, false), /*fee_unknown=*/true, 1, false, RegisterAfterReserve()}},
+        {"reserveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Reserve an asset", "Reserve", "The wallet pays for a reservation of an asset name."), 0, SIZE_MAX, false), /*fee_unknown=*/true, 1, false, RegisterAfterReserve(), {LaunchAfterReserve()}}},
         {"registerasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(WithLogo(confirm::Generic("Register an asset", "Register", "The wallet registers an asset it reserved, with the supply shown."), 5, false), 0, 6, false), /*fee_unknown=*/true}},
         {"setassetlogo", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithLogo(confirm::Generic("Set the logo of an asset", "Set the logo", "The wallet puts this logo on the chain for an asset it controls, in place of the one before: everyone sees it where the asset is shown."), 1, true), /*fee_unknown=*/false, 2}},
         {"setassetdisplayname", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Set the display name of an asset", "Set the display name", "The wallet puts this display name on the chain for an asset it controls, in place of the one before: everyone sees it after the asset's ticker. Display names are not unique."), SIZE_MAX, 1, true), /*fee_unknown=*/false, 2}},
@@ -740,7 +822,7 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"addpoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Add liquidity", "Add", "The wallet puts the amounts shown into the pool, for shares of it; out of the pool's proportions, it pays the pool's fee on the part a swap would trade."), {.asset_keys = {1}, .pools = {0}}), /*fee_unknown=*/true}},
         {"removepoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of the pool shown, for its assets (or the one shown alone, its fee paid on the part traded)."), {.assets = {2}, .pools = {0}}), /*fee_unknown=*/true}},
         // Launches: the token resolved and shown (WithAssets); a launch names its ticker, which its reservation reveals.
-        {"launchtoken", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithNames(confirm::Generic("Launch a token", "Launch", "The wallet launches a token on a bonding curve, from its reservation of the ticker: a billion tokens, fixed; buyers pay CHN into its curve and sellers get CHN back from it, until it graduates into a locked pool. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false), /*fee_unknown=*/true}},
+        {"launchtoken", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, DescribeLaunch, /*fee_unknown=*/true}},
         {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", "The wallet pays CHN into the token's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its CHN back.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", "The wallet sells the token back to its curve for at least the CHN shown (min_out), paid by the coinbase.", {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},

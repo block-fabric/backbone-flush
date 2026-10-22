@@ -8,6 +8,7 @@
 #include <webui/chainconfig.h>
 
 #include <chainparams.h>
+#include <chainparamsbase.h>
 #include <clientversion.h>
 #include <common/args.h>
 #include <common/init.h>
@@ -20,6 +21,7 @@
 #include <logging.h>
 #include <node/interface_ui.h>
 #include <util/chaintype.h>
+#include <util/time.h>
 #include <util/exception.h>
 #include <util/fs_helpers.h>
 #include <util/strencodings.h>
@@ -42,10 +44,10 @@
 #include <webui/local.h>
 #include <webui/sidechainapi.h>
 #include <webui/sidechainnodes.h>
+#include <webui/linkhost.h>
+#include <webui/links.h>
 #include <webui/singleinstance.h>
-#ifdef WIN32
 #include <webui/urischeme.h>
-#endif
 #ifdef ENABLE_WALLET
 #include <webui/walletapi.h>
 #endif
@@ -153,7 +155,7 @@ void SetupUIArgs(ArgsManager& argsman)
     argsman.AddArg("-webuitestshots=<dir>", "Folder for the pictures the test script takes", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
 #endif
 #ifdef WIN32
-    argsman.AddArg("-webuiregisteruri", strprintf("Open %s: payment URIs with this program, for this user, unless another one does (default: 1; never with -webuitestscript)", webui::chain::URI_SCHEME), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
+    argsman.AddArg("-webuiregisteruri", strprintf("Open %s: links (payments, and the action links of the site) with this program, for this user, unless another one does (default: 1; never with -webuitestscript)", webui::chain::URI_SCHEME), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::GUI);
 #endif
 }
 
@@ -448,12 +450,27 @@ void App::OnInstanceMessage(const std::string& line)
             deliver = m_phase == "ready";
             if (!deliver) m_pending_uris.push_back(uri);
         }
-        if (deliver) {
-            UniValue data{UniValue::VOBJ};
-            data.pushKV("uri", uri);
-            m_hub->Emit("uri", std::move(data));
-        }
+        if (deliver) DeliverUri(uri);
     }
+}
+
+void App::DeliverUri(const std::string& uri)
+{
+    // An action link of flush.markets: read and confirmed by the host alone, never handed to the page.
+    if (links::IsAction(uri)) {
+        if (!m_links || !m_links->Enqueue(uri, links::Source::BROWSER)) {
+            UniValue dialog{UniValue::VOBJ};
+            dialog.pushKV("kind", "message");
+            dialog.pushKV("level", "error");
+            dialog.pushKV("title", "Link refused");
+            dialog.pushKV("message", "Too many links at once: open them one at a time.");
+            Inform(std::move(dialog));
+        }
+        return;
+    }
+    UniValue data{UniValue::VOBJ};
+    data.pushKV("uri", uri);
+    m_hub->Emit("uri", std::move(data));
 }
 
 void App::PollShutdown()
@@ -566,7 +583,24 @@ bool App::StartNode()
         uris = m_pending_uris;
     }
     const fs::path socket{SingleInstance::SocketPath(m_args.GetDataDirNet())};
-    if (SingleInstance::SendToRunning(socket, uris)) {
+    // An action link names its network (links.h): with no app of this network running, it goes to the app of the network it
+    // names, if that one runs (a browser starts the app with the default network); that app checks it again.
+    const auto other_app{[&]() -> fs::path {
+        if (uris.size() != 1 || !links::IsAction(uris.front())) return {};
+        const std::string& uri{uris.front()};
+        const size_t at{uri.find("network=")};
+        if (at == std::string::npos || (uri[at - 1] != '?' && uri[at - 1] != '&')) return {};
+        const std::string network{uri.substr(at + 8, uri.find('&', at) == std::string::npos ? std::string::npos : uri.find('&', at) - at - 8)};
+        const auto chain{ChainTypeFromString(network)};
+        if (!chain || *chain == m_args.GetChainType()) return {};
+        return SingleInstance::SocketPath(m_args.GetDataDirBase() / fs::PathFromString(CreateBaseChainParams(*chain)->DataDir()));
+    }};
+    bool handed{SingleInstance::SendToRunning(socket, uris)};
+    if (!handed) {
+        const fs::path other{other_app()};
+        handed = !other.empty() && SingleInstance::SendToRunning(other, uris);
+    }
+    if (handed) {
         tfm::format(std::cout, "%s runs already for this data directory: %s handed to it.\n", CLIENT_NAME, uris.empty() ? "asked it to show itself" : "the URIs were");
         LOCK(m_mutex);
         m_exit_code = EXIT_SUCCESS;
@@ -706,11 +740,7 @@ bool App::StartNode()
         LOCK(m_mutex);
         waiting.swap(m_pending_uris);
     }
-    for (const std::string& uri : waiting) {
-        UniValue event{UniValue::VOBJ};
-        event.pushKV("uri", uri);
-        m_hub->Emit("uri", std::move(event));
-    }
+    for (const std::string& uri : waiting) DeliverUri(uri);
     m_window->PostDelayed(SHUTDOWN_POLL, [this] { PollShutdown(); });
     return true;
 }
@@ -749,6 +779,7 @@ void App::NodeThread()
         if (m_node_events) m_node_events->Stop();
         m_bridge->Stop();
         if (m_instance) m_instance->Stop();
+        if (m_links) m_links->Stop();
         LogInfo("webui: shutting the node down");
         m_node->appShutdown();
         LogInfo("webui: node stopped");
@@ -756,6 +787,7 @@ void App::NodeThread()
         if (m_node_events) m_node_events->Stop();
         m_bridge->Stop();
         if (m_instance) m_instance->Stop();
+        if (m_links) m_links->Stop();
     }
     m_window->Quit();
 }
@@ -1647,6 +1679,47 @@ void App::RegisterHostMethods()
     m_confirmed_rpc = std::make_unique<confirm::ConfirmedRpc>(need_node, [this](const Window::ConfirmDialog& dialog) { return AskHost(dialog); }, keys, fee);
     m_confirmed_rpc->Register(b);
 
+    // The action links of flush.markets (linkhost.h): from the browser (a second start, the command line), pasted or dropped
+    // into the window, or a launch file; each read, resolved and quoted by the host, and confirmed in its own dialog.
+    {
+        links::LinkHost::Deps deps;
+        deps.node = need_node;
+        deps.confirmed = [this](const UniValue& call) { return m_confirmed_rpc->Call(call); };
+        deps.ask = [this](const Window::ConfirmDialog& dialog) { return AskHost(dialog); };
+        deps.open = [this](const std::string& url) {
+#ifdef WEBUI_TEST_HOOKS
+            if (!m_test_script.empty()) {
+                // A test run opens no browser: the address is kept for the test (test.linksOpened).
+                LOCK(m_mutex);
+                m_test_opened.push_back(url);
+                return true;
+            }
+#endif
+            auto done{std::make_shared<std::promise<bool>>()};
+            m_window->Post([this, url, done] { done->set_value(m_window->OpenExternal(url)); });
+            auto future{done->get_future()};
+            return future.wait_for(10s) == std::future_status::ready && future.get();
+        };
+        deps.choose = [this](const Window::FileDialog& dialog) { return Choose(dialog); };
+        deps.inform = [this](const std::string& title, const std::string& message, bool error) {
+            UniValue dialog{UniValue::VOBJ};
+            dialog.pushKV("kind", "message");
+            dialog.pushKV("level", error ? "error" : "info");
+            dialog.pushKV("title", title);
+            dialog.pushKV("message", message);
+            Inform(std::move(dialog));
+        };
+        deps.wallet = [this]() {
+            const UniValue prefs{NetworkPrefs()};
+            const UniValue& last{prefs.isObject() ? prefs.find_value("lastWallet") : NullUniValue};
+            return last.isStr() ? last.get_str() : std::string{};
+        };
+        deps.network = [] { return ChainTypeToString(Params().GetChainType()); };
+        deps.now = [] { return GetTime(); };
+        m_links = std::make_unique<links::LinkHost>(std::move(deps));
+        m_links->Register(b);
+    }
+
 #ifdef WEBUI_TEST_HOOKS
     if (!m_test_script.empty()) {
         // The hooks of the tests of the app: only in a build for the tests (WEBUI_TEST_HOOKS), and only
@@ -1791,6 +1864,18 @@ void App::RegisterHostMethods()
             }
             return out;
         });
+        b.RegisterHost("test.openLink", [this](const UniValue& params) {
+            // A link as a second start of the app hands it over (SingleInstance: "uri <link>"), from the browser.
+            OnInstanceMessage("uri " + ParamStr(params, "uri"));
+            return UniValue{true};
+        });
+        b.RegisterHost("test.linksOpened", [this](const UniValue&) {
+            // The web addresses the links opened (the browser is not opened in a test run).
+            LOCK(m_mutex);
+            UniValue out{UniValue::VARR};
+            for (const std::string& url : m_test_opened) out.push_back(url);
+            return out;
+        });
         b.RegisterHost("test.notifications", [this](const UniValue&) {
             LOCK(m_mutex);
             UniValue out{UniValue::VARR};
@@ -1840,8 +1925,10 @@ int App::Run()
         return "optionsUndo:" + (m_network.empty() ? ChainTypeToString(m_args.GetChainType()) : m_network);
     });
 
-#ifdef WIN32
-    // The payment URIs of the chain (the installer of chains-qt registers them for all users).
+#if defined(WIN32) || defined(__linux__)
+    // The links of the chain (payments, and the action links of its site): this program opens them, for this user (Windows:
+    // the registry of the user, as its installer does for all users; Linux: a desktop entry and mimeapps.list), unless
+    // another installation the user chose does.
     if (m_args.GetBoolArg("-webuiregisteruri", true) && m_args.GetArg("-webuitestscript", "").empty()) RegisterUriScheme(std::string{webui::chain::URI_SCHEME}, CLIENT_NAME);
 #endif
 

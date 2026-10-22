@@ -16,7 +16,8 @@
   import { app, applySnapshot, loadPrefs, phaseEvents, prefs, subscribe, toast } from './lib/state.svelte';
   import { applyLook } from './lib/customthemes';
   import { look } from './lib/themestore.svelte';
-  import { parsePaymentUri } from './lib/uri';
+  import { isActionUri, isLaunchFile, parsePaymentUri } from './lib/uri';
+  import { openLink, importLaunchText } from './lib/links';
   import { watchWindow } from './lib/windowframe.svelte';
   import Fatal from './views/Fatal.svelte';
   import Intro from './views/Intro.svelte';
@@ -109,6 +110,11 @@
 
   /** A payment URI: from another start of the app, or dropped on the window (BitcoinGUI::dropEvent). */
   function handleUri(uri: string) {
+    // An action link of the site: the host's alone (it reads it and asks in its own dialog).
+    if (isActionUri(uri)) {
+      void openLink(uri.trim());
+      return;
+    }
     const parsed = parsePaymentUri(uri);
     if (!parsed.ok) {
       toast('error', t('Payment request error'), parsed.error);
@@ -134,7 +140,7 @@
     if (app.phase !== 'ready' || !e.dataTransfer) return;
     // A link dropped on the window would load in it: the app takes payment links, and nothing else.
     e.preventDefault();
-    e.dataTransfer.dropEffect = [...e.dataTransfer.types].some((t) => t === 'text/uri-list' || t === 'text/plain') ? 'copy' : 'none';
+    e.dataTransfer.dropEffect = [...e.dataTransfer.types].some((t) => t === 'text/uri-list' || t === 'text/plain' || t === 'Files') ? 'copy' : 'none';
   }
 
   function ondrop(e: DragEvent) {
@@ -143,6 +149,12 @@
     // Text dropped into a field stays the business of the field.
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
     e.preventDefault();
+    // A launch file of the site dropped on the window: its text to the host, which reads it (never the page).
+    const file = [...(e.dataTransfer?.files ?? [])].find((f) => isLaunchFile(f.name));
+    if (file) {
+      void importLaunchText(file);
+      return;
+    }
     for (const uri of droppedUris(e)) handleUri(uri);
   }
 

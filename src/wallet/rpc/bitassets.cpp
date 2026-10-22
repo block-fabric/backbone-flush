@@ -2185,6 +2185,7 @@ RPCMethod launchtoken()
                 {"info", RPCArg::Type::STR, RPCArg::Optional::OMITTED, strprintf("Its description and links, at most %u bytes", bitassets::MAX_INFO_SIZE)},
                 {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to 5)"},
                 {"first_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "CHN the launch buys of its token in its own block, at the block's price"},
+                {"first_min_out", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least tokens the first buy gets (0: any): the rules refuse its order below it, its CHN back; refused here if its quote alone is less"},
                 {"min_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least CHN a buy on the curve pays (0: any)"},
                 {"max_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The most CHN a buy on the curve pays (0: any)"},
             }},
@@ -2241,6 +2242,20 @@ RPCMethod launchtoken()
     launch.max_buy = coin("max_buy");
     if (launch.max_buy != 0 && launch.max_buy < launch.min_buy) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_buy is less than min_buy");
     launch.first_buy = coin("first_buy");
+    if (options.exists("first_min_out")) {
+        launch.first_min_out = bitassets::ParseUnits(options["first_min_out"], bitassets::LAUNCH_DECIMALS, /*allow_zero=*/true);
+        if (launch.first_min_out > 0 && launch.first_buy == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "first_min_out goes with a first buy");
+        if (launch.first_min_out > 0) {
+            // What the first buy gets alone in its block, on the new curve: never signed for less than the least asked.
+            const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
+            const auto quote{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{rules.launch_fee, bitassets::LAUNCH_CURVE_END, launch.max_buy, launch.min_buy},
+                                                            static_cast<uint64_t>(rules.launch_graduation) / 2, bitassets::LAUNCH_VIRTUAL_TOKENS,
+                                                            {bitassets::dex::HopIn{true, launch.first_buy}}, {true})};
+            if (!quote || quote->outs[0] < launch.first_min_out) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy gets %s tokens alone in its block, less than first_min_out", bitassets::FormatUnits(quote ? quote->outs[0] : 0, bitassets::LAUNCH_DECIMALS)));
+            }
+        }
+    }
     std::vector<Out> outs;
     if (launch.first_buy > 0) {
         if (launch.first_buy < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s CHN at least", FormatMoney(bitassets::MIN_CHN_PAYOUT)));

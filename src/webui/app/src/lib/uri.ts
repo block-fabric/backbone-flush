@@ -20,6 +20,21 @@ function decode(text: string): string {
   return decodeURIComponent(text.replace(/\+/g, ' '));
 }
 
+/**
+ * Whether text is an action link of the site (scheme:<verb>?..., a verb of lowercase letters: connect, launch, buy, sell,
+ * swap), not a payment. The page never reads one: it hands it to the host as it is (host.openLink), which reads it,
+ * resolves it and asks the user in its own dialog (src/webui/linkhost.h).
+ */
+export function isActionUri(text: string): boolean {
+  const t = text.trim();
+  return t.toLowerCase().startsWith(SCHEME + ':') && /^[a-z]+\?/.test(t.slice(SCHEME.length + 1));
+}
+
+/** Whether a file is a launch file of the site (<TICKER>.flushlaunch.json). */
+export function isLaunchFile(name: string): boolean {
+  return /\.flushlaunch\.json$/i.test(name);
+}
+
 export function parsePaymentUri(uri: string): UriResult {
   const text = uri.trim();
   if (!text.toLowerCase().startsWith(SCHEME + ':')) return { ok: false, error: `Not a ${SCHEME}: URI` };

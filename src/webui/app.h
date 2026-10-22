@@ -44,6 +44,9 @@ class WalletApi;
 namespace confirm {
 class ConfirmedRpc;
 } // namespace confirm
+namespace links {
+class LinkHost;
+} // namespace links
 
 /** The options of the app on top of the ones of the node (the GUI options of chains-qt, and the debug ones of chains-app). */
 void SetupUIArgs(ArgsManager& args);
@@ -95,6 +98,8 @@ private:
     void PollShutdown() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     void DeliverEvents(const std::string& batch_json);
     void OnInstanceMessage(const std::string& line) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** A URI of the scheme handed to the app (its command line, a second start): an action link to the host (links.h), a payment to the page. */
+    void DeliverUri(const std::string& uri) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     /** The preferences of the interface on the network of the node (or of the command line before it is known). */
     UniValue NetworkPrefs() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     bool PrefFlag(const std::string& key, bool fallback) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
@@ -171,6 +176,10 @@ private:
     std::unique_ptr<NodeApi> m_node_api;
     //! The RPC methods that pay, sign or change the votes of the node, confirmed on the desktop (confirm.h).
     std::unique_ptr<confirm::ConfirmedRpc> m_confirmed_rpc;
+    //! The action links of flush.markets (linkhost.h): read, resolved and confirmed by the host.
+    std::unique_ptr<links::LinkHost> m_links;
+    //! The web addresses the links opened in a test run, in place of the browser (-webuitestscript).
+    std::vector<std::string> m_test_opened GUARDED_BY(m_mutex);
     //! The nodes of sidechains run from here.
     std::unique_ptr<SidechainNodes> m_sidechain_nodes;
     std::unique_ptr<SidechainApi> m_sidechain_api;
