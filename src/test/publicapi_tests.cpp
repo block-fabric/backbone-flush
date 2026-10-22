@@ -412,6 +412,25 @@ BOOST_AUTO_TEST_CASE(public_face_http1)
     BOOST_CHECK_EQUAL(p.clients[0], "203.0.113.9");
     BOOST_CHECK_EQUAL(p.clients[1], "10.1.1.1"); // not a proxy: its header is not believed
     BOOST_CHECK_EQUAL(p.clients[2], "198.51.100.4"); // the right-most entry, the proxy's own
+    // IPv6 clients are known by their /64, peers and forwarded addresses alike: rotating addresses gets no fresh limits.
+    p.clients.clear();
+    for (int i{1}; i <= 20; ++i) {
+        Http1(*p.server, "GET /api/v1/status HTTP/1.1\r\n\r\n", *Lookup(strprintf("2a02:6b8:1:2:%x:%x::%x", i, i * 7, i * 13), 1, false));
+        Http1(*p.server, strprintf("GET /api/v1/status HTTP/1.1\r\nX-Real-IP: 2a02:6b8:5:6:%x::%x\r\n\r\n", i, i * 3), *Lookup("127.0.0.1", 1, false));
+    }
+    Http1(*p.server, "GET /api/v1/status HTTP/1.1\r\nX-Real-IP: 2a02:6b8:5:7::1\r\n\r\n", *Lookup("127.0.0.1", 1, false));
+    BOOST_REQUIRE_EQUAL(p.clients.size(), 41U);
+    for (int i{0}; i < 40; i += 2) {
+        BOOST_CHECK_EQUAL(p.clients[i], "2a02:6b8:1:2::/64");
+        BOOST_CHECK_EQUAL(p.clients[i + 1], "2a02:6b8:5:6::/64");
+    }
+    BOOST_CHECK_EQUAL(p.clients[40], "2a02:6b8:5:7::/64"); // another /64, another client
+    // So they share one bucket of the rate limiter: a burst of 3, then refused, whatever address in the /64 is next.
+    publicapi::RateLimiter limits{0.001, 3};
+    int taken{0};
+    for (const auto& client : std::vector<std::string>{p.clients.begin(), p.clients.begin() + 40}) taken += !limits.Take(client, 1);
+    BOOST_CHECK_EQUAL(taken, 6); // 3 for each /64
+    BOOST_CHECK(!limits.Take(p.clients[40], 1));
     p.refuse_after = 0;
     r = Http1(*p.server, "GET /api/v1/status HTTP/1.1\r\n\r\n");
     BOOST_CHECK_EQUAL(StatusOf(r), 429);

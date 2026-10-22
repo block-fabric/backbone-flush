@@ -65,7 +65,7 @@ void AddPublicApiOptions(ArgsManager& args)
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiproxyheader=<name>", "The header the proxies of -publicapiproxy set with the client's address (e.g. X-Real-IP; X-Forwarded-For: its right-most entry). The proxy must set it itself, overwriting what the client sent",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
-    args.AddArg("-publicapiipv6prefix=<bits>", "IPv6 clients of the public API are counted by this prefix for the 16 connections an address may hold (one client usually has a /64 to rotate addresses in; 16 to 128, default: 64)",
+    args.AddArg("-publicapiipv6prefix=<bits>", "IPv6 clients of the public API are counted by this prefix, for the 16 connections an address may hold and for its rate limits (one client usually has a /64 to rotate addresses in; 16 to 128, default: 64)",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapireflection", "Serve gRPC server reflection on the public API (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapirate=<n>", "Calls a second each client of the public API may make on average (a quote counts 4, a list 2; default: 10)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);

@@ -86,7 +86,7 @@ struct CallInfo {
     std::string path;
     //! The request's headers, names in lower case.
     const std::map<std::string, std::string>& headers;
-    //! The client's address: the peer's, or what a trusted proxy in front says (Options::trusted_proxies).
+    //! The client's key: the peer's, or what a trusted proxy in front says (Options::trusted_proxies), IPv6 by its prefix (Server::AddressKey).
     std::string client;
     //! A REST request (Options::rest).
     bool rest{false};
@@ -198,7 +198,8 @@ public:
     const pb::Pool& Pool() const { return m_pool; }
     const Options& GetOptions() const { return m_options; }
     const std::string& Name() const { return m_name; }
-    /** The key a client's connections are counted under (Options::max_connections_per_ip, ipv6_prefix). */
+    /** The key a client is known by, for its connections (Options::max_connections_per_ip) and its calls' limits (CallInfo::client):
+     *  an IPv6 address by its prefix (Options::ipv6_prefix), an IPv4 one whole. */
     static std::string AddressKey(const CNetAddr& addr, int ipv6_prefix);
     void Run(std::function<void()> task);
 

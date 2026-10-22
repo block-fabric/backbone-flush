@@ -489,6 +489,11 @@ class PublicApiTest(LayersTest):
         assert_equal(r.json()["error"]["code"], "resource_exhausted")
         # The proxy the operator named (here: localhost, with X-Real-IP) names the client: another client has its own budget.
         assert_equal(strict.get("status", headers={"X-Real-IP": "203.0.113.7"}).status, 200)
+        # An IPv6 client is its /64 (-publicapiipv6prefix): rotating addresses in it gets no fresh budget.
+        codes = [strict.get("status", headers={"X-Real-IP": f"2a02:6b8:7:8:{i:x}::{i * 3:x}"}).status for i in range(1, 7)]
+        assert_equal(codes[:3], [200, 200, 200])
+        assert 429 in codes[3:]
+        assert_equal(strict.get("status", headers={"X-Real-IP": "2a02:6b8:7:9::1"}).status, 200)
 
         self.log.info("Slow clients: a request not all in within 15 s closes the connection; 16 connections an address")
         import socket

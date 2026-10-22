@@ -451,11 +451,13 @@ bool HostAllowed(const std::string& host_port, const std::vector<std::string>& a
     return !host.empty() && std::all_of(host.begin(), host.end(), [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
 }
 
-/** The client a request is for: the peer, or what a proxy it trusts says (X-Real-IP, else the last of X-Forwarded-For). */
+/** The client a request is for: the peer, or what a proxy it trusts says (X-Real-IP, else the last of X-Forwarded-For).
+ *  Keyed as its connections are counted (Server::AddressKey): an IPv6 client by its prefix, so that rotating addresses
+ *  in its /64 does not give it fresh rate limits. */
 std::string ClientOf(const Server& server, const Request& r)
 {
     const Options& options{server.GetOptions()};
-    const std::string peer{r.peer.IsValid() ? r.peer.ToStringAddr() : "local"};
+    const std::string peer{r.peer.IsValid() ? Server::AddressKey(r.peer, options.ipv6_prefix) : "local"};
     if (options.proxy_header.empty()) return peer;
     const bool trusted{r.peer.IsValid() && std::any_of(options.trusted_proxies.begin(), options.trusted_proxies.end(), [&](const CSubNet& s) { return s.Match(r.peer); })};
     if (!trusted) return peer;
@@ -463,7 +465,7 @@ std::string ClientOf(const Server& server, const Request& r)
     // X-Forwarded-For: the right-most entry, the one the trusted proxy appended (those before it are the client's word).
     if (const auto comma{forwarded.rfind(',')}; comma != std::string::npos) forwarded = forwarded.substr(comma + 1);
     forwarded = util::TrimString(forwarded);
-    if (const auto addr{LookupHost(forwarded, /*fAllowLookup=*/false)}) return addr->ToStringAddr();
+    if (const auto addr{LookupHost(forwarded, /*fAllowLookup=*/false)}) return Server::AddressKey(*addr, options.ipv6_prefix);
     return peer;
 }
 
