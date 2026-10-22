@@ -91,8 +91,9 @@ class LayersLaunchTest(LayersTest):
         self.bmm()
         got = self.holding(n1, "MOON")
         assert_equal(got, quote["amount_out"])
-        quote = n1.quotelaunch("MOON", got / 2, "sell")
-        sold = n1.selltolaunch("0x" + made["token"], got / 2)
+        half = (got / 2).quantize(Decimal("0.000001"))
+        quote = n1.quotelaunch("MOON", half, "sell")
+        sold = n1.selltolaunch("0x" + made["token"], half)
         block = self.bmm()
         assert self.paid_in(n1, block, sold["quote"]), "the sale's CHN by the coinbase"
         assert_equal(sold["quote"], quote["amount_out"])
