@@ -38,3 +38,8 @@ webui_local_e2e(ba_feedback 49740)
 # list, the asset page, the compact Your assets of the Home and the Overview, the display name changed by its controller,
 # the "this wallet" chip of Transactions opened in the explorer, the addresses and roles in the registration's details.
 webui_local_e2e(ba_tickers 49760 --app-arg=-testactivationheight=ticker@0)
+# links.js: the links of flush.markets (doc/flush-links.md): a buy, a sale, a swap in a graduated pool, a launch from a launch
+# file dropped on the window and one from a link, a connect, each in the host's dialog window (Launchpad) and pictured; the
+# refusals (another network, expired, used twice, a ticker not the token's, a floor the curve cannot meet, an unknown
+# parameter, a callback elsewhere, another logo). Pictures in Launchpad.
+webui_local_e2e(links 49820 --app-arg=-testactivationheight=dex@0 --app-arg=-testactivationheight=dexcurves@0 --app-arg=-testactivationheight=ticker@0)

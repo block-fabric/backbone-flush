@@ -550,6 +550,24 @@ namespace {
 thread_local bool g_describe_only{false};
 } // namespace
 
+static thread_local const Preface* g_preface{nullptr};
+
+Preface::Preface(std::vector<dialog::Row> rows, std::string message, std::string kind)
+    : m_previous{g_preface}, m_rows{std::move(rows)}, m_message{std::move(message)}, m_kind{std::move(kind)}
+{
+    g_preface = this;
+}
+Preface::~Preface() { g_preface = m_previous; }
+
+void Preface::Apply(Window::ConfirmDialog& dialog)
+{
+    if (!g_preface) return;
+    dialog.rows.insert(dialog.rows.begin(), g_preface->m_rows.begin(), g_preface->m_rows.end());
+    if (!g_preface->m_message.empty()) dialog.message = g_preface->m_message + "\n\n" + dialog.message;
+    dialog.kind = g_preface->m_kind + ":" + (dialog.kind.empty() ? dialog.title : dialog.kind);
+    dialog.level = std::max(dialog.level, dialog::Level::WARNING);
+}
+
 DescribeOnly::DescribeOnly() : m_previous{g_describe_only} { g_describe_only = true; }
 DescribeOnly::~DescribeOnly() { g_describe_only = m_previous; }
 bool DescribeOnly::Active() { return g_describe_only; }
@@ -704,6 +722,7 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
         throw HostError(BRIDGE_INVALID_REQUEST, strprintf("Too much for one question (%u facts; at most %u): ask for fewer at once", dialog->rows.size(), dialog::MAX_ROWS));
     }
     if (dialog && calls.size() > 1) dialog->message = strprintf("%u at once.\n\n%s", calls.size(), dialog->message);
+    if (dialog) Preface::Apply(*dialog);
 
     const auto run{[&]() -> UniValue {
         if (!batch) return RunRpc(node, name, calls.front().second, wallet);
@@ -724,7 +743,10 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
         return run();
     }
     if (!m_keys) throw HostError(-18, "Wallets are disabled in this node (-disablewallet).");
-    if (!dialog) dialog = Keys(confirm::Call{node, wallet, name, calls.front().second});
+    if (!dialog) {
+        dialog = Keys(confirm::Call{node, wallet, name, calls.front().second});
+        Preface::Apply(*dialog);
+    }
     return m_keys(wallet, *dialog, method.kind == Method::Kind::SPEND, method.fee_unknown, run);
 }
 
@@ -757,7 +779,14 @@ std::string TxidOf(const UniValue& result)
 UniValue ConfirmedRpc::TwoSteps(interfaces::Node& node, const std::string& wallet, const std::string& name, const Method& method, UniValue params, const UniValue& then)
 {
     if (!method.reveal || method.kind != Method::Kind::SPEND) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("%s has no second step", name));
-    const Reveal& reveal{*method.reveal};
+    // The second step named, among those of the method (the first is its usual one).
+    const Reveal* chosen{&*method.reveal};
+    if (then.isObject() && then.find_value("method").isStr()) {
+        for (const Reveal& other : method.other_reveals) {
+            if (other.method == then.find_value("method").get_str()) chosen = &other;
+        }
+    }
+    const Reveal& reveal{*chosen};
     if (!then.isObject() || !then.find_value("method").isStr() || then.find_value("method").get_str() != reveal.method) {
         throw HostError(BRIDGE_INVALID_REQUEST, strprintf("then: {method: \"%s\", params}", reveal.method));
     }
@@ -814,6 +843,7 @@ UniValue ConfirmedRpc::TwoSteps(interfaces::Node& node, const std::string& walle
     dialog.message = strprintf("%s\n\nStep 2 is sent by the app without asking again, %s: exactly as shown, from this wallet, within an hour, "
                                "and for a network fee of at most the one shown. Anything else, and the app asks again.\n\nAccept only if you asked for it.",
                                reveal.what, when);
+    Preface::Apply(dialog);
 
     const UniValue result{m_keys(wallet, dialog, /*always=*/true, /*fee_unknown=*/false, [&] { return RunRpc(node, name, params, wallet); })};
     const std::string txid{TxidOf(result)};
@@ -904,6 +934,7 @@ std::optional<UniValue> ConfirmedRpc::Authorized(interfaces::Node& node, const s
     auto dialog{method.describe(call)};
     if (!dialog) dialog = Keys(call);
     dialog->message = "You accepted this with its first step. The wallet is locked: its passphrase signs it.\n\n" + dialog->message;
+    Preface::Apply(*dialog);
     try {
         UniValue result{m_keys(wallet, *dialog, /*always=*/false, /*fee_unknown=*/false, [&] { return RunRpc(node, name, params, wallet); })};
         LogInfo("webui: %s ran as accepted with its first step %s", name, entry->commit_txid);

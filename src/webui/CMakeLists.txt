@@ -144,6 +144,8 @@ add_library(chains_webui_core STATIC EXCLUDE_FROM_ALL
   events.cpp
   i18n.cpp
   icontint.cpp
+  linkhost.cpp
+  links.cpp
   local.cpp
   nodeapi.cpp
   nodeevents.cpp
@@ -164,6 +166,10 @@ target_link_libraries(chains_webui_core
     univalue
     Boost::headers
 )
+if(NOT WIN32)
+  # The handler of the app's links on a freedesktop.org desktop (urischeme.h).
+  target_sources(chains_webui_core PRIVATE urischeme_xdg.cpp)
+endif()
 if(WIN32)
   # The named pipe of the single instance, the link of the startup folder.
   target_link_libraries(chains_webui_core PUBLIC advapi32 ole32 shell32 uuid)

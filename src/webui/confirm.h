@@ -146,6 +146,8 @@ struct Method {
     bool batch{false};
     //! The second step of this one, confirmed with it (rpc.confirmed {then}).
     std::optional<Reveal> reveal{};
+    //! Other second steps it may have, told apart by their method (reserveasset: registerasset, or launchtoken).
+    std::vector<Reveal> other_reveals{};
 };
 
 /** A describer of the generic kind: the title and the button, and which parameters are destinations and amounts. */
@@ -170,6 +172,28 @@ public:
 
 private:
     bool m_previous;
+};
+
+/**
+ * While one lives on a thread, every question ConfirmedRpc asks on that thread starts with these rows and this text, and
+ * its kind is prefixed (for the limits of the questions): what a link of a site asks (webui/linkhost.h) says where it
+ * comes from above all the facts the describer gives. The level is at least WARNING.
+ */
+class Preface
+{
+public:
+    Preface(std::vector<dialog::Row> rows, std::string message, std::string kind);
+    ~Preface();
+    Preface(const Preface&) = delete;
+    Preface& operator=(const Preface&) = delete;
+    //! Put the preface of this thread, if any, on a question.
+    static void Apply(Window::ConfirmDialog& dialog);
+
+private:
+    const Preface* m_previous;
+    std::vector<dialog::Row> m_rows;
+    std::string m_message;
+    std::string m_kind;
 };
 
 /** The methods confirmed this way, by name: the kit's own (confirm.cpp) and the chain's own (local.cpp). */
