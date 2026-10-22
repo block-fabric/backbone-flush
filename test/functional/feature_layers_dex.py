@@ -284,7 +284,9 @@ class LayersDexTest(LayersTest):
         assert_raises_rpc_error(-8, "waits", n2.settleoraclecontract, c_chn)
         # The contracts' CHN are in the state, with the pools': the peg balance's "assets".
         pools_chn = sum(p["reserve_a"] if p["asset_a"] == "ECX" else p["reserve_b"] if p["asset_b"] == "ECX" else 0 for p in n0.listpools())
-        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2)
+        # The coin the treasury holds (the protocol's parts of the fees) counts too.
+        treasury_chn = sum(b["balance"] for b in n0.gettreasury()["balances"] if b["asset_id"] == "00" * 32)
+        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2 + treasury_chn)
 
         n0.publishoracle(prices, "E1", 150)
         # The squatter's key cannot attest for the honest oracle; its own attestation is its own oracle's.
