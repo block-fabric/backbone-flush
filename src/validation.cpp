@@ -8,6 +8,7 @@
 #include <validation.h>
 
 #include <bitassets/index.h>
+#include <bitassets/market.h>
 #include <bitassets/state.h>
 
 #include <arith_uint256.h>
@@ -6323,7 +6324,12 @@ util::Result<void> Chainstate::LoadDrivechainState()
     // So is one without the search index of the assets of this version (derived data: bitassets/index.h).
     // An index of the layout before display names is of this one already (bitassets::index::UpgradeLayout): nothing is derived again for it.
     if (bitassets::StoreLayoutCurrent(cache) && bitassets::index::UpgradeLayout(cache)) LogInfo("The search index of the assets is brought to layout %u in place (display names)", bitassets::index::INDEX_LAYOUT);
-    const bool layout_current{bitassets::StoreLayoutCurrent(cache) && bitassets::index::LayoutCurrent(cache)};
+    // The DEX's market index (bitassets/market.h, -dexindex): erased if this node no longer keeps it; derived again with
+    // the rest if it keeps it and the store does not have it for every block.
+    if (!bitassets::market::Enabled() && bitassets::market::Present(cache)) LogInfo("The DEX's market index is not kept (-dexindex=0): %u entries erased", bitassets::market::Wipe(cache));
+    const bool market_current{bitassets::market::LayoutCurrent(cache)};
+    if (!market_current) LogInfo("The DEX's market index (-dexindex) is new to this node, or of another layout: deriving the sidechain state again from the blocks");
+    const bool layout_current{bitassets::StoreLayoutCurrent(cache) && bitassets::index::LayoutCurrent(cache) && market_current};
     if (!layout_current) LogInfo("The assets in the sidechain database are in an earlier layout, or without their search index: deriving it again from the blocks");
     if (have_state && layout_current && scdb.GetBlockHash() == tip->GetBlockHash()) {
         m_scdb = std::move(scdb);

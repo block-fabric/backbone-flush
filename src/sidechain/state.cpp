@@ -6,6 +6,7 @@
 
 #include <addresstype.h>
 #include <bitassets/index.h>
+#include <bitassets/market.h>
 #include <common/signmessage.h>
 #include <crypto/common.h>
 #include <drivechain/sidechain.h>
@@ -610,6 +611,8 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
     if (fees && !Hooks().CheckFees(*this, block, height, step, *fees, reject_reason)) return false;
     // The search index of the assets (derived data, no rule reads it), from what the block changed.
     if (m_overlay) bitassets::index::ConnectBlock(*m_overlay, height, params.asset_volume_window);
+    // The DEX's market index (-dexindex: trades, candles, holders), the same way.
+    if (m_overlay) bitassets::market::ConnectBlock(*m_overlay, block, height);
     return true;
 }
 
