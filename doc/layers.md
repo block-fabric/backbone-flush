@@ -629,7 +629,12 @@ the security parts paid, the parts in force); `getdexinfo`'s `swap_fee_parts`; `
 (`fee_parts_exact`); a block's pools, treasury and security parts add up to what its orders paid in and got
 (`fee_parts_conserved_and_undone`, launches: `launch_trade_graduate_claim`); a block taken back takes the treasury's
 accruals and its security parts back with the rest of its changes (the store's journal). The bidder/validators split of
-the security parts is the fee split's, to the satoshi (`security_parts_split_as_fees`).
+the security parts is the fee split's, to the satoshi (`security_parts_split_as_fees`). What a round takes out of a pool is what it credits:
+the parts are clamped to what was taken (at most what the pool holds; a concentrated pool: what it kept beyond its
+walk), the security part first, in every branch; launches' parts come out of fees already taken out of the curve, and
+books charge none. Random blocks of orders against small pools of every kind at the highest tier (one with a dynamic
+fee) conserve every asset exactly: what orders paid in less what they got equals what the pools gained plus what the
+treasury took (`fee_parts_conserve_every_kind`, a block taken back included).
 
 ## Logos of assets
 
