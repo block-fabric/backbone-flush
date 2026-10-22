@@ -60,10 +60,22 @@ def attestation_hash(oracle_hex, event_hex, value, height):
     return hashlib.sha256(data).digest()
 
 
+
+def taken(node, amount, fee_millionths):
+    """The security and protocol parts of the swap fee on `amount` (units) at `fee_millionths`: what leaves the pool (doc/layers.md "Fees of the DEX")."""
+    parts = node.getdexinfo()["swap_fee_parts"]
+    fee = amount * fee_millionths // 1000000
+    out = 0
+    for key in ("security", "protocol"):
+        share = int(Decimal(str(parts[key])) * 10000)
+        out += fee * share // 1000000
+    return out
+
 class LayersDexTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}"]
+        # The fee split too (pos/feesplit.h): the security parts of the DEX's fees in the chain's coin are split with the block's fees.
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", "-testactivationheight=feesplit@1"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
@@ -179,7 +191,10 @@ class LayersDexTest(LayersTest):
         # Each better than alone: the other's flow nets against it.
         assert_greater_than(Decimal(chn_out) / COIN, alone_sell)
         assert_greater_than(Decimal(gold_out) / 100, alone_buy)
-        assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out, r_c + units("0.2", 8) - chn_out))
+        # What came in and went out, less the security and protocol parts of each side's 0.3 % fee (which left the pool:
+        # the coin's security part paid with the block's fees, GOLD's held by the treasury).
+        assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out - taken(n0, 5000, 3000), r_c + units("0.2", 8) - chn_out - taken(n0, units("0.2", 8), 3000)))
+        assert_greater_than(n0.gettreasury()["security_paid"], 0)
 
         self.log.info("Batch: an order whose min_out the batch misses is refunded; the other fills as alone")
         alone = n1.quoteswap("GOLD", 50, "ECX")["amount_out"]
@@ -269,7 +284,9 @@ class LayersDexTest(LayersTest):
         assert_raises_rpc_error(-8, "waits", n2.settleoraclecontract, c_chn)
         # The contracts' CHN are in the state, with the pools': the peg balance's "assets".
         pools_chn = sum(p["reserve_a"] if p["asset_a"] == "ECX" else p["reserve_b"] if p["asset_b"] == "ECX" else 0 for p in n0.listpools())
-        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2)
+        # The coin the treasury holds (the protocol's parts of the fees) counts too.
+        treasury_chn = sum(b["balance"] for b in n0.gettreasury()["balances"] if b["asset_id"] == "00" * 32)
+        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2 + treasury_chn)
 
         n0.publishoracle(prices, "E1", 150)
         # The squatter's key cannot attest for the honest oracle; its own attestation is its own oracle's.
@@ -352,7 +369,25 @@ class LayersDexTest(LayersTest):
             n.setstaking(False)
         time.sleep(2)
         self.wait_in_sync()
-        assert_equal(self.reserves(n0, "SILVER", "OIL"), (r_s + 4000 - silver_out, r_o + 3000 - oil_out))
+        assert_equal(self.reserves(n0, "SILVER", "OIL"), (r_s + 4000 - silver_out - taken(n0, 4000, 3000), r_o + 3000 - oil_out - taken(n0, 3000, 3000)))
+        self.check_states()
+        assert_peg_balance(main, self.nodes)
+
+        self.log.info("A swap paying the coin in a block of stake: the security part of its fee joins the block's fees (pot and pool)")
+        paid_before = n0.gettreasury()["security_paid"]
+        for n in self.nodes:
+            n.setstaking(True)
+        c = n1.swapasset("ECX", "0.5", "GOLD")["txid"]
+        block_c = self.mined(n1, c)
+        assert self.is_pos(n0, block_c)
+        self.wait_until(lambda: n0.gettreasury()["security_paid"] > paid_before)
+        for n in self.nodes:
+            n.setstaking(False)
+        time.sleep(2)
+        self.wait_in_sync()
+        # The coinbase of that block: its pool output holds the validators' part of the fees and of the security part.
+        coinbase = n0.getblock(block_c, 2)["tx"][0]
+        assert any(o["scriptPubKey"]["hex"].startswith("6a04de56504c") for o in coinbase["vout"]), coinbase["vout"]
         self.check_states()
         assert_peg_balance(main, self.nodes)
 

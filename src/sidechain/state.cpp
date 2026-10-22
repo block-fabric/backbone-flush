@@ -531,6 +531,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     bitassets::State assets{Writable()};
     if (!bitassets::CheckLogoActivation(tx, params.LogoActive(height), reject_reason)) return false;
     if (!bitassets::CheckTickerActivation(tx, params.TickerActive(height), reject_reason)) return false;
+    if (!bitassets::CheckCurvesActivation(tx, params.DexCurvesActive(height), reject_reason)) return false;
     // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
     // never outgrows what the next block with the peg actions is sure to pay.
     if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued(), params.DexActive(height))) return false;
@@ -607,6 +608,10 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
     }
     if (!Hooks().AfterBlock(*this, block, height, step, minted, params, reject_reason)) return false;
     if (fees && !Hooks().CheckFees(*this, block, height, step, *fees, reject_reason)) return false;
+    // The DEX's security parts of its fees: coins the coinbase may pay beyond the fees of the transactions (the DEX's
+    // coin, which the state held, paid out with them: CheckFees split them). After AfterBlock, which counts what the
+    // coinbase pays beyond the fees (the payouts) apart from the fees' outputs.
+    minted += BitAssets().BlockSecurityFees(height);
     // The search index of the assets (derived data, no rule reads it), from what the block changed.
     if (m_overlay) bitassets::index::ConnectBlock(*m_overlay, height, params.asset_volume_window);
     return true;

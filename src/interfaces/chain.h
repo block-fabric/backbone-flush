@@ -25,6 +25,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 class CBlock;
@@ -201,6 +202,23 @@ public:
     virtual std::optional<uint256> getBitAssetsReservation(const Txid& txid) = 0;
     //! BitAssets: a pool, by its id.
     virtual std::optional<bitassets::Pool> getBitAssetsPool(const uint256& id) = 0;
+    //! BitAssets: a pool and its kind (Layers' DEX pool kinds), read together.
+    virtual std::optional<std::pair<bitassets::Pool, bitassets::PoolParams>> getBitAssetsPoolOfKind(const uint256& id) = 0;
+    //! Layers' DEX: what an amount gives through named pools (any kind, at the fees they charge next), each hop's output; nullopt if it cannot.
+    virtual std::optional<std::vector<uint64_t>> quoteBitAssetsPools(const bitassets::AssetId& asset_in, const std::vector<uint256>& pools, uint64_t amount) = 0;
+    //! Layers' DEX: the fee a pool charges next (its kind's, or its dynamic fee), of FEE_DENOMINATOR.
+    virtual uint32_t getBitAssetsPoolFee(const uint256& pool) = 0;
+    //! Concentrated liquidity: a pool's state, a position.
+    virtual std::optional<bitassets::ClState> getBitAssetsClState(const uint256& pool) = 0;
+    virtual std::optional<bitassets::ClPosition> getBitAssetsPosition(const uint256& id) = 0;
+    //! Order books: a limit order.
+    virtual std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) = 0;
+    //! Concentrated liquidity: what a position is owed in fees now (its record's and those earned since).
+    virtual std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) = 0;
+    //! Layers' launches: a launch, by its token.
+    virtual std::optional<bitassets::LaunchRecord> getBitAssetsLaunch(const bitassets::AssetId& token) = 0;
+    //! BitAssets: the pools of an asset, by id, with their kinds.
+    virtual std::vector<std::tuple<uint256, bitassets::Pool, bitassets::PoolParams>> getBitAssetsPoolsOf(const bitassets::AssetId& asset) = 0;
     //! BitAssets: an auction, by the transaction that made it.
     virtual std::optional<bitassets::Auction> getBitAssetsAuction(const Txid& txid) = 0;
     //! BitAssets: the height of the next block.
@@ -228,6 +246,8 @@ public:
     virtual std::optional<int> getBitAssetsReservationHeight(const Txid& txid) = 0;
     //! Layers' DEX: whether the next block has its rules (SidechainParams::dex_height).
     virtual bool getBitAssetsDexActive() = 0;
+    //! Layers' DEX: whether the next block has its pool kinds (SidechainParams::dex_curves_height).
+    virtual bool getBitAssetsDexCurvesActive() = 0;
     //! Layers' DEX: an oracle, by id.
     virtual std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) = 0;
     //! Layers' DEX: what an oracle attested for an event.

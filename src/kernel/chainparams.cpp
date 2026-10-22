@@ -249,6 +249,7 @@ public:
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
         consensus.sidechain.bitassets_reveal_depth = 6;
         consensus.sidechain.dex_height = 0; // Layers' DEX from the first block (a new network)
+        consensus.sidechain.dex_curves_height = 0; // and its pool kinds
         // The fee split from the first block: the main network has not started (doc/fastblocks.md).
         consensus.pos.fee_split_height = 0;
         consensus.pos.fee_curve2_height = 0;
@@ -393,6 +394,9 @@ public:
         // 19/Oct/2026).
         consensus.sidechain.dex_height = 0;
         consensus.sidechain.logo_height = 0;
+        // The DEX's pool kinds from their height (a change of the rules of a running network: every node
+        // upgraded before it; kernel/testnet_activation.h).
+        consensus.sidechain.dex_curves_height = TESTNET_DEX_CURVES_HEIGHT;
         // The search index's volume window: a day of 15-second slots (bitassets/index.h; not a rule).
         consensus.sidechain.asset_volume_window = 5760;
         consensus.sidechain.ticker_height = 0;
@@ -539,6 +543,7 @@ public:
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
         consensus.sidechain.bitassets_reveal_depth = 3;
         consensus.sidechain.dex_height = 0; // Layers' DEX from the first block
+        consensus.sidechain.dex_curves_height = 0; // and its pool kinds
         consensus.pos.fee_split_height = 0; // not launched: from the first block
         consensus.pos.fee_curve2_height = 0;
         consensus.sidechain.logo_height = 0;
@@ -671,6 +676,16 @@ public:
             // Layers' DEX never, unless a test asks (-testactivationheight=dex@<height>): the tests of the
             // rules before it run unchanged.
             consensus.sidechain.dex_height = opts.dep_opts.dex_height.value_or(std::numeric_limits<int>::max());
+            // The DEX's pool kinds with the DEX, unless a test asks (-testactivationheight=dexcurves@<height>).
+            consensus.sidechain.dex_curves_height = opts.dep_opts.dex_curves_height.value_or(0);
+            // Flush's fees of the DEX, as on its eCash networks (doc/layers.md "Fees of the DEX"): swaps 85 % providers /
+            // 11 % security / 4 % treasury; launch curves 1.15 %, 50 % creator / 30 % treasury / 20 % security.
+            consensus.sidechain.dex_fee_security_share = 110'000;
+            consensus.sidechain.dex_fee_protocol_share = 40'000;
+            consensus.sidechain.launch_fee = 11'500;
+            consensus.sidechain.launch_creator_share = 500'000;
+            consensus.sidechain.launch_protocol_share = 300'000;
+            consensus.sidechain.launch_security_share = 200'000;
             // The logos of assets from the first block, unless a test asks (-testactivationheight=logo@<height>).
             consensus.sidechain.logo_height = opts.dep_opts.logo_height.value_or(0);
             // Tickers and display names only if a test asks (-testactivationheight=ticker@<height>):
@@ -836,6 +851,21 @@ public:
         // Rules that need only what the bip300301_enforcer reports of each block, which a node can follow through
         // an enforcer alone (-mainchaingrpc): new networks, nothing on them to fork (SidechainParams::main_events_only).
         consensus.sidechain.main_events_only = true;
+        // Flush has not launched on any eCash network: the DEX's pool kinds and launches are its rules from the first
+        // block, on every one (Layers' test network takes them at a height of its own: kernel/testnet_activation.h).
+        consensus.sidechain.dex_curves_height = 0;
+        // Launches graduate at 500 ECX (a consensus parameter; doc/layers.md "Launches").
+        consensus.sidechain.launch_graduation = 500 * COIN;
+        // The fees of the DEX (doc/layers.md "Fees of the DEX"; decided 2026-10-21): swap fees 85 % to the liquidity
+        // providers, 11 % to the chain's security (the BMM bidder and the validators, by the curve of the network fees),
+        // 4 % to the protocol's treasury; a launch's curve charges 1.15 % of a trade: 50 % to its creator, 30 % to the
+        // treasury, 20 % to the chain's security. Network fees: the bidder and the validators only (pos/feesplit.h).
+        consensus.sidechain.dex_fee_security_share = 110'000;
+        consensus.sidechain.dex_fee_protocol_share = 40'000;
+        consensus.sidechain.launch_fee = 11'500;
+        consensus.sidechain.launch_creator_share = 500'000;
+        consensus.sidechain.launch_protocol_share = 300'000;
+        consensus.sidechain.launch_security_share = 200'000;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

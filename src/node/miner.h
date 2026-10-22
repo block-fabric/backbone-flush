@@ -48,6 +48,9 @@ struct CBlockTemplate
     CBlock block;
     // Fees per transaction, not including coinbase transaction (unlike CBlock::vtx).
     std::vector<CAmount> vTxFees;
+    // A sidechain's fees of the block no transaction paid (Layers' DEX: the security parts of its fees), in the
+    // coinbase's first output with the others, and split with them (pos::SplitFees).
+    CAmount side_security_fees{0};
     // Sigops per transaction, not including coinbase transaction (unlike CBlock::vtx).
     std::vector<int64_t> vTxSigOpsCost;
     /* A vector of package fee rates, ordered by the sequence in which

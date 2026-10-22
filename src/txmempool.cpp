@@ -256,7 +256,7 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
         m_bitassets_txs.insert(tx.GetHash());
         m_bitassets_unindexed.insert(tx.GetHash());
         if (marker->operation) {
-            if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) m_bitassets_registrations[reg->name] = tx.GetHash();
+            if (const auto* reg{bitassets::RegisterOf(*marker->operation)}) m_bitassets_registrations[reg->name] = tx.GetHash();
             if (const auto* release{std::get_if<bitassets::ReleaseAsset>(&*marker->operation)}) m_bitassets_releases[release->asset] = tx.GetHash();
         }
     }
@@ -405,7 +405,7 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
             const auto erase_own{[&](std::map<uint256, Txid>& map, const uint256& key) {
                 if (const auto entry{map.find(key)}; entry != map.end() && entry->second == it->GetTx().GetHash()) map.erase(entry);
             }};
-            if (const auto* reg{std::get_if<bitassets::Register>(&*marker->operation)}) erase_own(m_bitassets_registrations, reg->name);
+            if (const auto* reg{bitassets::RegisterOf(*marker->operation)}) erase_own(m_bitassets_registrations, reg->name);
             if (const auto* release{std::get_if<bitassets::ReleaseAsset>(&*marker->operation)}) erase_own(m_bitassets_releases, release->asset);
         }
         SetBitAssetsReads(it->GetTx().GetHash(), std::nullopt);

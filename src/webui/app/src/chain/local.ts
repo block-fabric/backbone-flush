@@ -60,7 +60,7 @@ export const LOCAL_PAGES = [
   // Shown as "Register new asset" (user decision, 2026-10-15); its id stays issue.
   // A tab of My assets (user feedback 2026-10-19); go('issue') and its links lead there.
   { id: 'issue', title: 'Register new asset', tabOf: { page: 'my-assets', tab: 'register' }, simpleTitle: 'Create a token', simpleSummary: 'Make a token of your own', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Register new asset', icon: 'issue', simpleLabel: 'Create a token' } },
-  { id: 'trade', title: 'Trade', simpleTitle: 'Swap', simple: true, simpleSummary: 'Trade one token for another', icon: 'swap', section: 'chain', shortcut: 'Alt+9', summary: 'Swap assets in their pools, and provide liquidity for a share of the fees', keywords: 'swap exchange amm pool liquidity price dex', quick: { label: 'Swap', icon: 'swap' } },
+  { id: 'trade', title: 'Trade', simpleTitle: 'Swap', simple: true, simpleSummary: 'Trade one token for another', icon: 'swap', section: 'chain', shortcut: 'Alt+9', summary: 'Swap assets in their pools, provide liquidity for a share of the fees, and launch tokens on bonding curves', keywords: 'swap exchange amm pool liquidity price dex launch bonding curve', quick: { label: 'Swap', icon: 'swap' } },
   { id: 'auctions', title: 'Auctions', icon: 'gavel', section: 'chain', summary: 'Buy at a price that falls block by block, or sell by Dutch auction', keywords: 'dutch auction bid sell buy', advanced: true },
 ] as const satisfies readonly LocalPage[];
 
@@ -102,7 +102,14 @@ export const LOCAL_COMMANDS = [
   { id: 'fb.evidence', label: 'Proofs of double signing', page: 'staking', tab: 'slashing', tip: 'Proofs that a leader signed two blocks for one slot, and jailed validators', keywords: 'slashing evidence jail banned' },
   { id: 'ba.issue', label: 'Register new asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
   { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
+  { id: 'ba.markets', label: 'Markets', page: 'trade', tab: 'markets', tip: 'Every pair: its price, its change and volume over a day, its liquidity', keywords: 'market index pairs volume liquidity price change verified curators issuers' },
+  { id: 'ba.book', label: 'Order book…', page: 'trade', tab: 'book', tip: 'The order book of two assets: limit orders to buy or sell at a price', keywords: 'order book limit orders bid ask spread' },
+  { id: 'ba.treasury', label: 'Treasury', page: 'trade', tab: 'treasury', tip: 'Where the fees go, and what the treasury holds per asset', keywords: 'treasury fees protocol security providers split' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
+  { id: 'ba.positions', label: 'Positions', page: 'trade', tab: 'positions', tip: 'Your positions of concentrated liquidity: in range or not, fees earned; collect, add, remove, close', keywords: 'concentrated liquidity position range ticks uniswap v3 fees collect' },
+  { id: 'ba.launches', label: 'Launches', page: 'trade', tab: 'launches', tip: 'Tokens sold from a bonding curve until they graduate into a locked pool', keywords: 'launch bonding curve token new graduate pump fair' },
+  { id: 'ba.launch', label: 'Launch a token…', page: 'trade', tab: 'launch', tip: 'Launch a token of your own on a bonding curve', keywords: 'launch bonding curve token create new ticker' },
+  { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable or weighted, at a fee tier', keywords: 'pool curve stable weighted stableswap amplification weights fee tier' },
   { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset', keywords: 'dutch auction' },
   { id: 'ba.activity', label: 'Asset activity', page: 'my-assets', tab: 'activity', tip: 'The asset transactions of this wallet', keywords: 'history transactions' },
 ] as const satisfies readonly LocalCommand[];

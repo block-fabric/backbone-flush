@@ -13,7 +13,9 @@
 // data directory, with no cap but a sanity one (in the preferences of the app, capped at 256 kB, it could
 // fill up).
 
+#include <interfaces/node.h>
 #include <test/util/setup_common.h>
+#include <webui/confirm.h>
 #include <tinyformat.h>
 #include <util/fs.h>
 #include <webui/bridge.h>
@@ -137,13 +139,14 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // Bonds, unbonds, staking and proofs of possession go through the host, which asks the desktop.
     for (const char* m : {"createbond", "createunbond", "setstaking", "signbondpop"}) BOOST_CHECK_MESSAGE(!methods.contains(m), m);
     // Layers: and the 17 of the assets the pages read (journal_of_bitassets below; listassettransactions with no key; the
-    // searches, searchmyassets), two of which sign with the wallet's keys; the 18 that pay or sign (setassetlogo and
-    // setassetdisplayname among them) are confirmed by the host; no bond among any of them.
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U);
+    // searches, searchmyassets), two of which sign with the wallet's keys, and the 7 of the DEX (its info, routes, TWAP,
+    // the pool kinds' quotes, simulation, preview, depth); the 23 that pay or sign (setassetlogo and setassetdisplayname,
+    // routes and the pool kinds' among them) are confirmed by the host; no bond among any of them.
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U);
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
-    BOOST_CHECK_EQUAL(confirmed.size(), 18U);
+    BOOST_CHECK_EQUAL(confirmed.size(), 31U);
     for (const char* m : {"getposinfo", "getstakinginfo", "listbonds", "createbond", "createunbond", "setstaking", "signbondpop"}) {
         BOOST_CHECK_MESSAGE(!keyed.contains(m), m);
         BOOST_CHECK_MESSAGE(!confirmed.contains(m), m);
@@ -358,6 +361,56 @@ BOOST_AUTO_TEST_CASE(logo_cache_counts_what_it_keeps)
     cache.Put(std::string(64, 'd'), huge);
     BOOST_CHECK(cache.Size() < before);
     BOOST_CHECK_EQUAL(cache.Bytes(), cache.CountedBytes());
+}
+
+namespace {
+/** A node to read from (getasset, getpool), for the describers. */
+struct ReadingNode : TestingSetup {
+    std::unique_ptr<interfaces::Node> node{interfaces::MakeNode(m_node)};
+    std::string Refused(const std::string& method, const UniValue& params)
+    {
+        const auto& methods{webui::local::ConfirmedRpcMethods()};
+        BOOST_REQUIRE(methods.contains(method));
+        try {
+            methods.at(method).describe(webui::confirm::Call{*node, "w", method, params});
+        } catch (const webui::HostError& e) {
+            return e.what();
+        }
+        return "";
+    }
+};
+UniValue Arr(std::initializer_list<UniValue> items)
+{
+    UniValue a{UniValue::VARR};
+    for (const UniValue& v : items) a.push_back(v);
+    return a;
+}
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(confirmations_resolve_every_asset_and_pool, ReadingNode)
+{
+    // Security review 2026-10-21: a confirmation shows an asset as the node resolves it, or refuses. A name (or a number) the
+    // page could pick to read as one asset while the node trades another is refused before anything is shown; so is an id
+    // no asset has, and a pool that is not one.
+    const std::string some_id{"0x" + std::string(64, '1')};
+    for (const auto& [method, params] : std::vector<std::pair<std::string, UniValue>>{
+             {"swapasset", Arr({UniValue{"GOLD"}, UniValue{"1"}, UniValue{"CHN"}})},
+             {"swapasset", Arr({UniValue{"CHN"}, UniValue{"1"}, UniValue{"1739-0029"}})},
+             {"sendasset", Arr({UniValue{"addr"}, UniValue{"gold"}, UniValue{"1"}})},
+             {"addliquidity", Arr({UniValue{"0xabc"}, UniValue{"1"}, UniValue{"CHN"}, UniValue{"1"}})},
+             {"swaproute", Arr({Arr({UniValue{"CHN"}, UniValue{"SILVER"}}), UniValue{"1"}})},
+             {"createpool", Arr({UniValue{"USDX"}, UniValue{"1"}, UniValue{"CHN"}, UniValue{"1"}})},
+             {"addpoolliquidity", Arr({UniValue{std::string(64, 'a')}, Obj({{"GOLD", UniValue{"1"}}})})},
+             {"buyfromlaunch", Arr({UniValue{"MOON"}, UniValue{"1"}})},
+             {"claimlaunch", Arr({UniValue{"1739-0029"}})},
+         }) {
+        const std::string why{Refused(method, params)};
+        BOOST_CHECK_MESSAGE(why.find("id") != std::string::npos || why.find("No such pool") != std::string::npos, method << ": " << why);
+    }
+    // An id no asset has (this chain has no assets at all): refused, never shown as given.
+    BOOST_CHECK_NE(Refused("swapasset", Arr({UniValue{some_id}, UniValue{"1"}, UniValue{"CHN"}})), "");
+    BOOST_CHECK_NE(Refused("swappools", Arr({UniValue{"CHN"}, UniValue{"1"}, Arr({UniValue{std::string(64, 'b')}})})), "");
+    BOOST_CHECK_NE(Refused("removepoolliquidity", Arr({UniValue{"not a pool"}})), "");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

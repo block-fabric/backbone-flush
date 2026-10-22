@@ -4,6 +4,8 @@
 
 #include <bitassets/dex.h>
 
+#include <bitassets/curves.h>
+
 #include <arith_uint256.h>
 #include <hash.h>
 #include <pubkey.h>
@@ -82,13 +84,23 @@ uint256 CumulativeDelta(const uint256& later, const uint256& earlier)
     return ArithToUint256(UintToArith256(later) - UintToArith256(earlier));
 }
 
-std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time)
+std::pair<uint256, uint256> PricesQ64(const PoolParams& params, uint64_t reserve0, uint64_t reserve1)
+{
+    // Constant product: the reserves' ratios, as they always were; the others the slope of the curve and its inverse, each the floor of an exact quotient.
+    return {curves::SpotPriceQ64(params, reserve0, reserve1, /*inverse=*/false), curves::SpotPriceQ64(params, reserve0, reserve1, /*inverse=*/true)};
+}
+
+std::pair<uint256, uint256> CumulativeAt(const Observation& obs, uint32_t time, const PoolParams& params)
 {
     if (time <= obs.time) return {obs.price0_cumulative, obs.price1_cumulative};
     const uint32_t elapsed{time - obs.time};
-    return {Accumulate(obs.price0_cumulative, PriceQ64(obs.reserve1, obs.reserve0), elapsed),
-            Accumulate(obs.price1_cumulative, PriceQ64(obs.reserve0, obs.reserve1), elapsed)};
+    const auto [p0, p1]{PricesQ64(params, obs.reserve0, obs.reserve1)};
+    return {Accumulate(obs.price0_cumulative, p0, elapsed), Accumulate(obs.price1_cumulative, p1, elapsed)};
 }
+
+uint32_t PoolFee(const PoolParams& params) { return params.fee; }
+
+std::string VerificationEvent(const AssetId& asset, int round) { return "Layers verification " + asset.GetHex() + " #" + std::to_string(round); }
 
 double AveragePrice(const uint256& delta, uint32_t seconds)
 {
@@ -140,11 +152,32 @@ bool CheckAttestation(const uint256& pubkey, const uint256& oracle, const uint25
 bool IsOracleName(const std::string& name) { return IsAssetName(name); }
 
 namespace {
-/** What `amount` of `in` gives alone in a pool; 0 if nothing (or the pool is closed). */
-uint64_t HopAlone(const Pool& pool, const AssetId& in, uint64_t amount)
+/** What `amount` of `in` gives alone in a pool of a kind; 0 if nothing (or the pool is closed). A launch curve's from its record (a buy paying in directly). */
+uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const PoolParams& params, const AssetId& in, uint64_t amount)
 {
     if (amm::Abandoned(pool)) return 0;
-    const auto cleared{ClearPool(pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}})};
+    if (params.GetCurve() == Curve::BOOK) {
+        std::map<uint256, BookOrder> resting;
+        // The book's index as it is: the end of each block sweeps the orders that expired out of it (SweepBooks), so it
+        // holds live orders only, unless more expired at once than a block's end sweeps (a quote then; min_out guards).
+        const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, 0)};
+        return cleared ? cleared->outs[0] : 0;
+    }
+    if (params.GetCurve() == Curve::CONCENTRATED) {
+        auto cl{state.GetClState(id)};
+        if (!cl) return 0;
+        std::map<int32_t, ClTick> ticks;
+        const auto cleared{state.ClearCl(id, state.QuoteFee(id, params), pool, *cl, ticks, {HopIn{pool.asset0 == in, amount}})};
+        return cleared ? cleared->outs[0] : 0;
+    }
+    if (params.GetCurve() == Curve::LAUNCH) {
+        const auto launch{state.GetLaunch(pool.asset1)};
+        if (!launch) return 0;
+        const auto cleared{curves::ClearLaunch(curves::LaunchCurve{launch->fee, LAUNCH_CURVE_END, launch->max_buy, launch->min_buy}, pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}}, {in.IsNull()})};
+        return cleared ? cleared->outs[0] : 0;
+    }
+    // ClearPool's own result for the pools AddLiquidity makes (curves::ClearPoolOf at 0.30 % is it).
+    const auto cleared{curves::ClearPoolOf(params, state.QuoteFee(id, params), pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}})};
     return cleared ? cleared->outs[0] : 0;
 }
 } // namespace
@@ -157,15 +190,47 @@ std::optional<std::vector<uint64_t>> QuoteRoute(const State& state, const std::v
     for (size_t i{0}; i + 1 < path.size(); ++i) {
         const auto pool{state.FindPool(path[i], path[i + 1])};
         if (!pool) return std::nullopt;
-        amount = HopAlone(*pool, path[i], amount);
+        amount = HopAlone(state, PoolId(path[i], path[i + 1]), *pool, PoolParams{}, path[i], amount);
         if (amount == 0) return std::nullopt;
         outs.push_back(amount);
     }
     return outs;
 }
 
+std::optional<std::vector<AssetId>> PathOfPools(const State& state, const AssetId& asset_in, const std::vector<uint256>& pools)
+{
+    if (pools.empty() || pools.size() + 1 > MAX_ROUTE_ASSETS) return std::nullopt;
+    std::vector<AssetId> path{asset_in};
+    for (const uint256& id : pools) {
+        const auto pool{state.GetPool(id)};
+        if (!pool) return std::nullopt;
+        const AssetId& at{path.back()};
+        if (pool->asset0 != at && pool->asset1 != at) return std::nullopt;
+        const AssetId next{pool->asset0 == at ? pool->asset1 : pool->asset0};
+        if (std::find(path.begin(), path.end(), next) != path.end()) return std::nullopt;
+        path.push_back(next);
+    }
+    return path;
+}
+
+std::optional<std::vector<uint64_t>> QuoteRoutePools(const State& state, const AssetId& asset_in, const std::vector<uint256>& pools, uint64_t amount_in, std::vector<AssetId>* path_out)
+{
+    const auto path{PathOfPools(state, asset_in, pools)};
+    if (!path) return std::nullopt;
+    std::vector<uint64_t> outs;
+    uint64_t amount{amount_in};
+    for (size_t i{0}; i < pools.size(); ++i) {
+        const Pool pool{*Assert(state.GetPool(pools[i]))};
+        amount = HopAlone(state, pools[i], pool, state.GetPoolParams(pools[i]), (*path)[i], amount);
+        if (amount == 0) return std::nullopt;
+        outs.push_back(amount);
+    }
+    if (path_out) *path_out = *path;
+    return outs;
+}
+
 std::vector<FoundRoute> FindRoutes(const State& state, const AssetId& from, const AssetId& to, uint64_t amount_in, size_t max_hops, size_t max_results, size_t max_visits,
-                                   size_t max_pools_per_asset)
+                                   size_t max_pools_per_asset, bool curves)
 {
     std::vector<FoundRoute> found;
     if (from == to || amount_in == 0) return found;
@@ -173,10 +238,13 @@ std::vector<FoundRoute> FindRoutes(const State& state, const AssetId& from, cons
     size_t visits{0};
     std::vector<AssetId> path{from};
     std::vector<uint64_t> outs;
+    std::vector<uint256> ids;
     std::function<void(uint64_t)> extend{[&](uint64_t amount) {
         if (path.size() - 1 >= max_hops) return;
         const AssetId at{path.back()};
         std::vector<std::pair<uint256, Pool>> pools{state.PoolsOf(at)};
+        // Without the pool kinds, only the pool of each two assets AddLiquidity makes.
+        if (!curves) std::erase_if(pools, [&](const auto& p) { return p.first != PoolId(p.second.asset0, p.second.asset1); });
         // The deepest pools of the asset first (most of it), then by id.
         const auto depth{[&](const Pool& pool) { return pool.asset0 == at ? pool.reserve0 : pool.reserve1; }};
         std::sort(pools.begin(), pools.end(), [&](const auto& a, const auto& b) {
@@ -188,24 +256,29 @@ std::vector<FoundRoute> FindRoutes(const State& state, const AssetId& from, cons
             if (++visits > max_visits) return;
             const AssetId other{pool.asset0 == at ? pool.asset1 : pool.asset0};
             if (std::find(path.begin(), path.end(), other) != path.end()) continue;
-            const uint64_t out{HopAlone(pool, at, amount)};
+            const uint64_t out{HopAlone(state, id, pool, state.GetPoolParams(id), at, amount)};
             if (out == 0) continue;
             path.push_back(other);
             outs.push_back(out);
+            ids.push_back(id);
             if (other == to) {
-                found.push_back({path, outs});
+                FoundRoute route{path, outs, ids, true};
+                for (size_t i{0}; i < ids.size(); ++i) route.legacy = route.legacy && ids[i] == PoolId(path[i], path[i + 1]);
+                found.push_back(std::move(route));
             } else {
                 extend(out);
             }
             path.pop_back();
             outs.pop_back();
+            ids.pop_back();
         }
     }};
     extend(amount_in);
     std::sort(found.begin(), found.end(), [](const FoundRoute& a, const FoundRoute& b) {
         if (a.outs.back() != b.outs.back()) return a.outs.back() > b.outs.back();
         if (a.path.size() != b.path.size()) return a.path.size() < b.path.size();
-        return a.path < b.path;
+        if (a.path != b.path) return a.path < b.path;
+        return a.pools < b.pools;
     });
     if (found.size() > max_results) found.resize(max_results);
     return found;

@@ -100,6 +100,16 @@ let history: string[] = [];
 let hidden: Asset[] = [];
 let activityCount = 1;
 let tickersOn = false;
+/** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
+let dexOn = false;
+/** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
+let launchCount = 2;
+const MOON = id('m');
+const STAR = id('t');
+function launchOf(token: string, i = 0): Record<string, unknown> {
+  const star = token === STAR;
+  return { token, ticker: token === MOON ? 'MOON' : star ? 'STAR' : `L${i}`, display_name: token === MOON ? 'To the moon' : undefined, info: token === MOON ? 'A token for the moon.\nhttps://example.org' : undefined, has_logo: false, creator: ME, txid: id('8'), height: 12, status: star ? 'graduated' : 'curve', pool: star ? id('g') : id('c'), raised: star ? '500.00000003' : '200.00000000', graduation: '500.00000000', progress: star ? 100 : 40, price: star ? 0.000002 : 0.00000081, market_cap: star ? '2000.00000000' : '810.00000000', supply: star ? '1020000000.000000' : '1000000000.000000', curve_tokens_left: star ? 0 : 400000000, fee: 1, creator_share: 30, creator_fees_owed: token === MOON ? '0.01000000' : '0.00000000', creator_fees_paid: '0.00000000', allocation: 2, allocation_claimed: false, min_buy: '0.00000000', max_buy: '0.00000000', volume: '210.00000000', trades: 5, ...(star ? { graduated_height: 18 } : {}) };
+}
 const calls: BridgeRequest[] = [];
 
 function fresh() {
@@ -141,7 +151,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'openposition', 'changeposition'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -229,6 +239,112 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       const aout = swapOut(rin, rout, ain.ok ? ain.units : 0n);
       return { amount_in: Number(formatUnits(ain.ok ? ain.units : 0n, din, { group: false })), amount_out: Number(formatUnits(aout, dout, { group: false })), price: 1, spot_price: 1, price_impact: priceImpact(rin, rout, ain.ok ? ain.units : 0n, aout), fee: 0.003, abandoned: false };
     }
+    // Layers' DEX: its pool kinds (src/rpc/bitassets.cpp), as the node answers them.
+    case 'getdexinfo':
+      if (!dexOn) fail('Method not found', -32601);
+      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], swap_fee_parts: { liquidity_providers: 89, security: 11, protocol: 0 } };
+    case 'getswapquote': {
+      // [asset_in, amount, asset_out, {max_hops}]: the pair's pools of every kind, best first.
+      if (!dexOn) fail('Method not found', -32601);
+      const pair = pools.filter((x) => [assetArg(x.asset_a_id), assetArg(x.asset_b_id)].sort().join() === [p[0], p[2]].sort().join() && !x.abandoned);
+      const gives: Record<string, number> = { [id('s')]: 5.2, [id('p')]: 4.9 };
+      const list = pair.map((x) => ({ pool: x.pool, curve: x.curve ?? 'constant_product', fee: x.fee ?? 0.3, amp: x.amp, default_kind: x.default_kind ?? true, amount_in: Number(p[1]), amount_out: gives[x.pool] ?? 1, price: 0.1, spot_price: 0.1, price_impact: x.pool === id('p') ? 1 : 0.5, fee_paid: 0.001, abandoned: false }));
+      list.sort((x, y) => y.amount_out - x.amount_out);
+      return { pools: list, best_pool: list[0]?.pool };
+    }
+    case 'quoteroute':
+      // A route through SILVER, of a weighted pool and a stable one, that gives more than either pool of the pair.
+      if (!dexOn) fail('Method not found', -32601);
+      return p[0] === 'CHN' && p[2] === assetArg(GOLD)
+        ? { amount_in: Number(p[1]), amount_out: 5.5, path: ['CHN', 'SILVER', 'GOLD'], pools: [id('q'), id('r')], routes: [{ path: ['CHN', 'SILVER', 'GOLD'], path_ids: [CHN_ID, SILVER, GOLD], amount_out: 5.5, pools: [id('q'), id('r')], default_pools: false, hops: [{ pool: id('q'), curve: 'weighted', fee: 0.3, amount_out: 3 }, { pool: id('r'), curve: 'stable', fee: 0.05, amount_out: 5.5 }] }] }
+        : { amount_in: Number(p[1]), amount_out: 0, path: [], pools: [], routes: [] };
+    case 'previewpool': {
+      const kind = (p[4] ?? {}) as { curve?: string; fee?: number; amp?: number; weight_a?: number };
+      return { pool: id('n'), exists: false, open: false, shares: 999000, price: Number(p[3]) / Number(p[1]), curve: kind.curve, fee: kind.fee, amp: kind.amp, default_kind: false, depth: [
+        { side: 'sell_a', size_percent: 1, amount_in: 0.1, amount_out: 0.0099, avg_price: 0.099, price_after: 0.098, price_impact: 0.4 },
+        { side: 'sell_b', size_percent: 1, amount_in: 0.01, amount_out: 0.099, avg_price: 0.101, price_after: 0.102, price_impact: 0.4 },
+        { side: 'sell_a', size_percent: 10, amount_in: 1, amount_out: 0.09, avg_price: 0.09, price_after: 0.08, price_impact: 9 },
+        { side: 'sell_b', size_percent: 10, amount_in: 0.1, amount_out: 0.9, avg_price: 0.11, price_after: 0.12, price_impact: 9 },
+      ] };
+    }
+    case 'getpoolcurve': {
+      // The pool's own order: CHN, the null hash, first.
+      const x = pools.find((q) => q.pool === p[0]);
+      if (!x) fail('No such pool');
+      return { pool: p[0], asset_a: 'CHN', asset_b: x!.asset_a, asset_a_id: CHN_ID, asset_b_id: x!.asset_a_id, price: 10, curve: x!.curve, fee: x!.fee, amp: x!.amp, default_kind: x!.default_kind, depth: [
+        { side: 'sell_a', size_percent: 0.1, amount_in: 0.05, amount_out: 0.49, avg_price: 9.8, price_after: 9.9, price_impact: 0.2 },
+        { side: 'sell_b', size_percent: 0.1, amount_in: 0.5, amount_out: 0.0499, avg_price: 0.0998, price_after: 0.0997, price_impact: 0.2 },
+        { side: 'sell_a', size_percent: 50, amount_in: 25, amount_out: 160, avg_price: 6.4, price_after: 4.4, price_impact: 36 },
+        { side: 'sell_b', size_percent: 50, amount_in: 250, amount_out: 16, avg_price: 0.064, price_after: 0.044, price_impact: 36 },
+      ] };
+    }
+    case 'quotepoolliquidity': {
+      // [pool, amounts] or [pool, null, shares, only]: by label, in the pool's own order (CHN first).
+      const x = pools.find((q) => q.pool === p[0]);
+      if (!x) fail('No such pool');
+      if (p[1]) return { shares: 4321, opens: false, amounts: { CHN: 0, [x!.asset_a]: 10 }, share_of_pool: 0.34 };
+      return { shares: p[2], opens: false, amounts: p[3] ? { CHN: 0, [x!.asset_a]: 2.5 } : { CHN: 0.12, [x!.asset_a]: 1.25 }, share_of_pool: 7.9 };
+    }
+    case 'createpool':
+      return { txid: id('7'), pool: id('n'), shares: 999000 };
+    // Concentrated liquidity: the node's own order (CHN first in a pool with CHN): CHN in GOLD at 10.
+    case 'getpoolticks':
+      return { tick: 23027, price: 10, liquidity: '5000000', tick_spacing: 60, ticks: [{ tick: 20820, price: 8, liquidity_net: '5000000', liquidity_gross: '5000000', liquidity_above: '5000000' }, { tick: 24840, price: 12, liquidity_net: '-5000000', liquidity_gross: '5000000', liquidity_above: '0' }] };
+    case 'previewposition':
+      return { tick_lower: 22500, tick_upper: 23520, price_lower: Number(p[1]), price_upper: Number(p[2]), liquidity: '12345', amount0: 0.5, amount1: 5, in_range: true };
+    case 'openposition':
+      return { txid: id('7'), position: id('o'), tick_lower: 22500, tick_upper: 23520, liquidity: '12345' };
+    case 'changeposition':
+      return { txid: id('7') };
+    case 'listpositions':
+      return [
+        { position: id('o'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 22500, tick_upper: 23520, price_lower: 9.5, price_upper: 10.5, liquidity: '12345', in_range: true, amount0: 0.5, amount1: 5, fees0: 0.01, fees1: 0.25 },
+        { position: id('u'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 24000, tick_upper: 24840, price_lower: 11, price_upper: 12, liquidity: '999', in_range: false, amount0: 0.3, amount1: 0, fees0: 0, fees1: 0 },
+      ];
+    // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
+    case 'getlaunchstats':
+      if (!dexOn) fail('Method not found', -32601);
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true } };
+    case 'listlaunches': {
+      const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
+      const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
+      const list = all.filter((l) => (o.status === 'graduated' ? l.status === 'graduated' : o.status === 'curve' || o.status === 'new' ? l.status === 'curve' : true) && Number(l.progress) >= (o.min_progress ?? 0));
+      const from = Number(o.cursor || 0);
+      const limit = o.limit ?? 50;
+      return { launches: list.slice(from, from + limit), total: list.length, ...(from + limit < list.length ? { next_cursor: String(from + limit) } : {}) };
+    }
+    case 'getlaunch':
+      if (p[0] === assetArg(MOON)) return launchOf(MOON);
+      if (p[0] === assetArg(STAR)) return launchOf(STAR);
+      return fail('Not a launched token');
+    case 'quotelaunch': {
+      // [token, amount, side]: a buy of more than 300 CHN passes the curve's end.
+      const amount = Number(p[1]);
+      const past = p[2] === 'buy' && amount > 300;
+      return p[2] === 'buy'
+        ? { amount_in: amount, amount_out: past ? 400000000 : 2469135.802469, back: past ? '100.00000000' : '0.00000000', fee: '0.02000000', price: 0.00000081, spot_price: 0.0000008, price_after: 0.00000082, price_impact: 1.2, progress_after: past ? 100 : 40.4, graduates: past }
+        : { amount_in: amount, amount_out: 0.79, back: '0.00000000', fee: '0.00800000', price: 0.00000079, spot_price: 0.0000008, price_after: 0.00000079, price_impact: 1.3, progress_after: 39.8, graduates: false };
+    }
+    case 'getlaunchlog':
+      return [{ height: 15, token: MOON, created: false, graduated: false, orders: 2, coin_in: '10.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 12000000, fees: '0.10000000', reserve_coin: '450.00000000', reserve_tokens: 625000000 }, { height: 12, token: MOON, created: true, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 4000000, fees: '0.01000000', reserve_coin: '251.00000000', reserve_tokens: 1120000000 }, { height: 13, token: STAR, created: false, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 1, fees: '0.01000000', reserve_coin: '1.00000000', reserve_tokens: 1 }];
+    case 'launchtoken':
+      return { txid: id('7'), token: MOON, ticker: p[0], pool: id('c') };
+    case 'buyfromlaunch':
+      return { txid: id('7'), quote: 2469135.802469, min_out: 2444444.444444, back: '0.00000000' };
+    case 'selltolaunch':
+      return { txid: id('7'), quote: '0.79000000', min_out: '0.78210000' };
+    case 'claimlaunch':
+      return { txid: id('7'), fees: '0.01000000', allocation: 0 };
+    case 'getaddressinfo':
+      return { ismine: p[0] === ME };
+    case 'addpoolliquidity':
+      return { txid: id('7'), shares: 1234 };
+    case 'removepoolliquidity':
+      return { txid: id('7'), shares: 500, amounts: { GOLD: 1, CHN: 0 } };
+    case 'swappools':
+      return { txid: id('7'), asset_out: 'GOLD', quote: 5.2, min_out: 5.17 };
+    case 'swaproute':
+      return { txid: id('7'), quote: 5.5, min_out: 5.47 };
     case 'listauctions': {
       // [include_closed, count, skip, asset].
       const list = (p[0] ? [...auctions, { ...auctions[0], auction: id('f'), status: 'closed', remaining: 0 }] : auctions).filter((a) => p[3] == null || assetArg(a.base_id) === p[3] || assetArg(a.quote_id) === p[3]);
@@ -325,6 +441,8 @@ beforeEach(() => {
   resetHiding();
   activityCount = 1;
   tickersOn = false;
+  dexOn = false;
+  launchCount = 2;
   store = null;
   locked = false;
   calls.length = 0;
@@ -978,6 +1096,361 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
 
 // Simple mode (lib/uimode.svelte.ts, user decision 2026-10-16): Swap with a plain quote, My assets, Create a
 // token; pools, liquidity and auctions in Advanced. The same calls as Advanced.
+describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
+  /** A stable pool of GOLD and CHN beside the default one, and shares of it. */
+  function stablePool() {
+    pools.push({ ...pools[0], pool: id('s'), reserve_a: 400, reserve_b: 40, shares: 1264911, swaps: 1, curve: 'stable', fee: 0.05, fee_millionths: 500, amp: 100, default_kind: false });
+    mine.liquidity.push({ pool: id('s'), asset_a: 'GOLD', asset_b: 'CHN', asset_a_id: GOLD, asset_b_id: CHN_ID, shares: 100000, percent: 7.9, value_a: 31.6, value_b: 3.16 });
+  }
+
+  it('Swap: every pool of the pair and a route compared; the best route sent by swaproute with its pools, another pool by swappools, the default one by swapasset', async () => {
+    dexOn = true;
+    stablePool();
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(ba.dex?.curves_active).toBe(true));
+    await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(GOLD));
+    const ways = () => within(screen.getByRole('list', { name: 'Ways to trade' })).getAllByRole('button');
+    const swapFor = async (amount: string) => {
+      await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: amount } });
+      await waitFor(() => expect(ways().length).toBe(3));
+    };
+    await swapFor('0.5');
+    // Best first: the route through SILVER (a weighted pool, then a stable one), then the stable pool, then the default one.
+    expect(ways()[0].textContent).toMatch(/Weighted.*Stable/s);
+    expect(ways()[0].getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'The route' })).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Route' })).getAllByRole('listitem').length).toBe(2);
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('in a Weighted pool at 0.3%'));
+    await answer('yes');
+    await waitFor(() => expect(called('swaproute')[0]?.params).toEqual([['CHN', assetArg(SILVER), assetArg(GOLD)], '0.5', 0.5, '5.47', [id('q'), id('r')]]));
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
+
+    // The stable pool of the pair, picked: by its id.
+    await swapFor('0.5');
+    await fireEvent.click(ways().find((b) => /Stable/.test(b.textContent ?? '') && !/Weighted/.test(b.textContent ?? ''))!);
+    await waitFor(() => expect(screen.getByText('Pool fee (0.05%)')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('swappools')[0]?.params).toEqual(['CHN', '0.5', [id('s')], 0.5, '5.17']));
+    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
+
+    // The default pool, picked: swapasset as before the pool kinds.
+    await swapFor('0.5');
+    await fireEvent.click(ways().find((b) => /Constant product/.test(b.textContent ?? ''))!);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'The pool' })).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 0.5, 10, '4.87']));
+  });
+
+  it('Create pool: a stable pool, its kind chosen, previewed by the node, created with its kind', async () => {
+    dexOn = true;
+    nav.tab = 'create';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#cp-a')).not.toBeNull());
+    await pickAsset('cp-a', SILVER);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('radio', { name: /Stable/ }));
+    // A stable pool starts at the 0.05% tier, A at 100.
+    await waitFor(() => expect(within(screen.getByRole('group', { name: 'Fee tier' })).getByRole('button', { name: '0.05%' }).getAttribute('aria-pressed')).toBe('true'));
+    expect((document.querySelector('#cp-amp') as HTMLInputElement).value).toBe('100');
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#cp-amount-a')!, { target: { value: '10' } });
+    await fireEvent.input(document.querySelector('#cp-amount-b')!, { target: { value: '1' } });
+    await waitFor(() => expect(screen.getByTestId('pool-preview').textContent).toContain(id('n')));
+    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '10', 'CHN', '1', { curve: 'stable', fee: 0.05, amp: 100 }]);
+    expect(screen.getByRole('img', { name: 'Price impact by the size of a trade, each way' })).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the pool/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(SILVER), '10', 'CHN', '1', { curve: 'stable', fee: 0.05, amp: 100 }, 1]));
+  });
+
+  it('Create pool: before the pool kinds, the page says so and offers Add liquidity', async () => {
+    nav.tab = 'create';
+    render(Trade);
+    await loaded();
+    await waitFor(() => expect(screen.getByText(/This node says nothing of pool kinds/)).toBeTruthy());
+    expect(document.querySelector('#cp-a')).toBeNull();
+  });
+
+  it('a pool of another kind: its kind in the list, its page with its depth, one asset put in and one taken out by its id', async () => {
+    dexOn = true;
+    stablePool();
+    nav.tab = 'pools';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => {
+      const r = within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((x) => /Stable/.test(x.textContent ?? ''));
+      if (!r) throw new Error('no stable pool');
+      return r;
+    });
+    expect(row.textContent).toContain('0.05%');
+    expect(row.textContent).toContain('A 100');
+    await fireEvent.click(row);
+    await waitFor(() => expect(called('getpoolcurve')[0]?.params).toEqual([id('s'), 16]));
+    await waitFor(() => expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy());
+    // getpoolcurve's order (CHN first) turned into the page's (GOLD first): selling GOLD at 0.1% gets about 0.0499 CHN.
+    const first = within(screen.getByRole('table', { name: 'Slippage' })).getAllByRole('row')[1];
+    expect(first.textContent).toContain('0.0499');
+    expect(screen.getByText(id('s'))).toBeTruthy();
+
+    await fireEvent.input(document.querySelector('#pv-add-a')!, { target: { value: '10' } });
+    await waitFor(() => expect(screen.getByText(/One asset alone/)).toBeTruthy());
+    // The node's quote of the shares (quotepoolliquidity), by asset id.
+    expect(called('quotepoolliquidity').at(-1)?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }]);
+    expect(screen.getByText('4321')).toBeTruthy();
+    await fireEvent.click(within(screen.getByRole('form', { name: 'Add liquidity to this pool' })).getByRole('button', { name: /Add liquidity/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('addpoolliquidity')[0]?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }, 1]));
+
+    await fireEvent.click(screen.getByRole('button', { name: /GOLD alone/ }));
+    await waitFor(() => expect(called('quotepoolliquidity').some((c) => (c.params as unknown[])[3] === assetArg(GOLD))).toBe(true));
+    // The quote's amounts by label, CHN first in the node's order: 2.5 GOLD.
+    await waitFor(() => expect(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByText(/^2\.5/)).toBeTruthy());
+    await fireEvent.click(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 100, assetArg(GOLD), 1]));
+  });
+
+  it('My assets: shares of a pool of another kind, with its kind, taken out by its id', async () => {
+    dexOn = true;
+    stablePool();
+    mine.liquidity = mine.liquidity.filter((l) => l.pool === id('s'));
+    nav.tab = 'liquidity';
+    render(MyAssets);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('.position .pool-kind')?.textContent).toMatch(/Stable/));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Take out…' }));
+    await fireEvent.click(screen.getByRole('button', { name: '50%' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 50, null, 1]));
+    expect(called('removeliquidity')).toEqual([]);
+  });
+});
+
+describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: concentrated liquidity and dynamic fees", () => {
+  /** A concentrated GOLD/CHN pool with a dynamic fee: 1 GOLD = 0.1 CHN (the node: 1 CHN = 10 GOLD). */
+  function clPool() {
+    pools.push({ ...pools[0], pool: id('k'), reserve_a: 50, reserve_b: 5, price: 0.1, shares: 0, swaps: 3, curve: 'concentrated', fee: 0.3, fee_millionths: 3000, default_kind: false, dynamic_fee: true, fee_now: 0.8, concentrated: { sqrt_price_x96: 'ab', tick: 23027, liquidity: '5000000', tick_spacing: 60 } });
+  }
+
+  it('Create pool: a concentrated pool with a dynamic fee, made at a price, then a way to open a position', async () => {
+    dexOn = true;
+    nav.tab = 'create';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#cp-a')).not.toBeNull());
+    await pickAsset('cp-a', SILVER);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('radio', { name: /Concentrated/ }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: /Dynamic fee/ }));
+    await waitFor(() => expect(screen.getAllByText('dynamic').length).toBeGreaterThan(0));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // Its price in place of a deposit.
+    expect(document.querySelector('#cp-amount-a')).toBeNull();
+    await fireEvent.input(document.querySelector('#cp-price')!, { target: { value: '2.5' } });
+    await waitFor(() => expect(screen.getByTestId('pool-preview')).toBeTruthy());
+    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '1', 'CHN', '2.5', { curve: 'concentrated', fee: 0.3, dynamic_fee: true }]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the pool/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(SILVER), '1', 'CHN', '2.5', { curve: 'concentrated', fee: 0.3, dynamic_fee: true }, 1]));
+    await waitFor(() => expect(screen.getByTestId('pool-made')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /Open a position/ }));
+    expect(nav.tab).toBe('pools');
+  });
+
+  it('a concentrated pool\'s page: its fee now, its liquidity by price, a range picked, previewed in the node\'s order, opened', async () => {
+    dexOn = true;
+    clPool();
+    nav.tab = 'pools';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((r) => /Concentrated/.test(r.textContent ?? ''))!);
+    // The fee for the next block, tagged dynamic.
+    expect(row.textContent).toMatch(/0\.8%\s*dynamic/);
+    await fireEvent.click(row);
+    await waitFor(() => expect(called('getpoolticks')[0]?.params).toEqual([id('k'), 500]));
+    await waitFor(() => expect(screen.getByRole('img', { name: /The liquidity of the pool by price/ }).querySelectorAll('rect.bar').length).toBe(1));
+    // ±5% around 0.1 CHN for 1 GOLD at first.
+    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.095');
+    expect((document.querySelector('#cl-upper') as HTMLInputElement).value).toBe('0.105');
+    await fireEvent.click(screen.getByRole('button', { name: '±20%' }));
+    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.08');
+    await fireEvent.input(document.querySelector('#cl-amount-a')!, { target: { value: '5' } });
+    await waitFor(() => expect(screen.getByTestId('position-preview').textContent).toContain('In range'));
+    // To the node: CHN in GOLD, the bounds turned over (1/0.12 to 1/0.08).
+    const asked = called('previewposition').at(-1)?.params as unknown[];
+    expect(asked[0]).toBe(id('k'));
+    expect(asked[1] as number).toBeCloseTo(1 / 0.12, 9);
+    expect(asked[2] as number).toBeCloseTo(12.5, 9);
+    expect(asked[3]).toEqual({ [assetArg(GOLD)]: '5' });
+    // What goes in, in the page's order: 5 GOLD and 0.5 CHN.
+    expect(screen.getByTestId('position-preview').textContent).toMatch(/Goes in\s*5\s*GOLD\s*0\.5\s*CHN/);
+    await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), asked[1], asked[2], { [assetArg(GOLD)]: '5' }, 1]));
+    // A range above the price: GOLD alone, CHN's field off.
+    await fireEvent.input(document.querySelector('#cl-lower')!, { target: { value: '0.2' } });
+    await fireEvent.input(document.querySelector('#cl-upper')!, { target: { value: '0.3' } });
+    await waitFor(() => expect((document.querySelector('#cl-amount-b') as HTMLInputElement).disabled).toBe(true));
+  });
+
+  it('Positions: in range or not, their fees, collected, part taken out, one closed', async () => {
+    dexOn = true;
+    clPool();
+    nav.tab = 'positions';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('in-range')).toBeTruthy());
+    expect(screen.getByTestId('out-of-range')).toBeTruthy();
+    // In the page's order: the fees of GOLD first (0.25), then of CHN (0.01).
+    const first = screen.getByRole('region', { name: `Position ${id('o').slice(0, 8)}` });
+    expect(within(first).getByTestId('fees').textContent).toMatch(/0\.25\s*GOLD/);
+    expect(within(first).getByRole('img', { name: /Its range, 0\.0952381 to 0\.105263, and the price, 0\.1/ })).toBeTruthy();
+    await fireEvent.click(within(first).getByRole('button', { name: 'Collect' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[0]?.params).toEqual([id('o'), { collect: true }]));
+    // Once the collect is done.
+    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
+    await fireEvent.click(within(first).getByRole('button', { name: 'Remove' }));
+    await fireEvent.click(within(first).getByRole('button', { name: 'Take out' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[1]?.params).toEqual([id('o'), { remove: 50, collect: true }]));
+    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
+    const second = screen.getByRole('region', { name: `Position ${id('u').slice(0, 8)}` });
+    expect(within(second).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', true);
+    await fireEvent.click(within(second).getByRole('button', { name: 'Close' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[2]?.params).toEqual([id('u'), { close: true }]));
+  });
+});
+
+describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
+  it('Launches: the counts, the list filtered and sorted, a page at a time', async () => {
+    dexOn = true;
+    launchCount = 60;
+    nav.tab = 'launches';
+    render(Trade);
+    await loaded();
+    const rows = () => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(rows().length).toBe(50));
+    expect(rows()[0].textContent).toMatch(/MOON.*To the moon.*40/s);
+    expect(rows()[1].textContent).toContain('graduated');
+    expect(screen.getByText(/Showing 50 of 60 launches/)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(rows().length).toBe(60));
+    expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'all', sort: 'newest', limit: 50, cursor: '50' }]);
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Graduated' }));
+    await waitFor(() => expect(rows().length).toBe(1));
+    expect(rows()[0].textContent).toContain('STAR');
+    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Near graduation' }));
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Sort launches' }), { target: { value: 'progress' } });
+    await waitFor(() => expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'curve', sort: 'progress', min_progress: 80, limit: 50 }]));
+  });
+
+  it('a launch on its curve: progress, the curve, a buy quoted and sent, one passing the end, the recent blocks, the creator paid', async () => {
+    dexOn = true;
+    nav.tab = 'launches';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('MOON'))!);
+    await fireEvent.click(row);
+    await waitFor(() => expect(screen.getByRole('img', { name: /The bonding curve of the launch/ })).toBeTruthy());
+    expect(screen.getByText(/200 of 500 CHN raised/)).toBeTruthy();
+    expect(screen.getByText('Creator allocation 2%')).toBeTruthy();
+    // The recent blocks of this launch only, newest first.
+    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Recent blocks' })).getAllByRole('row').length).toBe(3));
+    await waitFor(() => expect(screen.getByText('this wallet')).toBeTruthy());
+
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toContain('2,469,135.802469'));
+    expect(called('quotelaunch').at(-1)?.params).toEqual([assetArg(MOON), '2', 'buy']);
+    await fireEvent.click(screen.getByRole('form', { name: 'Trade on the curve' }).querySelector('button[type="submit"]')!);
+    await answer('yes');
+    // The least confirmed is the least signed: the quote less 1%.
+    await waitFor(() => expect(called('buyfromlaunch')[0]?.params).toEqual([assetArg(MOON), '2', 1, '2444444.444444']));
+
+    await waitFor(() => expect((document.querySelector('#launch-amount') as HTMLInputElement).value).toBe(''));
+    // 400 CHN (more than the 10 the wallet held).
+    wallets.balances.w = { trusted: 1000_00000000n, untrustedPending: 0n, immature: 0n };
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '400' } });
+    await waitFor(() => expect(screen.getByTestId('launch-graduates')).toBeTruthy());
+    expect(screen.getByTestId('launch-quote').textContent).toMatch(/100 CHN: the buy passes the curve's end/);
+
+    await fireEvent.click(screen.getByRole('button', { name: /Pay the creator/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('claimlaunch')[0]?.params).toEqual([assetArg(MOON)]));
+  });
+
+  it('a graduated launch: trades in its pool, no curve to buy from', async () => {
+    dexOn = true;
+    nav.tab = 'launches';
+    render(Trade);
+    await loaded();
+    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('STAR'))!);
+    await fireEvent.click(row);
+    await waitFor(() => expect(screen.getByTestId('launch-graduated').textContent).toContain('Graduated — trades in its pool'));
+    expect(screen.queryByRole('form', { name: 'Trade on the curve' })).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: /Its pool/ }));
+    expect(nav.tab).toBe('pools');
+  });
+
+  it('Launch a token: a ticker reserved, then a reservation launched with what it is and its options, the allocation flagged', async () => {
+    dexOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(document.querySelector('#launch-ticker')).not.toBeNull());
+    await fireEvent.input(document.querySelector('#launch-ticker')!, { target: { value: 'MOON' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    // The host asks (one question: the launch is asked when the reservation is deep enough).
+    await fireEvent.click(screen.getByRole('button', { name: 'Reserve the ticker' }));
+    await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['MOON']));
+    cleanup();
+
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    // A reservation of this wallet (IRON, deep enough), not one a registration uses.
+    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
+    await waitFor(() => expect(screen.getByText(/ready to launch/)).toBeTruthy());
+    await fireEvent.input(document.querySelector('#launch-display')!, { target: { value: 'Iron age' } });
+    await fireEvent.input(document.querySelector('#launch-info')!, { target: { value: 'An iron token.' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#launch-first')!, { target: { value: '1' } });
+    await fireEvent.input(document.querySelector('#launch-allocation')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByText(/Dilution\./)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    const review = await screen.findByTestId('launch-review');
+    expect(review.textContent).toMatch(/at 500 CHN raised/);
+    expect(review.textContent).toMatch(/20M \(2%\), minted at graduation/);
+    expect(review.textContent).toMatch(/1\.15% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
+    await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron token.', allocation: 2, first_buy: '1' }]));
+    // Then its page.
+    await waitFor(() => expect(nav.tab).toBe('launches'));
+  });
+});
+
 describe('Simple mode', () => {
   beforeEach(() => {
     prefs.uiMode = 'simple';

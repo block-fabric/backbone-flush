@@ -45,6 +45,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.fee_split_height = *height;
         } else if (deployment_name == "dex") {
             options.dex_height = *height;
+        } else if (deployment_name == "dexcurves") {
+            options.dex_curves_height = *height;
         } else if (deployment_name == "feecurve2") {
             options.fee_curve2_height = *height;
         } else if (deployment_name == "ticker") {

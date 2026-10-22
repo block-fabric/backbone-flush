@@ -153,6 +153,9 @@ struct PoolRow {
     int32_t created{0};
     int32_t last{0};
     uint64_t reserve0{0};
+    //! For a pool of another curve than constant product: reserve0 times its spot price (its curve's slope; a
+    //! concentrated pool's square root price squared), so that reserve0/reserve1 is its price as for the others
+    //! (PricedReserve1); 0 for a book.
     uint64_t reserve1{0};
     //! The reserves at the start of the window (or when it was made, if later): what the change of price is against.
     uint64_t ref0{0};
@@ -170,6 +173,9 @@ struct PoolRow {
     /** The change of the price of asset1 in asset0 over the window, in millionths. */
     int64_t ChangePpm() const;
 };
+
+/** A pool's second reserve as the index keeps it (PoolRow::reserve1). */
+uint64_t PricedReserve1(const State& state, const uint256& id, const Pool& pool);
 
 struct PoolSnap {
     uint64_t volume{0};

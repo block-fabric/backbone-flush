@@ -688,10 +688,10 @@ describe('the host side of the pages (local.cpp)', () => {
   const allowed = [...local.slice(local.indexOf('RpcMethods()'), local.indexOf('KeyedRpcMethods()')).matchAll(/\{"(\w+)", Bridge::Thread/g)].map((m) => m[1]);
 
   it('the pages read with the RPCs of the node, and nothing on the list spends, bonds or signs', () => {
-    // Layers: FastBlocks' nine, then those of the assets (bitassets.test.ts checks them).
+    // Layers: FastBlocks' nine, then those of the assets and of the DEX (getdexinfo, simulateclearing), of the launches, of the positions of concentrated liquidity, of the order books and the verified issuers (bitassets.test.ts checks them).
     const fbs = ['getanchorinfo', 'getleaderschedule', 'getposinfo', 'getstakinginfo', 'getvalidator', 'getvalidators', 'listbonds', 'listevidence', 'submitevidence'];
     expect(allowed.filter((m) => fbs.includes(m)).sort()).toEqual(fbs);
-    expect(allowed.filter((m) => !fbs.includes(m)).every((m) => /asset|pool|auction|quote/.test(m))).toBe(true);
+    expect(allowed.filter((m) => !fbs.includes(m)).every((m) => /asset|pool|auction|quote|dex|clearing|launch|position|book|order|verification|oracle|treasury/.test(m))).toBe(true);
     for (const m of ['createbond', 'createunbond', 'setstaking', 'signbondpop']) expect(allowed).not.toContain(m);
   });
 

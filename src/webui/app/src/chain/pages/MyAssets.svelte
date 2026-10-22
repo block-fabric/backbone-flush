@@ -27,6 +27,8 @@
   import { withoutHidden } from '../ba/visible.svelte';
   import { chainTxHidden } from '../txinfo.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
+  import PoolKind from '../ba/PoolKind.svelte';
+  import { flipKind, kindOf } from '../ba/kinds';
   import {
     amountParam,
     approx,
@@ -48,7 +50,7 @@
     type Reservation,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
 
   $effect(() => startBitAssets());
@@ -172,8 +174,22 @@
   let removing = $state<string | null>(null);
   let percent = $state(100);
   let slippage = $state(1);
+  /** The pool of a position: by its id (a pair may have pools of several kinds), else the pair's default one. */
+  const poolOfPosition = (pos: Position) => poolById(pos.pool) ?? poolOf(pos.asset_a_id, pos.asset_b_id);
+  /** Whether a position is in a pool of another kind than addliquidity's: taken out by its id (removepoolliquidity). */
+  const byId = (pos: Position) => poolById(pos.pool)?.default_kind === false;
+  /** The kind of a position's pool, its asset_a first. */
+  function positionKind(pos: Position) {
+    const pool = poolById(pos.pool);
+    if (!pool) return null;
+    return pool.asset_a_id === pos.asset_a_id ? kindOf(pool) : flipKind(kindOf(pool));
+  }
+  function openPool(pos: Position) {
+    tradeIntent.pool = pos.pool;
+    go('trade', 'pools');
+  }
   function preview(pos: Position): { a: bigint; b: bigint } | null {
-    const pool = poolOf(pos.asset_a_id, pos.asset_b_id);
+    const pool = poolOfPosition(pos);
     if (!pool) return null;
     const da = decimalsOf(pos.asset_a_id);
     const db = decimalsOf(pos.asset_b_id);
@@ -203,6 +219,15 @@
     });
     if (r.choice !== 'yes') return;
     try {
+      if (byId(pos)) {
+        // A pool of another kind: by its id, for both assets (one alone: its page).
+        const done = await walletRpc<{ txid: string; shares: Amount }>(wallet, 'removepoolliquidity', [pos.pool, percent, null, slippage]);
+        if (!done) return;
+        removing = null;
+        toast('success', t('Liquidity taken out'), t('%1 shares, with the next block.', String(done.shares)));
+        void refreshBitAssets();
+        return;
+      }
       const done = await walletRpc<{ txid: string; amount_a: Amount; amount_b: Amount }>(wallet, 'removeliquidity', [assetArg(pos.asset_a_id), assetArg(pos.asset_b_id), percent, slippage]);
       if (!done) return;
       removing = null;
@@ -213,6 +238,7 @@
     }
   }
   function addMore(pos: Position) {
+    if (byId(pos)) return openPool(pos);
     tradeIntent.a = pos.asset_a_id;
     tradeIntent.b = pos.asset_b_id;
     go('trade', 'liquidity');
@@ -285,7 +311,7 @@
       {#if simple}
         <div class="panel ba-figure"><span class="muted">Being created</span><strong>{issuingCount}</strong><span class="faint">in your assets once registered</span></div>
       {:else}
-        <div class="panel ba-figure"><span class="muted">Pool shares</span><strong>{mine?.liquidity.length ?? 0}</strong><span class="faint">earning 0.3% of each trade</span></div>
+        <div class="panel ba-figure"><span class="muted">Pool shares</span><strong>{mine?.liquidity.length ?? 0}</strong><span class="faint">{ba.dex?.curves_active ? t("earning their pools' fees") : t("earning 0.3% of each trade")}</span></div>
         <div class="panel ba-figure"><span class="muted">Being issued</span><strong>{issuingCount}</strong><span class="faint">{tn('%n auction(s) of yours to follow', receipts.length)}</span></div>
       {/if}
     </section>
@@ -392,11 +418,13 @@
         <div class="ba-cols">
           {#each mine?.liquidity ?? [] as pos (pos.pool)}
             {@const out = removing === pos.pool ? preview(pos) : null}
+            {@const kind = positionKind(pos)}
             <section class="panel position">
               <header class="issue-head">
                 <span class="pair"><AssetBadge id={pos.asset_a_id} label={pos.asset_a} size="s" /> <span class="faint">/</span> <AssetBadge id={pos.asset_b_id} label={pos.asset_b} size="s" /></span>
                 <span class="ba-tag accent">{formatPercent(pos.percent)}</span>
               </header>
+              {#if kind}<PoolKind {kind} showDefault />{/if}
               <div class="ba-bar"><span use:barWidth={pos.percent / 100}></span></div>
               <dl class="ba-lines">
                 <dt>Shares</dt><dd>{formatAmount(pos.shares, 0)}</dd>
@@ -424,6 +452,7 @@
                 <div class="row">
                   <button type="button" class="btn small" onclick={() => { removing = pos.pool; percent = 100; }}>Take out…</button>
                   <button type="button" class="btn small ghost" onclick={() => addMore(pos)}>Add more</button>
+                  <button type="button" class="btn small ghost" onclick={() => openPool(pos)}>Pool page</button>
                 </div>
               {/if}
             </section>

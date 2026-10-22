@@ -4,6 +4,9 @@
 
 #include <bitassets/index.h>
 
+#include <bitassets/clmath.h>
+#include <bitassets/curves.h>
+
 #include <util/check.h>
 
 #include <algorithm>
@@ -223,6 +226,27 @@ struct RowCache {
 
 } // namespace
 
+uint64_t PricedReserve1(const State& state, const uint256& id, const Pool& pool)
+{
+    const PoolParams params{state.GetPoolParams(id)};
+    const Curve curve{params.GetCurve()};
+    // Constant product: its reserves are its price (as the index always kept them).
+    if (curve == Curve::CONSTANT_PRODUCT) return pool.reserve1;
+    // A book holds orders: no price of its own; a pool without asset0 none to scale.
+    if (curve == Curve::BOOK || pool.reserve0 == 0) return 0;
+    long double price{0};
+    if (curve == Curve::CONCENTRATED) {
+        const auto cl{state.GetClState(id)};
+        if (!cl) return 0;
+        price = static_cast<long double>(UintToArith256(cl::PriceQ64(UintToArith256(cl->sqrt_price))).getdouble()) / 18446744073709551616.0L;
+    } else {
+        price = curves::SpotPrice(params, pool.reserve0, pool.reserve1);
+    }
+    const long double priced{static_cast<long double>(pool.reserve0) * price};
+    if (!(priced >= 1)) return 0;
+    return priced >= static_cast<long double>(MAX_AMOUNT) ? MAX_AMOUNT : static_cast<uint64_t>(priced);
+}
+
 int64_t PoolRow::ChangePpm() const
 {
     if (ref0 == 0 || ref1 == 0 || reserve0 == 0 || reserve1 == 0) return 0;
@@ -413,7 +437,7 @@ void ConnectBlock(sidechain::StoreOverlay& store, int height, int volume_window)
             const bool same{before && before->asset0 == now->asset0 && before->asset1 == now->asset1};
             const uint64_t in0{Sub(now->volume0, same ? before->volume0 : 0)};
             const uint64_t in1{Sub(now->volume1, same ? before->volume1 : 0)};
-            volume = Add(in0, MulDiv(in1, now->reserve0, now->reserve1));
+            volume = Add(in0, MulDiv(in1, now->reserve0, PricedReserve1(state, id, *now)));
             if (volume > 0) asset_volume[now->asset1] = Add(asset_volume[now->asset1], volume);
         }
         pool_now.emplace(id, std::make_pair(now, volume));
@@ -531,10 +555,10 @@ void ConnectBlock(sidechain::StoreOverlay& store, int height, int volume_window)
             row->asset1 = now->asset1;
             row->created = now->height;
             row->ref0 = now->reserve0;
-            row->ref1 = now->reserve1;
+            row->ref1 = PricedReserve1(state, id, *now);
         }
         row->reserve0 = now->reserve0;
-        row->reserve1 = now->reserve1;
+        row->reserve1 = PricedReserve1(state, id, *now);
         row->abandoned = amm::Abandoned(*now);
         row->last = height;
         if (volume_window > 0) {
@@ -542,7 +566,7 @@ void ConnectBlock(sidechain::StoreOverlay& store, int height, int volume_window)
             Bytes key{K('H')};
             Put32(key, Height32(height));
             PutHash(key, id);
-            store.Put(key, sidechain::EncodeValue(PoolSnap{volume, now->reserve0, now->reserve1}));
+            store.Put(key, sidechain::EncodeValue(PoolSnap{volume, now->reserve0, row->reserve1}));
         }
     }
 

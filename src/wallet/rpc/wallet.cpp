@@ -1095,6 +1095,21 @@ RPCMethod createoraclecontract();
 RPCMethod settleoraclecontract();
 RPCMethod addliquidity();
 RPCMethod removeliquidity();
+RPCMethod createpool();
+RPCMethod addpoolliquidity();
+RPCMethod removepoolliquidity();
+RPCMethod swappools();
+RPCMethod launchtoken();
+RPCMethod buyfromlaunch();
+RPCMethod selltolaunch();
+RPCMethod claimlaunch();
+RPCMethod openposition();
+RPCMethod changeposition();
+RPCMethod listpositions();
+RPCMethod placeorder();
+RPCMethod settleorder();
+RPCMethod listorders();
+RPCMethod verifyasset();
 RPCMethod createauction();
 RPCMethod bidauction();
 RPCMethod collectauction();
@@ -1192,6 +1207,21 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &settleoraclecontract},
         {"wallet", &addliquidity},
         {"wallet", &removeliquidity},
+        {"wallet", &createpool},
+        {"wallet", &addpoolliquidity},
+        {"wallet", &removepoolliquidity},
+        {"wallet", &swappools},
+        {"wallet", &launchtoken},
+        {"wallet", &buyfromlaunch},
+        {"wallet", &selltolaunch},
+        {"wallet", &claimlaunch},
+        {"wallet", &openposition},
+        {"wallet", &changeposition},
+        {"wallet", &listpositions},
+        {"wallet", &placeorder},
+        {"wallet", &settleorder},
+        {"wallet", &listorders},
+        {"wallet", &verifyasset},
         {"wallet", &createauction},
         {"wallet", &bidauction},
         {"wallet", &collectauction},

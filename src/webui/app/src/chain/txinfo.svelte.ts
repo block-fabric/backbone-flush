@@ -3,7 +3,7 @@
 // what kind of move, how much, and the other side: where a send went, who paid what came in.
 import { t } from '../lib/i18n.svelte';
 import { wallets } from '../lib/state.svelte';
-import { formatAmount, type AssetTx } from './ba/model';
+import { formatAmount, OPERATIONS, type AssetTx } from './ba/model';
 import { ba, holdingOf, refreshBitAssets, startBitAssets } from './ba/store.svelte';
 import { ignoreAsset } from './ba/hide.svelte';
 import { hiddenAsset } from './ba/visible.svelte';
@@ -58,6 +58,31 @@ export function categoryText(e: Pick<AssetTx, 'category' | 'sign'>): string {
     default:
       return t('Asset');
   }
+}
+
+/**
+ * The operations of Layers' DEX (createpool, addpoolliquidity, removepoolliquidity, swappools, swaproute; launchtoken,
+ * claimlaunch; buys and sales on a launch's curve are routes) that
+ * listassettransactions lists as moves of the assets (sent, received): named as listassetactivity names them.
+ */
+const DEX_OPERATIONS = new Set(['create pool', 'add liquidity', 'remove liquidity', 'route', 'launch', 'claim launch']);
+
+/** The words of a move, with the operation listassetactivity says of its transaction (if read). */
+export function operationText(e: Pick<AssetTx, 'category' | 'sign'>, operation: string | undefined): string {
+  if (operation && DEX_OPERATIONS.has(operation) && (e.category === 'send' || e.category === 'receive')) return t(OPERATIONS[operation]);
+  return categoryText(e);
+}
+
+/** The operation listassetactivity says of a transaction of the wallet, if it read it. */
+let opsByTxid = new Map<string, string>();
+let opsOf: unknown = null;
+export function activityOperationOf(txid: string): string | undefined {
+  const list = ba.activity;
+  if (opsOf !== list) {
+    opsByTxid = new Map(list.map((a) => [a.txid, a.operation]));
+    opsOf = list;
+  }
+  return opsByTxid.get(txid);
 }
 
 /** An amount with its sign, in the asset's decimals, exact. */
@@ -135,12 +160,14 @@ export function assetMovesOf(txid: string): AssetTx[] {
 /** What chainTxOf made for each transaction, while the list read stays the same (a page asks it for every row, often). */
 let made = new Map<string, ChainTx | undefined>();
 let madeOf: unknown = null;
+let madeOps: unknown = null;
 
 export function chainTxOf(txid: string): ChainTx | undefined {
   const moves = assetMovesOf(txid);
-  if (madeOf !== byTxidOf) {
+  if (madeOf !== byTxidOf || madeOps !== ba.activity) {
     made = new Map();
     madeOf = byTxidOf;
+    madeOps = ba.activity;
   }
   if (made.has(txid)) return made.get(txid);
   const out = makeChainTx(moves);
@@ -151,8 +178,9 @@ export function chainTxOf(txid: string): ChainTx | undefined {
 function makeChainTx(moves: AssetTx[]): ChainTx | undefined {
   if (!moves.length) return undefined;
   const parties = (e: AssetTx) => counterparty(e).parties.map((p) => p.address);
+  const operation = activityOperationOf(moves[0].txid);
   return {
-    type: categoryText(moves[0]),
+    type: operationText(moves[0], operation),
     search: moves.map((e) => [e.label ?? '', e.display_name ?? '', e.seq ? `#${e.seq}` : '', e.asset ?? '', categoryText(e), ...parties(e)].join(' ')).join(' '),
     csv: [
       moves.map((e) => e.label ?? '').join('; '),

@@ -4,6 +4,8 @@
 //
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
+#include <bitassets/clmath.h>
+#include <bitassets/curves.h>
 #include <bitassets/dex.h>
 #include <bitassets/index.h>
 #include <bitassets/logo.h>
@@ -13,12 +15,14 @@
 #include <core_io.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/transaction.h>
 #include <rpc/bitassets.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
 #include <sidechain/state.h>
 #include <sync.h>
+#include <util/moneystr.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <validation.h>
@@ -189,6 +193,67 @@ UniValue PriceToJSON(uint64_t base_units, uint8_t base_decimals, uint64_t quote_
     return value;
 }
 
+UniValue DecimalToJSON(double price);
+
+/** The pool kinds' fields of a pool (bitassets/curves.h), its asset `a` first. */
+std::vector<RPCResult> KindResults()
+{
+    return {
+        {RPCResult::Type::STR, "curve", "\"constant_product\", \"stable\" or \"weighted\""},
+        {RPCResult::Type::NUM, "fee", "Its fee, in percent of what goes in (0.01, 0.05, 0.3 or 1), all to the liquidity providers"},
+        {RPCResult::Type::NUM, "fee_millionths", "The same in millionths"},
+        {RPCResult::Type::NUM, "amp", /*optional=*/true, "A stable pool's amplification A"},
+        {RPCResult::Type::NUM, "weight_a", /*optional=*/true, "A weighted pool's weight of the first asset, in percent"},
+        {RPCResult::Type::NUM, "weight_b", /*optional=*/true, "And of the second"},
+        {RPCResult::Type::BOOL, "default_kind", "Whether it is the kind AddLiquidity makes (constant product, 0.3 %): the pool of the two assets that swapasset, swaproute's paths and addliquidity name"},
+        {RPCResult::Type::BOOL, "dynamic_fee", "Whether its fee rises with its volatility"},
+        {RPCResult::Type::NUM, "fee_now", /*optional=*/true, "A dynamic fee's value for the next block, in percent"},
+        {RPCResult::Type::OBJ, "concentrated", /*optional=*/true, "A concentrated pool's state",
+        {
+            {RPCResult::Type::STR_HEX, "sqrt_price_x96", "Its square root price, Q64.96 (asset1 per asset0, in units)"},
+            {RPCResult::Type::NUM, "tick", "Its tick"},
+            {RPCResult::Type::STR, "liquidity", "The liquidity in range (decimal)"},
+            {RPCResult::Type::NUM, "tick_spacing", "Positions' ticks are multiples of it"},
+        }},
+    };
+}
+
+std::string U128Text(unsigned __int128 value)
+{
+    if (value == 0) return "0";
+    std::string text;
+    while (value > 0) {
+        text.insert(text.begin(), static_cast<char>('0' + static_cast<int>(value % 10)));
+        value /= 10;
+    }
+    return text;
+}
+
+void PushKind(UniValue& obj, const bitassets::PoolParams& params, bool flip)
+{
+    obj.pushKV("curve", bitassets::curves::CurveName(params.GetCurve()));
+    obj.pushKV("fee", DecimalToJSON(params.fee / 10000.0));
+    obj.pushKV("fee_millionths", static_cast<uint64_t>(params.fee));
+    if (params.GetCurve() == bitassets::Curve::STABLE) obj.pushKV("amp", static_cast<uint64_t>(params.amp));
+    if (params.GetCurve() == bitassets::Curve::WEIGHTED) {
+        const int w0{params.weight0};
+        obj.pushKV("weight_a", flip ? 100 - w0 : w0);
+        obj.pushKV("weight_b", flip ? w0 : 100 - w0);
+    }
+    obj.pushKV("default_kind", params.Legacy());
+    obj.pushKV("dynamic_fee", (params.flags & bitassets::POOL_FLAG_DYNAMIC_FEE) != 0);
+}
+
+/** What one whole `a` is worth in `b` at a pool's point (its curve's price; the reserves' ratio for constant product; a concentrated pool's, its state's). */
+double WholeSpotPrice(const bitassets::PoolParams& params, const bitassets::Pool& pool, bool a_is_0, uint8_t da, uint8_t db, const bitassets::ClState* cl = nullptr)
+{
+    const double raw0{cl ? UintToArith256(bitassets::cl::PriceQ64(UintToArith256(cl->sqrt_price))).getdouble() / 18446744073709551616.0
+                         : bitassets::curves::SpotPrice(params, pool.reserve0, pool.reserve1)};
+    if (!(raw0 > 0)) return 0;
+    const double raw{a_is_0 ? raw0 : 1 / raw0};
+    return raw * std::pow(10.0, int{da} - int{db});
+}
+
 std::vector<RPCResult> PoolResults()
 {
     return {
@@ -199,7 +264,7 @@ std::vector<RPCResult> PoolResults()
         {RPCResult::Type::STR_HEX, "asset_b_id", "Its hash"},
         {RPCResult::Type::NUM, "reserve_a", "What the pool holds of the first asset"},
         {RPCResult::Type::NUM, "reserve_b", "What it holds of the second"},
-        {RPCResult::Type::NUM, "price", /*optional=*/true, "What one of the first asset is worth in the second"},
+        {RPCResult::Type::NUM, "price", /*optional=*/true, "What one of the first asset is worth in the second: the pool's price (the reserves' ratio for constant product, its curve's slope for the others)"},
         {RPCResult::Type::NUM, "shares", "The shares there are, in units (a share has no decimals)"},
         {RPCResult::Type::NUM, "volume_a", "All of the first asset ever traded in"},
         {RPCResult::Type::NUM, "volume_b", "All of the second asset ever traded in"},
@@ -207,6 +272,13 @@ std::vector<RPCResult> PoolResults()
         {RPCResult::Type::NUM, "created", "The height of the block that made it"},
         {RPCResult::Type::BOOL, "abandoned", "Whether nobody provides liquidity any more: it holds only the minimum it keeps for good, and trading in it gets almost nothing"},
     };
+}
+
+std::vector<RPCResult> PoolResultsWithKind()
+{
+    std::vector<RPCResult> results{PoolResults()};
+    for (RPCResult& r : KindResults()) results.push_back(std::move(r));
+    return results;
 }
 
 UniValue PoolToJSON(const bitassets::State& state, const uint256& id, const bitassets::Pool& pool, const AssetId& first)
@@ -225,13 +297,38 @@ UniValue PoolToJSON(const bitassets::State& state, const uint256& id, const bita
     obj.pushKV("asset_b_id", b.GetHex());
     obj.pushKV("reserve_a", AmountToJSON(reserve_a, da));
     obj.pushKV("reserve_b", AmountToJSON(reserve_b, db));
-    if (UniValue price{PriceToJSON(reserve_a, da, reserve_b, db)}; !price.isNull()) obj.pushKV("price", std::move(price));
+    const bitassets::PoolParams params{state.GetPoolParams(id)};
+    if (params.GetCurve() == bitassets::Curve::LAUNCH) {
+        // A launch's curve: what it holds (its reserves less the virtual), and its price.
+        if (const auto launch{state.GetLaunch(pool.asset1)}) {
+            const uint64_t coin{pool.reserve0 - std::min(pool.reserve0, launch->virtual_coin)}, tokens{pool.reserve1 - std::min(pool.reserve1, bitassets::LAUNCH_CURVE_END)};
+            obj.pushKV("reserve_a", AmountToJSON(flip ? tokens : coin, da));
+            obj.pushKV("reserve_b", AmountToJSON(flip ? coin : tokens, db));
+        }
+        if (UniValue price{PriceToJSON(reserve_a, da, reserve_b, db)}; !price.isNull()) obj.pushKV("price", std::move(price));
+    } else if (params.GetCurve() == bitassets::Curve::CONSTANT_PRODUCT) {
+        if (UniValue price{PriceToJSON(reserve_a, da, reserve_b, db)}; !price.isNull()) obj.pushKV("price", std::move(price));
+    } else if (params.GetCurve() == bitassets::Curve::CONCENTRATED) {
+        if (const auto cl{state.GetClState(id)}) obj.pushKV("price", DecimalToJSON(WholeSpotPrice(params, pool, !flip, da, db, &*cl)));
+    } else if (reserve_a > 0 && reserve_b > 0) {
+        obj.pushKV("price", DecimalToJSON(WholeSpotPrice(params, pool, !flip, da, db)));
+    }
     obj.pushKV("shares", pool.shares);
     obj.pushKV("volume_a", AmountToJSON(volume_a, da));
     obj.pushKV("volume_b", AmountToJSON(volume_b, db));
     obj.pushKV("swaps", pool.swaps);
     obj.pushKV("created", pool.height);
     obj.pushKV("abandoned", bitassets::amm::Abandoned(pool));
+    PushKind(obj, params, flip);
+    if (params.flags & bitassets::POOL_FLAG_DYNAMIC_FEE) obj.pushKV("fee_now", DecimalToJSON(state.QuoteFee(id, params) / 10000.0));
+    if (const auto cl{params.GetCurve() == bitassets::Curve::CONCENTRATED ? state.GetClState(id) : std::nullopt}) {
+        UniValue c(UniValue::VOBJ);
+        c.pushKV("sqrt_price_x96", UintToArith256(cl->sqrt_price).GetHex());
+        c.pushKV("tick", cl->tick);
+        c.pushKV("liquidity", U128Text(cl->Liquidity()));
+        c.pushKV("tick_spacing", bitassets::cl::TickSpacing(params.fee));
+        obj.pushKV("concentrated", std::move(c));
+    }
     return obj;
 }
 
@@ -596,7 +693,7 @@ RPCMethod listpools()
             {"count", RPCArg::Type::NUM, RPCArg::Default{100}, "How many, at most 1000"},
             {"skip", RPCArg::Type::NUM, RPCArg::Default{0}, "How many to skip"},
         },
-        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", PoolResults()}}},
+        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", PoolResultsWithKind()}}},
         RPCExamples{HelpExampleCli("listpools", "") + HelpExampleCli("listpools", "\"GOLD\"") + HelpExampleCli("listpools", "null 100 100")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -634,18 +731,24 @@ RPCMethod getpool()
 {
     return RPCMethod{
         "getpool",
-        "The pool of two assets.",
+        "A pool: of two assets, the kind addliquidity makes (constant product, 0.3 %); or any pool by its id (a pool of another kind: createpool).",
         {
-            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
-            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, std::string{bitassets::ASSET_ARG_HELP} + "; or the id of a pool (64 hex digits), asset_b left out"},
+            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::OMITTED, bitassets::ASSET_ARG_HELP},
         },
-        RPCResult{RPCResult::Type::OBJ, "", "", PoolResults()},
-        RPCExamples{HelpExampleCli("getpool", "\"GOLD\" \"ECX\"")},
+        RPCResult{RPCResult::Type::OBJ, "", "", PoolResultsWithKind()},
+        RPCExamples{HelpExampleCli("getpool", "\"GOLD\" \"CHN\"") + HelpExampleCli("getpool", "\"<pool id>\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
     LOCK(::cs_main);
     const bitassets::State state{StateOf(chainman)};
+    if (request.params[1].isNull()) {
+        const uint256 id{ParseHashV(request.params[0], "pool")};
+        const auto pool{state.GetPool(id)};
+        if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+        return PoolToJSON(state, id, *pool, pool->asset0.IsNull() ? pool->asset1 : pool->asset0);
+    }
     const AssetId a{ParseAsset(request.params[0], state)}, b{ParseAsset(request.params[1], state)};
     const auto pool{state.FindPool(a, b)};
     if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, "There is no pool of these assets (addliquidity makes one)");
@@ -916,6 +1019,19 @@ RPCMethod getdexinfo()
             {RPCResult::Type::STR_AMOUNT, "oracle_registration_fee", "What registering an oracle costs (to mainchain miners)"},
             {RPCResult::Type::NUM, "max_contract_outcomes", "Most outcomes an oracle contract names"},
             {RPCResult::Type::NUM, "max_contract_duration", "Latest an oracle contract expires, in blocks"},
+            {RPCResult::Type::NUM, "curves_height", "The first block of the pool kinds (fee tiers, stable and weighted pools; -1: never on this network)"},
+            {RPCResult::Type::BOOL, "curves_active", "Whether the next block has them"},
+            {RPCResult::Type::ARR, "fee_tiers", "The fees a pool is made with, in percent", {{RPCResult::Type::NUM, "", ""}}},
+            {RPCResult::Type::ARR, "curves", "The curves", {{RPCResult::Type::STR, "", ""}}},
+            {RPCResult::Type::NUM, "min_amp", "A stable pool's least amplification"},
+            {RPCResult::Type::NUM, "max_amp", "And most"},
+            {RPCResult::Type::ARR, "weights", "A weighted pool's weights of an asset, in percent (the other has the rest)", {{RPCResult::Type::NUM, "", ""}}},
+            {RPCResult::Type::OBJ, "swap_fee_parts", "The parts of every swap fee, in percent of it (consensus parameters of this network)",
+            {
+                {RPCResult::Type::NUM, "liquidity_providers", "What stays in the pool (the remainders of the roundings too)"},
+                {RPCResult::Type::NUM, "security", "To the block's BMM bidder and validators, by the curve of the network fees (fees in the chain's coin; in an asset: held by the treasury)"},
+                {RPCResult::Type::NUM, "protocol", "To the treasury (gettreasury)"},
+            }},
         }},
         RPCExamples{HelpExampleCli("getdexinfo", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -933,6 +1049,24 @@ RPCMethod getdexinfo()
     result.pushKV("oracle_registration_fee", ValueFromAmount(bitassets::ORACLE_REGISTRATION_FEE));
     result.pushKV("max_contract_outcomes", static_cast<int>(bitassets::MAX_CONTRACT_OUTCOMES));
     result.pushKV("max_contract_duration", bitassets::MAX_CONTRACT_DURATION);
+    result.pushKV("curves_height", params.dex_curves_height == std::numeric_limits<int>::max() ? -1 : std::max(params.dex_curves_height, params.dex_height));
+    result.pushKV("curves_active", params.DexCurvesActive(NextHeight(chainman)));
+    UniValue tiers(UniValue::VARR);
+    for (uint32_t fee : bitassets::FEE_TIERS) tiers.push_back(DecimalToJSON(fee / 10000.0));
+    result.pushKV("fee_tiers", std::move(tiers));
+    UniValue curves(UniValue::VARR);
+    for (uint8_t c{0}; c <= bitassets::MAX_CURVE; ++c) curves.push_back(bitassets::curves::CurveName(static_cast<bitassets::Curve>(c)));
+    result.pushKV("curves", std::move(curves));
+    result.pushKV("min_amp", static_cast<uint64_t>(bitassets::MIN_AMP));
+    result.pushKV("max_amp", static_cast<uint64_t>(bitassets::MAX_AMP));
+    UniValue weights(UniValue::VARR);
+    for (uint8_t w : bitassets::WEIGHTS) weights.push_back(w);
+    result.pushKV("weights", std::move(weights));
+    UniValue parts(UniValue::VOBJ);
+    parts.pushKV("liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.dex_fee_protocol_share) / 10000.0));
+    parts.pushKV("security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+    parts.pushKV("protocol", DecimalToJSON(params.dex_fee_protocol_share / 10000.0));
+    result.pushKV("swap_fee_parts", std::move(parts));
     return result;
 },
     };
@@ -956,6 +1090,7 @@ RPCMethod quoteroute()
             {RPCResult::Type::NUM, "amount_in", "What goes in"},
             {RPCResult::Type::NUM, "amount_out", "What the best route gives (0 if there is none)"},
             {RPCResult::Type::ARR, "path", "The best route's assets, first to last (for swaproute); empty if none", {{RPCResult::Type::STR, "", "An asset's label"}}},
+            {RPCResult::Type::ARR, "pools", "The best route's pools (for swaproute's pools); empty if none", {{RPCResult::Type::STR_HEX, "", "A pool"}}},
             {RPCResult::Type::ARR, "routes", "The routes found, best first",
             {
                 {RPCResult::Type::OBJ, "", "",
@@ -963,11 +1098,15 @@ RPCMethod quoteroute()
                     {RPCResult::Type::ARR, "path", "Its assets", {{RPCResult::Type::STR, "", "An asset's label"}}},
                     {RPCResult::Type::ARR, "path_ids", "The same, by hash (null for ECX)", {{RPCResult::Type::STR_HEX, "", "An asset"}}},
                     {RPCResult::Type::NUM, "amount_out", "What it gives"},
+                    {RPCResult::Type::ARR, "pools", "Its pools, first to last (for swaproute's pools, or swappools)", {{RPCResult::Type::STR_HEX, "", "A pool"}}},
+                    {RPCResult::Type::BOOL, "default_pools", "Whether every pool is of the kind addliquidity makes: swaproute's path alone names them"},
                     {RPCResult::Type::ARR, "hops", "Each pool's part",
                     {
                         {RPCResult::Type::OBJ, "", "",
                         {
                             {RPCResult::Type::STR_HEX, "pool", "The pool"},
+                            {RPCResult::Type::STR, "curve", "Its curve"},
+                            {RPCResult::Type::NUM, "fee", "Its fee, in percent"},
                             {RPCResult::Type::NUM, "amount_out", "What comes out of it"},
                         }},
                     }},
@@ -988,7 +1127,12 @@ RPCMethod quoteroute()
     if (in == out) throw JSONRPCError(RPC_INVALID_PARAMETER, "The same asset in and out");
     const uint8_t di{DecimalsOf(state, in)}, dout{DecimalsOf(state, out)};
     const uint64_t amount_in{bitassets::ParseUnits(request.params[1], di)};
-    const auto routes{bitassets::dex::FindRoutes(state, in, out, amount_in, max_hops, count)};
+    const auto routes{bitassets::dex::FindRoutes(state, in, out, amount_in, max_hops, count, 20000, 16, chainman.GetConsensus().sidechain.DexCurvesActive(NextHeight(chainman)))};
+    const auto pool_ids{[](const std::vector<uint256>& pools) {
+        UniValue arr(UniValue::VARR);
+        for (const uint256& id : pools) arr.push_back(id.GetHex());
+        return arr;
+    }};
     const auto labels{[&](const std::vector<AssetId>& path) {
         UniValue arr(UniValue::VARR);
         for (const AssetId& asset : path) arr.push_back(LabelOf(state, asset));
@@ -1002,10 +1146,15 @@ RPCMethod quoteroute()
         for (const AssetId& asset : route.path) ids.push_back(asset.GetHex());
         obj.pushKV("path_ids", std::move(ids));
         obj.pushKV("amount_out", AmountToJSON(route.outs.back(), dout));
+        obj.pushKV("pools", pool_ids(route.pools));
+        obj.pushKV("default_pools", route.legacy);
         UniValue hops(UniValue::VARR);
         for (size_t i{0}; i < route.outs.size(); ++i) {
             UniValue hop(UniValue::VOBJ);
-            hop.pushKV("pool", bitassets::PoolId(route.path[i], route.path[i + 1]).GetHex());
+            const bitassets::PoolParams kind{state.GetPoolParams(route.pools[i])};
+            hop.pushKV("pool", route.pools[i].GetHex());
+            hop.pushKV("curve", bitassets::curves::CurveName(kind.GetCurve()));
+            hop.pushKV("fee", DecimalToJSON(kind.fee / 10000.0));
             hop.pushKV("amount_out", AmountToJSON(route.outs[i], DecimalsOf(state, route.path[i + 1])));
             hops.push_back(std::move(hop));
         }
@@ -1016,6 +1165,7 @@ RPCMethod quoteroute()
     result.pushKV("amount_in", AmountToJSON(amount_in, di));
     result.pushKV("amount_out", AmountToJSON(routes.empty() ? 0 : routes.front().outs.back(), dout));
     result.pushKV("path", routes.empty() ? UniValue{UniValue::VARR} : labels(routes.front().path));
+    result.pushKV("pools", routes.empty() ? UniValue{UniValue::VARR} : pool_ids(routes.front().pools));
     result.pushKV("routes", std::move(list));
     return result;
 },
@@ -1092,8 +1242,9 @@ RPCMethod getpooltwap()
             hi = mid - 1;
         }
     }
-    const auto [start0, start1]{bitassets::dex::CumulativeAt(at(lo), from_time)};
-    const auto [end0, end1]{bitassets::dex::CumulativeAt(last, to_time)};
+    const bitassets::PoolParams kind{state.GetPoolParams(id)};
+    const auto [start0, start1]{bitassets::dex::CumulativeAt(at(lo), from_time, kind)};
+    const auto [end0, end1]{bitassets::dex::CumulativeAt(last, to_time, kind)};
     const uint32_t seconds{to_time - from_time};
     const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
     // Units of the other asset per unit, as whole assets.
@@ -1107,7 +1258,8 @@ RPCMethod getpooltwap()
     result.pushKV("seconds", seconds);
     result.pushKV("twap_a", DecimalToJSON(bitassets::dex::AveragePrice(bitassets::dex::CumulativeDelta(end0, start0), seconds) * scale0));
     result.pushKV("twap_b", DecimalToJSON(bitassets::dex::AveragePrice(bitassets::dex::CumulativeDelta(end1, start1), seconds) / scale0));
-    result.pushKV("spot_a", PriceToJSON(pool->reserve0, d0, pool->reserve1, d1));
+    const auto cl_now{state.GetClState(id)};
+    result.pushKV("spot_a", DecimalToJSON(WholeSpotPrice(kind, *pool, true, d0, d1, cl_now ? &*cl_now : nullptr)));
     result.pushKV("cumulative_a", end0.GetHex());
     result.pushKV("cumulative_b", end1.GetHex());
     result.pushKV("observations", kept);
@@ -1185,6 +1337,142 @@ RPCMethod getoraclevalue()
         result.pushKV("height", attestation->height);
         result.pushKV("txid", attestation->txid.GetHex());
     }
+    return result;
+},
+    };
+}
+
+RPCMethod getverifications()
+{
+    return RPCMethod{
+        "getverifications",
+        "Verified issuers (not a rule: what wallets show): what curators say of an asset. A curator is an oracle that attests "
+        "\"Layers verification <asset id> #<round>\" with 1 (verified) or 0 (taken back); its word is that of its last round. "
+        "Only the curators named count (the ones the user trusts: anyone can register an oracle, so no list means no verification).",
+        {
+            {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"curators", RPCArg::Type::ARR, RPCArg::Optional::NO, "The curators the user trusts (ids or keys of oracles; 1 to 200)", {{"curator", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "asset", "The asset's id"},
+            {RPCResult::Type::BOOL, "verified", "Whether one of the curators named verifies it now"},
+            {RPCResult::Type::ARR, "curators", "", {{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR_HEX, "curator", "The oracle's id"},
+                {RPCResult::Type::STR, "name", "Its name (a label)"},
+                {RPCResult::Type::BOOL, "verified", "Its word now"},
+                {RPCResult::Type::NUM, "round", "Its last round attested (0: none)"},
+                {RPCResult::Type::NUM, "height", /*optional=*/true, "The block of that attestation"},
+            }}}},
+        }},
+        RPCExamples{HelpExampleCli("getverifications", "\"GOLD\" '[\"<curator>\"]'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId asset{ParseAsset(request.params[0], state)};
+    std::vector<uint256> curators;
+    const UniValue& named{request.params[1]};
+    if (named.empty() || named.size() > 200) throw JSONRPCError(RPC_INVALID_PARAMETER, "Name 1 to 200 curators (the ones you trust)");
+    for (const UniValue& c : named.getValues()) curators.push_back(ParseOracle(c, state));
+    UniValue list(UniValue::VARR);
+    bool any{false};
+    for (const uint256& curator : curators) {
+        int round{0};
+        std::optional<bitassets::Attestation> last;
+        for (int r{1}; r <= bitassets::dex::MAX_VERIFICATION_ROUNDS; ++r) {
+            const auto a{state.GetAttestation(curator, bitassets::dex::EventId(bitassets::dex::VerificationEvent(asset, r)))};
+            if (!a) break;
+            round = r;
+            last = a;
+        }
+        const bool verified{last && last->value > 0};
+        any = any || verified;
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("curator", curator.GetHex());
+        const auto record{state.GetOracle(curator)};
+        obj.pushKV("name", record ? record->name : "");
+        obj.pushKV("verified", verified);
+        obj.pushKV("round", round);
+        if (last) obj.pushKV("height", last->height);
+        list.push_back(std::move(obj));
+    }
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("asset", asset.GetHex());
+    result.pushKV("verified", any);
+    result.pushKV("curators", std::move(list));
+    return result;
+},
+    };
+}
+
+RPCMethod gettreasury()
+{
+    return RPCMethod{
+        "gettreasury",
+        "The treasury: what the protocol's parts of the DEX's swap fees and of the launches' fees accrued, per asset, held by the chain "
+        "itself (no key, no output; no rule spends from it yet: a hook waits for one), and the security parts of the fees: paid with the "
+        "blocks' fees when in the chain's coin, held per asset otherwise.",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::OBJ, "fee_parts", "The parts of the fees, in percent (consensus parameters of this network)",
+            {
+                {RPCResult::Type::NUM, "swap_security", ""},
+                {RPCResult::Type::NUM, "swap_protocol", ""},
+                {RPCResult::Type::NUM, "swap_liquidity_providers", ""},
+                {RPCResult::Type::NUM, "launch_fee", "The fee of a trade on a launch's curve, in percent"},
+                {RPCResult::Type::NUM, "launch_creator", ""},
+                {RPCResult::Type::NUM, "launch_protocol", ""},
+                {RPCResult::Type::NUM, "launch_security", ""},
+            }},
+            {RPCResult::Type::ARR, "balances", "By asset", {{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR, "asset", "Its label (CHN: the chain's coin)"},
+                {RPCResult::Type::STR_HEX, "asset_id", "Its hash (null: the chain's coin)"},
+                {RPCResult::Type::NUM, "balance", "The protocol's, held"},
+                {RPCResult::Type::NUM, "from_swaps", "Of which came from swap fees"},
+                {RPCResult::Type::NUM, "from_launches", "And from launches' fees"},
+                {RPCResult::Type::NUM, "security_held", "The security parts of swap fees in this asset, held (none for the chain's coin: paid with the blocks)"},
+            }}}},
+            {RPCResult::Type::STR_AMOUNT, "security_paid", "The security parts paid with the blocks' fees, in all (the chain's coin)"},
+            {RPCResult::Type::BOOL, "spending_rule", "Whether a rule spends from the treasury: false (none yet)"},
+        }},
+        RPCExamples{HelpExampleCli("gettreasury", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const Consensus::SidechainParams& params{chainman.GetConsensus().sidechain};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    UniValue parts(UniValue::VOBJ);
+    parts.pushKV("swap_security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+    parts.pushKV("swap_protocol", DecimalToJSON(params.dex_fee_protocol_share / 10000.0));
+    parts.pushKV("swap_liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.dex_fee_protocol_share) / 10000.0));
+    parts.pushKV("launch_fee", DecimalToJSON(params.launch_fee / 10000.0));
+    parts.pushKV("launch_creator", DecimalToJSON(params.launch_creator_share / 10000.0));
+    parts.pushKV("launch_protocol", DecimalToJSON(params.launch_protocol_share / 10000.0));
+    parts.pushKV("launch_security", DecimalToJSON(params.launch_security_share / 10000.0));
+    UniValue balances(UniValue::VARR);
+    state.ForEachTreasury([&](const AssetId& asset, const bitassets::TreasuryEntry& entry) {
+        const uint8_t d{DecimalsOf(state, asset)};
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("asset", LabelOf(state, asset));
+        obj.pushKV("asset_id", asset.GetHex());
+        obj.pushKV("balance", AmountToJSON(entry.balance, d));
+        obj.pushKV("from_swaps", AmountToJSON(entry.from_swaps, d));
+        obj.pushKV("from_launches", AmountToJSON(entry.from_launches, d));
+        obj.pushKV("security_held", AmountToJSON(entry.security_held, d));
+        balances.push_back(std::move(obj));
+        return balances.size() < 1000;
+    });
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("fee_parts", std::move(parts));
+    result.pushKV("balances", std::move(balances));
+    result.pushKV("security_paid", ValueFromAmount(static_cast<CAmount>(std::min<uint64_t>(state.GetSecurityFees().total, MAX_MONEY))));
+    result.pushKV("spending_rule", false);
     return result;
 },
     };
@@ -1595,7 +1883,7 @@ RPCMethod searchpools()
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
             {RPCResult::Type::ARR, "pools", "", {{RPCResult::Type::OBJ, "", "", [] {
-                std::vector<RPCResult> results{PoolResults()};
+                std::vector<RPCResult> results{PoolResultsWithKind()};
                 results.push_back({RPCResult::Type::NUM, "depth", "The ECX it holds (0 for a pool without ECX)"});
                 results.push_back({RPCResult::Type::NUM, "volume_window", "ECX traded over the volume window"});
                 results.push_back({RPCResult::Type::NUM, "price_change", "The change of the price of asset_b in asset_a over the window, in percent"});
@@ -1808,6 +2096,1537 @@ RPCMethod getassetindexinfo()
     };
 }
 
+//
+// The DEX's pool kinds (bitassets/curves.h): quotes over every pool of a pair, a simulated batch, a preview of
+// a pool before it is made, and the depth of a pool.
+//
+
+/** A round of a pool now (any kind, at the fee it charges next), and the pool after it; `preview`: a pool not made yet, of that kind. */
+struct RoundResult {
+    bitassets::dex::Clearing clearing;
+    bitassets::Pool after;
+    std::optional<bitassets::ClState> cl_before, cl_after;
+};
+std::optional<RoundResult> RoundOf(const bitassets::State& state, const uint256& id, const bitassets::Pool& pool, const std::vector<bitassets::dex::HopIn>& orders,
+                                   const std::optional<bitassets::PoolParams>& preview = std::nullopt)
+{
+    const bitassets::PoolParams kind{preview ? *preview : state.GetPoolParams(id)};
+    const uint32_t fee{preview ? kind.fee : state.QuoteFee(id, kind)};
+    RoundResult r;
+    r.after = pool;
+    std::optional<bitassets::dex::Clearing> cleared;
+    if (kind.GetCurve() == bitassets::Curve::CONCENTRATED) {
+        r.cl_before = state.GetClState(id);
+        if (!r.cl_before) return std::nullopt;
+        r.cl_after = r.cl_before;
+        std::map<int32_t, bitassets::ClTick> ticks;
+        cleared = state.ClearCl(id, fee, pool, *r.cl_after, ticks, orders);
+    } else if (kind.GetCurve() == bitassets::Curve::BOOK) {
+        std::map<uint256, bitassets::BookOrder> resting;
+        cleared = state.ClearBook(id, pool, resting, orders, 0);
+    } else if (kind.GetCurve() == bitassets::Curve::LAUNCH) {
+        const auto launch{state.GetLaunch(pool.asset1)};
+        if (!launch) return std::nullopt;
+        cleared = bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, bitassets::LAUNCH_CURVE_END, launch->max_buy, launch->min_buy}, pool.reserve0, pool.reserve1, orders,
+                                                 std::vector<bool>(orders.size(), true));
+    } else {
+        cleared = bitassets::curves::ClearPoolOf(kind, fee, pool.reserve0, pool.reserve1, orders);
+    }
+    if (!cleared) return std::nullopt;
+    r.clearing = *cleared;
+    r.after.reserve0 = cleared->reserve0;
+    r.after.reserve1 = cleared->reserve1;
+    return r;
+}
+
+/** What `amount_in` of `in` gives alone in a pool, and the measures of the trade, as an object. */
+UniValue TradeToJSON(const bitassets::State& state, const uint256& id, const bitassets::Pool& pool, const AssetId& in, uint64_t amount_in, uint64_t amount_out)
+{
+    const bitassets::PoolParams kind{state.GetPoolParams(id)};
+    const AssetId out{pool.asset0 == in ? pool.asset1 : pool.asset0};
+    const uint8_t di{DecimalsOf(state, in)}, dout{DecimalsOf(state, out)};
+    const bool zero_in{pool.asset0 == in};
+    const auto round{RoundOf(state, id, pool, {{zero_in, amount_in}})};
+    const bitassets::ClState* cl_before{round && round->cl_before ? &*round->cl_before : nullptr};
+    const double spot{WholeSpotPrice(kind, pool, zero_in, di, dout, cl_before)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("pool", id.GetHex());
+    PushKind(obj, kind, !zero_in);
+    obj.pushKV("amount_in", AmountToJSON(amount_in, di));
+    obj.pushKV("amount_out", AmountToJSON(amount_out, dout));
+    const double whole_in{amount_in / std::pow(10.0, di)}, whole_out{amount_out / std::pow(10.0, dout)};
+    obj.pushKV("price", DecimalToJSON(whole_out > 0 ? whole_in / whole_out : 0));
+    obj.pushKV("spot_price", DecimalToJSON(spot > 0 ? 1 / spot : 0));
+    // The price of what comes out, worse than the spot's by: the fee included.
+    const double impact{spot > 0 && whole_in > 0 ? std::clamp(100.0 * (1.0 - (whole_out / whole_in) / spot), 0.0, 100.0) : 100.0};
+    UniValue impact_value;
+    impact_value.setNumStr(strprintf("%.4f", impact));
+    obj.pushKV("price_impact", impact_value);
+    obj.pushKV("fee_paid", AmountToJSON(static_cast<uint64_t>(static_cast<unsigned __int128>(amount_in) * state.QuoteFee(id, kind) / bitassets::FEE_DENOMINATOR), di));
+    if (round) {
+        const double next{WholeSpotPrice(kind, round->after, zero_in, di, dout, round->cl_after ? &*round->cl_after : nullptr)};
+        obj.pushKV("spot_price_after", DecimalToJSON(next > 0 ? 1 / next : 0));
+    }
+    obj.pushKV("abandoned", bitassets::amm::Abandoned(pool));
+    return obj;
+}
+
+std::vector<RPCResult> TradeResults()
+{
+    std::vector<RPCResult> results{
+        {RPCResult::Type::STR_HEX, "pool", "The pool"},
+    };
+    for (RPCResult& r : KindResults()) results.push_back(std::move(r));
+    for (RPCResult r : std::vector<RPCResult>{
+             {RPCResult::Type::NUM, "amount_in", "What goes in"},
+             {RPCResult::Type::NUM, "amount_out", "What comes out, alone in its block"},
+             {RPCResult::Type::NUM, "price", "What one of what comes out costs, in what goes in"},
+             {RPCResult::Type::NUM, "spot_price", "The same at the pool's price before"},
+             {RPCResult::Type::NUM, "price_impact", "How much worse the trade's price is than the spot price, in percent (the fee included)"},
+             {RPCResult::Type::NUM, "fee_paid", "What the pool keeps of what goes in"},
+             {RPCResult::Type::NUM, "spot_price_after", /*optional=*/true, "The pool's price after the trade"},
+             {RPCResult::Type::BOOL, "abandoned", "Whether nobody provides liquidity to it"},
+         }) {
+        results.push_back(std::move(r));
+    }
+    return results;
+}
+
+RPCMethod getswapquote()
+{
+    return RPCMethod{
+        "getswapquote",
+        "What a trade gives now in every pool of a pair, of every kind, and through the best route over all pools: for an amount in, what "
+        "comes out; or (exact_out) the least that has to go in for an amount out. Each as the only order of its block would get it.",
+        {
+            {"asset_in", RPCArg::Type::STR, RPCArg::Optional::NO, "What is paid in. " + std::string{bitassets::ASSET_ARG_HELP}},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much goes in (or comes out, with exact_out)"},
+            {"asset_out", RPCArg::Type::STR, RPCArg::Optional::NO, "What comes out"},
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {
+                {"exact_out", RPCArg::Type::BOOL, RPCArg::Default{false}, "The amount is what comes out"},
+                {"max_hops", RPCArg::Type::NUM, RPCArg::Default{4}, "Most pools on a route (1 to 4); 0: no route, the pair's pools only"},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::ARR, "pools", "The pair's pools that trade it, best first", {{RPCResult::Type::OBJ, "", "", TradeResults()}}},
+            {RPCResult::Type::STR_HEX, "best_pool", /*optional=*/true, "The pair's pool that gives most (or takes least)"},
+            {RPCResult::Type::OBJ, "route", /*optional=*/true, "The best route over all pools (exact_out: none)",
+            {
+                {RPCResult::Type::ARR, "path", "Its assets", {{RPCResult::Type::STR, "", "An asset's label"}}},
+                {RPCResult::Type::ARR, "pools", "Its pools", {{RPCResult::Type::STR_HEX, "", "A pool"}}},
+                {RPCResult::Type::NUM, "amount_out", "What it gives"},
+                {RPCResult::Type::BOOL, "default_pools", "Whether swaproute's path alone names its pools"},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("getswapquote", "\"CHN\" 1 \"GOLD\"") + HelpExampleCli("-named getswapquote", "asset_in=GOLD amount=5 asset_out=CHN exact_out=true")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const UniValue& options{request.params[3]};
+    const bool exact_out{options.exists("exact_out") && options["exact_out"].get_bool()};
+    const int max_hops{options.exists("max_hops") ? options["max_hops"].getInt<int>() : 4};
+    if (max_hops < 0 || max_hops > static_cast<int>(bitassets::MAX_ROUTE_ASSETS - 1)) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_hops is 0 to 4");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId in{ParseAsset(request.params[0], state)}, out{ParseAsset(request.params[2], state)};
+    if (in == out) throw JSONRPCError(RPC_INVALID_PARAMETER, "The same asset in and out");
+    const uint8_t di{DecimalsOf(state, in)}, dout{DecimalsOf(state, out)};
+    const uint64_t amount{bitassets::ParseUnits(request.params[1], exact_out ? dout : di)};
+    struct Quote {
+        uint256 id;
+        bitassets::Pool pool;
+        uint64_t in, out;
+    };
+    std::vector<Quote> quotes;
+    for (const auto& [id, pool] : state.PoolsOf(in)) {
+        if ((pool.asset0 == in ? pool.asset1 : pool.asset0) != out || bitassets::amm::Abandoned(pool)) continue;
+        const bool zero_in{pool.asset0 == in};
+        const auto alone{[&](uint64_t x) -> uint64_t {
+            const auto r{RoundOf(state, id, pool, {{zero_in, x}})};
+            return r ? r->clearing.outs[0] : 0;
+        }};
+        if (exact_out) {
+            // The least in that gives the amount out (what comes out never falls as more goes in).
+            const uint64_t reserve_in{zero_in ? pool.reserve0 : pool.reserve1};
+            if (reserve_in >= bitassets::MAX_AMOUNT) continue;
+            const uint64_t most{bitassets::MAX_AMOUNT - reserve_in};
+            if (alone(most) < amount) continue;
+            uint64_t lo{1}, hi{most};
+            while (lo < hi) {
+                const uint64_t mid{lo + (hi - lo) / 2};
+                if (alone(mid) >= amount) {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            quotes.push_back({id, pool, lo, alone(lo)});
+        } else {
+            const uint64_t got{alone(amount)};
+            if (got == 0) continue;
+            quotes.push_back({id, pool, amount, got});
+        }
+    }
+    std::sort(quotes.begin(), quotes.end(), [&](const Quote& a, const Quote& b) {
+        if (exact_out ? a.in != b.in : a.out != b.out) return exact_out ? a.in < b.in : a.out > b.out;
+        return a.id < b.id;
+    });
+    UniValue result(UniValue::VOBJ);
+    UniValue list(UniValue::VARR);
+    for (const Quote& q : quotes) list.push_back(TradeToJSON(state, q.id, q.pool, in, q.in, q.out));
+    result.pushKV("pools", std::move(list));
+    if (!quotes.empty()) result.pushKV("best_pool", quotes.front().id.GetHex());
+    if (!exact_out && max_hops > 0) {
+        const auto routes{bitassets::dex::FindRoutes(state, in, out, amount, max_hops, 1, 20000, 16, chainman.GetConsensus().sidechain.DexCurvesActive(NextHeight(chainman)))};
+        if (!routes.empty()) {
+            UniValue route(UniValue::VOBJ);
+            UniValue path(UniValue::VARR), pools(UniValue::VARR);
+            for (const AssetId& a : routes[0].path) path.push_back(LabelOf(state, a));
+            for (const uint256& id : routes[0].pools) pools.push_back(id.GetHex());
+            route.pushKV("path", std::move(path));
+            route.pushKV("pools", std::move(pools));
+            route.pushKV("amount_out", AmountToJSON(routes[0].outs.back(), dout));
+            route.pushKV("default_pools", routes[0].legacy);
+            result.pushKV("route", std::move(route));
+        }
+    }
+    return result;
+},
+    };
+}
+
+RPCMethod simulateclearing()
+{
+    return RPCMethod{
+        "simulateclearing",
+        "What a round of a pool's batch clearing would give these orders together now (doc/layers.md, \"Pool kinds\"): one price for all, "
+        "the pool's net trade on its curve. Nothing is sent.",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"orders", RPCArg::Type::ARR, RPCArg::Optional::NO, "The orders",
+            {
+                {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                {
+                    {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, "What it pays in: one of the pool's assets"},
+                    {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much"},
+                }},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR, "asset_a", "The pool's first asset"},
+            {RPCResult::Type::STR, "asset_b", "Its second"},
+            {RPCResult::Type::ARR, "outs", "What each order gets, in order", {{RPCResult::Type::NUM, "", ""}}},
+            {RPCResult::Type::NUM, "price", /*optional=*/true, "The uniform price of a whole asset_a in asset_b (from the orders that pay asset_a in, else those that pay asset_b)"},
+            {RPCResult::Type::NUM, "reserve_a", "What the pool holds after"},
+            {RPCResult::Type::NUM, "reserve_b", ""},
+            {RPCResult::Type::NUM, "spot_before", "The pool's price before, of a whole asset_a in asset_b"},
+            {RPCResult::Type::NUM, "spot_after", "And after"},
+        }},
+        RPCExamples{HelpExampleCli("simulateclearing", "\"<pool>\" '[{\"asset\":\"GOLD\",\"amount\":10},{\"asset\":\"CHN\",\"amount\":1}]'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto pool{state.GetPool(id)};
+    if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const bitassets::PoolParams kind{state.GetPoolParams(id)};
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    std::vector<bitassets::dex::HopIn> orders;
+    for (const UniValue& order : request.params[1].getValues()) {
+        const AssetId asset{ParseAsset(order["asset"], state)};
+        if (asset != pool->asset0 && asset != pool->asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, "An order pays in an asset the pool does not hold");
+        orders.push_back({asset == pool->asset0, bitassets::ParseUnits(order["amount"], asset == pool->asset0 ? d0 : d1)});
+    }
+    if (orders.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "No orders");
+    if (bitassets::amm::Abandoned(*pool)) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nobody provides liquidity to this pool: orders through it are refunded");
+    const auto round{RoundOf(state, id, *pool, orders)};
+    if (!round) throw JSONRPCError(RPC_INVALID_PARAMETER, "The pool cannot clear these orders (amounts beyond its bounds)");
+    const bitassets::dex::Clearing* cleared{&round->clearing};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("asset_a", LabelOf(state, pool->asset0));
+    result.pushKV("asset_b", LabelOf(state, pool->asset1));
+    UniValue outs(UniValue::VARR);
+    std::optional<double> price;
+    for (size_t i{0}; i < orders.size(); ++i) {
+        outs.push_back(AmountToJSON(cleared->outs[i], orders[i].zero_in ? d1 : d0));
+        if (cleared->outs[i] == 0) continue;
+        const double in_whole{orders[i].amount / std::pow(10.0, orders[i].zero_in ? d0 : d1)}, out_whole{cleared->outs[i] / std::pow(10.0, orders[i].zero_in ? d1 : d0)};
+        // After the fee: the uniform price is what every order of a side gets for what it pays, less the fee.
+        const double keep{1.0 - kind.fee / double(bitassets::FEE_DENOMINATOR)};
+        if (orders[i].zero_in && !price) price = out_whole / (in_whole * keep);
+        if (!orders[i].zero_in && !price) price = (in_whole * keep) / out_whole;
+    }
+    result.pushKV("outs", std::move(outs));
+    if (price) result.pushKV("price", DecimalToJSON(*price));
+    result.pushKV("reserve_a", AmountToJSON(cleared->reserve0, d0));
+    result.pushKV("reserve_b", AmountToJSON(cleared->reserve1, d1));
+    result.pushKV("spot_before", DecimalToJSON(WholeSpotPrice(kind, *pool, true, d0, d1, round->cl_before ? &*round->cl_before : nullptr)));
+    result.pushKV("spot_after", DecimalToJSON(WholeSpotPrice(kind, round->after, true, d0, d1, round->cl_after ? &*round->cl_after : nullptr)));
+    return result;
+},
+    };
+}
+
+/** The pool kind an options object names (createpool, previewpool): curve, fee, amp, weight_a. */
+bitassets::CreatePool ParseKindOptions(const UniValue& options)
+{
+    const UniValue& p_options{options};
+    bitassets::CreatePool create;
+    const std::string curve_name{options.exists("curve") ? options["curve"].get_str() : "constant_product"};
+    const auto curve{bitassets::curves::ParseCurve(curve_name)};
+    if (!curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "curve is constant_product, stable or weighted");
+    create.curve = static_cast<uint8_t>(*curve);
+    // The fee in percent: 0.01, 0.05, 0.3 or 1 (default: 0.05 for stable pools, 0.3 for the others).
+    const double fee_percent{options.exists("fee") ? options["fee"].get_real() : (*curve == bitassets::Curve::STABLE ? 0.05 : 0.3)};
+    create.fee = static_cast<uint32_t>(std::llround(fee_percent * 10000));
+    if (*curve == bitassets::Curve::STABLE) create.amp = options.exists("amp") ? options["amp"].getInt<uint32_t>() : 100;
+    if (*curve == bitassets::Curve::WEIGHTED) {
+        if (!options.exists("weight_a")) throw JSONRPCError(RPC_INVALID_PARAMETER, "A weighted pool needs weight_a, the first asset's weight in percent");
+        create.weight_a = static_cast<uint8_t>(options["weight_a"].getInt<int>());
+    }
+    // The fee that rises with the pool's volatility (dynamic_fee): any curve.
+    const UniValue& dyn{p_options.exists("dynamic_fee") ? p_options["dynamic_fee"] : NullUniValue};
+    if (!dyn.isNull() && dyn.get_bool()) create.flags |= bitassets::POOL_FLAG_DYNAMIC_FEE;
+    if (const auto why{bitassets::WhyNotPoolKind(create.curve, create.fee, create.amp, create.weight_a, create.flags)}) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a pool kind: " + *why);
+    return create;
+}
+
+std::vector<RPCArg> KindOptionArgs()
+{
+    return {
+        {"curve", RPCArg::Type::STR, RPCArg::Default{"constant_product"}, "constant_product, stable or weighted"},
+        {"fee", RPCArg::Type::NUM, RPCArg::DefaultHint{"0.05 for stable, else 0.3"}, "The fee tier, in percent: 0.01, 0.05, 0.3 or 1"},
+        {"amp", RPCArg::Type::NUM, RPCArg::DefaultHint{"100 for stable"}, "A stable pool's amplification, 1 to 10000: higher, flatter around the balance"},
+        {"weight_a", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A weighted pool's weight of asset_a, in percent: 2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95 or 98"},
+        {"dynamic_fee", RPCArg::Type::BOOL, RPCArg::Default{false}, "The fee rises with the pool's volatility (above its tier, by half the recent average change of the price per block, at most 2 % more)"},
+    };
+}
+
+/** The trades of a depth chart or a preview: for each size, what goes in and comes out each way. */
+UniValue DepthToJSON(const bitassets::State& state, const uint256& id, const bitassets::PoolParams& kind, const bitassets::Pool& pool, uint8_t d0, uint8_t d1,
+                     const std::vector<double>& fractions, bool flip = false, bool preview = false)
+{
+    UniValue points(UniValue::VARR);
+    const auto cl_now{preview ? std::nullopt : state.GetClState(id)};
+    for (const double fraction : fractions) {
+        for (const bool zero_in : {true, false}) {
+            // A concentrated pool holds liquidity around its price, not its reserves' worth at every price: sizes of what it holds.
+            const uint64_t reserve_in{zero_in ? pool.reserve0 : pool.reserve1};
+            const uint64_t amount{static_cast<uint64_t>(std::max(1.0, std::floor(reserve_in * fraction)))};
+            if (amount > bitassets::MAX_AMOUNT - reserve_in) continue;
+            const auto round{RoundOf(state, id, pool, {{zero_in, amount}}, preview ? std::optional{kind} : std::nullopt)};
+            if (!round || round->clearing.outs[0] == 0) continue;
+            const uint64_t got{round->clearing.outs[0]};
+            const double in_whole{amount / std::pow(10.0, zero_in ? d0 : d1)}, out_whole{got / std::pow(10.0, zero_in ? d1 : d0)};
+            // Prices of a whole asset_a in asset_b, asset_a the pool's first (its second, flipped).
+            const bool a_in{zero_in != flip};
+            const double spot{WholeSpotPrice(kind, pool, !flip, flip ? d1 : d0, flip ? d0 : d1, cl_now ? &*cl_now : nullptr)};
+            const double avg{a_in ? out_whole / in_whole : in_whole / out_whole};
+            UniValue point(UniValue::VOBJ);
+            point.pushKV("side", a_in ? "sell_a" : "sell_b");
+            point.pushKV("size_percent", DecimalToJSON(fraction * 100));
+            point.pushKV("amount_in", AmountToJSON(amount, zero_in ? d0 : d1));
+            point.pushKV("amount_out", AmountToJSON(got, zero_in ? d1 : d0));
+            point.pushKV("avg_price", DecimalToJSON(avg));
+            point.pushKV("price_after", DecimalToJSON(WholeSpotPrice(kind, round->after, !flip, flip ? d1 : d0, flip ? d0 : d1, round->cl_after ? &*round->cl_after : nullptr)));
+            UniValue impact;
+            impact.setNumStr(strprintf("%.4f", spot > 0 ? std::clamp(100.0 * (a_in ? 1.0 - avg / spot : 1.0 - spot / avg), 0.0, 100.0) : 100.0));
+            point.pushKV("price_impact", impact);
+            points.push_back(std::move(point));
+        }
+    }
+    return points;
+}
+
+std::vector<RPCResult> WithKind(std::vector<RPCResult> results)
+{
+    for (RPCResult& r : KindResults()) results.push_back(std::move(r));
+    return results;
+}
+
+const RPCResult DEPTH_RESULT{RPCResult::Type::ARR, "depth", "Trades of growing size each way, alone in their block (a depth chart)",
+{
+    {RPCResult::Type::OBJ, "", "",
+    {
+        {RPCResult::Type::STR, "side", "sell_a (asset_a in) or sell_b"},
+        {RPCResult::Type::NUM, "size_percent", "What goes in, in percent of the pool's reserve of it"},
+        {RPCResult::Type::NUM, "amount_in", ""},
+        {RPCResult::Type::NUM, "amount_out", ""},
+        {RPCResult::Type::NUM, "avg_price", "The trade's price of a whole asset_a in asset_b"},
+        {RPCResult::Type::NUM, "price_after", "The pool's price after it"},
+        {RPCResult::Type::NUM, "price_impact", "How much worse than the spot price, in percent (the fee included)"},
+    }},
+}};
+
+RPCMethod previewpool()
+{
+    return RPCMethod{
+        "previewpool",
+        "What createpool would make, without making it: the pool's id, whether it exists, the shares the deposit gets, its price, and what trades "
+        "of growing size would do (slippage).",
+        {
+            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"amount_a", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it goes in"},
+            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"amount_b", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it"},
+            {"kind", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "The pool's kind", KindOptionArgs()},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "", WithKind({
+            {RPCResult::Type::STR_HEX, "pool", "Its id"},
+            {RPCResult::Type::BOOL, "exists", "Whether a pool of this kind of the pair exists"},
+            {RPCResult::Type::BOOL, "open", "Whether someone provides liquidity to it (then createpool is refused: addpoolliquidity)"},
+            {RPCResult::Type::NUM, "shares", "The shares the deposit gets (0 if too little)"},
+            {RPCResult::Type::STR, "too_small", /*optional=*/true, "Why the deposit is too little to open a pool"},
+            {RPCResult::Type::NUM, "price", "What a whole asset_a would be worth in asset_b"},
+            DEPTH_RESULT,
+        })},
+        RPCExamples{HelpExampleCli("previewpool", "\"USDX\" 1000 \"USDY\" 1000 '{\"curve\":\"stable\",\"fee\":0.05,\"amp\":200}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    bitassets::CreatePool create{ParseKindOptions(request.params[4].isNull() ? UniValue{UniValue::VOBJ} : request.params[4])};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    create.asset_a = ParseAsset(request.params[0], state);
+    create.asset_b = ParseAsset(request.params[2], state);
+    if (create.asset_a == create.asset_b) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a pool");
+    const uint8_t da{DecimalsOf(state, create.asset_a)}, db{DecimalsOf(state, create.asset_b)};
+    create.amount_a = bitassets::ParseUnits(request.params[1], da);
+    create.amount_b = bitassets::ParseUnits(request.params[3], db);
+    const bool a_first{create.asset_a < create.asset_b};
+    const bitassets::PoolParams kind{bitassets::MakePoolParams(create, a_first ? da : db, a_first ? db : da)};
+    const uint256 id{bitassets::PoolIdOf(create.asset_a, create.asset_b, kind)};
+    const auto existing{state.GetPool(id)};
+    if (kind.GetCurve() == bitassets::Curve::CONCENTRATED) {
+        // Made at the price the amounts name, nothing in: positions bring its liquidity (previewposition).
+        UniValue result(UniValue::VOBJ);
+        result.pushKV("pool", id.GetHex());
+        result.pushKV("exists", existing.has_value());
+        result.pushKV("open", existing.has_value());
+        result.pushKV("shares", 0);
+        result.pushKV("price", DecimalToJSON((create.amount_b / std::pow(10.0, db)) / (create.amount_a / std::pow(10.0, da))));
+        PushKind(result, kind, !a_first);
+        result.pushKV("depth", UniValue{UniValue::VARR});
+        return result;
+    }
+    bitassets::Pool pool;
+    if (existing) pool = *existing;
+    pool.asset0 = std::min(create.asset_a, create.asset_b);
+    pool.asset1 = std::max(create.asset_a, create.asset_b);
+    pool.reserve0 += a_first ? create.amount_a : create.amount_b;
+    pool.reserve1 += a_first ? create.amount_b : create.amount_a;
+    const auto total{bitassets::curves::OpeningShares(kind, pool.reserve0, pool.reserve1)};
+    pool.shares = total.value_or(0);
+    const uint64_t shares{total && *total > bitassets::MIN_LIQUIDITY ? *total - bitassets::MIN_LIQUIDITY : 0};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("pool", id.GetHex());
+    result.pushKV("exists", existing.has_value());
+    result.pushKV("open", existing && !bitassets::amm::Abandoned(*existing));
+    result.pushKV("shares", shares);
+    const uint64_t chn{pool.asset0.IsNull() ? pool.reserve0 : pool.asset1.IsNull() ? pool.reserve1 : bitassets::MIN_OPEN_CHN};
+    if (shares < bitassets::MIN_OPEN_SHARES) {
+        result.pushKV("too_small", strprintf("it makes %u shares; a pool opens with %u at least", shares, bitassets::MIN_OPEN_SHARES));
+    } else if (chn < bitassets::MIN_OPEN_CHN) {
+        result.pushKV("too_small", strprintf("a pool with CHN opens with %s CHN at least", FormatMoney(bitassets::MIN_OPEN_CHN)));
+    }
+    result.pushKV("price", DecimalToJSON(WholeSpotPrice(kind, pool, a_first, da, db)));
+    PushKind(result, kind, !a_first);
+    // In the order the caller named the assets: sell_a is asset_a in.
+    result.pushKV("depth", DepthToJSON(state, id, kind, pool, a_first ? da : db, a_first ? db : da, {0.001, 0.01, 0.05, 0.1, 0.25, 0.5}, !a_first, /*preview=*/true));
+    return result;
+},
+    };
+}
+
+RPCMethod getpoolcurve()
+{
+    return RPCMethod{
+        "getpoolcurve",
+        "A pool's depth: what trades of growing size, each way, would get alone now, and the price after each (for a depth chart).",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"points", RPCArg::Type::NUM, RPCArg::Default{12}, "How many sizes, from 0.1 % to 90 % of the reserve put in (2 to 40)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "", WithKind({
+            {RPCResult::Type::STR_HEX, "pool", "The pool"},
+            {RPCResult::Type::STR, "asset_a", "Its first asset"},
+            {RPCResult::Type::STR, "asset_b", "Its second"},
+            {RPCResult::Type::STR_HEX, "asset_a_id", "The first asset's id (the lower; null for CHN)"},
+            {RPCResult::Type::STR_HEX, "asset_b_id", "The second's"},
+            {RPCResult::Type::NUM, "price", "A whole asset_a in asset_b now"},
+            DEPTH_RESULT,
+        })},
+        RPCExamples{HelpExampleCli("getpoolcurve", "\"<pool>\" 20")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    const int count{request.params[1].isNull() ? 12 : request.params[1].getInt<int>()};
+    if (count < 2 || count > 40) throw JSONRPCError(RPC_INVALID_PARAMETER, "points is 2 to 40");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto pool{state.GetPool(id)};
+    if (!pool) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const bitassets::PoolParams kind{state.GetPoolParams(id)};
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    // Geometric from 0.1 % to 90 %.
+    std::vector<double> fractions;
+    for (int i{0}; i < count; ++i) fractions.push_back(0.001 * std::pow(900.0, i / double(count - 1)));
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("pool", id.GetHex());
+    result.pushKV("asset_a", LabelOf(state, pool->asset0));
+    result.pushKV("asset_b", LabelOf(state, pool->asset1));
+    result.pushKV("asset_a_id", pool->asset0.GetHex());
+    result.pushKV("asset_b_id", pool->asset1.GetHex());
+    const auto cl_now{state.GetClState(id)};
+    result.pushKV("price", DecimalToJSON(WholeSpotPrice(kind, *pool, true, d0, d1, cl_now ? &*cl_now : nullptr)));
+    PushKind(result, kind, false);
+    result.pushKV("depth", DepthToJSON(state, id, kind, *pool, d0, d1, fractions));
+    return result;
+},
+    };
+}
+
+std::string ScriptAddress(const CScript& script)
+{
+    CTxDestination dest;
+    return ExtractDestination(script, dest) ? EncodeDestination(dest) : HexStr(script);
+}
+
+/** An operation as an explorer shows it: its kind, and its fields (assets by id, amounts in units). */
+UniValue OperationToJSON(const bitassets::Operation& operation)
+{
+    UniValue obj(UniValue::VOBJ);
+    const auto asset{[](const AssetId& id) { return id.GetHex(); }};
+    std::visit([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        obj.pushKV("kind", static_cast<int>(T::KIND));
+        if constexpr (std::is_same_v<T, bitassets::Reserve>) {
+            obj.pushKV("name", "reserve");
+        } else if constexpr (std::is_same_v<T, bitassets::Register>) {
+            obj.pushKV("name", "register");
+            obj.pushKV("asset", asset(op.name));
+            obj.pushKV("supply", op.supply);
+            obj.pushKV("decimals", op.decimals);
+            if (op.text) obj.pushKV("ticker", *op.text);
+            if (!op.display_name.empty()) obj.pushKV("display_name", op.display_name);
+            obj.pushKV("logo", !op.logo.empty());
+        } else if constexpr (std::is_same_v<T, bitassets::Mint>) {
+            obj.pushKV("name", "mint");
+            obj.pushKV("asset", asset(op.asset));
+            obj.pushKV("amount", op.amount);
+        } else if constexpr (std::is_same_v<T, bitassets::Swap>) {
+            obj.pushKV("name", "swap");
+            obj.pushKV("asset_in", asset(op.asset_in));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("asset_out", asset(op.asset_out));
+            obj.pushKV("min_out", op.min_out);
+        } else if constexpr (std::is_same_v<T, bitassets::AddLiquidity>) {
+            obj.pushKV("name", "add_liquidity");
+            obj.pushKV("asset_a", asset(op.asset_a));
+            obj.pushKV("amount_a", op.amount_a);
+            obj.pushKV("asset_b", asset(op.asset_b));
+            obj.pushKV("amount_b", op.amount_b);
+            obj.pushKV("pool", bitassets::PoolId(op.asset_a, op.asset_b).GetHex());
+        } else if constexpr (std::is_same_v<T, bitassets::RemoveLiquidity>) {
+            obj.pushKV("name", "remove_liquidity");
+            obj.pushKV("pool", bitassets::PoolId(op.asset_a, op.asset_b).GetHex());
+            obj.pushKV("shares", op.shares);
+        } else if constexpr (std::is_same_v<T, bitassets::Route>) {
+            obj.pushKV("name", "route");
+            UniValue path(UniValue::VARR);
+            for (const AssetId& a : op.path) path.push_back(asset(a));
+            obj.pushKV("path", std::move(path));
+            UniValue pools(UniValue::VARR);
+            for (size_t i{0}; i + 1 < op.path.size(); ++i) pools.push_back(bitassets::PoolId(op.path[i], op.path[i + 1]).GetHex());
+            obj.pushKV("pools", std::move(pools));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("min_out", op.min_out);
+        } else if constexpr (std::is_same_v<T, bitassets::CreatePool>) {
+            obj.pushKV("name", "create_pool");
+            obj.pushKV("asset_a", asset(op.asset_a));
+            obj.pushKV("amount_a", op.amount_a);
+            obj.pushKV("asset_b", asset(op.asset_b));
+            obj.pushKV("amount_b", op.amount_b);
+            obj.pushKV("curve", bitassets::curves::CurveName(static_cast<bitassets::Curve>(op.curve)));
+            obj.pushKV("fee_millionths", static_cast<uint64_t>(op.fee));
+            if (op.amp) obj.pushKV("amp", static_cast<uint64_t>(op.amp));
+            if (op.weight_a) obj.pushKV("weight_a", op.weight_a);
+            obj.pushKV("min_shares", op.min_shares);
+            bitassets::PoolParams params;
+            params.curve = op.curve;
+            params.fee = op.fee;
+            params.amp = op.amp;
+            params.flags = op.flags;
+            if (op.curve == static_cast<uint8_t>(bitassets::Curve::WEIGHTED)) params.weight0 = op.asset_a < op.asset_b ? op.weight_a : static_cast<uint8_t>(100 - op.weight_a);
+            obj.pushKV("pool", bitassets::PoolIdOf(op.asset_a, op.asset_b, params).GetHex());
+        } else if constexpr (std::is_same_v<T, bitassets::PoolDeposit>) {
+            obj.pushKV("name", "pool_deposit");
+            obj.pushKV("pool", op.pool.GetHex());
+            obj.pushKV("amount0", op.amount0);
+            obj.pushKV("amount1", op.amount1);
+            obj.pushKV("min_shares", op.min_shares);
+        } else if constexpr (std::is_same_v<T, bitassets::PoolWithdraw>) {
+            obj.pushKV("name", "pool_withdraw");
+            obj.pushKV("pool", op.pool.GetHex());
+            obj.pushKV("shares", op.shares);
+            obj.pushKV("only", op.only == 0 ? "both" : op.only == 1 ? "asset0" : "asset1");
+            obj.pushKV("min0", op.min0);
+            obj.pushKV("min1", op.min1);
+        } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
+            obj.pushKV("name", "swap_pools");
+            obj.pushKV("asset_in", asset(op.asset_in));
+            UniValue pools(UniValue::VARR);
+            for (const uint256& id : op.pools) pools.push_back(id.GetHex());
+            obj.pushKV("pools", std::move(pools));
+            obj.pushKV("amount_in", op.amount_in);
+            obj.pushKV("min_out", op.min_out);
+        } else if constexpr (std::is_same_v<T, bitassets::LaunchToken>) {
+            obj.pushKV("name", "launch_token");
+            obj.pushKV("token", asset(op.reg.name));
+            if (op.reg.text) obj.pushKV("ticker", *op.reg.text);
+            if (!op.reg.display_name.empty()) obj.pushKV("display_name", op.reg.display_name);
+            obj.pushKV("logo", !op.reg.logo.empty());
+            obj.pushKV("creator", ScriptAddress(op.creator));
+            obj.pushKV("allocation_bps", op.allocation);
+            obj.pushKV("min_buy", op.min_buy);
+            obj.pushKV("max_buy", op.max_buy);
+            obj.pushKV("first_buy", op.first_buy);
+        } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
+            obj.pushKV("name", "claim_launch");
+            obj.pushKV("token", asset(op.token));
+        } else {
+            static const std::map<int, std::string> names{{5, "burn"}, {4, "update"}, {9, "create_auction"}, {10, "bid"}, {11, "collect"}, {12, "release_asset"}, {14, "register_oracle"},
+                                                          {15, "attest"}, {16, "create_oracle_contract"}, {17, "settle_oracle_contract"}, {32, "set_logo"}, {34, "set_display_name"}};
+            const auto it{names.find(T::KIND)};
+            obj.pushKV("name", it == names.end() ? "operation" : it->second);
+        }
+    }, operation);
+    return obj;
+}
+
+RPCMethod decodeassettx()
+{
+    return RPCMethod{
+        "decodeassettx",
+        "What a transaction does to the assets, as its marker says (for explorers): the operation and its fields, every kind included "
+        "(the DEX's routes and pool kinds), and the outputs the marker lists. What it gave (an order's result) is in the chain's state, not here.",
+        {
+            {"tx", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "A transaction: its id (in the mempool, or a block with -txindex), or its hex"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::BOOL, "marker", "Whether it has a marker (an asset transaction)"},
+            {RPCResult::Type::STR, "error", /*optional=*/true, "Why its marker is not well formed"},
+            {RPCResult::Type::OBJ_DYN, "operation", /*optional=*/true, "The operation: kind (its marker byte), name, and its fields", {{RPCResult::Type::ANY, "", ""}}},
+            {RPCResult::Type::ARR, "outputs", /*optional=*/true, "The outputs the marker lists",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::NUM, "n", "The output"},
+                    {RPCResult::Type::STR, "carries", "asset, control, reservation, lp, receipt, or result (what the operation gives)"},
+                    {RPCResult::Type::STR_HEX, "id", /*optional=*/true, "What the token is of"},
+                    {RPCResult::Type::NUM, "amount", /*optional=*/true, "In units"},
+                }},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("decodeassettx", "\"<txid>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node{EnsureAnyNodeContext(request.context)};
+    ChainstateManager& chainman{EnsureChainman(node)};
+    const std::string text{request.params[0].get_str()};
+    CTransactionRef tx;
+    if (text.size() == 64) {
+        const auto txid{Txid::FromHex(text)};
+        if (!txid) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a transaction id");
+        uint256 block;
+        tx = node::GetTransaction(nullptr, node.mempool.get(), *txid, chainman.m_blockman, block);
+        if (!tx) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No such transaction in the mempool or the transaction index (-txindex); give its hex");
+    } else {
+        CMutableTransaction mtx;
+        if (!DecodeHexTx(mtx, text)) throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Not a transaction");
+        tx = MakeTransactionRef(std::move(mtx));
+    }
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("txid", tx->GetHash().GetHex());
+    std::string error;
+    const auto marker{bitassets::GetMarker(*tx, &error)};
+    result.pushKV("marker", marker.has_value() || !error.empty());
+    if (!error.empty()) result.pushKV("error", error);
+    if (!marker) return result;
+    if (marker->operation) result.pushKV("operation", OperationToJSON(*marker->operation));
+    UniValue outs(UniValue::VARR);
+    static const char* kinds[]{"asset", "control", "reservation", "lp", "receipt"};
+    for (const bitassets::MarkerOutput& out : marker->outputs) {
+        UniValue o(UniValue::VOBJ);
+        o.pushKV("n", out.n);
+        if (out.token) {
+            o.pushKV("carries", kinds[static_cast<int>(out.token->kind)]);
+            o.pushKV("id", out.token->id.GetHex());
+            o.pushKV("amount", out.token->amount);
+        } else {
+            o.pushKV("carries", "result");
+        }
+        outs.push_back(std::move(o));
+    }
+    result.pushKV("outputs", std::move(outs));
+    return result;
+},
+    };
+}
+
+//
+// Launches (LaunchToken, doc/layers.md "Launches"): what the website and the app read.
+//
+
+std::vector<RPCResult> LaunchResults()
+{
+    return {
+        {RPCResult::Type::STR_HEX, "token", "The token's id"},
+        {RPCResult::Type::STR, "ticker", "Its ticker"},
+        {RPCResult::Type::STR, "display_name", /*optional=*/true, "Its display name"},
+        {RPCResult::Type::STR, "info", /*optional=*/true, "Its description and links"},
+        {RPCResult::Type::BOOL, "has_logo", "Whether it has a logo (getassetlogo)"},
+        {RPCResult::Type::STR, "creator", "The creator's address (its fees and allocation go there)"},
+        {RPCResult::Type::STR_HEX, "txid", "The launch's transaction"},
+        {RPCResult::Type::NUM, "height", "Its block"},
+        {RPCResult::Type::STR, "status", "\"curve\" (trading on its bonding curve) or \"graduated\" (its pool with CHN, locked)"},
+        {RPCResult::Type::STR_HEX, "pool", "Its curve's pool, or, graduated, its pool with CHN"},
+        {RPCResult::Type::STR_AMOUNT, "raised", "CHN the curve raised (graduated: what it had raised)"},
+        {RPCResult::Type::STR_AMOUNT, "graduation", "What it graduates at"},
+        {RPCResult::Type::NUM, "progress", "Percent of that raised (100 once graduated)"},
+        {RPCResult::Type::NUM, "price", "CHN for a whole token now (the curve's, or the pool's)"},
+        {RPCResult::Type::STR_AMOUNT, "market_cap", "The price times the supply"},
+        {RPCResult::Type::NUM, "supply", "Whole tokens there are"},
+        {RPCResult::Type::NUM, "curve_tokens_left", "Whole tokens the curve still sells (0 once graduated)"},
+        {RPCResult::Type::NUM, "fee", "The curve's fee, in percent"},
+        {RPCResult::Type::NUM, "creator_share", "The creator's part of that fee, in percent of it"},
+        {RPCResult::Type::NUM, "protocol_share", "The protocol's part (to the treasury), in percent of it"},
+        {RPCResult::Type::NUM, "security_share", "The chain's security part (the BMM bidder and the validators), in percent of it; the rest goes into the pool at graduation"},
+        {RPCResult::Type::STR_AMOUNT, "protocol_fees", "Paid to the treasury so far"},
+        {RPCResult::Type::STR_AMOUNT, "security_fees", "Paid to the BMM bidders and validators so far"},
+        {RPCResult::Type::STR_AMOUNT, "creator_fees_owed", "The creator's fees not paid yet (claimlaunch)"},
+        {RPCResult::Type::STR_AMOUNT, "creator_fees_paid", "Paid so far"},
+        {RPCResult::Type::NUM, "allocation", "The creator's allocation, in percent of the supply, minted at graduation (0: none)"},
+        {RPCResult::Type::BOOL, "allocation_claimed", "Whether it was minted"},
+        {RPCResult::Type::STR_AMOUNT, "min_buy", "The least a buy pays (0: any)"},
+        {RPCResult::Type::STR_AMOUNT, "max_buy", "The most (0: any)"},
+        {RPCResult::Type::STR_AMOUNT, "volume", "CHN traded on the curve, in and out"},
+        {RPCResult::Type::NUM, "trades", "Blocks that traded on it"},
+        {RPCResult::Type::NUM, "graduated_height", /*optional=*/true, "The block it graduated in"},
+    };
+}
+
+UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const bitassets::LaunchRecord& launch)
+{
+    const auto record{state.GetAsset(token)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("token", token.GetHex());
+    obj.pushKV("ticker", record && !record->text.empty() ? record->text : "0x" + token.GetHex());
+    if (const auto display{state.GetDisplayName(token)}) obj.pushKV("display_name", display->text);
+    if (record && record->data.info) obj.pushKV("info", *record->data.info);
+    obj.pushKV("has_logo", state.GetLogo(token).has_value());
+    obj.pushKV("creator", ScriptAddress(launch.creator));
+    obj.pushKV("txid", launch.txid.GetHex());
+    obj.pushKV("height", launch.height);
+    obj.pushKV("status", launch.Graduated() ? "graduated" : "curve");
+    obj.pushKV("pool", launch.pool.GetHex());
+    const auto pool{state.GetPool(launch.pool)};
+    uint64_t raised{launch.raised_at_graduation}, left{0};
+    double price{0};
+    const double whole{std::pow(10.0, bitassets::LAUNCH_DECIMALS)};
+    if (pool && !launch.Graduated()) {
+        raised = pool->reserve0 - std::min(pool->reserve0, launch.virtual_coin);
+        left = pool->reserve1 - std::min(pool->reserve1, bitassets::LAUNCH_CURVE_END);
+    }
+    // Marginal price, in CHN for a whole token: the reserves' ratio (virtual on the curve).
+    if (pool && pool->reserve1 > 0) price = (static_cast<double>(pool->reserve0) / COIN) / (static_cast<double>(pool->reserve1) / whole);
+    obj.pushKV("raised", ValueFromAmount(static_cast<CAmount>(raised)));
+    obj.pushKV("graduation", ValueFromAmount(static_cast<CAmount>(launch.graduation)));
+    obj.pushKV("progress", DecimalToJSON(launch.Graduated() ? 100.0 : std::min(100.0, 100.0 * raised / launch.graduation)));
+    obj.pushKV("price", DecimalToJSON(price));
+    const uint64_t supply{record ? record->supply : bitassets::LAUNCH_SUPPLY};
+    obj.pushKV("market_cap", ValueFromAmount(static_cast<CAmount>(std::llround(price * (supply / whole) * COIN))));
+    obj.pushKV("supply", AmountToJSON(supply, bitassets::LAUNCH_DECIMALS));
+    obj.pushKV("curve_tokens_left", AmountToJSON(left, bitassets::LAUNCH_DECIMALS));
+    obj.pushKV("fee", DecimalToJSON(launch.fee / 10000.0));
+    obj.pushKV("creator_share", DecimalToJSON(launch.creator_share / 10000.0));
+    obj.pushKV("protocol_share", DecimalToJSON(launch.protocol_share / 10000.0));
+    obj.pushKV("security_share", DecimalToJSON(launch.security_share / 10000.0));
+    obj.pushKV("protocol_fees", ValueFromAmount(static_cast<CAmount>(launch.protocol_fees)));
+    obj.pushKV("security_fees", ValueFromAmount(static_cast<CAmount>(launch.security_fees)));
+    obj.pushKV("creator_fees_owed", ValueFromAmount(static_cast<CAmount>(launch.creator_fees)));
+    obj.pushKV("creator_fees_paid", ValueFromAmount(static_cast<CAmount>(launch.creator_paid)));
+    obj.pushKV("allocation", DecimalToJSON(launch.allocation / 100.0));
+    obj.pushKV("allocation_claimed", launch.allocation_claimed);
+    obj.pushKV("min_buy", ValueFromAmount(static_cast<CAmount>(launch.min_buy)));
+    obj.pushKV("max_buy", ValueFromAmount(static_cast<CAmount>(launch.max_buy)));
+    obj.pushKV("volume", ValueFromAmount(static_cast<CAmount>(launch.volume)));
+    obj.pushKV("trades", launch.trades);
+    if (launch.Graduated()) obj.pushKV("graduated_height", launch.graduated);
+    return obj;
+}
+
+AssetId ParseToken(const UniValue& value, const bitassets::State& state, bitassets::LaunchRecord& launch)
+{
+    const AssetId token{ParseAsset(value, state)};
+    const auto found{state.GetLaunch(token)};
+    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a launched token");
+    launch = *found;
+    return token;
+}
+
+RPCMethod getlaunch()
+{
+    return RPCMethod{
+        "getlaunch",
+        "A launch (launchtoken): its token, curve, progress to graduation, price, fees and creator.",
+        {{"token", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP}},
+        RPCResult{RPCResult::Type::OBJ, "", "", LaunchResults()},
+        RPCExamples{HelpExampleCli("getlaunch", "\"MOON\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    bitassets::LaunchRecord launch;
+    const AssetId token{ParseToken(request.params[0], state, launch)};
+    return LaunchToJSON(state, token, launch);
+},
+    };
+}
+
+RPCMethod listlaunches()
+{
+    return RPCMethod{
+        "listlaunches",
+        "The launches, filtered and sorted, a page at a time (next_cursor gives the next page of the same query).",
+        {
+            {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
+            {
+                {"status", RPCArg::Type::STR, RPCArg::Default{"all"}, "all, curve (not graduated), graduated, or new (made in the last 5760 blocks, not graduated)"},
+                {"min_progress", RPCArg::Type::NUM, RPCArg::Default{0}, "Only those at least this far to graduation, in percent (near graduation: 80)"},
+                {"sort", RPCArg::Type::STR, RPCArg::Default{"newest"}, "newest, oldest, volume, progress, market_cap"},
+                {"cursor", RPCArg::Type::STR, RPCArg::Default{""}, "next_cursor of the page before"},
+                {"limit", RPCArg::Type::NUM, RPCArg::Default{50}, "1 to 200"},
+            }},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::ARR, "launches", "", {{RPCResult::Type::OBJ, "", "", LaunchResults()}}},
+            {RPCResult::Type::NUM, "total", "How many match"},
+            {RPCResult::Type::STR, "next_cursor", /*optional=*/true, "For the next page; none at the end"},
+        }},
+        RPCExamples{HelpExampleCli("-named listlaunches", "status=curve min_progress=80 sort=progress") + HelpExampleCli("listlaunches", "'{\"status\":\"graduated\",\"sort\":\"volume\"}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const UniValue none{UniValue::VOBJ};
+    const UniValue& o{request.params[0].isNull() ? none : request.params[0]};
+    const std::string status{o.exists("status") ? o["status"].get_str() : "all"};
+    if (status != "all" && status != "curve" && status != "graduated" && status != "new") throw JSONRPCError(RPC_INVALID_PARAMETER, "status is all, curve, graduated or new");
+    const double min_progress{o.exists("min_progress") ? o["min_progress"].get_real() : 0.0};
+    const std::string sort{o.exists("sort") ? o["sort"].get_str() : "newest"};
+    if (sort != "newest" && sort != "oldest" && sort != "volume" && sort != "progress" && sort != "market_cap") throw JSONRPCError(RPC_INVALID_PARAMETER, "sort is newest, oldest, volume, progress or market_cap");
+    const int limit{o.exists("limit") ? o["limit"].getInt<int>() : 50};
+    if (limit < 1 || limit > 200) throw JSONRPCError(RPC_INVALID_PARAMETER, "limit is 1 to 200");
+    // The cursor: the position in this query's order (a page of a list that moves may skip or repeat one at its edge).
+    size_t skip{0};
+    if (o.exists("cursor") && !o["cursor"].get_str().empty()) {
+        const auto parsed{ToIntegral<uint64_t>(o["cursor"].get_str())};
+        if (!parsed) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a cursor of listlaunches");
+        skip = *parsed;
+    }
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const int tip{chainman.ActiveChain().Height()};
+    struct Row {
+        AssetId token;
+        bitassets::LaunchRecord launch;
+        UniValue json;
+        double progress, volume, cap;
+    };
+    std::vector<Row> rows;
+    state.ForEachLaunch([&](int32_t height, const AssetId& token) {
+        const auto launch{state.GetLaunch(token)};
+        if (!launch) return true;
+        if (status == "curve" && launch->Graduated()) return true;
+        if (status == "graduated" && !launch->Graduated()) return true;
+        if (status == "new" && (launch->Graduated() || tip - height > 5760)) return true;
+        UniValue json{LaunchToJSON(state, token, *launch)};
+        const double progress{json["progress"].get_real()};
+        if (progress < min_progress) return true;
+        const double cap{json["market_cap"].get_real()};
+        rows.push_back({token, *launch, std::move(json), progress, static_cast<double>(launch->volume), cap});
+        return true;
+    });
+    std::stable_sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
+        if (sort == "oldest") return a.launch.height < b.launch.height;
+        if (sort == "volume" && a.volume != b.volume) return a.volume > b.volume;
+        if (sort == "progress" && a.progress != b.progress) return a.progress > b.progress;
+        if (sort == "market_cap" && a.cap != b.cap) return a.cap > b.cap;
+        return a.launch.height > b.launch.height;
+    });
+    UniValue list(UniValue::VARR);
+    for (size_t i{skip}; i < rows.size() && list.size() < static_cast<size_t>(limit); ++i) list.push_back(rows[i].json);
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("launches", std::move(list));
+    result.pushKV("total", static_cast<uint64_t>(rows.size()));
+    if (skip + limit < rows.size()) result.pushKV("next_cursor", strprintf("%u", skip + limit));
+    return result;
+},
+    };
+}
+
+RPCMethod quotelaunch()
+{
+    return RPCMethod{
+        "quotelaunch",
+        "What a buy (CHN in) or a sale (tokens in) on a launch's curve gives now, alone in its block: what comes out, what comes back if it would "
+        "take the curve past its end, the fee, the price, and whether the launch would graduate.",
+        {
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "CHN to pay in (buy), or tokens to sell"},
+            {"side", RPCArg::Type::STR, RPCArg::Default{"buy"}, "buy or sell"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "amount_in", "What goes in"},
+            {RPCResult::Type::NUM, "amount_out", "What comes out (tokens for a buy, CHN for a sale, the fee taken)"},
+            {RPCResult::Type::STR_AMOUNT, "back", "CHN back (a buy past the curve's end)"},
+            {RPCResult::Type::STR_AMOUNT, "fee", "The fee, in CHN"},
+            {RPCResult::Type::NUM, "price", "CHN for a whole token, this trade"},
+            {RPCResult::Type::NUM, "spot_price", "The curve's price before"},
+            {RPCResult::Type::NUM, "price_after", "And after"},
+            {RPCResult::Type::NUM, "price_impact", "How much worse than the spot price, in percent (the fee included)"},
+            {RPCResult::Type::NUM, "progress_after", "Percent to graduation after"},
+            {RPCResult::Type::BOOL, "graduates", "Whether it would take the launch to graduation"},
+        }},
+        RPCExamples{HelpExampleCli("quotelaunch", "\"MOON\" 5") + HelpExampleCli("quotelaunch", "\"MOON\" 1000000 sell")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const std::string side{request.params[2].isNull() ? "buy" : request.params[2].get_str()};
+    if (side != "buy" && side != "sell") throw JSONRPCError(RPC_INVALID_PARAMETER, "side is buy or sell");
+    const bool buy{side == "buy"};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    bitassets::LaunchRecord launch;
+    ParseToken(request.params[0], state, launch);
+    if (launch.Graduated()) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: quote its pool (getswapquote)");
+    const auto pool{state.GetPool(launch.pool)};
+    if (!pool) throw JSONRPCError(RPC_MISC_ERROR, "The launch has no curve");
+    const uint64_t amount{bitassets::ParseUnits(request.params[1], buy ? bitassets::CHN_DECIMALS : bitassets::LAUNCH_DECIMALS)};
+    const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, bitassets::LAUNCH_CURVE_END, launch.max_buy, launch.min_buy}, pool->reserve0, pool->reserve1,
+                                                      {bitassets::dex::HopIn{buy, amount}}, {true})};
+    if (!cleared) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve cannot take this trade");
+    const double whole{std::pow(10.0, bitassets::LAUNCH_DECIMALS)};
+    const auto spot{[&](uint64_t x, uint64_t y) { return (static_cast<double>(x) / COIN) / (static_cast<double>(y) / whole); }};
+    const uint64_t out{cleared->outs[0]}, back{cleared->refunds[0]};
+    const double coin{(buy ? static_cast<double>(amount - back) : static_cast<double>(out)) / COIN};
+    const double tokens{(buy ? static_cast<double>(out) : static_cast<double>(amount)) / whole};
+    const double price{tokens > 0 ? coin / tokens : 0}, before{spot(pool->reserve0, pool->reserve1)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("amount_in", AmountToJSON(amount, buy ? bitassets::CHN_DECIMALS : bitassets::LAUNCH_DECIMALS));
+    result.pushKV("amount_out", AmountToJSON(out, buy ? bitassets::LAUNCH_DECIMALS : bitassets::CHN_DECIMALS));
+    result.pushKV("back", ValueFromAmount(static_cast<CAmount>(back)));
+    result.pushKV("fee", ValueFromAmount(static_cast<CAmount>(cleared->fees)));
+    result.pushKV("price", DecimalToJSON(price));
+    result.pushKV("spot_price", DecimalToJSON(before));
+    result.pushKV("price_after", DecimalToJSON(spot(cleared->reserve0, cleared->reserve1)));
+    UniValue impact;
+    impact.setNumStr(strprintf("%.4f", before > 0 && price > 0 ? std::clamp(100.0 * (buy ? price / before - 1.0 : 1.0 - price / before), 0.0, 100.0) : 100.0));
+    result.pushKV("price_impact", impact);
+    const uint64_t raised{cleared->reserve0 - std::min(cleared->reserve0, launch.virtual_coin)};
+    result.pushKV("progress_after", DecimalToJSON(std::min(100.0, 100.0 * raised / launch.graduation)));
+    result.pushKV("graduates", cleared->reached_end || raised >= launch.graduation);
+    return result;
+},
+    };
+}
+
+RPCMethod getlaunchstats()
+{
+    return RPCMethod{
+        "getlaunchstats",
+        "Launches in all: how many, on their curves and graduated, the CHN traded and raised, and the rules of new launches.",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "launches", "How many"},
+            {RPCResult::Type::NUM, "on_curve", "Not graduated"},
+            {RPCResult::Type::NUM, "graduated", "Graduated"},
+            {RPCResult::Type::STR_AMOUNT, "volume", "CHN traded on curves, in and out"},
+            {RPCResult::Type::STR_AMOUNT, "raised", "CHN the curves hold now, and raised by those graduated"},
+            {RPCResult::Type::OBJ, "rules", "What a new launch is made under (consensus parameters of this network)",
+            {
+                {RPCResult::Type::STR_AMOUNT, "graduation", "What a curve raises before it graduates"},
+                {RPCResult::Type::NUM, "fee", "A trade's fee on a curve, in percent"},
+                {RPCResult::Type::NUM, "creator_share", "The creator's part of it, in percent of the fee"},
+                {RPCResult::Type::NUM, "protocol_share", "The protocol's (the treasury's), in percent of the fee"},
+                {RPCResult::Type::NUM, "security_share", "The chain's security (the BMM bidder and the validators), in percent of the fee"},
+                {RPCResult::Type::NUM, "supply", "Whole tokens of a launch"},
+                {RPCResult::Type::NUM, "curve_supply", "Of which the curve sells"},
+                {RPCResult::Type::NUM, "pool_supply", "And go into the pool at graduation"},
+                {RPCResult::Type::NUM, "max_allocation", "The most a creator's allocation is, in percent"},
+                {RPCResult::Type::NUM, "log_blocks", "The blocks getlaunchlog keeps"},
+                {RPCResult::Type::BOOL, "active", "Whether the next block takes launches"},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("getlaunchstats", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const Consensus::SidechainParams& params{chainman.GetConsensus().sidechain};
+    uint64_t count{0}, graduated{0}, volume{0}, raised{0};
+    state.ForEachLaunch([&](int32_t, const AssetId& token) {
+        const auto launch{state.GetLaunch(token)};
+        if (!launch) return true;
+        ++count;
+        volume += launch->volume;
+        if (launch->Graduated()) {
+            ++graduated;
+            raised += launch->raised_at_graduation;
+        } else if (const auto pool{state.GetPool(launch->pool)}) {
+            raised += pool->reserve0 - std::min(pool->reserve0, launch->virtual_coin);
+        }
+        return true;
+    });
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("launches", count);
+    result.pushKV("on_curve", count - graduated);
+    result.pushKV("graduated", graduated);
+    result.pushKV("volume", ValueFromAmount(static_cast<CAmount>(volume)));
+    result.pushKV("raised", ValueFromAmount(static_cast<CAmount>(raised)));
+    UniValue rules(UniValue::VOBJ);
+    rules.pushKV("graduation", ValueFromAmount(params.launch_graduation));
+    rules.pushKV("fee", DecimalToJSON(params.launch_fee / 10000.0));
+    rules.pushKV("creator_share", DecimalToJSON(params.launch_creator_share / 10000.0));
+    rules.pushKV("protocol_share", DecimalToJSON(params.launch_protocol_share / 10000.0));
+    rules.pushKV("security_share", DecimalToJSON(params.launch_security_share / 10000.0));
+    rules.pushKV("supply", AmountToJSON(bitassets::LAUNCH_SUPPLY, bitassets::LAUNCH_DECIMALS));
+    rules.pushKV("curve_supply", AmountToJSON(bitassets::LAUNCH_CURVE_SUPPLY, bitassets::LAUNCH_DECIMALS));
+    rules.pushKV("pool_supply", AmountToJSON(bitassets::LAUNCH_POOL_SUPPLY, bitassets::LAUNCH_DECIMALS));
+    rules.pushKV("max_allocation", DecimalToJSON(bitassets::MAX_LAUNCH_ALLOCATION / 100.0));
+    rules.pushKV("log_blocks", bitassets::LAUNCH_LOG_BLOCKS);
+    rules.pushKV("active", params.DexCurvesActive(NextHeight(chainman)));
+    result.pushKV("rules", std::move(rules));
+    return result;
+},
+    };
+}
+
+RPCMethod getlaunchlog()
+{
+    return RPCMethod{
+        "getlaunchlog",
+        "For indexers: what blocks did on launch curves, a row per block and launch: made, CHN and tokens in and out, fees, the curve after, "
+        "graduated. The last 10080 blocks are kept (getlaunchstats' log_blocks); a reorganisation takes rows back with their blocks.",
+        {
+            {"from_height", RPCArg::Type::NUM, RPCArg::Optional::NO, "The first block"},
+            {"to_height", RPCArg::Type::NUM, RPCArg::DefaultHint{"from_height"}, "The last block (at most 1000 blocks)"},
+        },
+        RPCResult{RPCResult::Type::ARR, "", "",
+        {
+            {RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "height", "The block"},
+                {RPCResult::Type::STR_HEX, "token", "The launch"},
+                {RPCResult::Type::BOOL, "created", "Made in this block"},
+                {RPCResult::Type::BOOL, "graduated", "Graduated in this block"},
+                {RPCResult::Type::NUM, "orders", "Orders it filled"},
+                {RPCResult::Type::STR_AMOUNT, "coin_in", "CHN buyers paid in (what came back not counted)"},
+                {RPCResult::Type::STR_AMOUNT, "coin_out", "CHN sellers got"},
+                {RPCResult::Type::NUM, "tokens_in", "Tokens sold to it"},
+                {RPCResult::Type::NUM, "tokens_out", "Tokens bought from it"},
+                {RPCResult::Type::STR_AMOUNT, "fees", "Its fees"},
+                {RPCResult::Type::STR_AMOUNT, "reserve_coin", "The curve's CHN after (virtual), or the pool's at graduation"},
+                {RPCResult::Type::NUM, "reserve_tokens", "And its tokens"},
+            }},
+        }},
+        RPCExamples{HelpExampleCli("getlaunchlog", "1000 1100")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const int from{request.params[0].getInt<int>()};
+    const int to{request.params[1].isNull() ? from : request.params[1].getInt<int>()};
+    if (from < 0 || to < from || to - from >= 1000) throw JSONRPCError(RPC_INVALID_PARAMETER, "from_height to to_height: at most 1000 blocks");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    UniValue rows(UniValue::VARR);
+    for (int h{from}; h <= to; ++h) {
+        for (const auto& [token, e] : state.GetLaunchLog(h)) {
+            UniValue row(UniValue::VOBJ);
+            row.pushKV("height", h);
+            row.pushKV("token", token.GetHex());
+            row.pushKV("created", e.created);
+            row.pushKV("graduated", e.graduated);
+            row.pushKV("orders", e.orders);
+            row.pushKV("coin_in", ValueFromAmount(static_cast<CAmount>(e.coin_in)));
+            row.pushKV("coin_out", ValueFromAmount(static_cast<CAmount>(e.coin_out)));
+            row.pushKV("tokens_in", AmountToJSON(e.tokens_in, bitassets::LAUNCH_DECIMALS));
+            row.pushKV("tokens_out", AmountToJSON(e.tokens_out, bitassets::LAUNCH_DECIMALS));
+            row.pushKV("fees", ValueFromAmount(static_cast<CAmount>(e.fees)));
+            row.pushKV("reserve_coin", ValueFromAmount(static_cast<CAmount>(e.reserve_coin)));
+            row.pushKV("reserve_tokens", AmountToJSON(e.reserve_tokens, bitassets::LAUNCH_DECIMALS));
+            rows.push_back(std::move(row));
+        }
+    }
+    return rows;
+},
+    };
+}
+
+RPCMethod quotepoolliquidity()
+{
+    return RPCMethod{
+        "quotepoolliquidity",
+        "What putting liquidity into a pool (by id, any kind) or taking it out would give now, as the rules work it out: the shares for "
+        "amounts (one side or both), or the amounts for shares (both sides, or one alone).",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::OMITTED, "To put in: amounts by asset (an asset's id, 0x and 64 hex digits, or CHN)",
+            {
+                {"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "How much"},
+            }},
+            {"shares", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Or, to take out: shares"},
+            {"only", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "With shares: the one asset to take out alone"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "shares", "The shares (given, or that the amounts get)"},
+            {RPCResult::Type::BOOL, "opens", "Whether the deposit opens the pool (nobody provides for it)"},
+            {RPCResult::Type::OBJ_DYN, "amounts", "By asset: what goes in, or what comes out", {{RPCResult::Type::NUM, "asset", ""}}},
+            {RPCResult::Type::NUM, "share_of_pool", "In percent, after"},
+        }},
+        RPCExamples{HelpExampleCli("quotepoolliquidity", "\"<pool>\" '{\"CHN\":1}'") + HelpExampleCli("-named quotepoolliquidity", "pool=<pool> shares=1000 only=CHN")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto found{state.GetPool(id)};
+    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such pool");
+    const bitassets::Pool& pool{*found};
+    const bitassets::PoolParams kind{state.GetPoolParams(id)};
+    if (kind.GetCurve() == bitassets::Curve::LAUNCH) throw JSONRPCError(RPC_INVALID_PARAMETER, "A launch's curve takes no liquidity");
+    const uint8_t d0{DecimalsOf(state, pool.asset0)}, d1{DecimalsOf(state, pool.asset1)};
+    const uint32_t fee{state.QuoteFee(id, kind)};
+    if (kind.GetCurve() == bitassets::Curve::CONCENTRATED) throw JSONRPCError(RPC_INVALID_PARAMETER, "A concentrated pool takes liquidity by positions (previewposition)");
+    UniValue result(UniValue::VOBJ);
+    UniValue amounts(UniValue::VOBJ);
+    if (!request.params[1].isNull()) {
+        uint64_t a0{0}, a1{0};
+        for (const std::string& key : request.params[1].getKeys()) {
+            const AssetId asset{ParseAsset(UniValue{key}, state)};
+            if (asset != pool.asset0 && asset != pool.asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, key + " is not an asset of this pool");
+            (asset == pool.asset0 ? a0 : a1) = bitassets::ParseUnits(request.params[1][key], asset == pool.asset0 ? d0 : d1, /*allow_zero=*/true);
+        }
+        uint64_t shares{0};
+        const bool opens{bitassets::amm::Abandoned(pool)};
+        if (opens) {
+            const auto total{a0 && a1 ? bitassets::curves::OpeningShares(kind, pool.reserve0 + a0, pool.reserve1 + a1) : std::nullopt};
+            shares = total && *total > bitassets::MIN_LIQUIDITY ? *total - bitassets::MIN_LIQUIDITY : 0;
+        } else {
+            shares = bitassets::curves::DepositShares(kind, fee, pool, a0, a1).value_or(0);
+        }
+        amounts.pushKV(LabelOf(state, pool.asset0), AmountToJSON(a0, d0));
+        amounts.pushKV(LabelOf(state, pool.asset1), AmountToJSON(a1, d1));
+        result.pushKV("shares", shares);
+        result.pushKV("opens", opens);
+        result.pushKV("amounts", std::move(amounts));
+        const uint64_t total{opens ? shares + bitassets::MIN_LIQUIDITY : pool.shares + shares};
+        result.pushKV("share_of_pool", DecimalToJSON(total ? 100.0 * shares / total : 0));
+        return result;
+    }
+    if (request.params[2].isNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Name amounts to put in, or shares to take out");
+    const uint64_t shares{request.params[2].getInt<uint64_t>()};
+    if (shares == 0 || shares > pool.shares - std::min(pool.shares, bitassets::MIN_LIQUIDITY)) throw JSONRPCError(RPC_INVALID_PARAMETER, "More shares than the pool can give back");
+    uint8_t only{0};
+    if (!request.params[3].isNull()) {
+        const AssetId asset{ParseAsset(request.params[3], state)};
+        if (asset != pool.asset0 && asset != pool.asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is not an asset of this pool");
+        only = asset == pool.asset0 ? 1 : 2;
+    }
+    auto [out0, out1]{bitassets::curves::WithdrawOf(kind, fee, pool, shares, only)};
+    if (pool.asset0.IsNull() && out0 < bitassets::MIN_CHN_PAYOUT) out0 = 0;
+    if (pool.asset1.IsNull() && out1 < bitassets::MIN_CHN_PAYOUT) out1 = 0;
+    amounts.pushKV(LabelOf(state, pool.asset0), AmountToJSON(out0, d0));
+    amounts.pushKV(LabelOf(state, pool.asset1), AmountToJSON(out1, d1));
+    result.pushKV("shares", shares);
+    result.pushKV("opens", false);
+    result.pushKV("amounts", std::move(amounts));
+    result.pushKV("share_of_pool", DecimalToJSON(100.0 * shares / pool.shares));
+    return result;
+},
+    };
+}
+
+//
+// Concentrated liquidity: positions and ticks.
+//
+
+/** A price given as a number or as text. */
+double PriceArg(const UniValue& value)
+{
+    if (value.isNum()) return value.get_real();
+    std::istringstream in{value.getValStr()};
+    in.imbue(std::locale::classic());
+    double price{0};
+    if (!(in >> price) || !in.eof()) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is a number");
+    return price;
+}
+
+/** A tick's price of asset0 in asset1, whole units. */
+double TickPrice(int32_t tick, uint8_t d0, uint8_t d1) { return std::pow(1.0001, tick) * std::pow(10.0, int{d0} - int{d1}); }
+
+RPCMethod getposition()
+{
+    return RPCMethod{
+        "getposition",
+        "A position of concentrated liquidity: its pool, range, liquidity, what it holds now, the fees it earned, whether it is in range.",
+        {{"position", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Its id"}},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "position", "Its id"},
+            {RPCResult::Type::STR_HEX, "pool", "Its pool"},
+            {RPCResult::Type::STR, "asset0", "The pool's first asset (the lower id)"},
+            {RPCResult::Type::STR, "asset1", "Its second"},
+            {RPCResult::Type::NUM, "tick_lower", ""},
+            {RPCResult::Type::NUM, "tick_upper", ""},
+            {RPCResult::Type::NUM, "price_lower", "Its range: asset0 in asset1, whole units"},
+            {RPCResult::Type::NUM, "price_upper", ""},
+            {RPCResult::Type::STR, "liquidity", ""},
+            {RPCResult::Type::BOOL, "in_range", "Whether the pool's price is in its range"},
+            {RPCResult::Type::NUM, "amount0", "What it holds now (taken out now, rounded down)"},
+            {RPCResult::Type::NUM, "amount1", ""},
+            {RPCResult::Type::NUM, "fees0", "Fees owed"},
+            {RPCResult::Type::NUM, "fees1", ""},
+            {RPCResult::Type::STR_HEX, "txid", "The transaction that opened it"},
+            {RPCResult::Type::NUM, "height", "Its block"},
+        }},
+        RPCExamples{HelpExampleCli("getposition", "\"<position>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "position")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto position{state.GetPosition(id)};
+    if (!position) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such position");
+    const auto pool{state.GetPool(position->pool)};
+    const auto cl{state.GetClState(position->pool)};
+    if (!pool || !cl) throw JSONRPCError(RPC_MISC_ERROR, "Its pool is gone");
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    const auto amounts{bitassets::cl::AmountsForLiquidity(UintToArith256(cl->sqrt_price), bitassets::cl::SqrtRatioAtTick(position->tick_lower),
+                                                          bitassets::cl::SqrtRatioAtTick(position->tick_upper), position->Liquidity(), false)};
+    const auto [fee0, fee1]{state.PositionFees(*position)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("position", id.GetHex());
+    obj.pushKV("pool", position->pool.GetHex());
+    obj.pushKV("asset0", LabelOf(state, pool->asset0));
+    obj.pushKV("asset1", LabelOf(state, pool->asset1));
+    obj.pushKV("tick_lower", position->tick_lower);
+    obj.pushKV("tick_upper", position->tick_upper);
+    obj.pushKV("price_lower", DecimalToJSON(TickPrice(position->tick_lower, d0, d1)));
+    obj.pushKV("price_upper", DecimalToJSON(TickPrice(position->tick_upper, d0, d1)));
+    obj.pushKV("liquidity", U128Text(position->Liquidity()));
+    obj.pushKV("in_range", position->tick_lower <= cl->tick && cl->tick < position->tick_upper);
+    obj.pushKV("amount0", AmountToJSON(amounts ? amounts->first : 0, d0));
+    obj.pushKV("amount1", AmountToJSON(amounts ? amounts->second : 0, d1));
+    obj.pushKV("fees0", AmountToJSON(fee0, d0));
+    obj.pushKV("fees1", AmountToJSON(fee1, d1));
+    obj.pushKV("txid", position->txid.GetHex());
+    obj.pushKV("height", position->height);
+    return obj;
+},
+    };
+}
+
+RPCMethod getpoolticks()
+{
+    return RPCMethod{
+        "getpoolticks",
+        "A concentrated pool's liquidity by price: each tick where liquidity starts or ends, what crossing it changes, and the liquidity in force "
+        "from it up to the next (a liquidity distribution chart).",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"count", RPCArg::Type::NUM, RPCArg::Default{500}, "Most ticks, 1 to 5000"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "tick", "The pool's tick"},
+            {RPCResult::Type::NUM, "price", "Its price, asset0 in asset1, whole units"},
+            {RPCResult::Type::STR, "liquidity", "In range now"},
+            {RPCResult::Type::NUM, "tick_spacing", ""},
+            {RPCResult::Type::ARR, "ticks", "", {{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "tick", ""},
+                {RPCResult::Type::NUM, "price", "asset0 in asset1, whole units"},
+                {RPCResult::Type::STR, "liquidity_net", "What crossing it upward adds (negative: takes)"},
+                {RPCResult::Type::STR, "liquidity_gross", "All liquidity that starts or ends there"},
+                {RPCResult::Type::STR, "liquidity_above", "The liquidity in force from it to the next tick"},
+            }}}},
+        }},
+        RPCExamples{HelpExampleCli("getpoolticks", "\"<pool>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    const int count{request.params[1].isNull() ? 500 : request.params[1].getInt<int>()};
+    if (count < 1 || count > 5000) throw JSONRPCError(RPC_INVALID_PARAMETER, "count is 1 to 5000");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto pool{state.GetPool(id)};
+    const auto cl{state.GetClState(id)};
+    if (!pool || !cl) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a concentrated pool");
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("tick", cl->tick);
+    result.pushKV("price", DecimalToJSON(WholeSpotPrice(state.GetPoolParams(id), *pool, true, d0, d1, &*cl)));
+    result.pushKV("liquidity", U128Text(cl->Liquidity()));
+    result.pushKV("tick_spacing", bitassets::cl::TickSpacing(state.GetPoolParams(id).fee));
+    UniValue ticks(UniValue::VARR);
+    __int128 running{0};
+    for (const auto& [tick, info] : state.ClTicksOf(id, count)) {
+        const __int128 net{info.net_negative ? -static_cast<__int128>(info.NetAbs()) : static_cast<__int128>(info.NetAbs())};
+        running += net;
+        UniValue t(UniValue::VOBJ);
+        t.pushKV("tick", tick);
+        t.pushKV("price", DecimalToJSON(TickPrice(tick, d0, d1)));
+        t.pushKV("liquidity_net", (net < 0 ? "-" : "") + U128Text(static_cast<unsigned __int128>(net < 0 ? -net : net)));
+        t.pushKV("liquidity_gross", U128Text(info.Gross()));
+        t.pushKV("liquidity_above", U128Text(running < 0 ? 0 : static_cast<unsigned __int128>(running)));
+        ticks.push_back(std::move(t));
+    }
+    result.pushKV("ticks", std::move(ticks));
+    return result;
+},
+    };
+}
+
+RPCMethod previewposition()
+{
+    return RPCMethod{
+        "previewposition",
+        "What openposition would make in a concentrated pool: the range in ticks (to the pool's spacing), the liquidity the amounts give, and what goes in of each.",
+        {
+            {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
+            {"price_lower", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "asset0 in asset1, whole units"},
+            {"price_upper", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, ""},
+            {"amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::NO, "The most of each, by asset (its id or CHN)", {{"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, ""}}},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::NUM, "tick_lower", ""},
+            {RPCResult::Type::NUM, "tick_upper", ""},
+            {RPCResult::Type::NUM, "price_lower", "The range as the ticks make it"},
+            {RPCResult::Type::NUM, "price_upper", ""},
+            {RPCResult::Type::STR, "liquidity", ""},
+            {RPCResult::Type::NUM, "amount0", "What goes in"},
+            {RPCResult::Type::NUM, "amount1", ""},
+            {RPCResult::Type::BOOL, "in_range", "Whether the price is in the range now (else one asset alone goes in)"},
+        }},
+        RPCExamples{HelpExampleCli("previewposition", "\"<pool>\" 0.9 1.1 '{\"CHN\":10,\"0x<id>\":10}'")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "pool")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto pool{state.GetPool(id)};
+    const auto cl{state.GetClState(id)};
+    if (!pool || !cl) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a concentrated pool");
+    const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
+    const int32_t spacing{bitassets::cl::TickSpacing(state.GetPoolParams(id).fee)};
+    const auto tick_of{[&](double price, bool up) {
+        if (!(price > 0)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is above 0");
+        const double exact{std::log(price * std::pow(10.0, int{d1} - int{d0})) / std::log(1.0001)};
+        int32_t tick{static_cast<int32_t>(std::clamp(std::floor(exact), double(bitassets::cl::MIN_TICK), double(bitassets::cl::MAX_TICK)))};
+        int32_t aligned{tick / spacing * spacing};
+        if (aligned > tick) aligned -= spacing;
+        if (up && aligned < tick) aligned += spacing;
+        return std::clamp(aligned, bitassets::cl::MIN_TICK / spacing * spacing, bitassets::cl::MAX_TICK / spacing * spacing);
+    }};
+    const int32_t lower{tick_of(PriceArg(request.params[1]), false)}, upper{tick_of(PriceArg(request.params[2]), true)};
+    if (lower >= upper) throw JSONRPCError(RPC_INVALID_PARAMETER, "The range is empty");
+    uint64_t a0{0}, a1{0};
+    for (const std::string& key : request.params[3].getKeys()) {
+        const AssetId asset{ParseAsset(UniValue{key}, state)};
+        if (asset != pool->asset0 && asset != pool->asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, key + " is not an asset of this pool");
+        (asset == pool->asset0 ? a0 : a1) = bitassets::ParseUnits(request.params[3][key], asset == pool->asset0 ? d0 : d1, /*allow_zero=*/true);
+    }
+    const arith_uint256 price{UintToArith256(cl->sqrt_price)}, sa{bitassets::cl::SqrtRatioAtTick(lower)}, sb{bitassets::cl::SqrtRatioAtTick(upper)};
+    const unsigned __int128 liquidity{bitassets::cl::LiquidityForAmounts(price, sa, sb, a0, a1)};
+    const auto needed{bitassets::cl::AmountsForLiquidity(price, sa, sb, liquidity, true)};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("tick_lower", lower);
+    result.pushKV("tick_upper", upper);
+    result.pushKV("price_lower", DecimalToJSON(TickPrice(lower, d0, d1)));
+    result.pushKV("price_upper", DecimalToJSON(TickPrice(upper, d0, d1)));
+    result.pushKV("liquidity", U128Text(liquidity));
+    result.pushKV("amount0", AmountToJSON(needed ? needed->first : 0, d0));
+    result.pushKV("amount1", AmountToJSON(needed ? needed->second : 0, d1));
+    result.pushKV("in_range", lower <= cl->tick && cl->tick < upper);
+    return result;
+},
+    };
+}
+
+//
+// Order books.
+//
+
+UniValue OrderToJSON(const bitassets::State& state, const uint256& id, const bitassets::BookOrder& o)
+{
+    const auto book{state.GetPool(o.book)};
+    UniValue obj(UniValue::VOBJ);
+    obj.pushKV("order", id.GetHex());
+    obj.pushKV("book", o.book.GetHex());
+    if (!book) return obj;
+    const AssetId sell{o.sells0 ? book->asset0 : book->asset1}, buy{o.sells0 ? book->asset1 : book->asset0};
+    const uint8_t ds{DecimalsOf(state, sell)}, db{DecimalsOf(state, buy)};
+    obj.pushKV("sells", LabelOf(state, sell));
+    obj.pushKV("sells_id", sell.GetHex());
+    obj.pushKV("buys", LabelOf(state, buy));
+    obj.pushKV("buys_id", buy.GetHex());
+    obj.pushKV("amount", AmountToJSON(o.amount, ds));
+    obj.pushKV("remaining", AmountToJSON(o.remaining, ds));
+    // Its limit, in whole units of what it buys per whole unit of what it sells.
+    obj.pushKV("price", DecimalToJSON(static_cast<double>(o.price_num) / o.price_den * std::pow(10.0, int{ds} - int{db})));
+    obj.pushKV("got", AmountToJSON(o.got, db));
+    obj.pushKV("to_collect", AmountToJSON(o.proceeds, db));
+    obj.pushKV("expiry", o.expiry);
+    obj.pushKV("txid", o.txid.GetHex());
+    obj.pushKV("height", o.height);
+    if (o.evicted != 0) obj.pushKV("evicted_height", o.evicted);
+    return obj;
+}
+
+const std::vector<RPCResult> ORDER_RESULTS{
+    {RPCResult::Type::STR_HEX, "order", "Its id (its token)"},
+    {RPCResult::Type::STR_HEX, "book", "Its book"},
+    {RPCResult::Type::STR, "sells", "What it sells"},
+    {RPCResult::Type::STR_HEX, "sells_id", ""},
+    {RPCResult::Type::STR, "buys", "What it buys"},
+    {RPCResult::Type::STR_HEX, "buys_id", ""},
+    {RPCResult::Type::NUM, "amount", "What it sold at first"},
+    {RPCResult::Type::NUM, "remaining", "What is left to sell"},
+    {RPCResult::Type::NUM, "price", "Its limit: whole units bought per whole unit sold, at least"},
+    {RPCResult::Type::NUM, "got", "What it bought in all"},
+    {RPCResult::Type::NUM, "to_collect", "What it bought and is not collected yet"},
+    {RPCResult::Type::NUM, "expiry", "The last block it trades in"},
+    {RPCResult::Type::STR_HEX, "txid", "The transaction that placed it"},
+    {RPCResult::Type::NUM, "height", "Its block"},
+    {RPCResult::Type::NUM, "evicted_height", /*optional=*/true, "The block in which a better and no smaller order took its place in a full book (it trades no more; settle it to take all it holds back)"},
+};
+
+RPCMethod getorder()
+{
+    return RPCMethod{
+        "getorder",
+        "A limit order of a book (placeorder): what it sells and buys, its limit, what is left, what it got.",
+        {{"order", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "Its id"}},
+        RPCResult{RPCResult::Type::OBJ, "", "", ORDER_RESULTS},
+        RPCExamples{HelpExampleCli("getorder", "\"<order>\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "order")};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const auto order{state.GetOrder(id)};
+    if (!order) throw JSONRPCError(RPC_INVALID_PARAMETER, "No such order");
+    return OrderToJSON(state, id, *order);
+},
+    };
+}
+
+RPCMethod getbook()
+{
+    return RPCMethod{
+        "getbook",
+        "The order book of two assets: its open orders on each side by price (a ladder), the best of each, and the spread. Prices of a whole "
+        "asset_a in asset_b.",
+        {
+            {"asset_a", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"asset_b", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::ASSET_ARG_HELP},
+            {"levels", RPCArg::Type::NUM, RPCArg::Default{50}, "Most prices on each side (1 to 500)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "book", "Its id (a venue of routes: swappools)"},
+            {RPCResult::Type::STR, "asset_a", ""},
+            {RPCResult::Type::STR, "asset_b", ""},
+            {RPCResult::Type::NUM, "open_orders", "Open orders, both sides"},
+            {RPCResult::Type::NUM, "best_ask", /*optional=*/true, "The lowest price asset_a is sold at"},
+            {RPCResult::Type::NUM, "best_bid", /*optional=*/true, "The highest price asset_a is bought at"},
+            {RPCResult::Type::ARR, "asks", "Sellers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a for sale at it"}, {RPCResult::Type::NUM, "orders", ""}}}}},
+            {RPCResult::Type::ARR, "bids", "Buyers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a wanted at it (what their asset_b buys)"}, {RPCResult::Type::NUM, "orders", ""}}}}},
+        }},
+        RPCExamples{HelpExampleCli("getbook", "\"GOLD\" \"CHN\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const int levels{request.params[2].isNull() ? 50 : request.params[2].getInt<int>()};
+    if (levels < 1 || levels > 500) throw JSONRPCError(RPC_INVALID_PARAMETER, "levels is 1 to 500");
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    const AssetId a{ParseAsset(request.params[0], state)}, b{ParseAsset(request.params[1], state)};
+    if (a == b) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a book");
+    const uint256 id{bitassets::BookId(a, b)};
+    const auto book{state.GetPool(id)};
+    const uint8_t da{DecimalsOf(state, a)}, db{DecimalsOf(state, b)};
+    const bool a_is_0{a < b};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("book", id.GetHex());
+    result.pushKV("asset_a", LabelOf(state, a));
+    result.pushKV("asset_b", LabelOf(state, b));
+    result.pushKV("open_orders", book ? book->shares - std::min<uint64_t>(book->shares, bitassets::MIN_LIQUIDITY) : 0);
+    // The side that sells a: the asks of a.
+    const auto ladder{[&](bool sells_a) {
+        UniValue arr(UniValue::VARR);
+        std::map<double, std::pair<double, int>, std::function<bool(double, double)>> levels_map{sells_a ? std::function<bool(double, double)>{std::less<double>{}} : std::function<bool(double, double)>{std::greater<double>{}}};
+        for (const auto& [oid, o] : state.BookSide(id, sells_a == a_is_0, bitassets::MAX_BOOK_SIDE, chainman.ActiveChain().Height() + 1)) {
+            if (o.remaining == 0) continue;
+            // Its limit as a price of a whole a in b.
+            const double lim{static_cast<double>(o.price_num) / o.price_den};
+            const double price{sells_a ? lim * std::pow(10.0, int{da} - int{db}) : (1.0 / lim) * std::pow(10.0, int{da} - int{db})};
+            const double amount_a{sells_a ? o.remaining / std::pow(10.0, da) : (o.remaining / std::pow(10.0, db)) / price};
+            auto& level{levels_map[price]};
+            level.first += amount_a;
+            ++level.second;
+        }
+        for (const auto& [price, level] : levels_map) {
+            if (arr.size() >= static_cast<size_t>(levels)) break;
+            UniValue l(UniValue::VOBJ);
+            l.pushKV("price", DecimalToJSON(price));
+            l.pushKV("amount", DecimalToJSON(level.first));
+            l.pushKV("orders", level.second);
+            arr.push_back(std::move(l));
+        }
+        return arr;
+    }};
+    UniValue asks{ladder(true)}, bids{ladder(false)};
+    if (!asks.empty()) result.pushKV("best_ask", asks[0]["price"]);
+    if (!bids.empty()) result.pushKV("best_bid", bids[0]["price"]);
+    result.pushKV("asks", std::move(asks));
+    result.pushKV("bids", std::move(bids));
+    return result;
+},
+    };
+}
+
 } // namespace
 
 UniValue SearchBitAssetsJSON(ChainstateManager& chainman, const UniValue& params, const std::vector<bitassets::AssetId>& only)
@@ -1839,6 +3658,24 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &searchpools},
         {"bitassets", &searchauctions},
         {"bitassets", &getassetindexinfo},
+        {"bitassets", &getswapquote},
+        {"bitassets", &simulateclearing},
+        {"bitassets", &previewpool},
+        {"bitassets", &getpoolcurve},
+        {"bitassets", &decodeassettx},
+        {"bitassets", &getlaunch},
+        {"bitassets", &listlaunches},
+        {"bitassets", &quotelaunch},
+        {"bitassets", &getlaunchstats},
+        {"bitassets", &getlaunchlog},
+        {"bitassets", &quotepoolliquidity},
+        {"bitassets", &getposition},
+        {"bitassets", &getpoolticks},
+        {"bitassets", &previewposition},
+        {"bitassets", &getorder},
+        {"bitassets", &getbook},
+        {"bitassets", &getverifications},
+        {"bitassets", &gettreasury},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

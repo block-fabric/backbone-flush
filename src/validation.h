@@ -912,6 +912,8 @@ private:
     bool m_side_changed_all GUARDED_BY(::cs_main){true};
     //! Layers' DEX: whether the last recheck of the mempool's asset transactions was under its rules (RemoveStaleDrivechainTxs).
     bool m_mempool_dex_active GUARDED_BY(::cs_main){false};
+    //! The same for the DEX's pool kinds (SidechainParams::dex_curves_height).
+    bool m_mempool_dex_curves_active GUARDED_BY(::cs_main){false};
     /** Note the keys of the sidechain state a block connected or disconnected changed (`changes`: those of its overlay). */
     void NoteSideChanges(const std::map<std::vector<unsigned char>, std::optional<std::vector<unsigned char>>>& changes) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 public:

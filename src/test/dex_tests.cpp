@@ -140,6 +140,16 @@ uint64_t Alone(const Pool& pool, const AssetId& in, uint64_t amount)
 }
 } // namespace
 
+namespace {
+/** The security and protocol parts of the fee on `in` at `fee` (the network's shares): what leaves the pool. */
+uint64_t Taken(uint64_t in, uint32_t fee = 3000)
+{
+    const auto& rules{Params().GetConsensus().sidechain};
+    const FeeParts parts{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(in) * fee / FEE_DENOMINATOR), rules.dex_fee_security_share, rules.dex_fee_protocol_share)};
+    return parts.security + parts.protocol;
+}
+} // namespace
+
 BOOST_FIXTURE_TEST_SUITE(dex_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(dex_tables_take_their_own_bytes)
@@ -329,7 +339,8 @@ BOOST_AUTO_TEST_CASE(dex_routes_two_and_four_hops)
     BOOST_CHECK(chain.TokenAt(COutPoint{four.GetHash(), 0}) == AssetToken(ids[4], quote4->back()));
     const Pool after_de{chain.PoolOf(ids[3], ids[4])};
     const bool d_first{after_de.asset0 == ids[3]};
-    BOOST_CHECK_EQUAL((d_first ? after_de.reserve0 : after_de.reserve1) - (d_first ? before_de.reserve0 : before_de.reserve1), (*quote4)[2]);
+    // What came in, less the fee's security and protocol parts, which leave the pool.
+    BOOST_CHECK_EQUAL((d_first ? after_de.reserve0 : after_de.reserve1) - (d_first ? before_de.reserve0 : before_de.reserve1), (*quote4)[2] - Taken((*quote4)[2]));
     BOOST_CHECK_EQUAL((d_first ? before_de.reserve1 : before_de.reserve0) - (d_first ? after_de.reserve1 : after_de.reserve0), quote4->back());
     // The route search finds A to E through the four pools (the only way).
     const auto found{dex::FindRoutes(chain.Assets(), ids[0], ids[4], 1000, 4)};
@@ -379,9 +390,20 @@ BOOST_AUTO_TEST_CASE(dex_batch_uniform_price_refund_and_undo)
     // The buy filled: no CHN back, its place gone; the sell's CHN out.
     BOOST_REQUIRE_EQUAL(chain.paid.size(), 1U);
     BOOST_CHECK(chain.paid[0] == CTxOut(static_cast<CAmount>(expected->outs[1]), OTHER));
+    // The reserves: the round's, less the security and protocol parts of each side's fee (exact: ⌊in·0.3 %⌋, then
+    // ⌊fee·share⌋ each). The chain's coin's security part is paid with the block's fees; GOLD's is held by the treasury.
     const Pool after{chain.PoolOf(GOLD, CHN)};
-    BOOST_CHECK_EQUAL(after.reserve0, expected->reserve0);
-    BOOST_CHECK_EQUAL(after.reserve1, expected->reserve1);
+    const uint64_t in0{chn_first ? 100'000'000U : 1'000'000U}, in1{chn_first ? 1'000'000U : 100'000'000U};
+    BOOST_CHECK_EQUAL(after.reserve0, expected->reserve0 - Taken(in0));
+    BOOST_CHECK_EQUAL(after.reserve1, expected->reserve1 - Taken(in1));
+    const auto& rules{Params().GetConsensus().sidechain};
+    const FeeParts chn_parts{SwapFeeParts(uint64_t{100'000'000} * 3000 / FEE_DENOMINATOR, rules.dex_fee_security_share, rules.dex_fee_protocol_share)};
+    const FeeParts gold_parts{SwapFeeParts(uint64_t{1'000'000} * 3000 / FEE_DENOMINATOR, rules.dex_fee_security_share, rules.dex_fee_protocol_share)};
+    BOOST_CHECK_EQUAL(chain.Assets().BlockSecurityFees(chain.height - 1), static_cast<CAmount>(chn_parts.security));
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(GOLD)->security_held, gold_parts.security);
+    BOOST_CHECK_EQUAL(chain.Assets().GetTreasury(GOLD)->balance, gold_parts.protocol);
+    // The fee, all of it: the providers' part stayed in the pool (the round's reserves are with it), the rest went.
+    BOOST_CHECK_EQUAL(chn_parts.security + chn_parts.protocol, Taken(100'000'000));
     BOOST_CHECK_EQUAL(after.swaps, start.swaps + 2);
     // Both better than they would have done one after the other.
     BOOST_CHECK_GT(expected->outs[0] + 1, Alone(start, CHN, 100'000'000) - 1);
