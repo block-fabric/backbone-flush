@@ -3091,16 +3091,19 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 // A concentrated pool's round took them itself, out of what it kept beyond its walk.
                 if (kind.fee > 0 && kind.params.GetCurve() != Curve::LAUNCH && kind.params.GetCurve() != Curve::BOOK) {
                     auto [p0, p1]{fee_parts(kind.fee, ins)};
+                    // What was taken is what is credited, exactly: at most the parts, at most what the pool holds (a
+                    // concentrated pool: what it kept beyond its walk); the security part first, the protocol's the rest.
+                    const auto clamp{[](FeeParts& p, uint64_t taken) {
+                        p.security = std::min(p.security, taken);
+                        p.protocol = taken - p.security;
+                    }};
                     if (kind.params.GetCurve() == Curve::CONCENTRATED) {
-                        // What it could take: the security part first, the protocol's the rest.
-                        const auto clamp{[](FeeParts& p, uint64_t taken) {
-                            p.security = std::min(p.security, taken);
-                            p.protocol = taken - p.security;
-                        }};
                         clamp(p0, cleared->taken0);
                         clamp(p1, cleared->taken1);
                     } else {
                         const uint64_t t0{std::min(p0.security + p0.protocol, pool->reserve0)}, t1{std::min(p1.security + p1.protocol, pool->reserve1)};
+                        clamp(p0, t0);
+                        clamp(p1, t1);
                         pool->reserve0 -= t0;
                         pool->reserve1 -= t1;
                     }

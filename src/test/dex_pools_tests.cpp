@@ -17,6 +17,7 @@
 #include <script/script.h>
 #include <sidechain/state.h>
 #include <sidechain/store.h>
+#include <test/util/random.h>
 #include <test/util/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
@@ -547,6 +548,97 @@ BOOST_AUTO_TEST_CASE(security_parts_split_as_fees)
         BOOST_CHECK_EQUAL(split.bidder_ordinary, 1'000'001 * bidder_bps / 10'000);
         BOOST_CHECK_EQUAL(split.bidder_ordinary + split.validators, 1'000'001);
     }
+}
+
+BOOST_AUTO_TEST_CASE(fee_parts_conserve_every_kind)
+{
+    // Random orders, both ways, through small pools of every searched kind and constant product at the highest tier (and
+    // one with a dynamic fee), many blocks: of each asset, what the orders paid in less what they got (fills and refunds)
+    // is, exactly, what the pools gained plus what the treasury took (its balance and the security parts it holds). No
+    // coin from nothing, none lost; a block taken back puts every pool and the treasury back.
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")}, SILVER{HashName("SILVER")};
+    const bool g0{GOLD < SILVER};
+    std::vector<uint64_t> gold_coins(40, 50'000), silver_coins(40, 50'000);
+    gold_coins.insert(gold_coins.begin(), {150'000, 150'000, 150'000, 150'000});
+    silver_coins.insert(silver_coins.begin(), {150'000, 150'000, 150'000, 150'000});
+    const auto g{chain.Issue("GOLD", 100'000'000, gold_coins, 0)};
+    const auto s{chain.Issue("SILVER", 100'000'000, silver_coins, 0)};
+    chain.Create(g[0], GOLD, 150'000, s[0], SILVER, 150'000, Curve::CONSTANT_PRODUCT, 10'000);
+    chain.Create(g[1], GOLD, 150'000, s[1], SILVER, 150'000, Curve::STABLE, 10'000, 50);
+    chain.Create(g[2], GOLD, 150'000, s[2], SILVER, 150'000, Curve::WEIGHTED, 10'000, 0, 20);
+    {
+        CreatePool dynamic;
+        dynamic.asset_a = GOLD;
+        dynamic.asset_b = SILVER;
+        dynamic.fee = 10'000;
+        dynamic.flags = POOL_FLAG_DYNAMIC_FEE;
+        dynamic.amount_a = 150'000;
+        dynamic.amount_b = 150'000;
+        dynamic.min_shares = 1;
+        chain.Require(MakeTx({g[3], s[3]}, dynamic, {std::nullopt}));
+    }
+    chain.EndBlock();
+    std::vector<uint256> pools;
+    for (const auto& [id, pool] : chain.Assets().PoolsOf(GOLD)) pools.push_back(id);
+    BOOST_REQUIRE_EQUAL(pools.size(), 4U);
+    const auto held{[&]() {
+        // Of GOLD and of SILVER: the pools' reserves and the treasury's holdings.
+        std::pair<unsigned __int128, unsigned __int128> sum{0, 0};
+        for (const uint256& id : pools) {
+            const Pool p{chain.PoolAt(id)};
+            sum.first += g0 ? p.reserve0 : p.reserve1;
+            sum.second += g0 ? p.reserve1 : p.reserve0;
+        }
+        for (const auto& [asset, sum_ref] : {std::make_pair(GOLD, &sum.first), std::make_pair(SILVER, &sum.second)}) {
+            const TreasuryEntry t{chain.Assets().GetTreasury(asset).value_or(TreasuryEntry{})};
+            *sum_ref += t.balance + t.security_held;
+        }
+        return sum;
+    }};
+    FastRandomContext rng{/*fDeterministic=*/true};
+    size_t gi{4}, si{4};
+    uint256 last_hash;
+    std::pair<unsigned __int128, unsigned __int128> last_held;
+    for (int block{0}; block < 18 && gi < g.size() && si < s.size(); ++block) {
+        const auto before{held()};
+        std::vector<CTransaction> orders;
+        unsigned __int128 in_gold{0}, in_silver{0};
+        for (int k{0}, m{1 + static_cast<int>(rng.randrange(4))}; k < m && gi < g.size() && si < s.size(); ++k) {
+            const uint256& pool{pools[rng.randrange(pools.size())]};
+            // Up to a third of the pool's side: big orders against small pools.
+            const uint64_t amount{1 + rng.randrange(50'000)};
+            const bool gold_in{rng.randbool()};
+            const COutPoint coin{gold_in ? g[gi++] : s[si++]};
+            std::vector<std::optional<Token>> outs{std::nullopt, AssetToken(gold_in ? GOLD : SILVER, 50'000 - amount)};
+            if (amount == 50'000) outs.pop_back();
+            orders.push_back(MakeTx({coin}, SwapPools{gold_in ? GOLD : SILVER, {pool}, amount, 1, CScript{}}, outs));
+            chain.Require(orders.back());
+            (gold_in ? in_gold : in_silver) += amount;
+        }
+        const uint256 hash_before{chain.state.Hash()};
+        chain.store.TakeUndo();
+        chain.EndBlock();
+        unsigned __int128 out_gold{0}, out_silver{0};
+        for (const CTransaction& tx : orders) {
+            const auto got{chain.TokenAt(COutPoint{tx.GetHash(), 0})};
+            BOOST_REQUIRE(got);
+            (got->id == GOLD ? out_gold : out_silver) += got->amount;
+        }
+        const auto after{held()};
+        BOOST_CHECK(after.first + out_gold == before.first + in_gold);
+        BOOST_CHECK(after.second + out_silver == before.second + in_silver);
+        last_hash = hash_before;
+        last_held = before;
+    }
+    // The last block taken back: every pool and the treasury as they were.
+    chain.store.Revert(chain.store.TakeUndo());
+    BOOST_CHECK(chain.state.Hash() == last_hash);
+    BOOST_CHECK(held() == last_held);
+    chain.EndBlock();
+    // The security parts of fees in assets: held, none paid with blocks (no coin in these pools). (Before the last block, taken back.)
+    BOOST_CHECK_GT(chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{}).security_held + chain.Assets().GetTreasury(SILVER).value_or(TreasuryEntry{}).security_held, 0U);
+    BOOST_CHECK_EQUAL(chain.Assets().GetSecurityFees().total, 0U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
