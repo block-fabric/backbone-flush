@@ -992,6 +992,9 @@ struct LaunchRecord {
     //! (millionths of the fee), what it graduates at, and the curve's virtual coin (half of that).
     uint32_t fee{0};
     uint32_t creator_share{0};
+    //! The protocol's and the chain's security parts of its fee (millionths of it), as made.
+    uint32_t protocol_share{0};
+    uint32_t security_share{0};
     uint64_t graduation{0};
     uint64_t virtual_coin{0};
     //! Its curve's pool (PoolIdOf of the coin, the token and the launch's kind) until it graduates; then the token's pool with the coin.
@@ -999,6 +1002,9 @@ struct LaunchRecord {
     //! The fees for the pool it graduates into, and the creator's not paid yet (the chain's coin), and the creator's paid.
     uint64_t pool_fees{0};
     uint64_t creator_fees{0};
+    //! The protocol's (to the treasury) and the chain's security parts of its fees, in all.
+    uint64_t protocol_fees{0};
+    uint64_t security_fees{0};
     uint64_t creator_paid{0};
     //! -1 until it graduates; then the block, and the coin it had raised.
     int32_t graduated{-1};
@@ -1010,7 +1016,8 @@ struct LaunchRecord {
     SERIALIZE_METHODS(LaunchRecord, obj)
     {
         READWRITE(obj.txid, obj.height, obj.creator, obj.allocation, obj.min_buy, obj.max_buy, obj.fee, obj.creator_share, obj.graduation, obj.virtual_coin, obj.pool,
-                  obj.pool_fees, obj.creator_fees, obj.creator_paid, obj.graduated, obj.raised_at_graduation, obj.allocation_claimed, obj.volume, obj.trades);
+                  obj.pool_fees, obj.creator_fees, obj.creator_paid, obj.graduated, obj.raised_at_graduation, obj.allocation_claimed, obj.volume, obj.trades,
+                  obj.protocol_share, obj.security_share, obj.protocol_fees, obj.security_fees);
     }
     friend bool operator==(const LaunchRecord&, const LaunchRecord&) = default;
     bool Graduated() const { return graduated >= 0; }
@@ -1196,12 +1203,38 @@ inline constexpr uint32_t MAX_AMP{10'000};
 /** The weights (percent of one asset; the other has the rest) a weighted pool is made with; 50/50 is the constant product. */
 inline constexpr std::array<uint8_t, 12> WEIGHTS{2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98};
 /**
- * The protocol's part of every fee, of FEE_DENOMINATOR: none. The fees are the liquidity providers'
- * (they stay in the pools). A hook, not a rule in use: the clearing works out this part
- * (dex::Clearing::protocol0, protocol1) and leaves it in the pool while it is 0; a later rule could
- * give it a destination.
+ * The treasury (doc/layers.md "Fees of the DEX"): what the protocol's parts of the DEX's fees and of the launches' fees
+ * accrued, per asset (the chain's coin: the null id), held by the chain itself: no key, no output. Also the security
+ * parts of swap fees paid in an asset (not the chain's coin), which no coinbase can pay: held per asset until a rule
+ * says what becomes of them. NO RULE SPENDS FROM IT YET: the hook is TreasurySpend (state.cpp), which refuses
+ * everything; a rule that spends (an emission, buybacks, a multisig of developers...) is a change of the rules.
  */
-inline constexpr uint32_t PROTOCOL_FEE_SHARE{0};
+struct TreasuryEntry {
+    //! The protocol's: what it holds of the asset, and what came in, from swaps and from launches.
+    uint64_t balance{0};
+    uint64_t from_swaps{0};
+    uint64_t from_launches{0};
+    //! The security parts of swap fees in this asset (never the chain's coin: those are paid with the block's fees).
+    uint64_t security_held{0};
+    SERIALIZE_METHODS(TreasuryEntry, obj) { READWRITE(obj.balance, obj.from_swaps, obj.from_launches, obj.security_held); }
+    friend bool operator==(const TreasuryEntry&, const TreasuryEntry&) = default;
+};
+/** The security parts of the fees a block paid in the chain's coin (to the BMM bidder and the validators), and in all. */
+struct SecurityFees {
+    int32_t height{-1};
+    uint64_t amount{0};
+    uint64_t total{0};
+    SERIALIZE_METHODS(SecurityFees, obj) { READWRITE(obj.height, obj.amount, obj.total); }
+    friend bool operator==(const SecurityFees&, const SecurityFees&) = default;
+};
+/** The parts of a fee (millionths of it, each rounded down); the rest, the remainder, is the liquidity providers' (or the curve's pool's). */
+struct FeeParts {
+    uint64_t security{0};
+    uint64_t protocol{0};
+    uint64_t creator{0};
+};
+FeeParts SwapFeeParts(uint64_t fee, uint32_t security_share, uint32_t protocol_share);
+FeeParts LaunchFeeParts(uint64_t fee, uint32_t creator_share, uint32_t protocol_share, uint32_t security_share);
 
 /**
  * What kind of pool a pool is. A pool with none recorded (State::GetPoolParams gives the default) is a
@@ -1522,6 +1555,12 @@ public:
     std::vector<std::pair<uint256, BookOrder>> BookSide(const uint256& book, bool asks, size_t max, int height) const;
     /** Takes the orders that expired at or before `height` out of their books' indexes, at most `budget`; how many. */
     size_t SweepBooks(int height, size_t budget = MAX_BOOK_SWEEP);
+    /** The treasury's entry of an asset (the chain's coin: the null id); every entry. */
+    std::optional<TreasuryEntry> GetTreasury(const AssetId& asset) const;
+    void ForEachTreasury(const std::function<bool(const AssetId&, const TreasuryEntry&)>& fn) const;
+    /** The security parts of the fees the block at `height` paid in the chain's coin (0 if none), and in all. */
+    CAmount BlockSecurityFees(int height) const;
+    SecurityFees GetSecurityFees() const;
     /** The orders in the index of a side of a book (live, or expired and not swept yet), as counted: at most MAX_BOOK_SIDE. */
     uint32_t BookCount(const uint256& book, bool asks) const;
     /** Every entry of a side's index, best first, live or not (at most MAX_BOOK_SCAN read). */
@@ -1544,7 +1583,8 @@ public:
      * walked through the pool's ticks (at most MAX_CL_CROSSINGS of them), the round's fees and roundings credited to the
      * liquidity in range. nullopt as ClearPool's.
      */
-    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders) const;
+    /** `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept beyond the walk. */
+    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0}) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;

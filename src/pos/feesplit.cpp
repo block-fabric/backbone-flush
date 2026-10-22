@@ -97,9 +97,10 @@ CAmount BidderShare(CAmount fees, int64_t spacing, FeeCurve curve)
     return std::max(floor_share, std::min(half, scaled));
 }
 
-FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve)
+FeeSplit SplitFees(std::span<const CTransactionRef> vtx, std::span<const CAmount> fees, bool fees_without_coinbase, int64_t spacing, FeeCurve curve, CAmount extra_ordinary)
 {
     FeeSplit split;
+    split.ordinary = extra_ordinary;
     for (size_t i{1}; i < vtx.size(); ++i) {
         const size_t at{fees_without_coinbase ? i - 1 : i};
         if (at >= fees.size()) break;

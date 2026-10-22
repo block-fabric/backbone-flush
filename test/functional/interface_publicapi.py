@@ -122,11 +122,19 @@ class PublicApiTest(LayersTest):
         assert_equal(Decimal(str(stats["fees"]["trade_bps"])), rules["fee"] * 100)
         assert_equal(stats["curve"]["virtual_ecx"], 250)
         assert_equal(stats["curve"]["supply"], 1e9)
-        assert_equal([s["to"] for s in stats["fees"]["split"]], ["creator", "pool"])
+        # The launch fee's parts as the rules say (getlaunchstats): the creator's, the treasury's if any, the chain's security, the pool's rest.
+        split = {s["to"]: Decimal(str(s["bps"])) for s in stats["fees"]["split"]}
+        assert_equal(split["creator"], rules["creator_share"] * 100)
+        assert_equal(split.get("security", 0), rules["security_share"] * 100)
+        assert_equal(sum(split.values()), 10000)
         fees = api.rest("fees")
         assert_equal(fees["pool_fee_tiers_ppm"], [100, 500, 3000, 10000])
         treasury = api.rest("treasury")
-        assert not treasury["available"]
+        rt = n0.gettreasury()
+        assert treasury["available"] and not treasury["spending_rule"]
+        assert_equal(Decimal(str(treasury["security_paid_ecx"])), rt["security_paid"])
+        swap_split = {s["to"]: Decimal(str(s["bps"])) for s in fees["swap_split"]}
+        assert_equal(swap_split["security"], rt["fee_parts"]["swap_security"] * 100)
 
         self.log.info("Launches: MOON with a first buy and a creator's text, SUN without")
         for t in ("MOON", "SUN"):
@@ -271,6 +279,10 @@ class PublicApiTest(LayersTest):
         assert_equal(lstats["on_curve"], 2)
         log = api.rest("launches/log", {"from_height": rpc["height"], "to_height": n0.getblockcount()})
         assert_equal(len(log["items"]), len(n0.getlaunchlog(rpc["height"], n0.getblockcount())))
+
+        # The chain's security parts of the launches' fees, paid with the blocks: as gettreasury says.
+        assert_equal(Decimal(str(api.rest("treasury")["security_paid_ecx"])), n0.gettreasury()["security_paid"])
+        assert_greater_than(n0.gettreasury()["security_paid"], 0)
 
         self.log.info("Graduation: MOON's curve to its end; its pool, locked; trading there")
         whale = n0.buyfromlaunch("MOON", 600)

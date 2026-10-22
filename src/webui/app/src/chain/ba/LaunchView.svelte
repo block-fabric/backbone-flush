@@ -19,7 +19,8 @@
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
-  import { claimable, curvePointAt, curveSeries, curveShape, feeSplit, LAUNCH_DECIMALS, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
+  import { launchFeeParts, launchFeeSplit } from './fees';
+  import { claimable, curvePointAt, curveSeries, curveShape, LAUNCH_DECIMALS, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
 
@@ -103,7 +104,7 @@
   const raised = $derived(launch ? approx(launch.raised) : 0);
   const now = $derived(curvePointAt(shape, graduated ? shape.graduation : raised));
   const series = $derived(curveSeries(shape));
-  const split = $derived(launch ? feeSplit(launch.fee, launch.creator_share) : null);
+  const split = $derived(launch ? launchFeeSplit(launchFeeParts(launch)) : '');
   const owed = $derived(launch ? claimable(launch) : { fees: false, allocation: false });
 
   // --- Buying and selling on the curve ---
@@ -327,7 +328,7 @@
           <dl class="ba-lines">
             <dt>Launched</dt><dd>block {formatCount(launch.height)}</dd>
             <dt>Supply</dt><dd>{formatAmount(launch.supply, LAUNCH_DECIMALS, { max: 0 })}</dd>
-            <dt>Fee</dt><dd>{launch.fee}% of each trade on the curve{#if split}: {split.creator}% to the creator, {split.pool}% into the pool at graduation{/if}</dd>
+            <dt>Fee</dt><dd data-testid="launch-fee-split">{split}</dd>
             <dt>Allocation</dt><dd>{#if launch.allocation > 0}{launch.allocation}% of the supply, minted to the creator at graduation (dilution){#if launch.allocation_claimed}, minted{/if}{:else}none{/if}</dd>
           </dl>
         </div>
@@ -339,6 +340,8 @@
           <dl class="ba-lines">
             <dt>Fees owed</dt><dd>{formatAmount(launch.creator_fees_owed, 8)} ECX</dd>
             <dt>Fees paid</dt><dd>{formatAmount(launch.creator_fees_paid, 8)} ECX</dd>
+            {#if launch.protocol_fees !== undefined}<dt>To the treasury</dt><dd>{formatAmount(launch.protocol_fees, 8)} ECX</dd>{/if}
+            {#if launch.security_fees !== undefined}<dt>To the chain's security</dt><dd>{formatAmount(launch.security_fees, 8)} ECX</dd>{/if}
           </dl>
           {#if owed.fees || owed.allocation}
             <div class="row"><button type="button" class="btn small" disabled={busy || wallets.current === null} onclick={claim}>Pay the creator what it is owed</button></div>

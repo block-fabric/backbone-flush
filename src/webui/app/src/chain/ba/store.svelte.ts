@@ -16,6 +16,7 @@ import { rpc } from '../../lib/rpc';
 import { node, toast, wallets } from '../../lib/state.svelte';
 import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
+import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo } from './kinds';
 import { EXACT_METHODS, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 
@@ -833,6 +834,11 @@ export function poolsOf(a: string, b: string): Pool[] {
 export function hasPool(id: string): boolean {
   void poolOf('', '');
   return pooled.has(id);
+}
+
+/** The parts of every swap fee (getdexinfo, read with the store): null from a node that does not say them. */
+export function swapParts(): SwapFeeParts | null {
+  return swapFeeParts(ba.dex?.swap_fee_parts);
 }
 
 /** The price of one of an asset in ECX, from its pool with ECX (undefined when it has none, or nobody provides to it). */

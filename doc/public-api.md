@@ -58,6 +58,8 @@ block's undo data has its keys), left out of the state's hash, read by no rule.
 - **Holders**: what each script holds of each token (asset coins, liquidity shares, positions, orders), from the
   outputs that carry tokens: by token, largest first with how many hold it, and by script (an address's holdings).
 - **24 hours** (volume, trades, change): from the hourly candles.
+- **Treasury inflows**: what each asset's treasury entry gained in a block (from swaps' and launches' fees, and the
+  security parts held in assets), newest first.
 
 Tests: `dex_market_tests` (trades, candles, holders, pages, a reorganisation that restores the index byte for byte,
 the index wiped and refused as incomplete), `interface_publicapi.py` (against the RPC truth, across a real reorg,
@@ -76,8 +78,8 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 |---|---|---|
 | `status` | GetStatus | network, Flush tip, eCash tip, slot, escrow, launches today, `market_index` |
 | `stats` | GetStats | launch counts, 24 h and total volume, fees (trade bps, split), the curve's parameters, pools, liquidity |
-| `fees` | GetFees | fee tiers, kinds, launch fee and split, protocol share, the mempool's relay fee |
-| `treasury` | GetTreasury | `available: false` while the chain's rules have no treasury (they have none) |
+| `fees` | GetFees | fee tiers, kinds, the launch fee and its parts, the swap fee's parts (liquidity providers, security, treasury), the mempool's relay fee |
+| `treasury` | GetTreasury | `gettreasury`: balances by asset (held by the chain, no key, no spending rule yet), inflows by block (the market index), the security parts paid |
 | `launches?filter=all\|new\|near\|curve\|graduated&sort=newest\|oldest\|progress\|mcap\|volume\|trades&q=&cursor=&limit≤100` | ListLaunches | `Page<LaunchSummary>` |
 | `launches/stats` | GetLaunchStats | getlaunchstats, and 24 h counts |
 | `launches/log?from_height=&to_height=` | GetLaunchLog | getlaunchlog (≤ 1000 blocks) |

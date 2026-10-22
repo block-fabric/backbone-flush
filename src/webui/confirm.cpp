@@ -178,7 +178,11 @@ std::function<std::string(const Call&)> AfterDepth(std::string info_method, std:
         const UniValue& depth{info.isObject() ? info.find_value(depth_field) : NullUniValue};
         if (!depth.isNum()) return std::string{"once the reservation is deep enough"};
         const int64_t blocks{depth.getInt<int64_t>()};
-        const int64_t seconds{(blocks + 1) * Params().GetConsensus().nPowTargetSpacing};
+        // The chain's own blocks: a block of stake each slot where the chain has slots (FastBlocks), else its target spacing
+        // (not Bitcoin's ten minutes of a regtest's parameters).
+        const auto& consensus{Params().GetConsensus()};
+        const int64_t spacing{consensus.pos.slot_seconds > 0 ? int64_t{consensus.pos.slot_seconds} : int64_t{consensus.nPowTargetSpacing}};
+        const int64_t seconds{(blocks + 1) * spacing};
         const std::string about{seconds < 90 ? strprintf("about %d s", seconds) : strprintf("about %d min", (seconds + 30) / 60)};
         return strprintf("once the reservation is %d block%s deep (%s)", blocks, blocks == 1 ? "" : "s", about);
     };
@@ -651,6 +655,9 @@ UniValue ConfirmedRpc::Call(const UniValue& params)
     }
     const std::string name{calls.front().first};
     const UniValue& then{params.find_value("then")};
+    // Each method it would run, the caller may run itself (its -rpcwhitelist, for the host over RPC): before any question.
+    for (const auto& c : calls) CheckRpcCaller(c.first);
+    if (then.isObject() && then.find_value("method").isStr()) CheckRpcCaller(then.find_value("method").get_str());
     const bool only{params.find_value("authorizedOnly").isTrue()};
     if (batch && (!then.isNull() || only)) throw HostError(BRIDGE_INVALID_REQUEST, "calls: one at a time with then or authorizedOnly");
     if (!then.isNull() && only) throw HostError(BRIDGE_INVALID_REQUEST, "then or authorizedOnly, not both");

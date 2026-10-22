@@ -848,6 +848,16 @@ public:
         consensus.sidechain.dex_curves_height = 0;
         // Launches graduate at 500 ECX (a consensus parameter; doc/layers.md "Launches").
         consensus.sidechain.launch_graduation = 500 * COIN;
+        // The fees of the DEX (doc/layers.md "Fees of the DEX"; decided 2026-10-21): swap fees 85 % to the liquidity
+        // providers, 11 % to the chain's security (the BMM bidder and the validators, by the curve of the network fees),
+        // 4 % to the protocol's treasury; a launch's curve charges 1.15 % of a trade: 50 % to its creator, 30 % to the
+        // treasury, 20 % to the chain's security. Network fees: the bidder and the validators only (pos/feesplit.h).
+        consensus.sidechain.dex_fee_security_share = 110'000;
+        consensus.sidechain.dex_fee_protocol_share = 40'000;
+        consensus.sidechain.launch_fee = 11'500;
+        consensus.sidechain.launch_creator_share = 500'000;
+        consensus.sidechain.launch_protocol_share = 300'000;
+        consensus.sidechain.launch_security_share = 200'000;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

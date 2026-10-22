@@ -1049,7 +1049,12 @@ RPCMethod getdexinfo()
             {RPCResult::Type::NUM, "min_amp", "A stable pool's least amplification"},
             {RPCResult::Type::NUM, "max_amp", "And most"},
             {RPCResult::Type::ARR, "weights", "A weighted pool's weights of an asset, in percent (the other has the rest)", {{RPCResult::Type::NUM, "", ""}}},
-            {RPCResult::Type::NUM, "protocol_fee_share", "The protocol's part of every fee, in percent: 0, all to the liquidity providers"},
+            {RPCResult::Type::OBJ, "swap_fee_parts", "The parts of every swap fee, in percent of it (consensus parameters of this network)",
+            {
+                {RPCResult::Type::NUM, "liquidity_providers", "What stays in the pool (the remainders of the roundings too)"},
+                {RPCResult::Type::NUM, "security", "To the block's BMM bidder and validators, by the curve of the network fees (fees in the chain's coin; in an asset: held by the treasury)"},
+                {RPCResult::Type::NUM, "protocol", "To the treasury (gettreasury)"},
+            }},
         }},
         RPCExamples{HelpExampleCli("getdexinfo", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -1080,7 +1085,11 @@ RPCMethod getdexinfo()
     UniValue weights(UniValue::VARR);
     for (uint8_t w : bitassets::WEIGHTS) weights.push_back(w);
     result.pushKV("weights", std::move(weights));
-    result.pushKV("protocol_fee_share", static_cast<uint64_t>(bitassets::PROTOCOL_FEE_SHARE));
+    UniValue parts(UniValue::VOBJ);
+    parts.pushKV("liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.dex_fee_protocol_share) / 10000.0));
+    parts.pushKV("security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+    parts.pushKV("protocol", DecimalToJSON(params.dex_fee_protocol_share / 10000.0));
+    result.pushKV("swap_fee_parts", std::move(parts));
     return result;
 },
     };
@@ -1418,6 +1427,76 @@ RPCMethod getverifications()
         result.pushKV("curators", std::move(list));
         return result;
     });
+},
+    };
+}
+
+RPCMethod gettreasury()
+{
+    return RPCMethod{
+        "gettreasury",
+        "The treasury: what the protocol's parts of the DEX's swap fees and of the launches' fees accrued, per asset, held by the chain "
+        "itself (no key, no output; no rule spends from it yet: a hook waits for one), and the security parts of the fees: paid with the "
+        "blocks' fees when in the chain's coin, held per asset otherwise.",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::OBJ, "fee_parts", "The parts of the fees, in percent (consensus parameters of this network)",
+            {
+                {RPCResult::Type::NUM, "swap_security", ""},
+                {RPCResult::Type::NUM, "swap_protocol", ""},
+                {RPCResult::Type::NUM, "swap_liquidity_providers", ""},
+                {RPCResult::Type::NUM, "launch_fee", "The fee of a trade on a launch's curve, in percent"},
+                {RPCResult::Type::NUM, "launch_creator", ""},
+                {RPCResult::Type::NUM, "launch_protocol", ""},
+                {RPCResult::Type::NUM, "launch_security", ""},
+            }},
+            {RPCResult::Type::ARR, "balances", "By asset", {{RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::STR, "asset", "Its label (CHN: the chain's coin)"},
+                {RPCResult::Type::STR_HEX, "asset_id", "Its hash (null: the chain's coin)"},
+                {RPCResult::Type::NUM, "balance", "The protocol's, held"},
+                {RPCResult::Type::NUM, "from_swaps", "Of which came from swap fees"},
+                {RPCResult::Type::NUM, "from_launches", "And from launches' fees"},
+                {RPCResult::Type::NUM, "security_held", "The security parts of swap fees in this asset, held (none for the chain's coin: paid with the blocks)"},
+            }}}},
+            {RPCResult::Type::STR_AMOUNT, "security_paid", "The security parts paid with the blocks' fees, in all (the chain's coin)"},
+            {RPCResult::Type::BOOL, "spending_rule", "Whether a rule spends from the treasury: false (none yet)"},
+        }},
+        RPCExamples{HelpExampleCli("gettreasury", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const Consensus::SidechainParams& params{chainman.GetConsensus().sidechain};
+    LOCK(::cs_main);
+    const bitassets::State state{StateOf(chainman)};
+    UniValue parts(UniValue::VOBJ);
+    parts.pushKV("swap_security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+    parts.pushKV("swap_protocol", DecimalToJSON(params.dex_fee_protocol_share / 10000.0));
+    parts.pushKV("swap_liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.dex_fee_protocol_share) / 10000.0));
+    parts.pushKV("launch_fee", DecimalToJSON(params.launch_fee / 10000.0));
+    parts.pushKV("launch_creator", DecimalToJSON(params.launch_creator_share / 10000.0));
+    parts.pushKV("launch_protocol", DecimalToJSON(params.launch_protocol_share / 10000.0));
+    parts.pushKV("launch_security", DecimalToJSON(params.launch_security_share / 10000.0));
+    UniValue balances(UniValue::VARR);
+    state.ForEachTreasury([&](const AssetId& asset, const bitassets::TreasuryEntry& entry) {
+        const uint8_t d{DecimalsOf(state, asset)};
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("asset", LabelOf(state, asset));
+        obj.pushKV("asset_id", asset.GetHex());
+        obj.pushKV("balance", AmountToJSON(entry.balance, d));
+        obj.pushKV("from_swaps", AmountToJSON(entry.from_swaps, d));
+        obj.pushKV("from_launches", AmountToJSON(entry.from_launches, d));
+        obj.pushKV("security_held", AmountToJSON(entry.security_held, d));
+        balances.push_back(std::move(obj));
+        return balances.size() < 1000;
+    });
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("fee_parts", std::move(parts));
+    result.pushKV("balances", std::move(balances));
+    result.pushKV("security_paid", ValueFromAmount(static_cast<CAmount>(std::min<uint64_t>(state.GetSecurityFees().total, MAX_MONEY))));
+    result.pushKV("spending_rule", false);
+    return result;
 },
     };
 }
@@ -2751,7 +2830,11 @@ std::vector<RPCResult> LaunchResults()
         {RPCResult::Type::NUM, "supply", "Whole tokens there are"},
         {RPCResult::Type::NUM, "curve_tokens_left", "Whole tokens the curve still sells (0 once graduated)"},
         {RPCResult::Type::NUM, "fee", "The curve's fee, in percent"},
-        {RPCResult::Type::NUM, "creator_share", "The creator's part of that fee, in percent of it (the rest goes into the pool at graduation)"},
+        {RPCResult::Type::NUM, "creator_share", "The creator's part of that fee, in percent of it"},
+        {RPCResult::Type::NUM, "protocol_share", "The protocol's part (to the treasury), in percent of it"},
+        {RPCResult::Type::NUM, "security_share", "The chain's security part (the BMM bidder and the validators), in percent of it; the rest goes into the pool at graduation"},
+        {RPCResult::Type::STR_AMOUNT, "protocol_fees", "Paid to the treasury so far"},
+        {RPCResult::Type::STR_AMOUNT, "security_fees", "Paid to the BMM bidders and validators so far"},
         {RPCResult::Type::STR_AMOUNT, "creator_fees_owed", "The creator's fees not paid yet (claimlaunch)"},
         {RPCResult::Type::STR_AMOUNT, "creator_fees_paid", "Paid so far"},
         {RPCResult::Type::NUM, "allocation", "The creator's allocation, in percent of the supply, minted at graduation (0: none)"},
@@ -2798,6 +2881,10 @@ UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const
     obj.pushKV("curve_tokens_left", AmountToJSON(left, bitassets::LAUNCH_DECIMALS));
     obj.pushKV("fee", DecimalToJSON(launch.fee / 10000.0));
     obj.pushKV("creator_share", DecimalToJSON(launch.creator_share / 10000.0));
+    obj.pushKV("protocol_share", DecimalToJSON(launch.protocol_share / 10000.0));
+    obj.pushKV("security_share", DecimalToJSON(launch.security_share / 10000.0));
+    obj.pushKV("protocol_fees", ValueFromAmount(static_cast<CAmount>(launch.protocol_fees)));
+    obj.pushKV("security_fees", ValueFromAmount(static_cast<CAmount>(launch.security_fees)));
     obj.pushKV("creator_fees_owed", ValueFromAmount(static_cast<CAmount>(launch.creator_fees)));
     obj.pushKV("creator_fees_paid", ValueFromAmount(static_cast<CAmount>(launch.creator_paid)));
     obj.pushKV("allocation", DecimalToJSON(launch.allocation / 100.0));
@@ -3006,6 +3093,8 @@ RPCMethod getlaunchstats()
                 {RPCResult::Type::STR_AMOUNT, "graduation", "What a curve raises before it graduates"},
                 {RPCResult::Type::NUM, "fee", "A trade's fee on a curve, in percent"},
                 {RPCResult::Type::NUM, "creator_share", "The creator's part of it, in percent of the fee"},
+                {RPCResult::Type::NUM, "protocol_share", "The protocol's (the treasury's), in percent of the fee"},
+                {RPCResult::Type::NUM, "security_share", "The chain's security (the BMM bidder and the validators), in percent of the fee"},
                 {RPCResult::Type::NUM, "supply", "Whole tokens of a launch"},
                 {RPCResult::Type::NUM, "curve_supply", "Of which the curve sells"},
                 {RPCResult::Type::NUM, "pool_supply", "And go into the pool at graduation"},
@@ -3044,6 +3133,8 @@ RPCMethod getlaunchstats()
         rules.pushKV("graduation", ValueFromAmount(params.launch_graduation));
         rules.pushKV("fee", DecimalToJSON(params.launch_fee / 10000.0));
         rules.pushKV("creator_share", DecimalToJSON(params.launch_creator_share / 10000.0));
+        rules.pushKV("protocol_share", DecimalToJSON(params.launch_protocol_share / 10000.0));
+        rules.pushKV("security_share", DecimalToJSON(params.launch_security_share / 10000.0));
         rules.pushKV("supply", AmountToJSON(bitassets::LAUNCH_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("curve_supply", AmountToJSON(bitassets::LAUNCH_CURVE_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("pool_supply", AmountToJSON(bitassets::LAUNCH_POOL_SUPPLY, bitassets::LAUNCH_DECIMALS));
@@ -3607,6 +3698,7 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
         {"bitassets", &getorder},
         {"bitassets", &getbook},
         {"bitassets", &getverifications},
+        {"bitassets", &gettreasury},
     };
     for (const auto& c : commands) t.appendCommand(c.name, &c);
 }

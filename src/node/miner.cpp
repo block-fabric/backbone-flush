@@ -199,6 +199,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     // transactions, and what they take from its first output (ChainHooks::MergeMinedFeeOutputs).
     std::vector<CTxOut> fee_outputs;
     CAmount fee_take{0};
+    CAmount side_security{0};
     int side_main_height{0};
     std::optional<uint256> bundle_hash;
     bool main_pending{false};
@@ -401,6 +402,9 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         // among the payouts of the transactions; the time is the block's, which only the price
         // accumulators read: a block of stake's producer sets it to its slot's after, which changes no payout).
         side->FinishTxs(nHeight, pblock->nTime, side_params, side_tx_outputs);
+        // ... and the security parts of its fees, which the block pays with the fees of its transactions.
+        side_security = side->BitAssets().BlockSecurityFees(nHeight);
+        pblocktemplate->side_security_fees = side_security;
         // As many of the payouts owed as a block may pay; the rest wait for the next block. Refunds
         // wait with the deposits (State::ConnectBlock).
         side_outputs.insert(side_outputs.end(), side_refunds.begin(), side_refunds.end());
@@ -412,7 +416,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
             const auto own{sidechain::Hooks().MergeMinedOutputs(side->View(), *pindexPrev, pblock->nTime)};
             side_outputs.insert(side_outputs.end(), own.begin(), own.end());
             // ... and for the fees of its transactions, last in the coinbase, taken from its first output.
-            fee_take = sidechain::Hooks().MergeMinedFeeOutputs(*pblock, nHeight, side_main_height, pblocktemplate->vTxFees, fee_outputs);
+            fee_take = sidechain::Hooks().MergeMinedFeeOutputs(*pblock, nHeight, side_main_height, pblocktemplate->vTxFees, fee_outputs, side_security);
         }
         m_chainstate.ReleaseSideCursor();
     }
@@ -438,7 +442,7 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     coinbaseTx.vout.resize(1);
     coinbaseTx.vout[0].scriptPubKey = m_options.coinbase_output_script;
     // Block subsidy + fees
-    const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus()) - fee_take};
+    const CAmount block_reward{nFees + GetBlockSubsidy(nHeight, chainparams.GetConsensus()) + side_security - fee_take};
     coinbaseTx.vout[0].nValue = block_reward;
     coinbase_tx.block_reward_remaining = block_reward;
     // Sidechain payouts come right after the first output, as the rules want them.

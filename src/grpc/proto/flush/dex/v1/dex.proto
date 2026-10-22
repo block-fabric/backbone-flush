@@ -128,14 +128,15 @@ message FeeSchedule {
   uint32 launch_fee_ppm = 5;
   repeated FeeShare launch_split = 6;
   double launch_graduation_ecx = 7;
-  // The protocol's part of every pool fee (millionths of it): 0, all to the liquidity providers.
+  // The protocol's (the treasury's) part of every pool fee, in millionths of it.
   uint32 protocol_fee_share_ppm = 8;
   // How the network fees of a block are shared (the PoS fee split): the BMM bidder's share now, in basis points,
   // the rest to the validators; null before the split's height.
   optional double network_bidder_bps = 9;
   // The relay fee of this node's mempool, in ECX per kvB (what broadcast transactions must pay at least).
   double min_relay_fee_ecx_per_kvb = 10;
-  // Swap fee shares, if the chain splits pool fees (repeated empty: all to the liquidity providers).
+  // How every swap fee is split (millionths of the fee as bps): liquidity_providers, security (the BMM bidder and the
+  // validators, with the block's fees), treasury. Order books charge none.
   repeated FeeShare swap_split = 11;
 }
 
@@ -144,18 +145,40 @@ message GetTreasuryRequest {}
 message TreasuryInflow {
   uint32 height = 1;
   uint32 time = 2;
+  // The asset (ECX: the chain's coin) and what came in: the protocol's parts of swap fees and of launch fees, and the
+  // security parts of swap fees paid in an asset (held: no coinbase pays them).
+  string asset = 5;
   double amount_ecx = 3;
   string source = 4;
+  double from_swaps = 6;
+  double from_launches = 7;
+  double security_held = 8;
+}
+
+message TreasuryBalance {
+  string asset = 1;
+  optional string asset_id = 2;
+  double balance = 3;
+  double from_swaps = 4;
+  double from_launches = 5;
+  double security_held = 6;
 }
 
 message Treasury {
-  // Whether this chain's rules have a treasury. While false, the rest is empty.
+  // Whether this chain's rules have a treasury (they do: held by the chain itself, no key, no output).
   bool available = 1;
   string reason = 2;
+  // None: the treasury is no address (the chain holds it).
   optional string address = 3;
+  // ECX held, and what came in over the last 24 hours (the market index).
   double balance_ecx = 4;
   double inflow_24h_ecx = 5;
   repeated TreasuryInflow inflows = 6;
+  repeated TreasuryBalance balances = 7;
+  // The security parts paid with the blocks' fees (to the BMM bidder and the validators), in all.
+  double security_paid_ecx = 8;
+  // Whether a rule spends from it: false (none yet; a change of the rules would add one).
+  bool spending_rule = 9;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -232,6 +255,9 @@ message LaunchDetail {
   string create_txid = 34;
   double first_buy_ecx = 35;
   double creator_share_percent = 36;
+  // The other parts of its fee (percent of it): the treasury's and the chain's security; the rest goes into the pool.
+  double protocol_share_percent = 44;
+  double security_share_percent = 45;
   double creator_fees_owed_ecx = 37;
   double creator_fees_paid_ecx = 38;
   double allocation_percent = 39;

@@ -169,6 +169,19 @@ uint64_t HolderCount(const sidechain::StoreView& view, const uint256& id, Token:
 /** What a script holds, by token (at most `limit`). */
 std::vector<Holding> HoldingsOf(const sidechain::StoreView& view, const CScript& script, size_t limit);
 
+/** What came into the treasury in a block (bitassets::TreasuryEntry): of an asset, from swaps' and launches' fees. */
+struct InflowRow {
+    int32_t height{0};
+    uint32_t time{0};
+    AssetId asset;
+    uint64_t from_swaps{0};
+    uint64_t from_launches{0};
+    uint64_t security_held{0};
+    SERIALIZE_METHODS(InflowRow, obj) { READWRITE(obj.height, obj.time, obj.asset, obj.from_swaps, obj.from_launches, obj.security_held); }
+};
+/** The treasury's inflows, newest first, at most `limit`. */
+std::vector<InflowRow> TreasuryInflows(const sidechain::StoreView& view, size_t limit);
+
 /** The price of a pool now, in whole units of asset0 per whole asset1; nullopt for a book or an empty pool. */
 std::optional<double> PoolPrice(const State& state, const uint256& id, const Pool& pool);
 

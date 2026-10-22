@@ -609,6 +609,10 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
     }
     if (!Hooks().AfterBlock(*this, block, height, step, minted, params, reject_reason)) return false;
     if (fees && !Hooks().CheckFees(*this, block, height, step, *fees, reject_reason)) return false;
+    // The DEX's security parts of its fees: coins the coinbase may pay beyond the fees of the transactions (the DEX's
+    // coin, which the state held, paid out with them: CheckFees split them). After AfterBlock, which counts what the
+    // coinbase pays beyond the fees (the payouts) apart from the fees' outputs.
+    minted += BitAssets().BlockSecurityFees(height);
     // The search index of the assets (derived data, no rule reads it), from what the block changed.
     if (m_overlay) bitassets::index::ConnectBlock(*m_overlay, height, params.asset_volume_window);
     // The DEX's market index (-dexindex: trades, candles, holders), the same way.

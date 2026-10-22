@@ -38,6 +38,17 @@ def units(amount, decimals):
     return int(Decimal(str(amount)) * 10**decimals)
 
 
+
+def taken(node, amount, fee_millionths):
+    """The security and protocol parts of the swap fee on `amount` (units) at `fee_millionths`: what leaves the pool (doc/layers.md "Fees of the DEX")."""
+    parts = node.getdexinfo()["swap_fee_parts"]
+    fee = amount * fee_millionths // 1000000
+    out = 0
+    for key in ("security", "protocol"):
+        share = int(Decimal(str(parts[key])) * 10000)
+        out += fee * share // 1000000
+    return out
+
 class LayersDexCurvesTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
@@ -173,7 +184,11 @@ class LayersDexCurvesTest(LayersTest):
         assert_equal(self.held(n1, "USDY") - y1, outs[0])
         assert_equal(self.held(n2, "USDX") - x2, outs[1])
         _, (a0, a1), _ = self.raw(n0, stable)
-        assert_equal((a0, a1), (e0, e1))
+        # The round's reserves less the security and protocol parts of each side's fee (which left the pool).
+        fee = pool["fee_millionths"]
+        in0, in1 = (300000, 100000) if usdx0 else (100000, 300000)
+        assert_equal((a0, a1), (e0 - taken(n0, in0, fee), e1 - taken(n0, in1, fee)))
+        assert not n0.gettreasury()["spending_rule"]
         simulated = n0.simulateclearing(stable, [{"asset": "USDX", "amount": 3000}, {"asset": "USDY", "amount": 1000}])
         assert_equal(len(simulated["outs"]), 2)
 

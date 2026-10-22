@@ -40,8 +40,10 @@ A pair of assets can have several pools, one of each kind:
 | Launch curve | new tokens (below) | made by a launch only; nobody adds liquidity to it |
 | Order book | limit orders (below) | not a pool you provide to: orders at your price |
 
-**Fee tiers**: 0.01 %, 0.05 %, 0.30 %, 1.00 % of what goes in. All of it goes to the pool's providers. Lower tiers
-suit stable pairs, higher ones volatile pairs. A pool may be made with a **dynamic fee**: its tier plus up to 2 %
+**Fee tiers**: 0.01 %, 0.05 %, 0.30 %, 1.00 % of what goes in. Of each fee, most stays with the pool's providers; a
+part pays the chain's security (the miners who anchor it and the validators) and, on Flush, a part goes to the
+protocol's treasury: on Layers 89 % providers / 11 % security; on Flush 85 % providers / 11 % security / 4 % treasury.
+Lower tiers suit stable pairs, higher ones volatile pairs. A pool may be made with a **dynamic fee**: its tier plus up to 2 %
 more while its price moves a lot, back to its tier when it is quiet.
 
 **Making a pool** (Trade → Create pool, or `createpool A amount_a B amount_b '{"curve":"stable","fee":0.05,"amp":200}'`):
@@ -98,8 +100,8 @@ a creator allocation.
 - When buyers have paid **500 CHN** into the curve, the token **graduates**: the raised coin and the curve's last
   quarter of the tokens become the token's ordinary pool with CHN, whose liquidity is **locked for good** (nobody
   holds its shares). Trading goes on there.
-- Fees: 1 % of every trade on the curve; 30 % of it to the creator (claim it any time), the rest into the pool at
-  graduation. The creator's optional allocation (at most 5 %) is created only at graduation, and every launch shows it.
+- Fees: of every trade on the curve, 1 % on Layers (80 % of it to the creator, 20 % to the chain's security) and 1.15 % on
+  Flush (50 % to the creator, 30 % to the treasury, 20 % to the chain's security). The creator claims theirs any time. The creator's optional allocation (at most 5 %) is created only at graduation, and every launch shows it.
 - Buying: Trade → Launches lists them (progress to graduation, price, market value, volume); a launch's page has its
   curve, a buy/sell panel and a quote. CLI: `listlaunches`, `getlaunch MOON`, `quotelaunch MOON 5`, `buyfromlaunch`,
   `selltolaunch`, `claimlaunch`.
@@ -116,6 +118,13 @@ pairs with CHN), with search and sorting (`searchpools` on the command line).
 shows a badge only for curators **you** chose to trust (none by default). A badge means a curator you trust says the
 asset is what it claims to be (its issuer is who it says); it says nothing of its price. Curators can take a
 verification back. CLI: `getverifications GOLD`; a curator: `verifyasset <oracle> GOLD (false)`.
+
+## Where the fees go: the treasury
+
+The protocol's parts of the fees accrue in a **treasury** that the chain holds itself: no key, no address, and no rule
+spends from it yet (what becomes of it is to be decided). `gettreasury` and the app show what it holds and where it came
+from. Fees paid in an asset (not the chain's coin) cannot pay the miners and validators directly: their security part
+waits in the treasury too, per asset.
 
 ## Prices over time
 
