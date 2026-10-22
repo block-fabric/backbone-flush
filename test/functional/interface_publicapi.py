@@ -201,7 +201,9 @@ class PublicApiTest(LayersTest):
         n2.buyfromlaunch("SUN", Decimal("0.5"))
         self.bmm()
         got2 = self.holding(n2, "MOON")
-        sold = n1.selltolaunch("MOON", got1 / 4)
+        # A quarter that fits the token's 6 decimals (what the launch fee leaves need not divide by 4).
+        quarter = (got1 / 4).quantize(Decimal("0.000001"))
+        sold = n1.selltolaunch("MOON", quarter)
         self.bmm()
         trades = api.rest("launches/MOON/trades")
         # The first buy, two buys and a sale, newest first.
@@ -209,7 +211,7 @@ class PublicApiTest(LayersTest):
         assert_equal(trades["total"], 4)
         assert_equal(trades["next_cursor"], None)
         sale = trades["items"][0]
-        assert_equal(Decimal(str(sale["tokens"])), got1 / 4)
+        assert_equal(Decimal(str(sale["tokens"])), quarter)
         assert_equal(Decimal(str(sale["ecx"])), sold["quote"])
         assert_equal(sale["venue"], "curve")
         assert_equal(sale["txid"], sold["txid"])

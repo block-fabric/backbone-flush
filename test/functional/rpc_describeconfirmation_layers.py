@@ -31,6 +31,8 @@ class LayersDescribeConfirmationTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
         self.num_nodes = 1
+        # The DEX from the first block: a route (swaproute) is one of its orders.
+        self.side_args = self.side_args + ["-testactivationheight=dex@0"]
         self.extra_args = [self.side_args]
 
     def run_test(self):
@@ -59,10 +61,13 @@ class LayersDescribeConfirmationTest(LayersTest):
         n0.addliquidity("GOLD", 10000, "ECX", 20)
         self.bmm()
         wallet = n0.listwallets()[0]
+        # A confirmation names an asset by its id only ("0x" and its hash): never a name that may look alike.
+        gold = "0x" + n0.getasset("GOLD")["asset"]
+        chn = "ECX"
 
         self.log.info("An asset sent: described with its destination and amount, run with its token")
         to = n0.getnewaddress()
-        d = n0.describeconfirmation("sendasset", [to, "GOLD", 25], wallet)
+        d = n0.describeconfirmation("sendasset", [to, gold, 25], wallet)
         assert_equal(d["needed"], True)
         assert_equal(d["title"], "Send an asset")
         assert_equal(rows(d)["address"], to)
@@ -75,19 +80,51 @@ class LayersDescribeConfirmationTest(LayersTest):
         self.bmm()
 
         self.log.info("A swap: its amounts; changed after the question, refused")
-        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "ECX", 1, 10, "0.1"], wallet)
+        d = n0.describeconfirmation("swapasset", [gold, 100, chn, 1, 10, "0.1"], wallet)
         assert_equal(d["title"], "Swap")
         assert "min_out" in rows(d)
         tampered = dict(d["request"])
-        tampered["params"] = dict(d["request"]["params"], params=["GOLD", 100, "ECX", 1, 10, "0"])
+        tampered["params"] = dict(d["request"]["params"], params=[gold, 100, chn, 1, 10, "0"])
         assert_raises_rpc_error(REFUSED, "not the one that was confirmed", n0.webuihost, tampered, d["token"])
         assert_raises_rpc_error(REFUSED, "not known", n0.webuihost, d["request"], d["token"])
-        d = n0.describeconfirmation("swapasset", ["GOLD", 100, "ECX", 1, 10, "0.1"], wallet)
+        d = n0.describeconfirmation("swapasset", [gold, 100, chn, 1, 10, "0.1"], wallet)
         n0.webuihost(d["request"], d["token"])
         self.bmm()
 
+        self.log.info("A route through pools, by its assets and by its pools' ids: each resolved in the question; reads of the DEX for the pages")
+        n0.reserveasset("SILV")
+        for _ in range(4):
+            self.bmm()
+        n0.registerasset("SILV", 1000000, 2)
+        self.bmm()
+        n0.addliquidity("SILV", 10000, "ECX", 20)
+        self.bmm()
+        silv = "0x" + n0.getasset("SILV")["asset"]
+        read = lambda method, params: n0.webuihost({"kind": "rpc", "method": method, "params": params})["result"]
+        quote = read("quoteroute", [gold, 10, silv])
+        assert_equal(quote["path"], ["GOLD", "ECX", "SILV"])
+        assert_equal(len(quote["routes"][0]["hops"]), 2)
+        assert read("getdexinfo", [])["active"]
+        d = n0.describeconfirmation("swaproute", [[gold, chn, silv], 10, 1, (quote["amount_out"] * Decimal("0.98")).quantize(Decimal("0.01"))], wallet)
+        assert_equal(d["title"], "Trade along a route")
+        shown = rows(d)
+        assert any(gold[2:10] in v for v in shown.values()), shown
+        assert "min_out" in shown and "amount_in" in shown
+        result = n0.webuihost(d["request"], d["token"])["result"]
+        assert result["txid"] in n0.getrawmempool()
+        self.bmm()
+        # The same route by its pools' ids (swappools): each pool named in the question by its id.
+        quote = read("quoteroute", [gold, 10, silv])
+        pools = [h["pool"] for h in quote["routes"][0]["hops"]]
+        d = n0.describeconfirmation("swappools", [gold, 10, pools, 1, (quote["amount_out"] * Decimal("0.98")).quantize(Decimal("0.01"))], wallet)
+        shown = rows(d)
+        assert pools[0][:8] in shown["Pool 1"] and pools[1][:8] in shown["Pool 2"], shown
+        result = n0.webuihost(d["request"], d["token"])["result"]
+        assert result["txid"] in n0.getrawmempool()
+        self.bmm()
+
         self.log.info("Liquidity: both amounts shown")
-        d = n0.describeconfirmation("addliquidity", ["GOLD", 100, "ECX", "0.2"], wallet)
+        d = n0.describeconfirmation("addliquidity", [gold, 100, chn, "0.2"], wallet)
         assert_equal(d["title"], "Add liquidity")
         assert {"amount_a", "amount_b"} <= set(rows(d))
 
