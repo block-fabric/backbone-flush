@@ -149,6 +149,10 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     options.ipv6_prefix = static_cast<int>(ipv6_prefix);
     // Slow reads (also behind HTTP/2 flow control), Rapid Reset and MadeYouReset, requests per connection.
     options.write_timeout_seconds = 30;
+    // A slow reader: at least 4 KiB a second taken of its waiting replies (or all of them) over each 30 s; what a
+    // connection holds of replies at most (a call's 4 MiB, what waits for the socket, room for a few streams).
+    options.min_read_bytes_per_second = 4 << 10;
+    options.max_reply_buffer = 32 << 20;
     options.max_requests_per_connection = 10000;
     options.max_abandoned_requests = 100;
     options.max_stream_messages = 32;
