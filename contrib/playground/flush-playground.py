@@ -45,7 +45,7 @@ import urllib.request
 from decimal import Decimal
 from pathlib import Path
 
-SLOT = 46
+SLOT = int(os.environ.get("FLUSH_PLAYGROUND_SLOT", "46"))  # FLUSH_PLAYGROUND_SLOT: another slot (e.g. 99, doc/photon-slot.md)
 SRCDIR = Path(__file__).resolve().parents[2]
 # The genesis validators: three fixed regtest keys (never use them anywhere else) and their x-only public keys.
 KEYS = ["11" + "00" * 30 + f"{i:02x}" for i in (1, 2, 3)]

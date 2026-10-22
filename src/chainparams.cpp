@@ -232,6 +232,7 @@ std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, c
     case ChainType::ECASH_TESTNET: {
         auto opts = CChainParams::MainNetOptions{};
         ReadMainNetArgs(args, opts);
+        opts.betanet_slot99 = IsBetanetSlot99(args, chain);
         return CChainParams::Ecash(chain, opts);
     }
     }

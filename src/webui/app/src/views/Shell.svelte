@@ -9,6 +9,7 @@
   import TxNotifier from '../components/TxNotifier.svelte';
   import LocalBackground from '../chain/LocalBackground.svelte';
   import MainchainAlert from '../components/MainchainAlert.svelte';
+  import TemporaryNetwork from '../components/TemporaryNetwork.svelte';
   import { startMainLink } from '../lib/mainlink.svelte';
   import { closeDetail, detail } from '../lib/detail.svelte';
   import { go, nav } from '../lib/nav.svelte';
@@ -49,6 +50,7 @@
     <TitleStrip title={pageTitleSource(nav.page)} detail={wallets.current !== null ? wallets.current || 'default wallet' : ''} />
   {/if}
   <!-- Above every page, whatever the layout: the mainchain node cannot be reached (a sidechain). -->
+  <TemporaryNetwork />
   <MainchainAlert />
   <div class="layout">
     {#if prefs.layout === 'workspace'}

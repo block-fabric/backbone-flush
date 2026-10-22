@@ -1,0 +1,30 @@
+# TEMPORARY (doc/photon-slot.md, doc/slot99-testnet.md): a validator of Flush on eCash betanet slot 99 (Photon's).
+# Install (as root): binaries in /opt/flush-photon/bin, flush.conf in /opt/flush-photon/, the data and the validator
+# key in /opt/flush-photon/data (owned by the system user flushphoton), then
+#   cp flush-photon-validator.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now flush-photon-validator
+#   ufw allow 38995/tcp comment 'Flush slot 99 P2P'
+# RPC: localhost only, cookie auth: runuser -u flushphoton -- /opt/flush-photon/bin/flush-cli -conf=/opt/flush-photon/flush.conf -datadir=/opt/flush-photon/data <method>
+[Unit]
+Description=TEMPORARY Flush on eCash betanet slot 99 (Photon): validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=flushphoton
+Group=flushphoton
+ExecStart=/opt/flush-photon/bin/flushd -conf=/opt/flush-photon/flush.conf -datadir=/opt/flush-photon/data
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=30
+MemoryMax=1G
+MemoryHigh=900M
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

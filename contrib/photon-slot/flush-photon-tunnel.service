@@ -1,0 +1,19 @@
+# TEMPORARY: the mainchain of a slot-99 Flush validator without a betanet node of its own: Backbone's gRPC on the lab
+# server (nodes.blockfab.org) through SSH, as 127.0.0.1:50052 here. The key /opt/flush-photon/tunnel_key may only
+# forward to 127.0.0.1:50051 there (restrict,port-forwarding,permitopen, user flushtunnel).
+[Unit]
+Description=TEMPORARY Flush slot 99: SSH tunnel to the lab Backbone gRPC
+After=network-online.target
+Wants=network-online.target
+Before=flush-photon-validator.service
+
+[Service]
+Type=simple
+User=flushphoton
+ExecStart=/usr/bin/ssh -N -i /opt/flush-photon/tunnel_key -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/opt/flush-photon/known_hosts -L 127.0.0.1:50052:127.0.0.1:50051 flushtunnel@216.128.183.114
+Restart=always
+RestartSec=15
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

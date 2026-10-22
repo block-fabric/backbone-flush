@@ -12,6 +12,8 @@
 #include <addresstype.h>
 #include <bitassets/state.h>
 #include <chainparams.h>
+#include <chainparamsbase.h>
+#include <common/args.h>
 #include <consensus/params.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
@@ -19,6 +21,7 @@
 #include <sidechain/store.h>
 #include <test/util/setup_common.h>
 #include <util/chaintype.h>
+#include <util/strencodings.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -204,6 +207,45 @@ BOOST_AUTO_TEST_CASE(rules_from_genesis)
         BOOST_CHECK_EQUAL(consensus.pos.fee_curve2_height, 0);
     }
     BOOST_CHECK_EQUAL(CreateChainParams(*m_node.args, ChainType::TESTNET)->GetConsensus().sidechain.main_activation_height, 4997);
+}
+
+/** TEMPORARY (doc/photon-slot.md): -chain=ecashbeta -sidechainslot=99 is Flush in betanet's slot 99, a network of its
+ * own (first block, message start, ports, data folder), with every rule of the slot-46 betanet Flush. */
+BOOST_AUTO_TEST_CASE(betanet_slot99)
+{
+    ArgsManager args;
+    args.AddArg("-sidechainslot", "", ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
+    const auto plain{CreateChainParams(args, ChainType::ECASH_BETANET)};
+    BOOST_CHECK(!IsBetanetSlot99(args, ChainType::ECASH_BETANET));
+    BOOST_CHECK(plain->TemporaryNotice().empty());
+    args.ForceSetArg("-sidechainslot", "99");
+    BOOST_CHECK(IsBetanetSlot99(args, ChainType::ECASH_BETANET));
+    BOOST_CHECK_THROW(IsBetanetSlot99(args, ChainType::ECASH), std::runtime_error);
+    BOOST_CHECK_THROW(IsBetanetSlot99(args, ChainType::ECASH_TESTNET), std::runtime_error);
+    BOOST_CHECK(!IsBetanetSlot99(args, ChainType::REGTEST));
+    const auto photon{CreateChainParams(args, ChainType::ECASH_BETANET)};
+    const Consensus::Params& a{plain->GetConsensus()};
+    const Consensus::Params& b{photon->GetConsensus()};
+    BOOST_CHECK_EQUAL(b.sidechain.slot, 99U);
+    BOOST_CHECK_EQUAL(b.sidechain.main_activation_height, 968998);
+    BOOST_CHECK_EQUAL(b.pos.main_activation_height, 968998);
+    BOOST_CHECK(b.hashGenesisBlock != a.hashGenesisBlock);
+    BOOST_CHECK(photon->MessageStart() != plain->MessageStart());
+    BOOST_CHECK_EQUAL(photon->GetDefaultPort(), 38995);
+    BOOST_CHECK_EQUAL(b.pos.genesis_validators.size(), 3U);
+    BOOST_CHECK_EQUAL(HexStr(b.pos.genesis_validators[0].pubkey), "50be1e4d85e06cb7535fee19de6021d57e36d846db8bc78579b6a1799fb5b8ba");
+    BOOST_CHECK(a.pos.genesis_validators.empty());
+    BOOST_CHECK(photon->TemporaryNotice().starts_with("Temporary: Flush on betanet slot 99 (Photon)"));
+    // The rules: the same as the slot-46 betanet Flush.
+    BOOST_CHECK_EQUAL(b.pos.stall_seconds, a.pos.stall_seconds);
+    BOOST_CHECK_EQUAL(b.pos.max_unanchored_slots, a.pos.max_unanchored_slots);
+    BOOST_CHECK_EQUAL(b.pos.seed_lookahead_seconds, a.pos.seed_lookahead_seconds);
+    BOOST_CHECK_EQUAL(b.sidechain.dex_fee_security_share, a.sidechain.dex_fee_security_share);
+    BOOST_CHECK_EQUAL(b.sidechain.launch_fee, a.sidechain.launch_fee);
+    BOOST_CHECK_EQUAL(b.sidechain.launch_graduation, a.sidechain.launch_graduation);
+    BOOST_CHECK(b.sidechain.main_events_only && !b.sidechain.main_single_payout);
+    args.ForceSetArg("-sidechainslot", "46");
+    BOOST_CHECK_THROW(CreateChainParams(args, ChainType::ECASH_BETANET), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

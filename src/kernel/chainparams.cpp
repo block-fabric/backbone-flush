@@ -884,6 +884,31 @@ public:
                            .message_start = {0x66, 0x6c, 0x78, 0x21}, .default_port = 8255, .bech32_hrp = "flx"});
             break;
         case ChainType::ECASH_BETANET:
+            if (opts.betanet_slot99) {
+                // TEMPORARY (doc/photon-slot.md): Flush in betanet's slot 99, voted in for Photon (activated at 968998,
+                // never deposited to). Its own first block, message start ("flx" + 0x99), ports (38994/38995) and
+                // data folder (betanet-photon), so it never mixes with a slot-46 Flush or with Photon's own chain; the
+                // betanet addresses (bflx), as the app knows them. The activation height pins this slot's sidechain:
+                // the node stops if another one ever takes slot 99 (Follower::CheckSlot).
+                MakeSidechain({.slot = 99, .genesis_message = "TEMPORARY Flush on eCash betanet slot 99 (Photon) 22/Oct/2026", .genesis_time = 1792627200,
+                               .message_start = {0x66, 0x6c, 0x78, 0x99}, .default_port = 38995, .bech32_hrp = "bflx"});
+                consensus.sidechain.main_activation_height = 968998;
+                // Its bootstrap: three genesis validators (each key made on its own machine: the lab node server, the
+                // server 5.78.75.193 and the UI PC), so blocks of stake start without 4 ECX bonded first; at least 3
+                // of them active, and a bond of 0.1 ECX makes another validator (the pool server's, anyone's).
+                // (x-only keys, in their byte order as -posvalidators takes them, not uint256's display order.)
+                const auto key{[](std::string_view hex) { const auto bytes{ParseHex(hex)}; return uint256{std::span<const unsigned char>{bytes}}; }};
+                consensus.pos.genesis_validators = {
+                    {.pubkey = key("50be1e4d85e06cb7535fee19de6021d57e36d846db8bc78579b6a1799fb5b8ba"), .stake = 1}, // lab
+                    {.pubkey = key("46e52427c3a472f9700624d7b6c91d87c7c4af184021b870cefb0ae50b752d83"), .stake = 1}, // 5.78
+                    {.pubkey = key("3b39aea3d8f7b8fdb0f8887c91eb8a00802351f79b930a0caddce8d50d8b3ba0"), .stake = 1}, // PC
+                };
+                consensus.pos.min_active_validators = 3;
+                consensus.pos.min_stake = COIN / 10;
+                m_temporary_notice = "Temporary: Flush on betanet slot 99 (Photon). A test chain in the slot voted in for Photon; it will be "
+                                     "dropped when Flush gets its own slot (46). Do not keep value here.";
+                break;
+            }
             MakeSidechain({.slot = 46, .genesis_message = "Flush on eCash betanet 21/Oct/2026", .genesis_time = 1792540800,
                            .message_start = {0x66, 0x6c, 0x78, 0x22}, .default_port = 38255, .bech32_hrp = "bflx"});
             break;

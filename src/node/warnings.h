@@ -25,6 +25,7 @@ enum class Warning {
     PRE_RELEASE_TEST_BUILD,
     FATAL_INTERNAL_ERROR,
     MAINCHAIN_UNREACHABLE,
+    TEMPORARY_NETWORK, //!< TEMPORARY: CChainParams::TemporaryNotice (doc/photon-slot.md)
 };
 
 /**

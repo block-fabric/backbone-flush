@@ -51,6 +51,12 @@ const CBaseChainParams& BaseParams();
 /** Sets the params returned by Params() to those for the given chain. */
 void SelectBaseParams(ChainType chain);
 
+/**
+ * TEMPORARY (doc/photon-slot.md): whether `chain` is betanet with -sidechainslot=99, Flush in the slot voted in for
+ * Photon. Throws on -sidechainslot on ecash or ecashtest, or on betanet with another slot.
+ */
+bool IsBetanetSlot99(const ArgsManager& args, ChainType chain);
+
 /** List of possible chain / network names  */
 #define LIST_CHAIN_NAMES "main, test, signet, regtest, ecash, ecashbeta, ecashtest"
 

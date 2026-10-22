@@ -89,6 +89,8 @@ public:
 
     const Consensus::Params& GetConsensus() const { return consensus; }
     const MessageStartChars& MessageStart() const { return pchMessageStart; }
+    /** TEMPORARY: a notice that this network is a temporary one (shown as a warning by the node and the app), or empty. */
+    const std::string& TemporaryNotice() const { return m_temporary_notice; }
     uint16_t GetDefaultPort() const { return nDefaultPort; }
     std::vector<int> GetAvailableSnapshotHeights() const;
 
@@ -198,6 +200,9 @@ public:
 
     struct MainNetOptions {
         DeploymentOptions dep_opts{};
+        //! TEMPORARY: on ChainType::ECASH_BETANET, Flush in slot 99 of betanet (the slot voted in for Photon, which
+        //! nobody uses) instead of 46 (-sidechainslot=99; doc/photon-slot.md). Remove with the variant.
+        bool betanet_slot99{false};
     };
 
     struct TestNetOptions {
@@ -229,6 +234,7 @@ protected:
     std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
     std::string bech32_hrp;
     ChainType m_chain_type;
+    std::string m_temporary_notice;
     CBlock genesis;
     std::vector<uint8_t> vFixedSeeds;
     bool fDefaultConsistencyChecks;

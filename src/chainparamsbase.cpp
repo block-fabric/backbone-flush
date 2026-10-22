@@ -10,6 +10,7 @@
 #include <util/chaintype.h>
 
 #include <cassert>
+#include <stdexcept>
 
 void SetupChainParamsBaseOptions(ArgsManager& argsman)
 {
@@ -27,7 +28,8 @@ void SetupChainParamsBaseOptions(ArgsManager& argsman)
     argsman.AddArg("-posuncheckedheaders=<n>", "FastBlocks: an outbound peer may hold <n> headers the node cannot check yet (not consensus; default: 2000; regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
     argsman.AddArg("-posuncheckedbytes=<n>", "FastBlocks: the blocks of the headers the node cannot check yet that a peer holds may weigh <n> bytes (not consensus; default: 33554432; regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
     argsman.AddArg("-posseedlookahead=<n>", "FastBlocks: the leader seed of an epoch is the hash of the highest mainchain block whose median time is at least <n> seconds before the epoch starts (default: 3600; regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
-    argsman.AddArg("-sidechainslot=<n>", "Make the regtest chain a sidechain in slot <n> of the mainchain, with the rules of one: blocks are blind merged mined and coins come from deposits. (regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
+    argsman.AddArg("-sidechainslot=<n>", "Make the regtest chain a sidechain in slot <n> of the mainchain, with the rules of one: blocks are blind merged mined and coins come from deposits (regtest). "
+                   "TEMPORARY: with -chain=ecashbeta, only 99: Flush in betanet's slot 99 (Photon's), a network of its own (own first block, message start, ports 38994/38995, data folder betanet-photon)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
     argsman.AddArg("-testmainenforcer", "With -sidechainslot: the mainchain follows the drivechain rules of the bip300301_enforcer, as on the eCash networks (backboned -testecash): no single payout, and the parameters tied to its blocks scaled as there (see SidechainParams). (regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-sidechainactivationheight=<n>", "With -sidechainslot: the height of the mainchain block that activated the sidechain in its slot (SidechainParams::main_activation_height; default: 0). (regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-testactivationheight=name@height.", "Set the activation height of 'name' (segwit, bip34, dersig, cltv, csv; FastBlocks: feesplit, feecurve2; BitAssets: logo, ticker; Flush: dex, dexcurves; regtest only). (test-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
@@ -70,6 +72,8 @@ std::unique_ptr<CBaseChainParams> CreateBaseChainParams(const ChainType chain)
     case ChainType::ECASH:
         return std::make_unique<CBaseChainParams>("", 8254);
     case ChainType::ECASH_BETANET:
+        // TEMPORARY: Flush in betanet's slot 99 (doc/photon-slot.md), with a data folder and RPC port of its own.
+        if (IsBetanetSlot99(gArgs, chain)) return std::make_unique<CBaseChainParams>("betanet-photon", 38994);
         return std::make_unique<CBaseChainParams>("betanet", 38254);
     case ChainType::ECASH_TESTNET:
         return std::make_unique<CBaseChainParams>("testnet4", 48254);
@@ -77,8 +81,20 @@ std::unique_ptr<CBaseChainParams> CreateBaseChainParams(const ChainType chain)
     assert(false);
 }
 
+bool IsBetanetSlot99(const ArgsManager& args, const ChainType chain)
+{
+    if (chain != ChainType::ECASH && chain != ChainType::ECASH_BETANET && chain != ChainType::ECASH_TESTNET) return false;
+    const auto slot{args.GetIntArg("-sidechainslot")};
+    if (!slot) return false;
+    if (chain != ChainType::ECASH_BETANET || *slot != 99) {
+        throw std::runtime_error("-sidechainslot on an eCash network: only -chain=ecashbeta -sidechainslot=99 (the temporary Flush in Photon's slot)");
+    }
+    return true;
+}
+
 void SelectBaseParams(const ChainType chain)
 {
-    globalChainBaseParams = CreateBaseChainParams(chain);
+    // The network's section of the configuration first: -sidechainslot=99 may be in [ecashbeta].
     gArgs.SelectConfigNetwork(ChainTypeToString(chain));
+    globalChainBaseParams = CreateBaseChainParams(chain);
 }

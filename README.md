@@ -1,5 +1,7 @@
 # Flush
 
+> **Branch `photon-slot`: a TEMPORARY Flush test network on eCash betanet slot 99. See [doc/slot99-testnet.md](doc/slot99-testnet.md).**
+
 Flush is a sidechain of **eCash** (ECX): **tokens, assets and a DEX on a fast chain**. Anyone can create
 tokens and assets (shares, points, tickets, stablecoins) and trade them on a decentralized exchange (pools,
 routes through several pools, batch clearing, price feeds, oracles) and by Dutch auction, on a chain with a

@@ -72,6 +72,7 @@
 #include <node/mining_args.h>
 #include <node/mining_types.h>
 #include <node/peerman_args.h>
+#include <node/warnings.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
 #include <policy/fees/estimator_args.h>
@@ -1571,6 +1572,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 {
     const ArgsManager& args = *Assert(node.args);
     const CChainParams& chainparams = Params();
+
+    // TEMPORARY (doc/photon-slot.md): a temporary network says so in every warning list (RPC, the app).
+    if (!chainparams.TemporaryNotice().empty()) {
+        LogWarning("%s", chainparams.TemporaryNotice());
+        if (node.warnings) node.warnings->Set(node::Warning::TEMPORARY_NETWORK, Untranslated(chainparams.TemporaryNotice()));
+    }
 
     auto opt_max_upload = ParseByteUnits(args.GetArg("-maxuploadtarget", DEFAULT_MAX_UPLOAD_TARGET), ByteUnit::M);
     if (!opt_max_upload) {
