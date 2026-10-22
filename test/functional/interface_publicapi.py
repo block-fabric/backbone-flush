@@ -28,6 +28,7 @@ from decimal import Decimal
 from feature_layers import LayersTest
 from test_framework.publicapi import (PublicApi, URI_PARAMS, action_hash, decode, encode, grpc_call, parse_uri, protoc_available)
 from test_framework.util import assert_equal, assert_greater_than
+from test_framework.test_framework import SkipTest
 
 DEX_HEIGHT = 10
 CURVES_HEIGHT = 15
@@ -57,6 +58,11 @@ class PublicApiTest(LayersTest):
         parser.add_argument("--site-shots", help="where its pictures go")
         parser.add_argument("--playwright", help="the playwright package (node) the site's test drives Chromium with")
         parser.add_argument("--hold", help="(development) write the API's port to this file and wait until it is removed, the chain running")
+
+    def skip_test_if_missing_module(self):
+        super().skip_test_if_missing_module()
+        if not self.config["components"].getboolean("ENABLE_PUBLICAPI", fallback=False):
+            raise SkipTest("built without the public DEX API (WITH_PUBLICAPI)")
 
     def run_test(self):
         super().run_test()
