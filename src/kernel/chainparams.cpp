@@ -678,6 +678,14 @@ public:
             consensus.sidechain.dex_height = opts.dep_opts.dex_height.value_or(std::numeric_limits<int>::max());
             // The DEX's pool kinds with the DEX, unless a test asks (-testactivationheight=dexcurves@<height>).
             consensus.sidechain.dex_curves_height = opts.dep_opts.dex_curves_height.value_or(0);
+            // Flush's fees of the DEX, as on its eCash networks (doc/layers.md "Fees of the DEX"): swaps 85 % providers /
+            // 11 % security / 4 % treasury; launch curves 1.15 %, 50 % creator / 30 % treasury / 20 % security.
+            consensus.sidechain.dex_fee_security_share = 110'000;
+            consensus.sidechain.dex_fee_protocol_share = 40'000;
+            consensus.sidechain.launch_fee = 11'500;
+            consensus.sidechain.launch_creator_share = 500'000;
+            consensus.sidechain.launch_protocol_share = 300'000;
+            consensus.sidechain.launch_security_share = 200'000;
             // The logos of assets from the first block, unless a test asks (-testactivationheight=logo@<height>).
             consensus.sidechain.logo_height = opts.dep_opts.logo_height.value_or(0);
             // Tickers and display names only if a test asks (-testactivationheight=ticker@<height>):
