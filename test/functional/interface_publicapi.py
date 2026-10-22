@@ -46,7 +46,7 @@ class PublicApiTest(LayersTest):
         common = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}", "-testactivationheight=ticker@0", "-txindex"]
         self.extra_args = [
             common + [f"-publicapi=127.0.0.1:{api_port(0)}", f"-publicapiorigin={ORIGIN}", "-publicapirate=1000", "-publicapiburst=5000"],
-            common + [f"-publicapi={api_port(1)}", "-publicapirate=1", "-publicapiburst=3"],
+            common + [f"-publicapi={api_port(1)}", "-publicapirate=1", "-publicapiburst=3", "-publicapiproxy=127.0.0.1", "-publicapiproxyheader=X-Real-IP"],
             common,
         ]
         self.common_args = common
@@ -459,8 +459,38 @@ class PublicApiTest(LayersTest):
         assert_equal(r.status, 429)
         assert int(r.headers["retry-after"]) >= 1
         assert_equal(r.json()["error"]["code"], "resource_exhausted")
-        # A proxy on localhost names the client: another client has its own budget.
+        # The proxy the operator named (here: localhost, with X-Real-IP) names the client: another client has its own budget.
         assert_equal(strict.get("status", headers={"X-Real-IP": "203.0.113.7"}).status, 200)
+
+        self.log.info("Slow clients: a request not all in within 15 s closes the connection; 16 connections an address")
+        import socket
+        slow = socket.create_connection(("127.0.0.1", api_port(0)))
+        slow.sendall(b"GET /api/v1/status HTTP/1.1\r\n")
+        start = time.time()
+        closed = False
+        while time.time() - start < 40:
+            try:
+                slow.sendall(b"X-A: b\r\n")  # a header line every second: never complete
+            except OSError:
+                closed = True
+                break
+            slow.settimeout(1)
+            try:
+                if slow.recv(1) == b"":
+                    closed = True
+                    break
+            except socket.timeout:
+                pass
+        assert closed, "a request that never completes holds the connection"
+        assert 14 <= time.time() - start <= 25, time.time() - start
+        slow.close()
+        held = [socket.create_connection(("127.0.0.1", api_port(0))) for _ in range(16)]
+        extra = socket.create_connection(("127.0.0.1", api_port(0)))
+        extra.settimeout(5)
+        assert_equal(extra.recv(1), b"")  # refused: closed at once
+        for c in held + [extra]:
+            c.close()
+        self.wait_until(lambda: api.get("status").status == 200)
 
         self.log.info("No wallet method is reachable; unknown procedures and paths")
         assert_equal(api.connect("ListUnspent", {})[0], 501)
@@ -497,6 +527,9 @@ class PublicApiTest(LayersTest):
                 assert_equal(status, 5)
                 status, _, replies = grpc_call(client, api_port(0), "grpc.health.v1.Health/Check", b"")
                 assert_equal((status, replies[0].hex()), (0, "0801"))
+                # Server reflection is off on the public API unless asked for (-publicapireflection).
+                status, _, _ = grpc_call(client, api_port(0), "grpc.reflection.v1.ServerReflection/ServerReflectionInfo", b"")
+                assert_equal(status, 12)
                 trades_req = encode("ListTradesRequest", 'id: "MOON" limit: 2')
                 status, _, replies = grpc_call(client, api_port(0), "ListLaunchTrades", trades_req)
                 assert_equal(status, 0)

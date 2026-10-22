@@ -223,7 +223,7 @@ public:
     {
         RegisterAll(server);
         grpcsrv::RegisterHealth(server, pool, {SERVICE});
-        grpcsrv::RegisterReflection(server, pool, {SERVICE});
+        if (options.reflection) grpcsrv::RegisterReflection(server, pool, {SERVICE});
     }
 
     std::optional<Status> Guard(const grpcsrv::CallInfo& call) override
@@ -969,7 +969,8 @@ private:
     {
         const bitassets::State state{tip.State()};
         const std::string verb{req.GetString("verb")};
-        const uint32_t expires_in{req.GetUInt("expires_in") == 0 ? 600 : static_cast<uint32_t>(req.GetUInt("expires_in"))};
+        // Ten minutes for a trade, an hour for a launch (its reservation has to be deep enough first), as the site writes them.
+        const uint32_t expires_in{req.GetUInt("expires_in") == 0 ? (verb == "launch" ? 3600 : 600) : static_cast<uint32_t>(req.GetUInt("expires_in"))};
         if (expires_in < 60 || expires_in > 3600) Fail(Code::INVALID_ARGUMENT, "expires_in: 60 to 3600 seconds");
         const int64_t expires{GetTime() + expires_in};
         const uint32_t slippage{Slippage(static_cast<uint32_t>(req.GetUInt("slippage_bps")))};
@@ -1096,7 +1097,7 @@ private:
             if (const auto why{bitassets::WhyNotDisplayName(name)}) Fail(Code::INVALID_ARGUMENT, "name: " + *why);
             const std::string desc{req.GetString("description")};
             for (const unsigned char c : desc) {
-                if (c < 0x20 || c == 0x7f) Fail(Code::INVALID_ARGUMENT, "description: plain text on one line");
+                if ((c < 0x20 && c != '\n') || c == 0x7f) Fail(Code::INVALID_ARGUMENT, "description: plain text (line breaks allowed, no other control character)");
             }
             size_t info{desc.size()};
             uri = {{"ticker", ticker}, {"name", name}};

@@ -346,6 +346,10 @@ struct Request {
     bool preflight{false};
     //! A request of the REST face, routed once its body is in; and how its reply is written raw.
     bool rest{false};
+    //! Messages a client stream sent so far.
+    size_t messages{0};
+    //! All of it is in (END_STREAM): its call runs, or ran.
+    bool ended{false};
 };
 
 std::string Header(const Request& r, const std::string& name)
@@ -449,21 +453,16 @@ bool HostAllowed(const std::string& host_port, const std::vector<std::string>& a
 std::string ClientOf(const Server& server, const Request& r)
 {
     const Options& options{server.GetOptions()};
-    const bool trusted{(options.trust_loopback_proxy && r.peer.IsValid() && r.peer.IsLocal()) ||
-                       std::any_of(options.trusted_proxies.begin(), options.trusted_proxies.end(), [&](const CSubNet& s) { return s.Match(r.peer); })};
-    if (trusted) {
-        std::string forwarded{util::TrimString(Header(r, "x-real-ip"))};
-        if (forwarded.empty()) {
-            const std::string xff{Header(r, "x-forwarded-for")};
-            if (const auto comma{xff.rfind(',')}; comma != std::string::npos) {
-                forwarded = util::TrimString(xff.substr(comma + 1));
-            } else {
-                forwarded = util::TrimString(xff);
-            }
-        }
-        if (const auto addr{LookupHost(forwarded, /*fAllowLookup=*/false)}) return addr->ToStringAddr();
-    }
-    return r.peer.IsValid() ? r.peer.ToStringAddr() : "local";
+    const std::string peer{r.peer.IsValid() ? r.peer.ToStringAddr() : "local"};
+    if (options.proxy_header.empty()) return peer;
+    const bool trusted{r.peer.IsValid() && std::any_of(options.trusted_proxies.begin(), options.trusted_proxies.end(), [&](const CSubNet& s) { return s.Match(r.peer); })};
+    if (!trusted) return peer;
+    std::string forwarded{Header(r, options.proxy_header)};
+    // X-Forwarded-For: the right-most entry, the one the trusted proxy appended (those before it are the client's word).
+    if (const auto comma{forwarded.rfind(',')}; comma != std::string::npos) forwarded = forwarded.substr(comma + 1);
+    forwarded = util::TrimString(forwarded);
+    if (const auto addr{LookupHost(forwarded, /*fAllowLookup=*/false)}) return addr->ToStringAddr();
+    return peer;
 }
 
 void BeginCall(Server& server, Request& r, bool http2)
@@ -586,6 +585,19 @@ void ContinueCall(Server& server, Request& r)
 {
     if (!r.entry || r.call->Closed() || !r.entry->desc->client_streaming) return;
     const auto status{TakeEnvelopes(r, server.GetOptions().max_request_bytes, [&](std::string_view bytes) {
+        // Each message of the stream is a call of its own for the limits: the guard again, and a bound on how many.
+        if (++r.messages > server.GetOptions().max_stream_messages) {
+            r.call->Finish({Code::RESOURCE_EXHAUSTED, strprintf("at most %u messages in a stream", server.GetOptions().max_stream_messages)});
+            return false;
+        }
+        if (r.messages > 1) {
+            if (const Guard& guard{server.GetGuard()}) {
+                if (const auto refused{guard(CallInfo{r.path, r.headers, r.client, false})}) {
+                    r.call->Finish(*refused);
+                    return false;
+                }
+            }
+        }
         pb::Message request{*r.entry->desc->input};
         std::string error;
         if (!DecodeMessage(r.call->Json(), bytes, request, error)) {
@@ -769,6 +781,8 @@ struct Connection::Impl {
     virtual void CloseAll() = 0;
     //! A call is in progress (a connection idle otherwise may be closed: Options::idle_timeout_seconds).
     virtual bool Busy() const = 0;
+    //! A request is being read (Options::request_timeout_seconds).
+    virtual bool Receiving() const = 0;
     std::string m_out;
     Server& m_server;
     CService m_peer;
@@ -857,7 +871,15 @@ public:
     }
 
     bool WantsWrite() const override { return !m_out.empty() || nghttp2_session_want_write(m_session); }
-    bool Busy() const override { return !m_streams.empty(); }
+    bool Busy() const override
+    {
+        // Busy only while a call runs; a stream still being read is not (Receiving).
+        return std::any_of(m_streams.begin(), m_streams.end(), [](const auto& s) { return s.second.request.ended && s.second.request.call && !s.second.request.call->Closed(); });
+    }
+    bool Receiving() const override
+    {
+        return std::any_of(m_streams.begin(), m_streams.end(), [](const auto& s) { return !s.second.request.ended; });
+    }
 
     void CloseAll() override
     {
@@ -1045,6 +1067,7 @@ private:
             BeginCall(self.m_server, r, /*http2=*/true);
         }
         if ((frame->hd.type == NGHTTP2_HEADERS || frame->hd.type == NGHTTP2_DATA) && (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) && r.call) {
+            r.ended = true;
             EndRequest(self.m_server, r);
             // The request is decoded: its bytes are no longer buffered.
             Stream& stream{it->second};
@@ -1123,7 +1146,8 @@ class Http1 : public Connection::Impl
 public:
     using Impl::Impl;
     ~Http1() override { CloseAll(); }
-    bool Busy() const override { return m_current != nullptr || m_request != nullptr || !m_in.empty(); }
+    bool Busy() const override { return m_current != nullptr; }
+    bool Receiving() const override { return m_current == nullptr && (m_request != nullptr || !m_in.empty()); }
 
     bool Receive(std::span<const uint8_t> data) override
     {
@@ -1283,7 +1307,8 @@ class Sniff : public Connection::Impl
 {
 public:
     using Impl::Impl;
-    bool Busy() const override { return !m_in.empty(); }
+    bool Busy() const override { return false; }
+    bool Receiving() const override { return !m_in.empty(); }
     bool Receive(std::span<const uint8_t> data) override
     {
         m_in.append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -1331,6 +1356,7 @@ std::string Connection::TakeOutput()
 
 bool Connection::WantsWrite() const { return m_impl->WantsWrite(); }
 bool Connection::Busy() const { return m_impl->Busy(); }
+bool Connection::Receiving() const { return m_impl->Receiving(); }
 void Connection::CloseAll() { m_impl->CloseAll(); }
 
 // ---------------------------------------------------------------------------
@@ -1459,10 +1485,18 @@ void Server::AcceptLoop()
                 continue;
             }
             if (!client->SetNonBlocking()) continue;
+            // Connections by address: bounded, but for the proxies in front (which carry everyone's).
+            const bool proxy{std::any_of(m_options.trusted_proxies.begin(), m_options.trusted_proxies.end(), [&](const CSubNet& s) { return s.Match(peer); })};
+            const std::string ip{proxy ? std::string{} : peer.ToStringAddr()};
+            LOCK(m_mutex);
+            if (!ip.empty() && m_options.max_connections_per_ip > 0 && m_per_ip[ip] >= m_options.max_connections_per_ip) {
+                LogDebug(BCLog::HTTP, "%s: connection from %s refused: %d connections from it already\n", m_name, peer.ToStringAddrPort(), m_per_ip[ip]);
+                continue;
+            }
+            if (!ip.empty()) ++m_per_ip[ip];
             ++m_connections;
             std::shared_ptr<Sock> shared{std::move(client)};
             auto done{std::make_shared<std::atomic<bool>>(false)};
-            LOCK(m_mutex);
             // The threads of connections that ended are joined here, so that they do not pile up.
             for (auto it{m_connection_threads.begin()}; it != m_connection_threads.end();) {
                 if (it->second->load()) {
@@ -1472,7 +1506,15 @@ void Server::AcceptLoop()
                     ++it;
                 }
             }
-            m_connection_threads.emplace_back(std::thread(&util::TraceThread, "grpcconn", [this, shared, peer, done] { ServeConnection(shared, peer); --m_connections; *done = true; }), done);
+            m_connection_threads.emplace_back(std::thread(&util::TraceThread, "grpcconn", [this, shared, peer, done, ip] {
+                ServeConnection(shared, peer);
+                if (!ip.empty()) {
+                    LOCK(m_mutex);
+                    if (--m_per_ip[ip] <= 0) m_per_ip.erase(ip);
+                }
+                --m_connections;
+                *done = true;
+            }), done);
         }
     }
 }
@@ -1485,9 +1527,21 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
     bool open{true};
     uint8_t buf[16384];
     auto last_activity{NodeClock::now()};
+    std::optional<NodeClock::time_point> receiving_since;
     while (open && !m_interrupt) {
-        if (m_options.idle_timeout_seconds > 0 && pending.empty() && !connection.Busy() &&
-            NodeClock::now() - last_activity > std::chrono::seconds{m_options.idle_timeout_seconds}) {
+        const auto now{NodeClock::now()};
+        // A request that takes too long to come in, however slowly it keeps coming, ends the connection; so does a
+        // connection with nothing running that sent nothing for a while. Calls running on a worker are never cut.
+        if (connection.Receiving()) {
+            if (!receiving_since) receiving_since = now;
+            if (m_options.request_timeout_seconds > 0 && now - *receiving_since > std::chrono::seconds{m_options.request_timeout_seconds}) {
+                LogDebug(BCLog::HTTP, "%s: %s too slow to send its request: closed\n", m_name, peer.ToStringAddrPort());
+                break;
+            }
+        } else {
+            receiving_since.reset();
+        }
+        if (m_options.idle_timeout_seconds > 0 && pending.empty() && !connection.Busy() && now - last_activity > std::chrono::seconds{m_options.idle_timeout_seconds}) {
             break;
         }
         Sock::Event occurred{0};

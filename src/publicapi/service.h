@@ -37,6 +37,8 @@ struct Options {
     double broadcast_burst{3};
     double broadcast_global_per_minute{120};
     bool broadcast{true};
+    //! Serve gRPC server reflection (a client stream: each message is charged as a call).
+    bool reflection{false};
     //! Expensive calls (quotes, builds, the first page of a tip) running at once, at most.
     int max_expensive{4};
     //! The cache of replies, per tip.

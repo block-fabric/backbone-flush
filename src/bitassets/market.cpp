@@ -453,12 +453,13 @@ void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int heigh
 std::vector<TradeRow> Trades(const sidechain::StoreView& view, const Market& market, int32_t before, const std::vector<unsigned char>& cursor, size_t limit,
                              std::vector<unsigned char>& next)
 {
+    const std::vector<unsigned char> cursor_in{cursor}; // `next` may be the cursor given
     next.clear();
     const Bytes prefix{TradePrefix(market)};
     Bytes from{prefix};
-    if (!cursor.empty()) {
-        if (cursor.size() != prefix.size() + 8 || !std::equal(prefix.begin(), prefix.end(), cursor.begin())) throw std::invalid_argument("not a cursor of these trades");
-        from = Bytes(cursor.begin(), cursor.end());
+    if (!cursor_in.empty()) {
+        if (cursor_in.size() != prefix.size() + 8 || !std::equal(prefix.begin(), prefix.end(), cursor_in.begin())) throw std::invalid_argument("not a cursor of these trades");
+        from = Bytes(cursor_in.begin(), cursor_in.end());
     } else if (before > 0) {
         // Trades of blocks below `before`: keys from ~(before - 1) on.
         Put32(from, ~static_cast<uint32_t>(before - 1));
@@ -501,14 +502,15 @@ std::optional<MarketRow> GetMarket(const sidechain::StoreView& view, const Marke
 std::vector<Holding> Holders(const sidechain::StoreView& view, const uint256& id, Token::Kind kind, const std::vector<unsigned char>& cursor, size_t limit,
                              std::vector<unsigned char>& next)
 {
+    const std::vector<unsigned char> cursor_in{cursor}; // `next` may be the cursor given
     next.clear();
     Bytes prefix{K(K_RANK)};
     PutHash(prefix, id);
     prefix.push_back(static_cast<uint8_t>(kind));
     Bytes from{prefix};
-    if (!cursor.empty()) {
-        if (cursor.size() <= prefix.size() + 8 || !std::equal(prefix.begin(), prefix.end(), cursor.begin())) throw std::invalid_argument("not a cursor of these holders");
-        from = Bytes(cursor.begin(), cursor.end());
+    if (!cursor_in.empty()) {
+        if (cursor_in.size() <= prefix.size() + 8 || !std::equal(prefix.begin(), prefix.end(), cursor_in.begin())) throw std::invalid_argument("not a cursor of these holders");
+        from = Bytes(cursor_in.begin(), cursor_in.end());
     }
     std::vector<Holding> rows;
     while (auto entry{view.Next(from, prefix)}) {

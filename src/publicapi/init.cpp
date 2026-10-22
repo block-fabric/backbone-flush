@@ -60,8 +60,12 @@ void AddPublicApiOptions(ArgsManager& args)
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiallowip=<ip>", "Accept public API connections from this source, beside localhost (needed to bind beyond localhost): an IP, a network/netmask or a network/CIDR. Can be specified multiple times",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
-    args.AddArg("-publicapiproxy=<ip>", "A proxy in front of the public API, beside localhost (whose X-Real-IP and X-Forwarded-For name the client, for the rate limits). Can be specified multiple times",
+    args.AddArg("-publicapiproxy=<ip>", "A proxy in front of the public API (e.g. 127.0.0.1 for nginx on this machine): its -publicapiproxyheader names the client, for the rate limits, "
+                                        "and its connections are not bounded by address. Default: none (the client is the connection's peer, forwarding headers ignored). Can be specified multiple times",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    args.AddArg("-publicapiproxyheader=<name>", "The header the proxies of -publicapiproxy set with the client's address (e.g. X-Real-IP; X-Forwarded-For: its right-most entry). The proxy must set it itself, overwriting what the client sent",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    args.AddArg("-publicapireflection", "Serve gRPC server reflection on the public API (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapirate=<n>", "Calls a second each client of the public API may make on average (a quote counts 4, a list 2; default: 10)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiburst=<n>", "And at once (default: 40)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapibroadcast", "Broadcast transactions signed elsewhere (POST /api/v1/broadcast; 6 a minute per client, 120 in all; default: 1)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -136,10 +140,16 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     options.max_connections = 256;
     options.max_streams = 32;
     options.idle_timeout_seconds = 30;
+    options.request_timeout_seconds = 15;
+    options.max_connections_per_ip = 16;
+    options.max_stream_messages = 32;
     options.rest_prefix = publicapi::REST_PREFIX;
     options.rest = publicapi::MakeRestRouter(*g_pool);
+    // The client's address from a proxy only when the operator names both the proxy and its header.
     options.trusted_proxies = proxies;
-    options.trust_loopback_proxy = true;
+    options.proxy_header = ToLower(args.GetArg("-publicapiproxyheader", ""));
+    if (!options.proxy_header.empty() && proxies.empty()) return InitError(Untranslated("-publicapiproxyheader needs -publicapiproxy (the addresses of the proxies that set it)"));
+    if (options.proxy_header.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos) return InitError(Untranslated("-publicapiproxyheader: a header name"));
     options.response_headers = {
         {"x-content-type-options", "nosniff"},
         {"content-security-policy", "default-src 'none'; frame-ancestors 'none'"},
@@ -161,6 +171,7 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     service_options.burst = number("-publicapiburst", 40);
     if (service_options.rate <= 0 || service_options.burst <= 0) return InitError(Untranslated("-publicapirate and -publicapiburst: numbers above 0"));
     service_options.broadcast = args.GetBoolArg("-publicapibroadcast", true);
+    service_options.reflection = args.GetBoolArg("-publicapireflection", false);
     g_service = publicapi::RegisterService(*g_server, *g_pool, node, service_options);
     publicapi::Service* service{g_service.get()};
     g_server->SetGuard([service](const grpcsrv::CallInfo& call) { return service->Guard(call); });

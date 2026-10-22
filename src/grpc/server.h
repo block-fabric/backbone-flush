@@ -129,14 +129,23 @@ struct Options {
     bool cors{false};
     //! Largest reply body; a bigger one ends the call with RESOURCE_EXHAUSTED (0: no bound).
     size_t max_response_bytes{0};
-    //! Close a connection that has no call in progress and sent nothing for this long (0: never).
+    //! Close a connection that has no call running and sent nothing for this long (0: never).
     int idle_timeout_seconds{0};
+    //! Close a connection whose request (its headers and body) is not all in this long after its first byte, however
+    //! slowly it keeps coming (slow clients holding connections); 0: never. Calls running on a worker are not counted.
+    int request_timeout_seconds{0};
+    //! Connections a client address may hold at once (0: no bound); the trusted proxies' own addresses are not bound.
+    int max_connections_per_ip{0};
+    //! Messages a client-streaming call (server reflection) may send; each is checked by the guard again.
+    size_t max_stream_messages{1024};
     //! The REST face: the prefix of its paths ("/api/v1/"), and how they map onto methods (empty: none).
     std::string rest_prefix;
     RestRouter rest;
-    //! Proxies whose X-Real-IP / X-Forwarded-For name the client (loopback peers always are, if trust_loopback_proxy).
+    //! A proxy in front: the header it sets with the client's address (lower case: "x-real-ip", or "x-forwarded-for",
+    //! whose right-most entry, the one that proxy appended, is taken), believed only from these addresses. Nothing set:
+    //! the client is the socket's peer, and forwarding headers are ignored.
+    std::string proxy_header;
     std::vector<CSubNet> trusted_proxies;
-    bool trust_loopback_proxy{false};
     //! Headers every reply carries.
     std::vector<std::pair<std::string, std::string>> response_headers;
 };
@@ -195,6 +204,8 @@ private:
     std::atomic<int> m_connections{0};
     std::atomic<size_t> m_buffered{0};
     Guard m_guard;
+    //! Connections by client address (Options::max_connections_per_ip).
+    std::map<std::string, int> m_per_ip GUARDED_BY(m_mutex);
     std::string m_name{"gRPC"};
 };
 
@@ -216,6 +227,8 @@ public:
     bool WantsWrite() const;
     /** Whether a request is in progress (being read, or its call not over). */
     bool Busy() const;
+    /** Whether a request is being read: begun and not all in (its headers, or its body). */
+    bool Receiving() const;
     /** End every call of the connection (the client went away, or the server stops). */
     void CloseAll();
 
