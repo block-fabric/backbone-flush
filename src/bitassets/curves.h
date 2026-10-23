@@ -158,6 +158,10 @@ struct LaunchCurve {
     uint64_t max_buy{0};
     //! The least a buy pays (0: any); one paying less misses.
     uint64_t min_buy{0};
+    //! Whether a round past the end ends the curve only when it is at its end exactly (launches from
+    //! SidechainParams::launch_params_height): without it, a round whose buys past the end all miss (routed in) or cannot
+    //! pay for the last units still ends it, and it graduates with less raised.
+    bool strict_end{false};
 };
 std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, uint64_t y, const std::vector<dex::HopIn>& orders, const std::vector<bool>& direct);
 

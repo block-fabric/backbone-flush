@@ -578,7 +578,7 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
     clearing.reserve0 = x + coin_in - coin_out;
     clearing.reserve1 = y + sold_in - given;
     clearing.fees = fees;
-    clearing.reached_end = true;
+    clearing.reached_end = !curve.strict_end || clearing.reserve1 == curve.end;
     return clearing;
 }
 

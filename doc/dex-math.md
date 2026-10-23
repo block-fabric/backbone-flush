@@ -75,14 +75,41 @@ stretch's liquidity: fee_growth += ⌊fees·2^128/L⌋ (modulo 2^256). A positio
 L·(growth_inside − growth_inside_last)/2^128, growth_inside as Uniswap v3's (outside values flipped at each crossing).
 A tick carries at most (2^128 − 1)/(number of ticks at the spacing) liquidity, so the in-range sum never overflows.
 
-**Launch curve** (`ClearLaunch`): a constant product of virtual reserves (x, y). With the fee (1 % on Layers, 1.15 % on Flush) taken in the coin
-(buyers: on the way in; sellers: on the way out, rounded up), a round is ClearPool's formula on the fee-free amounts,
-unless it would sell past yE. Then it goes exactly to the end at the chord price P = Δx/Δy with Δy = y − yE,
-Δx = ⌈x·y/yE⌉ − x; sellers get ⌊b·P⌋; direct buyers share Δy + B tokens pro rata, rounded down, the units left given
-one each in order to those who can pay one more; each pays ⌈t·P⌉ plus the fee, the rest back.
-Parameters: S = 10^15 units (10^9 tokens of 6 decimals), G = graduation (500 coins), V = G/2, Tv = 9S/8, yE = 3S/8:
-V·Tv = (V + G)·yE, so the curve's 3S/4 raise exactly G; the price rises (V+G)²/V² = 9×; the graduation pool
-(G, S/4) opens at the curve's last price 4G/S.
+**Launch curve** (`ClearLaunch`): a constant product of virtual reserves (x, y). With the fee (1 % on Layers, 1.15 % on Flush by
+default; a launch with parameters sets its own) taken in the coin (buyers: on the way in; sellers: on the way out, rounded up), a
+round is ClearPool's formula on the fee-free amounts, unless it would sell past yE. Then it goes exactly to the end at the chord
+price P = Δx/Δy with Δy = y − yE, Δx = ⌈x·y/yE⌉ − x; sellers get ⌊b·P⌋; direct buyers share Δy + B units pro rata, rounded
+down, the units left given one each in order to those who can pay one more; each pays ⌈t·P⌉ plus the fee, the rest back.
+
+Parameters, for a launch of supply S units (on the curve and in its pool), G = graduation (500 coins), V = G/2:
+
+  Tv = 9S/8,  yE = 3S/8,  curve part C = Tv − yE = 3S/4,  pool part P = S/4,  k = V·Tv.
+
+- **Graduation exact.** V·Tv = (G/2)(9S/8) = 9GS/16 = (3G/2)(3S/8) = (V + G)·yE: the curve reaches yE exactly when its coin
+  reaches V + G, so selling C raises exactly G, for any S.
+- **No jump at graduation.** The curve's last marginal price is (V + G)²/k = (9G²/4)/(9GS/16) = 4G/S; the pool it graduates
+  into, (G, S/4) (plus the fees kept for it, and the units not sold), opens at G/(S/4) = 4G/S.
+- **The same curve in coin for any S.** Prices per unit scale as 1/S: the start V/Tv = 4G/(9S), the end 4G/S (9×), so the
+  value of the whole supply goes from 4G/9 (≈ 222 coins at G = 500) to 4G (2000) whatever S and its decimals are. Per whole
+  unit of d decimals: multiply by 10^d. A first buy of b coins (fee-free b') gets Tv·b'/(V + b') units.
+- **Exact parts.** S is a multiple of 8 (`LAUNCH_SUPPLY_MULTIPLE`), so 9S/8, 3S/8, 3S/4 and S/4 are integers and C = 3P.
+- **Bounds (no overflow).** `MIN_LAUNCH_SUPPLY` = 10^6 units ≤ S ≤ `MAX_LAUNCH_SUPPLY` = 8·⌊(2^63 − 1)/9⌋: then Tv ≤ 2^63 − 1,
+  so every reserve is an amount. The products the round takes are of a coin side ≤ 2·(V + G) + fees < 2^37 and a unit side
+  < 2^63 (x·y, b·Δx, t·Δx: < 2^100), or of two unit amounts (the pro-rata share Δy·budget: < 2^126), all in 128 bits. The
+  floor of 10^6 units bounds the rounding: a unit costs at most 4G/S ≤ 0.02 coin at the end. S + the allocation
+  (⌊S·a/10^4⌋, a ≤ 500 basis points) < 2^63 − 1.
+- **Fee.** f ∈ [3000, 50000] millionths (0.3 % to 5 %), `MIN_LAUNCH_FEE`..`MAX_LAUNCH_FEE`; its parts as the network's
+  (Flush: creator 50 %, treasury 30 %, security 20 %; the roundings' remainder into the pool at graduation).
+- **An existing asset on a curve** (`CurveAsset`): S is the amount its controller puts in (taken from its coins); the same
+  curve and pool parts; the asset keeps its other units, its supply and its control coin; no allocation. Allowed for an asset
+  never launched whose default pool with the coin does not exist (graduation makes that pool).
+- A launch without parameters (and every launch before `launch_params_height`) has S = 10^15 (10^9 units of 6 decimals).
+
+Property tests (`dex_launch_tests`): `curve_constants_any_supply` (the identities above, at the bounds and 500 random S),
+`graduation_exact_any_supply_and_fee` (one buy of 2G: exactly C out for exactly G in, the fee, the refund, at three fees and
+57 supplies), `rounds_conserve_any_supply` (300 runs of random rounds at random S and f: every round clears, coin and units
+conserved, the product never falls, the end never passed), and a launch of 21 million of 8 decimals and an existing asset
+traded to graduation on a state (every unit accounted for).
 
 **Order book** (`ClearBook`, a call auction): candidates are the limits of the best 256 live orders of each side.
 For a price P (asset1 per asset0): supply(P) = takers' asset0 + Σ asks with limit ≤ P; spend(P) = takers' asset1 + Σ bids
@@ -125,7 +152,6 @@ in a book 2).
 - Dynamic: fee(h) = f + min(⌊vol(h)/2⌋, 20000), vol updated in each block that changes the pool:
   step = min(⌊|p1 − p0|·10^6/p0⌋, 10^6) (p the UQ64.64 spot price), vol ← ⌊(decayed·7 + step)/8⌋, decayed =
   vol >> ⌊(gap − 1)/40⌋ for a gap of blocks since the last change.
-- Launch: 1 % of each trade on the curve, 30 % of it to the creator, 70 % into the pool at graduation.
 
 ## TWAP
 

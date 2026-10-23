@@ -79,6 +79,7 @@ struct Chain {
         params.dex_curves_height = 0;
         params.ticker_height = 0;
         params.logo_height = 0;
+        params.launch_params_height = 0;
     }
     bool Apply(const CTransaction& tx, std::string& reason)
     {
@@ -142,6 +143,47 @@ struct Chain {
         const CTransaction tx{MakeTx({COutPoint{reserved.GetHash(), 0}}, launch, outs, static_cast<CAmount>(first_buy))};
         Require(tx);
         return tx;
+    }
+    /** Launches `name` with parameters: `supply` units of `decimals`, the curve's `fee`; the launch transaction (unapplied if `apply` is false). */
+    CTransaction LaunchWith(const std::string& name, uint64_t supply, uint8_t decimals, uint32_t fee, uint16_t allocation = 0, uint64_t first_buy = 0, bool apply = true)
+    {
+        const AssetId id{HashName(name)};
+        const uint256 nonce{HashName("nonce " + name)};
+        const CTransaction reserved{MakeTx({}, Reserve{ReservationCommitment(id, nonce, HOLDER)}, {Token{Token::Kind::RESERVATION, uint256{}, 1}})};
+        Require(reserved);
+        LaunchToken launch;
+        launch.reg.name = id;
+        launch.reg.nonce = nonce;
+        launch.reg.supply = supply;
+        launch.reg.decimals = decimals;
+        launch.reg.text = name;
+        launch.creator = CREATOR;
+        launch.allocation = allocation;
+        launch.first_buy = first_buy;
+        launch.chn_to = first_buy ? PAYEE : CScript{};
+        launch.fee = fee;
+        std::vector<std::optional<Token>> outs;
+        if (first_buy) outs.emplace_back();
+        const CTransaction tx{MakeTx({COutPoint{reserved.GetHash(), 0}}, launch, outs, static_cast<CAmount>(first_buy))};
+        if (apply) Require(tx);
+        return tx;
+    }
+    /** Registers `name` (`supply` units of `decimals`, to HOLDER): the outputs of its control coin and of its supply. */
+    std::pair<COutPoint, COutPoint> Issue(const std::string& name, uint64_t supply, uint8_t decimals)
+    {
+        const AssetId id{HashName(name)};
+        const uint256 nonce{HashName("nonce " + name)};
+        const CTransaction reserved{MakeTx({}, Reserve{ReservationCommitment(id, nonce, HOLDER)}, {Token{Token::Kind::RESERVATION, uint256{}, 1}})};
+        Require(reserved);
+        Register reg;
+        reg.name = id;
+        reg.nonce = nonce;
+        reg.supply = supply;
+        reg.decimals = decimals;
+        reg.text = name;
+        const CTransaction tx{MakeTx({COutPoint{reserved.GetHash(), 0}}, reg, {Token{Token::Kind::CONTROL, id, 1}, Token{Token::Kind::ASSET, id, supply}})};
+        Require(tx);
+        return {COutPoint{tx.GetHash(), 0}, COutPoint{tx.GetHash(), 1}};
     }
     /** A buy of `coin` through the curve: the order's transaction (its output 0 gets the tokens). */
     CTransaction Buy(const AssetId& token, uint64_t coin, uint64_t min_out = 1)
@@ -414,6 +456,346 @@ BOOST_AUTO_TEST_CASE(launch_trade_graduate_claim)
     // The log of the blocks: made, traded, graduated.
     BOOST_CHECK(chain.Assets().GetLaunchLog(100)[0].second.created);
     BOOST_CHECK(chain.Assets().GetLaunchLog(102)[0].second.graduated);
+}
+
+// Launches with parameters (launch_params_height; doc/dex-math.md "Launch curve"): any supply S (a multiple of 8 units,
+// MIN_LAUNCH_SUPPLY..MAX_LAUNCH_SUPPLY) and decimals, a fee of 0.3 % to 5 %; an existing asset on a curve.
+
+namespace {
+/** Supplies at the edges and in between: the least, the original, the most, odd multiples of 8. */
+std::vector<uint64_t> Supplies(FastRandomContext& rng, int random)
+{
+    std::vector<uint64_t> out{MIN_LAUNCH_SUPPLY, MIN_LAUNCH_SUPPLY + 8, 21'000'000ULL * 100'000'000, LAUNCH_SUPPLY, MAX_LAUNCH_SUPPLY, MAX_LAUNCH_SUPPLY - 8, 8'000'000'000'000'000'000ULL};
+    for (int i{0}; i < random; ++i) out.push_back(MIN_LAUNCH_SUPPLY + rng.randrange((MAX_LAUNCH_SUPPLY - MIN_LAUNCH_SUPPLY) / 8) * 8);
+    return out;
+}
+LaunchCurve CurveOf(uint64_t supply, uint32_t fee) { return LaunchCurve{fee, supply / 8 * 3, 0, 0, /*strict_end=*/true}; }
+} // namespace
+
+BOOST_AUTO_TEST_CASE(curve_constants_any_supply)
+{
+    FastRandomContext rng{/*fDeterministic=*/true};
+    for (const uint64_t S : Supplies(rng, 500)) {
+        BOOST_REQUIRE(IsLaunchSupply(S));
+        LaunchRecord record;
+        record.supply = S;
+        // The parts are exact: 3/4 on the curve, 1/4 into the pool, the virtual 9/8, the end 3/8.
+        BOOST_CHECK_EQUAL(record.CurveSupply() + record.PoolSupply(), S);
+        BOOST_CHECK_EQUAL(record.VirtualUnits() - record.CurveEnd(), record.CurveSupply());
+        BOOST_CHECK_EQUAL(record.CurveSupply(), 3 * record.PoolSupply());
+        BOOST_CHECK_LE(record.VirtualUnits(), MAX_AMOUNT);
+        // V·Tv = (V + G)·yE: selling the curve's part raises exactly G.
+        const unsigned __int128 k{static_cast<unsigned __int128>(V) * record.VirtualUnits()};
+        BOOST_CHECK(k == static_cast<unsigned __int128>(V + G) * record.CurveEnd());
+        // The graduation pool (G, S/4) has the curve's last marginal price (V + G)²/k.
+        BOOST_CHECK(static_cast<unsigned __int128>(V + G) * (V + G) * record.PoolSupply() == k * G);
+        // The allocation: the floor of its share, within what an amount can be.
+        record.allocation = MAX_LAUNCH_ALLOCATION;
+        BOOST_CHECK(static_cast<unsigned __int128>(S) + record.AllocationUnits() <= MAX_AMOUNT);
+    }
+    // A launch of before: LAUNCH_SUPPLY, and its allocation as it was.
+    LaunchRecord before;
+    before.allocation = 200;
+    BOOST_CHECK_EQUAL(before.Supply(), LAUNCH_SUPPLY);
+    BOOST_CHECK_EQUAL(before.AllocationUnits(), LAUNCH_SUPPLY / 10'000 * 200);
+    BOOST_CHECK_EQUAL(before.CurveEnd(), LAUNCH_CURVE_END);
+    BOOST_CHECK_EQUAL(before.VirtualUnits(), LAUNCH_VIRTUAL_TOKENS);
+    BOOST_CHECK_EQUAL(before.PoolSupply(), LAUNCH_POOL_SUPPLY);
+    // Not a launch's supply: not a multiple of 8, too little, too much.
+    BOOST_CHECK(!IsLaunchSupply(MIN_LAUNCH_SUPPLY + 4));
+    BOOST_CHECK(!IsLaunchSupply(MIN_LAUNCH_SUPPLY - 8));
+    BOOST_CHECK(!IsLaunchSupply(MAX_LAUNCH_SUPPLY + 8));
+    BOOST_CHECK(!IsLaunchSupply(0));
+}
+
+BOOST_AUTO_TEST_CASE(graduation_exact_any_supply_and_fee)
+{
+    // One buy of more than the curve costs: exactly 3S/4 out for exactly G in, the end exact, the rest back, at any
+    // supply and fee in the bounds.
+    FastRandomContext rng{/*fDeterministic=*/true};
+    for (const uint64_t S : Supplies(rng, 50)) {
+        for (const uint32_t fee : {MIN_LAUNCH_FEE, uint32_t{11'500}, MAX_LAUNCH_FEE}) {
+            const uint64_t pay{G * 2};
+            const auto cleared{ClearLaunch(CurveOf(S, fee), V, S / 8 * 9, {{true, pay}}, {true})};
+            BOOST_REQUIRE(cleared);
+            BOOST_CHECK(cleared->reached_end);
+            BOOST_CHECK_EQUAL(cleared->outs[0], S / 8 * 6);
+            BOOST_CHECK_EQUAL(cleared->reserve0, V + G);
+            BOOST_CHECK_EQUAL(cleared->reserve1, S / 8 * 3);
+            const uint64_t f{static_cast<uint64_t>((static_cast<unsigned __int128>(G) * fee + (1'000'000 - fee) - 1) / (1'000'000 - fee))};
+            BOOST_CHECK_EQUAL(cleared->fees, f);
+            BOOST_CHECK_EQUAL(cleared->refunds[0], pay - G - f);
+            // At its end the curve takes no more trades (it graduates); just before, all but one unit sold back gives at most G.
+            const auto almost{ClearLaunch(CurveOf(S, fee), V, S / 8 * 9, {{true, G / 2}}, {true})};
+            BOOST_REQUIRE(almost && !almost->reached_end);
+            const auto back{ClearLaunch(CurveOf(S, fee), almost->reserve0, almost->reserve1, {{false, almost->outs[0]}}, {true})};
+            BOOST_REQUIRE(back);
+            BOOST_CHECK_GE(back->reserve0, V);
+            BOOST_CHECK_LE(back->outs[0] + back->fees, G / 2);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(rounds_conserve_any_supply)
+{
+    // Random rounds of buys and sales at random supplies and fees: no overflow (every round clears), the coin and the
+    // units conserved, the product never falls, the end never passed.
+    FastRandomContext rng{/*fDeterministic=*/true};
+    for (int run{0}; run < 300; ++run) {
+        const uint64_t S{run % 3 == 0 ? MAX_LAUNCH_SUPPLY : run % 3 == 1 ? MIN_LAUNCH_SUPPLY : MIN_LAUNCH_SUPPLY + rng.randrange((MAX_LAUNCH_SUPPLY - MIN_LAUNCH_SUPPLY) / 8) * 8};
+        const uint32_t fee{static_cast<uint32_t>(MIN_LAUNCH_FEE + rng.randrange(MAX_LAUNCH_FEE - MIN_LAUNCH_FEE + 1))};
+        const LaunchCurve curve{CurveOf(S, fee)};
+        uint64_t x{V}, y{S / 8 * 9}, held{0};
+        const unsigned __int128 k0{static_cast<unsigned __int128>(x) * y};
+        for (int round{0}; round < 25 && y > curve.end; ++round) {
+            std::vector<dex::HopIn> orders;
+            std::vector<bool> direct;
+            for (int i{0}, m{1 + static_cast<int>(rng.randrange(4))}; i < m; ++i) {
+                const bool buy{held == 0 || rng.randbool()};
+                const uint64_t amount{buy ? 1 + rng.randrange(round % 9 == 8 ? 2 * G : G / 8) : 1 + rng.randrange(std::max<uint64_t>(1, held / 2))};
+                if (!buy) {
+                    if (amount > held) continue;
+                    held -= amount;
+                }
+                orders.push_back({buy, amount});
+                direct.push_back(rng.randrange(6) != 0);
+            }
+            if (orders.empty()) continue;
+            const auto cleared{ClearLaunch(curve, x, y, orders, direct)};
+            // A round past the end whose buyers came in through another pool (they miss there) and whose sellers would be
+            // paid more than came in does not clear (the batch then runs its orders one by one): never for any other reason.
+            if (!cleared) {
+                BOOST_CHECK_MESSAGE(std::find(direct.begin(), direct.end(), false) != direct.end(), "S " << S << " fee " << fee);
+                for (size_t i{0}; i < orders.size(); ++i) {
+                    if (!orders[i].zero_in) held += orders[i].amount;
+                }
+                continue;
+            }
+            unsigned __int128 coin_in{0}, coin_out{0}, units_in{0}, units_out{0};
+            for (size_t i{0}; i < orders.size(); ++i) {
+                if (orders[i].zero_in) {
+                    if (cleared->outs[i] > 0) {
+                        coin_in += orders[i].amount - cleared->refunds[i];
+                        units_out += cleared->outs[i];
+                    }
+                    held += cleared->outs[i];
+                } else {
+                    units_in += orders[i].amount;
+                    coin_out += cleared->outs[i];
+                }
+            }
+            BOOST_CHECK(static_cast<unsigned __int128>(x) + coin_in == static_cast<unsigned __int128>(cleared->reserve0) + coin_out + cleared->fees);
+            BOOST_CHECK(static_cast<unsigned __int128>(y) + units_in == static_cast<unsigned __int128>(cleared->reserve1) + units_out);
+            BOOST_CHECK(static_cast<unsigned __int128>(cleared->reserve0) * cleared->reserve1 >= k0);
+            BOOST_CHECK_GE(cleared->reserve1, curve.end);
+            // The end reached is the end exactly (strict_end: a buy routed in that misses there does not end it).
+            if (cleared->reached_end) {
+                BOOST_CHECK_EQUAL(cleared->reserve1, curve.end);
+                BOOST_CHECK_GE(cleared->reserve0, V + G);
+            }
+            x = cleared->reserve0;
+            y = cleared->reserve1;
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(launch_record_layout)
+{
+    // A record of before (no supply, not from an asset) is written as it was, and read back with its supply 0
+    // (LAUNCH_SUPPLY); one with parameters round-trips with them.
+    LaunchRecord before;
+    before.height = 7;
+    before.fee = 11'500;
+    before.allocation = 100;
+    DataStream a{};
+    a << before;
+    const size_t old_size{a.size()};
+    LaunchRecord read;
+    a >> read;
+    BOOST_CHECK(read == before);
+    LaunchRecord with{before};
+    with.supply = 21'000'000ULL * 100'000'000;
+    with.from_asset = true;
+    DataStream b{};
+    b << with;
+    BOOST_CHECK_GT(b.size(), old_size);
+    LaunchRecord back;
+    b >> back;
+    BOOST_CHECK(back == with);
+    BOOST_CHECK_EQUAL(back.Supply(), with.supply);
+}
+
+BOOST_AUTO_TEST_CASE(launch_markers_of_parameters)
+{
+    // A launch with parameters is a marker of its own kind, written one way; fee 0 there is not (it is a launch of before).
+    LaunchToken launch;
+    launch.reg.name = HashName("WIDE");
+    launch.reg.text = "WIDE";
+    launch.reg.supply = 8'000'000;
+    launch.reg.decimals = 2;
+    launch.creator = CREATOR;
+    launch.fee = 20'000;
+    Marker marker;
+    marker.operation = launch;
+    const CScript script{MarkerScript(marker)};
+    const auto parsed{ParseMarkerScript(script)};
+    BOOST_REQUIRE(parsed && parsed->operation);
+    BOOST_CHECK(std::get<LaunchToken>(*parsed->operation) == launch);
+    BOOST_CHECK(IsLaunchParamsOperation(*parsed->operation));
+    launch.fee = 0;
+    marker.operation = launch;
+    BOOST_CHECK(!IsLaunchParamsOperation(*ParseMarkerScript(MarkerScript(marker))->operation));
+    // The kind of parameters with a fee of 0 (written by hand from one of fee 1, its last bytes the fee and no outputs): not a marker.
+    {
+        launch.fee = 1;
+        marker.operation = launch;
+        const CScript good{MarkerScript(marker)};
+        std::vector<unsigned char> bytes{good.begin(), good.end()};
+        BOOST_REQUIRE(ParseMarkerScript(CScript(bytes.begin(), bytes.end())));
+        BOOST_REQUIRE_EQUAL(bytes[bytes.size() - 2], 1);
+        bytes[bytes.size() - 2] = 0;
+        BOOST_CHECK(!ParseMarkerScript(CScript(bytes.begin(), bytes.end())));
+    }
+    CurveAsset curve;
+    curve.asset = HashName("GOLD");
+    curve.amount = 8'000'000;
+    curve.fee = 3'000;
+    curve.creator = CREATOR;
+    marker.operation = curve;
+    const auto curve_parsed{ParseMarkerScript(MarkerScript(marker))};
+    BOOST_REQUIRE(curve_parsed && curve_parsed->operation);
+    BOOST_CHECK(std::get<CurveAsset>(*curve_parsed->operation) == curve);
+}
+
+BOOST_AUTO_TEST_CASE(launch_with_parameters_trade_graduate)
+{
+    Chain chain;
+    // 21 million of 8 decimals at 2 %, a 1 % allocation and a first buy.
+    const uint64_t S{21'000'000ULL * 100'000'000};
+    const AssetId BTC2{HashName("BTCTWO")};
+    const CTransaction launched{chain.LaunchWith("BTCTWO", S, 8, 20'000, /*allocation=*/100, /*first_buy=*/COIN_UNITS)};
+    const auto record{chain.Assets().GetLaunch(BTC2)};
+    BOOST_REQUIRE(record);
+    BOOST_CHECK_EQUAL(record->supply, S);
+    BOOST_CHECK_EQUAL(record->fee, 20'000U);
+    BOOST_CHECK(!record->from_asset);
+    const auto asset{chain.Assets().GetAsset(BTC2)};
+    BOOST_CHECK(asset->fixed);
+    BOOST_CHECK_EQUAL(asset->supply, S);
+    BOOST_CHECK_EQUAL(asset->decimals, 8);
+    BOOST_CHECK(!chain.Assets().FirstTokenOf(BTC2, Token::Kind::CONTROL));
+    const auto curve{chain.Assets().GetPool(record->pool)};
+    BOOST_REQUIRE(curve);
+    BOOST_CHECK_EQUAL(curve->reserve1, S / 8 * 9);
+    chain.EndBlock();
+    const CTransaction whale{chain.Buy(BTC2, 2 * G)};
+    chain.EndBlock();
+    const auto done{chain.Assets().GetLaunch(BTC2)};
+    BOOST_REQUIRE(done && done->Graduated());
+    const auto pool{chain.Assets().FindPool(BTC2, CHN)};
+    BOOST_REQUIRE(pool);
+    const uint64_t bought{chain.TokenAt(COutPoint{launched.GetHash(), 0})->amount + chain.TokenAt(COutPoint{whale.GetHash(), 0})->amount};
+    // Every unit accounted: what was bought, and the rest in the pool with the last quarter.
+    BOOST_CHECK_EQUAL(bought + pool->reserve1, S);
+    BOOST_CHECK_EQUAL(pool->reserve1, S / 4 + (S / 8 * 6 - bought));
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
+    // The allocation: 1 % of S.
+    const CTransaction claim{MakeTx({}, ClaimLaunch{BTC2}, {std::nullopt}, 0, {CREATOR})};
+    chain.Require(claim);
+    BOOST_CHECK(chain.TokenAt(COutPoint{claim.GetHash(), 0}) == (Token{Token::Kind::ASSET, BTC2, S / 100}));
+}
+
+BOOST_AUTO_TEST_CASE(launch_parameters_refused)
+{
+    Chain chain;
+    // Out of the bounds: the fee, the supply (not a multiple of 8, too little), its decimals past MAX_DECIMALS.
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("FEELOW", 8'000'000, 2, MIN_LAUNCH_FEE - 1, 0, 0, false)), "bad-ba-launch");
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("FEEHIGH", 8'000'000, 2, MAX_LAUNCH_FEE + 1, 0, 0, false)), "bad-ba-launch");
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("ODD", 8'000'004, 2, 11'500, 0, 0, false)), "bad-ba-launch");
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("TINY", MIN_LAUNCH_SUPPLY - 8, 2, 11'500, 0, 0, false)), "bad-ba-launch");
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("DEEP", 8'000'000, MAX_DECIMALS + 1, 11'500, 0, 0, false)), "bad-ba-supply");
+    // Before launch_params_height: not a marker of its time.
+    chain.params.launch_params_height = chain.height + 10;
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("EARLY", 8'000'000, 2, 11'500, 0, 0, false)), "bad-ba-marker");
+    // A launch of before still is.
+    chain.Launch("PLAIN");
+    BOOST_CHECK(chain.Assets().GetLaunch(HashName("PLAIN")));
+}
+
+BOOST_AUTO_TEST_CASE(existing_asset_on_a_curve)
+{
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")};
+    // A million GOLD of 6 decimals; 800 000 of them on a curve.
+    const uint64_t supply{1'000'000ULL * 1'000'000}, D{800'000ULL * 1'000'000};
+    const auto [control, coins]{chain.Issue("GOLD", supply, 6)};
+    chain.EndBlock();
+    CurveAsset curve;
+    curve.asset = GOLD;
+    curve.amount = D;
+    curve.fee = 10'000;
+    curve.creator = CREATOR;
+    // Without the control coin: refused.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coins}, curve, {Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-no-control");
+    // Before launch_params_height: not a marker of its time.
+    chain.params.launch_params_height = chain.height + 1;
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-marker");
+    chain.params.launch_params_height = 0;
+    // The units have to go in: listing them all out again is unbacked.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply}})), "bad-ba-tokens-unbacked");
+    const CTransaction put{MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D}})};
+    chain.Require(put);
+    const auto record{chain.Assets().GetLaunch(GOLD)};
+    BOOST_REQUIRE(record);
+    BOOST_CHECK(record->from_asset);
+    BOOST_CHECK_EQUAL(record->Supply(), D);
+    BOOST_CHECK_EQUAL(record->allocation, 0);
+    BOOST_CHECK(chain.Assets().Launching(GOLD));
+    // The asset as it was: its supply, its control coin (with the holder).
+    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(GOLD)->supply, supply);
+    BOOST_CHECK(!chain.Assets().GetAsset(GOLD)->fixed);
+    chain.EndBlock();
+    // Not twice.
+    {
+        CurveAsset small{curve};
+        small.amount = 8'000'000;
+        BOOST_CHECK_EQUAL(chain.Refused(MakeTx({COutPoint{put.GetHash(), 0}, COutPoint{put.GetHash(), 1}}, small,
+                                               {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D - small.amount}})), "bad-ba-launch-again");
+    }
+    // Traded to graduation: every unit of the asset accounted for.
+    const CTransaction whale{chain.Buy(GOLD, 2 * G)};
+    chain.EndBlock();
+    BOOST_REQUIRE(chain.Assets().GetLaunch(GOLD)->Graduated());
+    const auto pool{chain.Assets().FindPool(GOLD, CHN)};
+    BOOST_REQUIRE(pool);
+    const uint64_t bought{chain.TokenAt(COutPoint{whale.GetHash(), 0})->amount};
+    BOOST_CHECK_EQUAL(bought, D / 8 * 6);
+    BOOST_CHECK_EQUAL(pool->reserve1, D / 4);
+    BOOST_CHECK_EQUAL(bought + pool->reserve1 + chain.TokenAt(COutPoint{put.GetHash(), 1})->amount, supply);
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
+    // The controller keeps control: it mints after graduation as before.
+    chain.Require(MakeTx({COutPoint{put.GetHash(), 0}}, Mint{GOLD, 5}, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, 5}}));
+}
+
+BOOST_AUTO_TEST_CASE(existing_asset_with_a_pool_refused)
+{
+    Chain chain;
+    const AssetId SILVER{HashName("SILVER")};
+    const uint64_t supply{1'000'000ULL * 1'000'000};
+    const auto [control, coins]{chain.Issue("SILVER", supply, 6)};
+    chain.EndBlock();
+    // A pool with the coin of the kind it would graduate into: refused (the curve would graduate into it).
+    const CTransaction pooled{MakeTx({coins}, AddLiquidity{SILVER, CHN, 1'000'000'000, 10'000'000, 1}, {std::nullopt, std::nullopt, Token{Token::Kind::ASSET, SILVER, supply - 1'000'000'000}},
+                                     10'000'000)};
+    chain.Require(pooled);
+    chain.EndBlock();
+    CurveAsset curve;
+    curve.asset = SILVER;
+    curve.amount = 8'000'000;
+    curve.fee = 10'000;
+    curve.creator = CREATOR;
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, COutPoint{pooled.GetHash(), 2}}, curve,
+                                           {Token{Token::Kind::CONTROL, SILVER, 1}, Token{Token::Kind::ASSET, SILVER, supply - 1'000'000'000 - curve.amount}})), "bad-ba-launch-pooled");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

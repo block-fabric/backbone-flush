@@ -323,7 +323,7 @@ UniValue PoolToJSON(const bitassets::State& state, const uint256& id, const bita
     if (params.GetCurve() == bitassets::Curve::LAUNCH) {
         // A launch's curve: what it holds (its reserves less the virtual), and its price.
         if (const auto launch{state.GetLaunch(pool.asset1)}) {
-            const uint64_t coin{pool.reserve0 - std::min(pool.reserve0, launch->virtual_coin)}, tokens{pool.reserve1 - std::min(pool.reserve1, bitassets::LAUNCH_CURVE_END)};
+            const uint64_t coin{pool.reserve0 - std::min(pool.reserve0, launch->virtual_coin)}, tokens{pool.reserve1 - std::min(pool.reserve1, launch->CurveEnd())};
             obj.pushKV("reserve_a", AmountToJSON(flip ? tokens : coin, da));
             obj.pushKV("reserve_b", AmountToJSON(flip ? coin : tokens, db));
         }
@@ -2151,7 +2151,7 @@ std::optional<RoundResult> RoundOf(const bitassets::State& state, const uint256&
     } else if (kind.GetCurve() == bitassets::Curve::LAUNCH) {
         const auto launch{state.GetLaunch(pool.asset1)};
         if (!launch) return std::nullopt;
-        cleared = bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, bitassets::LAUNCH_CURVE_END, launch->max_buy, launch->min_buy}, pool.reserve0, pool.reserve1, orders,
+        cleared = bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd()}, pool.reserve0, pool.reserve1, orders,
                                                  std::vector<bool>(orders.size(), true));
     } else {
         cleared = bitassets::curves::ClearPoolOf(kind, fee, pool.reserve0, pool.reserve1, orders);
@@ -2721,6 +2721,20 @@ UniValue OperationToJSON(const bitassets::Operation& operation)
             obj.pushKV("min_buy", op.min_buy);
             obj.pushKV("max_buy", op.max_buy);
             obj.pushKV("first_buy", op.first_buy);
+            if (op.WithParams()) {
+                obj.pushKV("supply", op.reg.supply);
+                obj.pushKV("decimals", op.reg.decimals);
+                obj.pushKV("fee_ppm", op.fee);
+            }
+        } else if constexpr (std::is_same_v<T, bitassets::CurveAsset>) {
+            obj.pushKV("name", "curve_asset");
+            obj.pushKV("asset", asset(op.asset));
+            obj.pushKV("amount", op.amount);
+            obj.pushKV("fee_ppm", op.fee);
+            obj.pushKV("creator", ScriptAddress(op.creator));
+            obj.pushKV("min_buy", op.min_buy);
+            obj.pushKV("max_buy", op.max_buy);
+            obj.pushKV("first_buy", op.first_buy);
         } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
             obj.pushKV("name", "claim_launch");
             obj.pushKV("token", asset(op.token));
@@ -2828,8 +2842,12 @@ std::vector<RPCResult> LaunchResults()
         {RPCResult::Type::NUM, "progress", "Percent of that raised (100 once graduated)"},
         {RPCResult::Type::NUM, "price", CURRENCY_UNIT + " for a whole token now (the curve's, or the pool's)"},
         {RPCResult::Type::STR_AMOUNT, "market_cap", "The price times the supply"},
-        {RPCResult::Type::NUM, "supply", "Whole tokens there are"},
-        {RPCResult::Type::NUM, "curve_tokens_left", "Whole tokens the curve still sells (0 once graduated)"},
+        {RPCResult::Type::NUM, "supply", "Whole units of the asset there are"},
+        {RPCResult::Type::NUM, "decimals", "The asset's decimals"},
+        {RPCResult::Type::NUM, "curve_supply", "Whole units the curve sells in all (3/4 of the launch's supply)"},
+        {RPCResult::Type::NUM, "pool_supply", "Whole units that go into the pool at graduation (1/4)"},
+        {RPCResult::Type::BOOL, "from_asset", "Whether an existing asset was put on this curve (curveasset), rather than launched"},
+        {RPCResult::Type::NUM, "curve_tokens_left", "Whole units the curve still sells (0 once graduated)"},
         {RPCResult::Type::NUM, "fee", "The curve's fee, in percent"},
         {RPCResult::Type::NUM, "creator_share", "The creator's part of that fee, in percent of it"},
         {RPCResult::Type::NUM, "protocol_share", "The protocol's part (to the treasury), in percent of it"},
@@ -2848,9 +2866,17 @@ std::vector<RPCResult> LaunchResults()
     };
 }
 
+/** The decimals of a launch's asset (LAUNCH_DECIMALS for one of before, or not found). */
+uint8_t LaunchDecimals(const bitassets::State& state, const AssetId& token)
+{
+    const auto record{state.GetAsset(token)};
+    return record ? record->decimals : bitassets::LAUNCH_DECIMALS;
+}
+
 UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const bitassets::LaunchRecord& launch)
 {
     const auto record{state.GetAsset(token)};
+    const uint8_t decimals{record ? record->decimals : bitassets::LAUNCH_DECIMALS};
     UniValue obj(UniValue::VOBJ);
     obj.pushKV("token", token.GetHex());
     obj.pushKV("ticker", record && !record->text.empty() ? record->text : "0x" + token.GetHex());
@@ -2865,10 +2891,10 @@ UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const
     const auto pool{state.GetPool(launch.pool)};
     uint64_t raised{launch.raised_at_graduation}, left{0};
     double price{0};
-    const double whole{std::pow(10.0, bitassets::LAUNCH_DECIMALS)};
+    const double whole{std::pow(10.0, decimals)};
     if (pool && !launch.Graduated()) {
         raised = pool->reserve0 - std::min(pool->reserve0, launch.virtual_coin);
-        left = pool->reserve1 - std::min(pool->reserve1, bitassets::LAUNCH_CURVE_END);
+        left = pool->reserve1 - std::min(pool->reserve1, launch.CurveEnd());
     }
     // Marginal price, in CHN for a whole token: the reserves' ratio (virtual on the curve).
     if (pool && pool->reserve1 > 0) price = (static_cast<double>(pool->reserve0) / COIN) / (static_cast<double>(pool->reserve1) / whole);
@@ -2876,10 +2902,14 @@ UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const
     obj.pushKV("graduation", ValueFromAmount(static_cast<CAmount>(launch.graduation)));
     obj.pushKV("progress", DecimalToJSON(launch.Graduated() ? 100.0 : std::min(100.0, 100.0 * raised / launch.graduation)));
     obj.pushKV("price", DecimalToJSON(price));
-    const uint64_t supply{record ? record->supply : bitassets::LAUNCH_SUPPLY};
+    const uint64_t supply{record ? record->supply : launch.Supply()};
     obj.pushKV("market_cap", ValueFromAmount(static_cast<CAmount>(std::llround(price * (supply / whole) * COIN))));
-    obj.pushKV("supply", AmountToJSON(supply, bitassets::LAUNCH_DECIMALS));
-    obj.pushKV("curve_tokens_left", AmountToJSON(left, bitassets::LAUNCH_DECIMALS));
+    obj.pushKV("supply", AmountToJSON(supply, decimals));
+    obj.pushKV("decimals", decimals);
+    obj.pushKV("curve_supply", AmountToJSON(launch.CurveSupply(), decimals));
+    obj.pushKV("pool_supply", AmountToJSON(launch.PoolSupply(), decimals));
+    obj.pushKV("from_asset", launch.from_asset);
+    obj.pushKV("curve_tokens_left", AmountToJSON(left, decimals));
     obj.pushKV("fee", DecimalToJSON(launch.fee / 10000.0));
     obj.pushKV("creator_share", DecimalToJSON(launch.creator_share / 10000.0));
     obj.pushKV("protocol_share", DecimalToJSON(launch.protocol_share / 10000.0));
@@ -2902,7 +2932,7 @@ AssetId ParseToken(const UniValue& value, const bitassets::State& state, bitasse
 {
     const AssetId token{ParseAsset(value, state)};
     const auto found{state.GetLaunch(token)};
-    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not a launched token");
+    if (!found) throw JSONRPCError(RPC_INVALID_PARAMETER, "Not an asset on a curve (launched or put on one)");
     launch = *found;
     return token;
 }
@@ -3042,23 +3072,24 @@ RPCMethod quotelaunch()
     const bool buy{side == "buy"};
     return WithDexState(chainman, [&](const bitassets::State& state, [[maybe_unused]] int next_height) -> UniValue {
         bitassets::LaunchRecord launch;
-        ParseToken(request.params[0], state, launch);
+        const AssetId launch_token{ParseToken(request.params[0], state, launch)};
         if (launch.Graduated()) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: quote its pool (getswapquote)");
         const auto pool{state.GetPool(launch.pool)};
         if (!pool) throw JSONRPCError(RPC_MISC_ERROR, "The launch has no curve");
-        const uint64_t amount{bitassets::ParseUnits(request.params[1], buy ? bitassets::CHN_DECIMALS : bitassets::LAUNCH_DECIMALS)};
-        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, bitassets::LAUNCH_CURVE_END, launch.max_buy, launch.min_buy}, pool->reserve0, pool->reserve1,
+        const uint8_t decimals{LaunchDecimals(state, launch_token)};
+        const uint64_t amount{bitassets::ParseUnits(request.params[1], buy ? bitassets::CHN_DECIMALS : decimals)};
+        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, launch.CurveEnd(), launch.max_buy, launch.min_buy, launch.StrictEnd()}, pool->reserve0, pool->reserve1,
                                                           {bitassets::dex::HopIn{buy, amount}}, {true})};
         if (!cleared) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve cannot take this trade");
-        const double whole{std::pow(10.0, bitassets::LAUNCH_DECIMALS)};
+        const double whole{std::pow(10.0, decimals)};
         const auto spot{[&](uint64_t x, uint64_t y) { return (static_cast<double>(x) / COIN) / (static_cast<double>(y) / whole); }};
         const uint64_t out{cleared->outs[0]}, back{cleared->refunds[0]};
         const double coin{(buy ? static_cast<double>(amount - back) : static_cast<double>(out)) / COIN};
         const double tokens{(buy ? static_cast<double>(out) : static_cast<double>(amount)) / whole};
         const double price{tokens > 0 ? coin / tokens : 0}, before{spot(pool->reserve0, pool->reserve1)};
         UniValue result(UniValue::VOBJ);
-        result.pushKV("amount_in", AmountToJSON(amount, buy ? bitassets::CHN_DECIMALS : bitassets::LAUNCH_DECIMALS));
-        result.pushKV("amount_out", AmountToJSON(out, buy ? bitassets::LAUNCH_DECIMALS : bitassets::CHN_DECIMALS));
+        result.pushKV("amount_in", AmountToJSON(amount, buy ? bitassets::CHN_DECIMALS : decimals));
+        result.pushKV("amount_out", AmountToJSON(out, buy ? decimals : bitassets::CHN_DECIMALS));
         result.pushKV("back", ValueFromAmount(static_cast<CAmount>(back)));
         result.pushKV("fee", ValueFromAmount(static_cast<CAmount>(cleared->fees)));
         result.pushKV("price", DecimalToJSON(price));
@@ -3096,9 +3127,20 @@ RPCMethod getlaunchstats()
                 {RPCResult::Type::NUM, "creator_share", "The creator's part of it, in percent of the fee"},
                 {RPCResult::Type::NUM, "protocol_share", "The protocol's (the treasury's), in percent of the fee"},
                 {RPCResult::Type::NUM, "security_share", "The chain's security (the BMM bidder and the validators), in percent of the fee"},
-                {RPCResult::Type::NUM, "supply", "Whole tokens of a launch"},
-                {RPCResult::Type::NUM, "curve_supply", "Of which the curve sells"},
-                {RPCResult::Type::NUM, "pool_supply", "And go into the pool at graduation"},
+                {RPCResult::Type::NUM, "supply", "Whole units of a launch of the network's defaults (supply_default)"},
+                {RPCResult::Type::NUM, "curve_supply", "Of which the curve sells (3/4)"},
+                {RPCResult::Type::NUM, "pool_supply", "And go into the pool at graduation (1/4)"},
+                {RPCResult::Type::BOOL, "params_active", "Whether the next block takes launches with parameters (supply, decimals, fee; an existing asset on a curve: curveasset)"},
+                {RPCResult::Type::NUM, "params_height", "Their first block (-1: never on this network)"},
+                {RPCResult::Type::NUM, "fee_min", "The least fee a launch with parameters sets, in percent"},
+                {RPCResult::Type::NUM, "fee_max", "The most, in percent"},
+                {RPCResult::Type::NUM, "fee_default", "The network's (a launch without parameters)"},
+                {RPCResult::Type::STR, "supply_default", "Whole units of a launch without parameters"},
+                {RPCResult::Type::NUM, "decimals_default", "Its decimals"},
+                {RPCResult::Type::NUM, "decimals_max", "The most decimals an asset has"},
+                {RPCResult::Type::STR, "supply_min_units", "The least supply of a launch with parameters, in units (the smallest)"},
+                {RPCResult::Type::STR, "supply_max_units", "The most, in units"},
+                {RPCResult::Type::NUM, "supply_multiple_units", "Its supply in units is a multiple of this"},
                 {RPCResult::Type::NUM, "max_allocation", "The most a creator's allocation is, in percent"},
                 {RPCResult::Type::NUM, "log_blocks", "The blocks getlaunchlog keeps"},
                 {RPCResult::Type::BOOL, "active", "Whether the next block takes launches"},
@@ -3139,6 +3181,17 @@ RPCMethod getlaunchstats()
         rules.pushKV("supply", AmountToJSON(bitassets::LAUNCH_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("curve_supply", AmountToJSON(bitassets::LAUNCH_CURVE_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("pool_supply", AmountToJSON(bitassets::LAUNCH_POOL_SUPPLY, bitassets::LAUNCH_DECIMALS));
+        rules.pushKV("params_active", params.LaunchParamsActive(next_height));
+        rules.pushKV("params_height", params.launch_params_height == std::numeric_limits<int>::max() ? -1 : params.launch_params_height);
+        rules.pushKV("fee_min", DecimalToJSON(bitassets::MIN_LAUNCH_FEE / 10000.0));
+        rules.pushKV("fee_max", DecimalToJSON(bitassets::MAX_LAUNCH_FEE / 10000.0));
+        rules.pushKV("fee_default", DecimalToJSON(params.launch_fee / 10000.0));
+        rules.pushKV("supply_default", bitassets::FormatUnits(bitassets::LAUNCH_SUPPLY, bitassets::LAUNCH_DECIMALS));
+        rules.pushKV("decimals_default", bitassets::LAUNCH_DECIMALS);
+        rules.pushKV("decimals_max", bitassets::MAX_DECIMALS);
+        rules.pushKV("supply_min_units", strprintf("%u", bitassets::MIN_LAUNCH_SUPPLY));
+        rules.pushKV("supply_max_units", strprintf("%u", bitassets::MAX_LAUNCH_SUPPLY));
+        rules.pushKV("supply_multiple_units", bitassets::LAUNCH_SUPPLY_MULTIPLE);
         rules.pushKV("max_allocation", DecimalToJSON(bitassets::MAX_LAUNCH_ALLOCATION / 100.0));
         rules.pushKV("log_blocks", bitassets::LAUNCH_LOG_BLOCKS);
         rules.pushKV("active", params.DexCurvesActive(next_height));
@@ -3196,11 +3249,12 @@ RPCMethod getlaunchlog()
                 row.pushKV("orders", e.orders);
                 row.pushKV("coin_in", ValueFromAmount(static_cast<CAmount>(e.coin_in)));
                 row.pushKV("coin_out", ValueFromAmount(static_cast<CAmount>(e.coin_out)));
-                row.pushKV("tokens_in", AmountToJSON(e.tokens_in, bitassets::LAUNCH_DECIMALS));
-                row.pushKV("tokens_out", AmountToJSON(e.tokens_out, bitassets::LAUNCH_DECIMALS));
+                const uint8_t decimals{LaunchDecimals(state, token)};
+                row.pushKV("tokens_in", AmountToJSON(e.tokens_in, decimals));
+                row.pushKV("tokens_out", AmountToJSON(e.tokens_out, decimals));
                 row.pushKV("fees", ValueFromAmount(static_cast<CAmount>(e.fees)));
                 row.pushKV("reserve_coin", ValueFromAmount(static_cast<CAmount>(e.reserve_coin)));
-                row.pushKV("reserve_tokens", AmountToJSON(e.reserve_tokens, bitassets::LAUNCH_DECIMALS));
+                row.pushKV("reserve_tokens", AmountToJSON(e.reserve_tokens, decimals));
                 rows.push_back(std::move(row));
             }
         }

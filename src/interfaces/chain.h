@@ -248,6 +248,8 @@ public:
     virtual bool getBitAssetsDexActive() = 0;
     //! Layers' DEX: whether the next block has its pool kinds (SidechainParams::dex_curves_height).
     virtual bool getBitAssetsDexCurvesActive() = 0;
+    //! Launches with parameters: whether the next block has their rules (SidechainParams::launch_params_height).
+    virtual bool getBitAssetsLaunchParamsActive() = 0;
     //! Layers' DEX: an oracle, by id.
     virtual std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) = 0;
     //! Layers' DEX: what an oracle attested for an event.
