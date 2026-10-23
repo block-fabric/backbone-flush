@@ -115,15 +115,17 @@ struct InstallFastBlocks {
     std::optional<int64_t> seed_lookahead;
     std::optional<int> fee_split_height;
     std::optional<int> fee_curve2_height;
+    std::optional<int> jail_fix_height;
     explicit InstallFastBlocks(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt,
-                               std::optional<int> fee_curve2 = std::nullopt)
-        : seed_lookahead{lookahead}, fee_split_height{fee_split}, fee_curve2_height{fee_curve2}
+                               std::optional<int> fee_curve2 = std::nullopt, std::optional<int> jail_fix = std::nullopt)
+        : seed_lookahead{lookahead}, fee_split_height{fee_split}, fee_curve2_height{fee_curve2}, jail_fix_height{jail_fix}
     {
         CChainParams::RegTestOptions options;
         options.sidechain_slot = 5;
         options.pos_seed_lookahead = lookahead;
         options.dep_opts.fee_split_height = fee_split;
         options.dep_opts.fee_curve2_height = fee_curve2;
+        options.dep_opts.jail_fix_height = jail_fix;
         if (with_validators) {
             ECC_Context ecc;
             for (const CKey& key : keys) {
@@ -150,6 +152,7 @@ std::vector<const char*> SetupArgs(InstallFastBlocks& installed)
     if (installed.seed_lookahead) installed.args.push_back(strprintf("-posseedlookahead=%d", *installed.seed_lookahead));
     if (installed.fee_split_height) installed.args.push_back(strprintf("-testactivationheight=feesplit@%d", *installed.fee_split_height));
     if (installed.fee_curve2_height) installed.args.push_back(strprintf("-testactivationheight=feecurve2@%d", *installed.fee_curve2_height));
+    if (installed.jail_fix_height) installed.args.push_back(strprintf("-testactivationheight=jailfix@%d", *installed.jail_fix_height));
     std::vector<const char*> args;
     for (const std::string& arg : installed.args) args.push_back(arg.c_str());
     return args;
@@ -171,8 +174,8 @@ struct FastBlocksSetup : public InstallFastBlocks, public TestingSetup {
     int64_t base_slot{0};
 
     explicit FastBlocksSetup(bool with_validators = true, std::optional<int64_t> lookahead = std::nullopt, std::optional<int> fee_split = std::nullopt,
-                             std::optional<int> fee_curve2 = std::nullopt)
-        : InstallFastBlocks{with_validators, lookahead, fee_split, fee_curve2}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
+                             std::optional<int> fee_curve2 = std::nullopt, std::optional<int> jail_fix = std::nullopt)
+        : InstallFastBlocks{with_validators, lookahead, fee_split, fee_curve2, jail_fix}, TestingSetup{ChainType::REGTEST, TestOpts{.extra_args = SetupArgs(*this)}}
     {
         Hooks().Attach(m_node.chainman.get());
         Mock(START_TIME);
@@ -581,6 +584,38 @@ struct NoValidatorsSetup : public FastBlocksSetup {
 /** The genesis validators, and the seed of an epoch taken at its start (no lookahead). */
 struct SeedSetup : public FastBlocksSetup {
     SeedSetup() : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0} {}
+};
+
+/** The seed of an epoch taken at its start (no lookahead), and the liveness fix from the chain's block `height` on. */
+struct JailFixSetup : public FastBlocksSetup {
+    explicit JailFixSetup(int height = 0) : FastBlocksSetup{/*with_validators=*/true, /*lookahead=*/0, std::nullopt, std::nullopt, height} {}
+    /** The slots the leaders were charged with and the blocks they made, in every epoch up to `last`. */
+    std::pair<uint32_t, uint32_t> Counted(int64_t last)
+    {
+        uint32_t assigned{0}, produced{0};
+        LOCK(::cs_main);
+        for (int64_t e{0}; e <= last; ++e) {
+            for (const CKey& k : keys) {
+                if (const auto liveness{pos::GetLiveness(Chain().SideState().View(), e, XOnly(k))}) {
+                    assigned += liveness->assigned;
+                    produced += liveness->produced;
+                }
+            }
+        }
+        return {assigned, produced};
+    }
+    /** The first block of stake three epochs after the BMM block the chain starts with (as on betanet slot 99: hours after the origin). */
+    void LateFirstBlock()
+    {
+        StartPos();
+        const int late{static_cast<int>(3 * Pos().slots_per_epoch)};
+        Slot(late - 1);
+        Main();
+        Take(PosBlock(late));
+    }
+};
+struct JailFixLaterSetup : public JailFixSetup {
+    JailFixLaterSetup() : JailFixSetup{1000} {}
 };
 
 /**
@@ -2569,6 +2604,74 @@ BOOST_AUTO_TEST_CASE(jailing)
     BOOST_CHECK(staking.MakeSet(out, 3).Find(b));
     staking.PegStep(out, uint256{0xa2}, 2, 60, 3, 3, owed);
     BOOST_CHECK(pos::ValidatorSet(*pos::GetSetVersion(out, pos::GetAnchorSet(out, uint256{0xa2})->version), params).Find(b));
+}
+
+BOOST_AUTO_TEST_CASE(jailing_keeps_active)
+{
+    // From jail_fix_height (keep_active): no liveness jails that would leave the set with fewer than
+    // min_active_validators; before it, they were given (betanet slot 99: every genesis validator jailed).
+    ECC_Context ecc;
+    std::vector<CKey> validators(3);
+    for (CKey& k : validators) k.MakeNewKey(/*fCompressed=*/true);
+    const auto run{[&](uint32_t min_active, bool keep_active, int missing) {
+        Consensus::PosParams params;
+        params.slots_per_epoch = 20;
+        params.min_active_validators = min_active;
+        params.max_validators = 8;
+        for (const CKey& k : validators) params.genesis_validators.push_back({.pubkey = XOnly(k), .stake = 1});
+        const pos::Staking staking{params, uint256{1}};
+        sidechain::EmptyStore empty;
+        sidechain::StoreOverlay out{empty};
+        staking.LoadGenesis(out);
+        // Epoch 0: the first `missing` validators led twelve slots each and made none; the others made theirs.
+        std::vector<std::pair<int64_t, uint256>> missed;
+        for (int i{0}; i < 3; ++i) {
+            for (int64_t slot{0}; slot < 12; ++slot) {
+                if (i < missing) {
+                    missed.emplace_back(slot, XOnly(validators[i]));
+                } else {
+                    staking.NoteLiveness(out, slot, XOnly(validators[i]), {});
+                }
+            }
+        }
+        staking.NoteLiveness(out, 19, XOnly(validators[2]), missed);
+        std::vector<CTxOut> owed;
+        const auto made{staking.PegStep(out, uint256{0xa1}, 1, 20, 1, 1, owed, keep_active)};
+        int jailed{0};
+        for (const CKey& k : validators) jailed += pos::GetValidator(out, XOnly(k))->jailed_until_epoch > 0;
+        // The liveness of the epoch is dropped either way.
+        BOOST_CHECK(!pos::GetLiveness(out, 0, XOnly(validators[0])));
+        return std::make_pair(jailed, made.set_active);
+    }};
+    // All three missed theirs, three needed: before the fix all are jailed and blocks of stake stop; with it none.
+    BOOST_CHECK((run(3, /*keep_active=*/false, 3) == std::make_pair(3, false)));
+    BOOST_CHECK((run(3, /*keep_active=*/true, 3) == std::make_pair(0, true)));
+    // One of three missed, three needed: not jailed with the fix.
+    BOOST_CHECK((run(3, /*keep_active=*/true, 1) == std::make_pair(0, true)));
+    // One of three missed, two needed: jailed (two are left), with the fix as before it.
+    BOOST_CHECK((run(2, /*keep_active=*/true, 1) == std::make_pair(1, true)));
+    BOOST_CHECK((run(2, /*keep_active=*/false, 1) == std::make_pair(1, true)));
+    // Two of three missed, two needed: neither jailed (all or none).
+    BOOST_CHECK((run(2, /*keep_active=*/true, 2) == std::make_pair(0, true)));
+}
+
+BOOST_FIXTURE_TEST_CASE(liveness_first_block_late, JailFixSetup)
+{
+    // The live case of betanet slot 99: the first block of stake well after the slot the chain could start at.
+    // With the fix, it charges nobody for the slots before it: itself only.
+    LateFirstBlock();
+    BOOST_CHECK((Counted(pos::EpochOf(base_slot, Pos()) + 4) == std::make_pair(1U, 1U)));
+    // And the next ones as before: the slots since the last block of stake.
+    Take(PosBlock(3 * Pos().slots_per_epoch + 3));
+    BOOST_CHECK((Counted(pos::EpochOf(base_slot, Pos()) + 4) == std::make_pair(4U, 2U)));
+}
+
+BOOST_FIXTURE_TEST_CASE(liveness_first_block_late_before_fix, JailFixLaterSetup)
+{
+    // Before jail_fix_height, the rules as they were: the first block of stake charges an epoch of slots
+    // before it (every slot of it had a leader: three genesis validators, one needed).
+    LateFirstBlock();
+    BOOST_CHECK((Counted(pos::EpochOf(base_slot, Pos()) + 4) == std::make_pair(static_cast<uint32_t>(Pos().slots_per_epoch + 1), 1U)));
 }
 
 BOOST_FIXTURE_TEST_CASE(liveness_noted, FastBlocksSetup)
