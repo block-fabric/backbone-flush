@@ -72,10 +72,10 @@ message LaunchParams {
   uint32 supply_multiple_units = 8;
   uint32 decimals_max = 9;
   uint32 decimals_default = 10;
-  // The most a launch's allocation is in the next block, in basis points (2500 from allocation25_height, 500 before),
+  // The most a launch's allocation is in the next block, in basis points (1000 from allocation10_height, 500 before),
   // and that height (-1: never on this network).
   uint32 allocation_max_bps = 11;
-  int32 allocation25_height = 12;
+  int32 allocation10_height = 12;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -994,7 +994,7 @@ message BuildActionRequest {
   string logo_sha256 = 18;
   string first_buy_ecx = 19;
   // launch (optional), register: the supply in whole units and its decimals; launch, curve: the curve's fee (basis points,
-  // 30 to 500); launch: the creator's allocation (basis points, 0 to status.launch_params.allocation_max_bps: 2500, or 500 before allocation25_height).
+  // 30 to 500); launch: the creator's allocation (basis points, 0 to status.launch_params.allocation_max_bps: 1000, or 500 before allocation10_height).
   string supply = 20;
   optional uint32 decimals = 21;
   uint32 fee_bps = 22;

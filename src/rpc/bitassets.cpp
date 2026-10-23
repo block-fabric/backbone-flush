@@ -3143,8 +3143,8 @@ RPCMethod getlaunchstats()
                 {RPCResult::Type::STR, "supply_min_units", "The least supply of a launch with parameters, in units (the smallest)"},
                 {RPCResult::Type::STR, "supply_max_units", "The most, in units"},
                 {RPCResult::Type::NUM, "supply_multiple_units", "Its supply in units is a multiple of this"},
-                {RPCResult::Type::NUM, "max_allocation", "The most a creator's allocation is in the next block, in percent (25 from allocation25_height, 5 before)"},
-                {RPCResult::Type::NUM, "allocation25_height", "The first block of allocations of up to 25 % (-1: never on this network)"},
+                {RPCResult::Type::NUM, "max_allocation", "The most a creator's allocation is in the next block, in percent (10 from allocation10_height, 5 before)"},
+                {RPCResult::Type::NUM, "allocation10_height", "The first block of allocations of up to 10 % (-1: never on this network)"},
                 {RPCResult::Type::NUM, "log_blocks", "The blocks getlaunchlog keeps"},
                 {RPCResult::Type::BOOL, "active", "Whether the next block takes launches"},
             }},
@@ -3195,8 +3195,8 @@ RPCMethod getlaunchstats()
         rules.pushKV("supply_min_units", strprintf("%u", bitassets::MIN_LAUNCH_SUPPLY));
         rules.pushKV("supply_max_units", strprintf("%u", bitassets::MAX_LAUNCH_SUPPLY));
         rules.pushKV("supply_multiple_units", bitassets::LAUNCH_SUPPLY_MULTIPLE);
-        rules.pushKV("max_allocation", DecimalToJSON(bitassets::MaxLaunchAllocation(params.Allocation25Active(next_height)) / 100.0));
-        rules.pushKV("allocation25_height", params.allocation25_height == std::numeric_limits<int>::max() ? -1 : params.allocation25_height);
+        rules.pushKV("max_allocation", DecimalToJSON(bitassets::MaxLaunchAllocation(params.Allocation10Active(next_height)) / 100.0));
+        rules.pushKV("allocation10_height", params.allocation10_height == std::numeric_limits<int>::max() ? -1 : params.allocation10_height);
         rules.pushKV("log_blocks", bitassets::LAUNCH_LOG_BLOCKS);
         rules.pushKV("active", params.DexCurvesActive(next_height));
         result.pushKV("rules", std::move(rules));

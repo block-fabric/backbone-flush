@@ -69,9 +69,9 @@ state from its blocks once. Every node is to run v2 before that block; one that 
 
 ## Upgrade v3
 
-Branch `photon-v3` (photon-v2 and allocations of up to 25 %): from block `SLOT99_V3_HEIGHT`
-(src/kernel/chainparams.cpp) `allocation25_height`: a launch's creator allocation may be up to 25 % of its supply
-(`bitassets::MAX_LAUNCH_ALLOCATION`; 5 % before it, `MAX_LAUNCH_ALLOCATION_BEFORE_25`), minted on top of the supply
+Branch `photon-v3` (photon-v2 and allocations of up to 10 %): from block `SLOT99_V3_HEIGHT`
+(src/kernel/chainparams.cpp) `allocation10_height`: a launch's creator allocation may be up to 10 % of its supply
+(`bitassets::MAX_LAUNCH_ALLOCATION`; 5 % before it, `MAX_LAUNCH_ALLOCATION_BEFORE_10`), minted on top of the supply
 at graduation and claimed by the creator (`claimlaunch`), with no vesting yet (rug protection to come). The height is
 in the fingerprint: a node of v3 rebuilds its sidechain state once on its first start. A node of v2 follows the chain
 until the first launch with more than 5 % at or after the height, and forks off at that block.

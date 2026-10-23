@@ -84,15 +84,15 @@ describe('launching', () => {
   });
 });
 
-describe('creatorAllocation (allocations of up to 25 %)', () => {
-  const base = { supply: '1000000000.000000', decimals: 6, allocation: 25, allocation_claimed: false, status: 'curve' as const, progress: 40, creator_fees_owed: '0', curve_supply: '750000000.000000', pool_supply: '250000000.000000' };
-  it('a quarter of the supply, claimable at graduation, then to claim, then claimed', async () => {
+describe('creatorAllocation (allocations of up to 10 %)', () => {
+  const base = { supply: '1000000000.000000', decimals: 6, allocation: 10, allocation_claimed: false, status: 'curve' as const, progress: 40, creator_fees_owed: '0', curve_supply: '750000000.000000', pool_supply: '250000000.000000' };
+  it('a tenth of the supply, claimable at graduation, then to claim, then claimed', async () => {
     const { creatorAllocation } = await import('./launch');
-    expect(creatorAllocation(base)).toEqual({ percent: 25, units: 250_000_000_000_000n, decimals: 6, progress: 40, state: 'at-graduation' });
+    expect(creatorAllocation(base)).toEqual({ percent: 10, units: 100_000_000_000_000n, decimals: 6, progress: 40, state: 'at-graduation' });
     expect(creatorAllocation({ ...base, status: 'graduated', progress: 100 })?.state).toBe('claimable');
     expect(creatorAllocation({ ...base, status: 'graduated', allocation_claimed: true })?.state).toBe('claimed');
     // Of the launch's own supply (curve + pool), not the asset's supply after the mint.
-    expect(creatorAllocation({ ...base, supply: '1250000000.000000', status: 'graduated' })?.units).toBe(250_000_000_000_000n);
+    expect(creatorAllocation({ ...base, supply: '1100000000.000000', status: 'graduated' })?.units).toBe(100_000_000_000_000n);
     expect(creatorAllocation({ ...base, allocation: 0 })).toBeNull();
   });
 });
