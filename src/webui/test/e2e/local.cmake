@@ -46,3 +46,6 @@ webui_local_e2e(links 49820 --app-arg=-testactivationheight=dex@0 --app-arg=-tes
 # ba_liquidity.js: Add liquidity for a pair whose only pool is concentrated (a new pool, both amounts), into that pool at
 # its price, and reopened once abandoned (betanet slot 99, 2026-10-23: "Nobody provides liquidity to this pool any more").
 webui_local_e2e(ba_liquidity 49840 --app-arg=-testactivationheight=dex@0 --app-arg=-testactivationheight=dexcurves@0)
+# ba_swap_kinds.js: Swap for a pair whose only pool is concentrated (that pool, by its id, named by the panel), then with a
+# constant-product pool beside it at a better price (that one picked and traded in). Betanet slot 99, 2026-10-23.
+webui_local_e2e(ba_swap_kinds 49850 --app-arg=-testactivationheight=dex@0 --app-arg=-testactivationheight=dexcurves@0)

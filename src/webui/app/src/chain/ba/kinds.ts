@@ -236,7 +236,8 @@ export function tradeOptions(args: {
   pay: string;
   get: string;
   getDecimals: number;
-  /** quoteswap's quote of the default pool, and its id. */
+  /** quoteswap's quote of the default pool (the kind addliquidity makes: ba/liquidity.ts isAddLiquidityPool; never a pool
+   *  of another kind of the pair, which quoteswap does not quote and swapasset does not trade in), and its id. */
   single?: { pool: string; amount_out: Amount; price_impact: number; fee: Amount; price?: number; spot_price?: number } | null;
   market?: MarketQuote | null;
   routes?: RouteQuote | null;
@@ -273,6 +274,16 @@ export function tradeOptions(args: {
     add({ key: r.pools.join(','), pools: [...r.pools], path: [...r.path_ids], out: unitsOf(r.amount_out, getDecimals), defaultPools: r.default_pools, hops });
   }
   return out.sort((x, y) => (x.out === y.out ? Number(y.defaultPools) - Number(x.defaultPools) || x.pools.length - y.pools.length : x.out > y.out ? -1 : 1));
+}
+
+/**
+ * Which pool or route a trade option goes through, in words: each hop's kind and fee and the start of its pool's id
+ * ("Concentrated pool at 0.05% (2a1dbe3c…)"), hops joined by arrows with the asset between them.
+ */
+export function venueOf(option: Pick<TradeOption, 'hops'>, labelOf: (id: string) => string = (id) => id): string {
+  return option.hops
+    .map((h, i) => `${i > 0 ? `${labelOf(h.from)} → ` : ''}${CURVE_NAMES[h.kind.curve]} ${h.kind.curve === 'book' ? '' : 'pool '}at ${feePercent(feeNow(h.kind))} (${h.pool.slice(0, 8)}…)`)
+    .join(' → ');
 }
 
 /** The option a trade uses: the one picked, if it is still offered; else the best. */
