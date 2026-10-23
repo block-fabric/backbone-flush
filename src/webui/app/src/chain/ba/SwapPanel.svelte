@@ -20,10 +20,11 @@
   import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
   import { compactNumber } from './axis';
   import { hiddenAsset } from './visible.svelte';
-  import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolOf, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { liquidityState } from './liquidity';
   import { nav } from '../../lib/nav.svelte';
   import PoolKind from './PoolKind.svelte';
-  import { chooseOption, CURVE_NAMES, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
+  import { chooseOption, CURVE_NAMES, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, venueOf, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
@@ -71,7 +72,9 @@
     get = other ? (other.asset_a_id === pay ? other.asset_b_id : other.asset_a_id) : (choices.find((c) => c.id !== pay)?.id ?? '');
   });
 
-  const pool = $derived(get ? poolOf(pay, get) : undefined);
+  /** The pair's pool of the default kind (the one quoteswap quotes and swapasset trades in), if it has one: never a pool of
+   *  another kind (a concentrated one alone, say), which is quoted and traded by its id (getswapquote, swappools). */
+  const pool = $derived(get && get !== pay ? liquidityState(ba.pools, pay, get).pool : undefined);
   /** The pools of the pair of every kind someone provides to. */
   const pairPools = $derived(get && get !== pay ? poolsOf(pay, get).filter((p) => !p.abandoned) : []);
   /** Layers' DEX: routes through several pools (getdexinfo active), and pools of other kinds (curves_active). */
@@ -177,6 +180,8 @@
   /** Whether the trade goes as before the pool kinds: one hop in the default pool (swapasset, its curve and quote). */
   const plain = $derived(!chosen || (chosen.pools.length === 1 && chosen.defaultPools));
   const out = $derived(chosen ? chosen.out : null);
+  /** Which pool or route the trade goes through, in words. */
+  const venue = $derived(chosen ? venueOf(chosen, labelOf) : '');
   const least = $derived(out !== null ? lessSlippage(out, slip) : null);
   const impact = $derived(chosen?.impact ?? 0);
   const problem = $derived.by(() => {
@@ -223,7 +228,7 @@
 
   async function swap() {
     const wallet = wallets.current;
-    if (wallet === null || amount === null || out === null || least === null || problem || busy) return;
+    if (wallet === null || amount === null || out === null || least === null || problem || busy || quoting) return;
     // What the confirmation shows is what is signed: taken now, not read again after the dialogs (the quote
     // follows the pool while they are open). The least shown is the least the wallet signs (min_out, audit 7
     // E-BA2): should the pool have moved below it, the wallet refuses.
@@ -324,6 +329,7 @@
     {#if simple && chosen && out !== null && least !== null && amount !== null}
       <div class="plain" data-testid="swap-plain">
         <p>You pay <strong>{formatUnits(amount, payDecimals)} <SafeText text={nameOf(pay)} /></strong> and get about <strong>{formatUnits(out, getDecimals)} <SafeText text={nameOf(get)} /></strong>.</p>
+        <p class="muted small" data-testid="swap-venue">Through: <SafeText text={venue} /></p>
         <p class="muted small">At least {formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /> if the price moves first (<Term id="slippage">slippage</Term> {slip}%). {#if chosen.pools.length === 1}The market keeps {formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /> as its <Term id="fee">fee</Term>.{:else}It goes through {chosen.pools.length} markets, each keeping its <Term id="fee">fee</Term>.{/if}</p>
         {#if impact > 2}<p class="ba-warn small">This is a large trade for this market: the price you get is {impact.toFixed(1)}% worse than its price now.</p>{/if}
       </div>
@@ -332,6 +338,7 @@
         <dt>Price</dt><dd>1 <SafeText text={labelOf(get)} /> = {formatPrice(chosen.price ?? (out > 0n ? Number(amount) / 10 ** payDecimals / (Number(out) / 10 ** getDecimals) : undefined))} <SafeText text={labelOf(pay)} /></dd>
         {#if chosen.spotPrice !== undefined}<dt>Before the trade</dt><dd>{formatPrice(chosen.spotPrice)}</dd>{/if}
         {#if chosen.impact !== undefined}<dt>Price impact</dt><dd class:ba-good={impact <= 1} class:ba-warn={impact > 1 && impact <= 5} class:ba-bad={impact > 5}>{impact.toFixed(2)}%</dd>{/if}
+        <dt>{chosen.pools.length > 1 ? 'Route' : 'Pool'}</dt><dd data-testid="swap-venue"><SafeText text={venue} /></dd>
         <dt>At least</dt><dd class="strong">{formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /></dd>
         {#if chosen && chosen.pools.length === 1}
           <dt>Pool fee ({feePercent(feeNow(chosen.hops[0].kind))})</dt><dd>{formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /></dd>
@@ -364,7 +371,7 @@
       </div>
     {/if}
 
-    <div class="row"><button type="submit" class="btn primary wide" disabled={busy || wallets.current === null || amount === null || out === null || !!problem}><Icon name="swap" size={16} /> {busy ? 'Swapping…' : 'Swap'}</button></div>
+    <div class="row"><button type="submit" class="btn primary wide" disabled={busy || quoting || wallets.current === null || amount === null || out === null || !!problem}><Icon name="swap" size={16} /> {busy ? 'Swapping…' : 'Swap'}</button></div>
   </form>
 
   {#if simple}

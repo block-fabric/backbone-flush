@@ -579,7 +579,7 @@ no verification without the user's own list; the result says which of them verif
 The search index (`src/bitassets/index.{h,cpp}`, derived data kept with the state, not a rule) keeps a row per pool:
 its reserves, the reserves at the start of the volume window (`asset_volume_window` blocks, about a day), its volume in
 the window and its last block; `searchpools text filters sort cursor limit` pages through them sorted by depth (the CHN
-it holds), volume (CHN traded in the window), `price_change` (over the window) or newest, with each pool's state as
+it holds; then the pools without CHN, newest first: every pool is listed), volume (CHN traded in the window), `price_change` (over the window) or newest, with each pool's state as
 `getpool` gives it. The price change is the change of reserve0/reserve1, so for a pool of another curve than constant
 product the index keeps the second reserve as the first times its spot price (`PricedReserve1`: the curve's slope; a
 concentrated pool's square root price squared; 0 for a book, which has no price of its own): the ratio is then its

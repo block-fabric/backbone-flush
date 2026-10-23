@@ -21,6 +21,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -340,6 +341,81 @@ BOOST_AUTO_TEST_CASE(blocks_and_undo)
     sidechain::StoreOverlay with_index{empty};
     with_index.Put(StoreBytes{sidechain::DERIVED_TABLE, 'x'}, {1});
     BOOST_CHECK(sidechain::StoreHash(with_index) == sidechain::StoreHash(empty));
+}
+
+BOOST_AUTO_TEST_CASE(pools_by_depth_list_every_pool)
+{
+    // The default sort of searchpools (depth) with no filter: every pool, those with CHN by the CHN they hold, then the
+    // others (a pair without CHN; one nobody provides to, if asked for), newest first; across pages by the cursor.
+    sidechain::EmptyStore empty;
+    sidechain::StoreOverlay base{empty};
+    const AssetId gold{HashName("GOLD")}, silver{HashName("Silver")}, iron{HashName("Iron")};
+    const auto put_pool{[](sidechain::StoreOverlay& s, const AssetId& a, const AssetId& b, uint64_t r0, uint64_t r1, uint64_t shares, int height) {
+        Pool pool;
+        pool.asset0 = std::min(a, b);
+        pool.asset1 = std::max(a, b);
+        pool.reserve0 = r0;
+        pool.reserve1 = r1;
+        pool.shares = shares;
+        pool.height = height;
+        const uint256 id{PoolId(pool.asset0, pool.asset1)};
+        s.Put(sidechain::TableKey(0x34, id), sidechain::EncodeValue(pool));
+        // The state's index of pools by asset (0x3a), which a search of the pools of an asset reads.
+        for (const uint256& asset : {pool.asset0, pool.asset1}) {
+            StoreBytes key{sidechain::TableKey(0x3a, asset)};
+            key.insert(key.end(), id.begin(), id.end());
+            s.Put(key, {});
+        }
+        return id;
+    }};
+    uint256 deep, shallow, pair, left;
+    {
+        sidechain::StoreOverlay block{base, /*journal=*/true};
+        shallow = put_pool(block, CHN, gold, 1'000'000, 100, 1'000'000, 1);
+        deep = put_pool(block, CHN, silver, 9'000'000, 100, 1'000'000, 1);
+        ConnectBlock(block, 1, 3);
+        block.MergeInto(base);
+    }
+    {
+        sidechain::StoreOverlay block{base, /*journal=*/true};
+        pair = put_pool(block, gold, silver, 5'000, 5'000, 1'000'000, 2);
+        left = put_pool(block, CHN, iron, 1'001, 1'001, MIN_LIQUIDITY, 2);
+        ConnectBlock(block, 2, 3);
+        block.MergeInto(base);
+    }
+    const auto ids_of{[&](PoolRequest r) {
+        std::vector<uint256> ids;
+        for (int n{0}; n < 100; ++n) {
+            const PoolPage page{SearchPools(base, r)};
+            for (const PoolRow& row : page.pools) ids.push_back(row.id);
+            if (page.next.empty()) break;
+            r.cursor = page.next;
+        }
+        return ids;
+    }};
+    PoolRequest r;
+    BOOST_CHECK(ids_of(r) == (std::vector<uint256>{deep, shallow, pair}));
+    r.limit = 1;
+    BOOST_CHECK(ids_of(r) == (std::vector<uint256>{deep, shallow, pair}));
+    r.exclude_abandoned = false;
+    const std::vector<uint256> all{ids_of(r)};
+    BOOST_REQUIRE_EQUAL(all.size(), 4U);
+    BOOST_CHECK(all[0] == deep && all[1] == shallow);
+    BOOST_CHECK((std::set<uint256>{all[2], all[3]} == std::set<uint256>{pair, left}));
+    // The filters still hold in the tail: with CHN only, or some depth, the pair is left out.
+    r.chn_only = true;
+    BOOST_CHECK(ids_of(r) == (std::vector<uint256>{deep, shallow, left}));
+    r.chn_only = false;
+    r.min_depth = 1;
+    BOOST_CHECK(ids_of(r) == (std::vector<uint256>{deep, shallow}));
+    // Those of the assets a text matched: the same order.
+    PoolRequest by_assets;
+    by_assets.assets = std::vector<AssetId>{gold};
+    BOOST_CHECK(ids_of(by_assets) == (std::vector<uint256>{shallow, pair}));
+    // The volume sort keeps those traded in the window only.
+    PoolRequest volume;
+    volume.sort = PoolSort::VOLUME;
+    BOOST_CHECK(ids_of(volume).empty());
 }
 
 /**

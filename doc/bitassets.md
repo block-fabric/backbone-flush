@@ -395,8 +395,12 @@ bitassets-cli searchassets "#1739-0029"
 `searchpools (query filters sort cursor limit)`: pools whose assets match the text (of the first 1000
 assets it matches, found within one search budget: a text that few names match among millions stops there and
 says `partial`); filters `exclude_keywords` (either asset's name), `exclude_abandoned` (default true), `chn_only`, `min_depth` (CHN); sorts
-`depth` (default; pools with CHN), `volume` (traded within the window), `price_change` (of the second
-asset in the first, CHN for a pool with CHN, over the window, largest rise first), `newest`. Each pool
+`depth` (default; the pools with CHN by the CHN they hold, then every other pool, newest first), `volume` (traded within
+the window only), `price_change` (of the second asset in the first, CHN for a pool with CHN, over the window, largest
+rise first), `newest`. No text and no filters list every pool of every kind someone provides liquidity to (constant
+product, stable, weighted, concentrated, launch curve, book). A first argument that is a JSON object is taken for the
+filters (`searchpools '{}'`, `searchpools '{"exclude_abandoned": false}'`): before, it was the text `{}`, which no
+asset matches, and the answer was empty. Each pool
 as `listpools` shows it, with `depth`, `volume_window`, `price_change` (percent), `last_activity`. The sorts and
 filters of `searchassets` are taken too (an app sends the same object): `relevance`, `pool_depth`, `name`,
 `supply`, `oldest` sort by depth, `activity` by volume; the filters of assets are left aside.
