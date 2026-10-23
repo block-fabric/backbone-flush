@@ -300,6 +300,8 @@ public:
     bool FeeSplitActive(int height) const { return height >= m_params.fee_split_height; }
     /** The curve of the bidder's share the block at `height` takes (the second from PosParams::fee_curve2_height). */
     FeeCurve FeeCurveAt(int height) const { return height >= m_params.fee_curve2_height ? FeeCurve::LINEAR : FeeCurve::FIRST; }
+    /** Whether the block at `height` takes the liveness fix (PosParams::jail_fix_height). */
+    bool JailFixActive(int height) const { return height >= m_params.jail_fix_height; }
     /**
      * The mainchain height whose S a block's fee split takes: for a block of stake of `slot`, the block
      * that seeds its epoch (SeedHeight; none if not on record yet), for a merged mined block the

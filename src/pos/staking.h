@@ -171,9 +171,12 @@ public:
      * (`epoch` is for liveness and pruning only: those epochs are surely over), and the validator set
      * made, noted under `anchor` (the block's hash). The set is made as of `set_epoch` (at least
      * `epoch`; no later than the clock, and which whoever makes the block cannot move ahead): jails
-     * over by then are over for it, and jails given now run jail_epochs after it.
+     * over by then are over for it, and jails given now run jail_epochs after it. With `keep_active`
+     * (PosParams::jail_fix_height), the liveness jails are given only if the set made with them is still
+     * active (min_active_validators): none of them otherwise.
      */
-    PegStepResult PegStep(sidechain::StoreOverlay& out, const uint256& anchor, uint64_t anchors, int64_t slot, int64_t epoch, int64_t set_epoch, std::vector<CTxOut>& owed_tx) const;
+    PegStepResult PegStep(sidechain::StoreOverlay& out, const uint256& anchor, uint64_t anchors, int64_t slot, int64_t epoch, int64_t set_epoch, std::vector<CTxOut>& owed_tx,
+                          bool keep_active = false) const;
 
     /** Coins the chain could not pay to the reserve (a BMM block's pot whose payee is no address: IsRewardPayee). */
     void ToReserve(sidechain::StoreOverlay& out, CAmount amount) const;
