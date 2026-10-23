@@ -4,7 +4,7 @@
 // locked pool with CHN. The curve, worked out from the rules (a constant product of virtual reserves: from (G/2, 9/8·S)
 // to (3/2·G, 3/8·S), G the graduation, S the supply), for its chart and the review of a launch; the queries of the
 // list; the options of launchtoken. Pure: no state, no calls (tested in chain/ba/launch.test.ts).
-import { approx, unitsOf, type Amount } from './model';
+import { approx, formatUnits, minChnPayout, unitsOf, type Amount } from './model';
 import type { LaunchParamRules } from './create';
 import { TICKER } from '../config';
 
@@ -251,14 +251,14 @@ export function launchProblems(o: { allocation: number; maxAllocation: number; f
   const out: string[] = [];
   if (!(o.allocation >= 0 && o.allocation <= o.maxAllocation)) out.push(`The allocation is 0 to ${o.maxAllocation}%.`);
   if (o.infoBytes > o.maxInfo) out.push(`The description is at most ${o.maxInfo} bytes.`);
-  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push(`The first buy pays 0.0005 ${TICKER} at least.`);
+  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push(`The first buy pays ${formatUnits(o.minChn, 8)} ${TICKER} at least.`);
   if (o.minBuy !== null && o.maxBuy !== null && o.maxBuy > 0n && o.maxBuy < o.minBuy) out.push('The most a buy pays is less than the least.');
   if (o.firstBuy !== null && o.firstBuy > 0n && ((o.minBuy !== null && o.minBuy > 0n && o.firstBuy < o.minBuy) || (o.maxBuy !== null && o.maxBuy > 0n && o.firstBuy > o.maxBuy))) out.push('The first buy is outside the least and the most a buy pays: it would be refunded.');
   return out;
 }
 
-/** What the creator can be paid now (claimlaunch): its fees (from 0.0005 CHN), its allocation once graduated and not minted. */
-export function claimable(l: Pick<Launch, 'creator_fees_owed' | 'status' | 'allocation' | 'allocation_claimed'>, minChn = 0.0005): { fees: boolean; allocation: boolean } {
+/** What the creator can be paid now (claimlaunch): its fees (from the least payout, the node's), its allocation once graduated and not minted. */
+export function claimable(l: Pick<Launch, 'creator_fees_owed' | 'status' | 'allocation' | 'allocation_claimed'>, minChn = Number(minChnPayout()) / 1e8): { fees: boolean; allocation: boolean } {
   return { fees: approx(l.creator_fees_owed) >= minChn, allocation: l.status === 'graduated' && l.allocation > 0 && !l.allocation_claimed };
 }
 

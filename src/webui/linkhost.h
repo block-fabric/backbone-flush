@@ -115,6 +115,8 @@ public:
     //! A read of the node (no wallet's): getorder, getauction, getposition, getlaunch, quotepoolliquidity,
     //! previewposition. Its error as a LinkError with the node's words.
     virtual UniValue Read(const std::string& method, const UniValue& params) = 0;
+    //! The least ECX paid out in the next block, in satoshis (bitassets::MinChnPayout).
+    virtual uint64_t MinChnPayout() = 0;
 };
 
 /** The reader of the node (its chain's state, as the wallet's RPCs read it). */

@@ -27,7 +27,7 @@
   import { bpsOf, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { curveShape, DEFAULT_RULES, launchProblems, rulesOf, type LaunchStats } from './launch';
-  import { amountParam, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, MIN_CHN_PAYOUT, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
+  import { amountParam, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
   import { ba, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
@@ -198,7 +198,7 @@
   let maxBuy = $state<bigint | null>(null);
   let maxBuyText = $state('');
   let allocation = $state(0);
-  const launchIssues = $derived(curve ? launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: MIN_CHN_PAYOUT }) : []);
+  const launchIssues = $derived(curve ? launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: minChnPayout() }) : []);
   const wholeSupply = $derived(supplyValue !== null ? Number(supplyValue) / 10 ** decimals : 0);
   const shape = $derived(curveShape(rules.graduation, wholeSupply || 1));
   const split = $derived(curveSplit(supplyValue ?? 0n));

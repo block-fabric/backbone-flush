@@ -837,7 +837,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
         }
         // Layers' DEX: an order whose min_out the pools as they are cannot give it alone is not relayed. Valid,
         // a block could take it (it would be refunded, its fee paid); the mempool keeps what can fill.
-        if (side_params.DexActive(height) && !side.BitAssets().OrderFillsAlone(tx, reject_reason)) {
+        if (side_params.DexActive(height) && !side.BitAssets().OrderFillsAlone(tx, reject_reason, height)) {
             return ws.m_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, reject_reason);
         }
         ws.m_side_payouts += payouts;
@@ -5964,7 +5964,7 @@ void Chainstate::RemoveStaleDrivechainTxs()
                 !bitassets::CheckLaunchParamsActivation(*tx, side_params.LaunchParamsActive(tip->nHeight + 1), reject_reason) ||
                 !bitassets::CheckAllocationActivation(*tx, side_params.Allocation10Active(tip->nHeight + 1), reject_reason) ||
                 !bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, side_params.bitassets_reveal_depth, nullptr, dex) ||
-                (dex && !bitassets::State{reads}.OrderFillsAlone(*tx, reject_reason))) {
+                (dex && !bitassets::State{reads}.OrderFillsAlone(*tx, reject_reason, tip->nHeight + 1))) {
                 stale.push_back(tx);
                 continue;
             }

@@ -587,7 +587,7 @@ std::optional<uint64_t> SwapIn(uint64_t reserve_in, uint64_t reserve_out, uint64
     return in.GetLow64();
 }
 
-std::optional<Deposit> Provide(const Pool& pool, uint64_t amount0, uint64_t amount1)
+std::optional<Deposit> Provide(const Pool& pool, uint64_t amount0, uint64_t amount1, uint64_t min_chn)
 {
     if (amount0 == 0 || amount1 == 0 || amount0 > MAX_AMOUNT || amount1 > MAX_AMOUNT) return std::nullopt;
     if (Abandoned(pool)) {
@@ -613,8 +613,8 @@ std::optional<Deposit> Provide(const Pool& pool, uint64_t amount0, uint64_t amou
         deposit.take0 = worth(pool.reserve0);
     }
     // CHN goes back by the coinbase: dust stays in the pool, for its providers.
-    if (pool.asset0.IsNull() && amount0 - deposit.take0 < MIN_CHN_PAYOUT) deposit.take0 = amount0;
-    if (pool.asset1.IsNull() && amount1 - deposit.take1 < MIN_CHN_PAYOUT) deposit.take1 = amount1;
+    if (pool.asset0.IsNull() && amount0 - deposit.take0 < min_chn) deposit.take0 = amount0;
+    if (pool.asset1.IsNull() && amount1 - deposit.take1 < min_chn) deposit.take1 = amount1;
     return deposit;
 }
 
@@ -632,11 +632,11 @@ std::pair<uint64_t, uint64_t> Withdraw(const Pool& pool, uint64_t shares)
             static_cast<uint64_t>(static_cast<unsigned __int128>(pool.reserve1) * shares / pool.shares)};
 }
 
-std::pair<uint64_t, uint64_t> WithdrawPaid(const Pool& pool, uint64_t shares)
+std::pair<uint64_t, uint64_t> WithdrawPaid(const Pool& pool, uint64_t shares, uint64_t min_chn)
 {
     auto [out0, out1]{Withdraw(pool, shares)};
-    if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) out0 = 0;
-    if (pool.asset1.IsNull() && out1 < MIN_CHN_PAYOUT) out1 = 0;
+    if (pool.asset0.IsNull() && out0 < min_chn) out0 = 0;
+    if (pool.asset1.IsNull() && out1 < min_chn) out1 = 0;
     return {out0, out1};
 }
 } // namespace amm
@@ -711,6 +711,16 @@ bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string&
         return false;
     }
     return true;
+}
+
+uint64_t MinChnPayout(int height)
+{
+    return MinChnPayoutOf(Params().GetConsensus().sidechain.SmallPayoutsActive(height));
+}
+
+uint64_t MinBookChn(int height)
+{
+    return Params().GetConsensus().sidechain.SmallPayoutsActive(height) ? MIN_CHN_PAYOUT_SMALL : MIN_BOOK_CHN_BEFORE_SMALL;
 }
 
 const Register* RegisterOf(const Operation& op)
@@ -1547,6 +1557,7 @@ bool State::OrderHolds(const AssetId& asset) const
 
 std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, std::string& reject_reason, int reveal_depth) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto invalid{[&](const char* reason) -> std::optional<Plan> {
         reject_reason = reason;
         return std::nullopt;
@@ -1798,7 +1809,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         uint64_t& reserve_out{zero_in ? pool.reserve1 : pool.reserve0};
         const uint64_t out{amm::SwapOut(reserve_in, reserve_out, swap->amount_in)};
         if (out == 0 || out < swap->min_out || out >= reserve_out) return invalid("bad-ba-swap-price");
-        if (swap->asset_out.IsNull() && out < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        if (swap->asset_out.IsNull() && out < min_chn) return invalid("bad-ba-chn-dust");
         const auto new_in{Add(reserve_in, swap->amount_in)};
         if (!new_in) return invalid("bad-ba-swap");
         reserve_in = *new_in;
@@ -1830,7 +1841,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         // the pool (amm::Provide). Whoever opens a pool first sets its price: a deposit made for
         // another price goes in at it, or gives fewer shares than it asks for and is refused.
         if (!Add(pool.reserve0, amount0) || !Add(pool.reserve1, amount1)) return invalid("bad-ba-liquidity");
-        const auto deposit{amm::Provide(pool, amount0, amount1)};
+        const auto deposit{amm::Provide(pool, amount0, amount1, min_chn)};
         if (!deposit || deposit->shares < add->min_shares) return invalid("bad-ba-liquidity-price");
         if (deposit->opens) {
             // A pool opens, or reopens, with a deposit worth trading against, not dust.
@@ -1864,7 +1875,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (remove->shares > pool.shares - std::min(pool.shares, MIN_LIQUIDITY)) return invalid("bad-ba-liquidity");
         // A side that rounds to nothing (or to CHN dust, which stays in the pool) is left out, so that
         // a small provider can still leave; one side must give something.
-        const auto [out0, out1]{amm::WithdrawPaid(pool, remove->shares)};
+        const auto [out0, out1]{amm::WithdrawPaid(pool, remove->shares, min_chn)};
         const bool a_first{pool.asset0 == remove->asset_a};
         const uint64_t out_a{a_first ? out0 : out1}, out_b{a_first ? out1 : out0};
         if (out_a == 0 && out_b == 0) return invalid("bad-ba-liquidity-price");
@@ -1881,9 +1892,9 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (create->start_height < height) return invalid("bad-ba-auction-started");
         // An auction that never starts would hold what it sells, and the asset it quotes, for ever.
         if (create->start_height > height + MAX_AUCTION_DELAY) return invalid("bad-ba-auction-delay");
-        // CHN sold are paid out by the coinbase, MIN_CHN_PAYOUT at least: less could never be bought,
+        // CHN sold are paid out by the coinbase, min_chn at least: less could never be bought,
         // nor taken back.
-        if (create->base.IsNull() && create->base_amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        if (create->base.IsNull() && create->base_amount < min_chn) return invalid("bad-ba-chn-dust");
         Auction auction;
         auction.base = create->base;
         auction.base_amount = create->base_amount;
@@ -1927,19 +1938,19 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
             if (paid > bid->quote_amount) return invalid("bad-ba-bid-price");
             bought = auction.remaining;
             back = bid->quote_amount - paid;
-            // CHN dust does not come back (the coinbase pays out MIN_CHN_PAYOUT at least): the auction keeps it.
-            if (auction.quote.IsNull() && back < MIN_CHN_PAYOUT) {
+            // CHN dust does not come back (the coinbase pays out min_chn at least): the auction keeps it.
+            if (auction.quote.IsNull() && back < min_chn) {
                 paid += back;
                 back = 0;
             }
         }
         if (bought == 0 || bought > auction.remaining || bought < bid->min_base) return invalid("bad-ba-bid-price");
-        // CHN are paid out MIN_CHN_PAYOUT at least: a bid buys no less, leaves none less to buy (nor to
+        // CHN are paid out min_chn at least: a bid buys no less, leaves none less to buy (nor to
         // take back), and pays no less (the proceeds, collected, would not be paid out).
-        if (auction.base.IsNull() && (bought < MIN_CHN_PAYOUT || (bought < auction.remaining && auction.remaining - bought < MIN_CHN_PAYOUT))) {
+        if (auction.base.IsNull() && (bought < min_chn || (bought < auction.remaining && auction.remaining - bought < min_chn))) {
             return invalid("bad-ba-chn-dust");
         }
-        if (auction.quote.IsNull() && paid < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        if (auction.quote.IsNull() && paid < min_chn) return invalid("bad-ba-chn-dust");
         const auto proceeds{Add(auction.proceeds, paid)};
         if (!proceeds) return invalid("bad-ba-bid");
         auction.remaining -= bought;
@@ -1957,7 +1968,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (!auction.CollectableAt(height)) return invalid("bad-ba-auction-running");
         debit(Token::Kind::RECEIPT, collect->auction.ToUint256(), 1);
         // CHN dust is not paid out: it was burned when it went in.
-        const auto paid{[&](const AssetId& asset, uint64_t amount) { return amount > 0 && !(asset.IsNull() && amount < MIN_CHN_PAYOUT); }};
+        const auto paid{[&](const AssetId& asset, uint64_t amount) { return amount > 0 && !(asset.IsNull() && amount < min_chn); }};
         if (paid(auction.base, auction.remaining)) plan.results.push_back({auction.base, auction.remaining});
         if (paid(auction.quote, auction.proceeds)) plan.results.push_back({auction.quote, auction.proceeds});
         auction.remaining = 0;
@@ -2069,6 +2080,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
 bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Plan& plan, uint64_t& chn_taken, const std::function<void(const AssetId&, uint64_t)>& take,
                     std::string& reject_reason) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto invalid{[&](const char* reason) {
         reject_reason = reason;
         return false;
@@ -2117,10 +2129,10 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             if (!pool) return invalid("bad-ba-no-pool");
             if (amm::Abandoned(*pool)) return invalid("bad-ba-pool-closed");
         }
-        // CHN out, or back, is paid to chn_to; CHN back is paid out, MIN_CHN_PAYOUT at least.
+        // CHN out, or back, is paid to chn_to; CHN back is paid out, min_chn at least.
         const bool chn_end{order.path.front().IsNull() || order.path.back().IsNull()};
         if (chn_end && order.chn_to.empty()) return invalid("bad-ba-chn-to");
-        if (order.path.front().IsNull() && order.amount_in < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        if (order.path.front().IsNull() && order.amount_in < min_chn) return invalid("bad-ba-chn-dust");
         take(order.path.front(), order.amount_in);
         // Its place among the payouts; the amount at the block's end.
         if (chn_end) plan.payouts.emplace_back(0, order.chn_to);
@@ -2154,8 +2166,8 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
         if (!GetOracle(create->oracle)) return invalid("bad-ba-no-oracle");
         if (create->expiry <= height || int64_t{create->expiry} > int64_t{height} + MAX_CONTRACT_DURATION) return invalid("bad-ba-contract-expiry");
         if (!create->asset.IsNull() && !HasAsset(create->asset)) return invalid("bad-ba-asset-unknown");
-        // CHN are paid out by the coinbase, MIN_CHN_PAYOUT at least.
-        if (create->asset.IsNull() && (create->amount < MIN_CHN_PAYOUT || create->amount > static_cast<uint64_t>(MAX_MONEY))) return invalid("bad-ba-chn-dust");
+        // CHN are paid out by the coinbase, min_chn at least.
+        if (create->asset.IsNull() && (create->amount < min_chn || create->amount > static_cast<uint64_t>(MAX_MONEY))) return invalid("bad-ba-chn-dust");
         take(create->asset, create->amount);
         OracleContract contract;
         contract.oracle = create->oracle;
@@ -2195,6 +2207,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
                          const std::function<void(Token::Kind, const uint256&, uint64_t)>& credit, const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit,
                          std::string& reject_reason) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto invalid{[&](const char* reason) {
         reject_reason = reason;
         return false;
@@ -2304,9 +2317,9 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
         const uint256 id{PositionId(tx.GetHash())};
         (void)credit;
         plan.results.push_back({id, 1, Token::Kind::POSITION});
-        // What comes back: CHN under MIN_CHN_PAYOUT stays in the pool (nobody's), as a deposit's dust does.
+        // What comes back: CHN under min_chn stays in the pool (nobody's), as a deposit's dust does.
         const uint64_t back0{open->max0 - needed->first}, back1{open->max1 - needed->second};
-        if (pool.asset0.IsNull() && back0 < MIN_CHN_PAYOUT) {
+        if (pool.asset0.IsNull() && back0 < min_chn) {
             pool.reserve0 += back0;
         } else {
             result(pool.asset0, back0);
@@ -2332,7 +2345,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
         pool.reserve0 += needed->first;
         pool.reserve1 += needed->second;
         const uint64_t back0{change.limit0 - needed->first}, back1{change.limit1 - needed->second};
-        if (pool.asset0.IsNull() && back0 < MIN_CHN_PAYOUT) {
+        if (pool.asset0.IsNull() && back0 < min_chn) {
             pool.reserve0 += back0;
         } else {
             result(pool.asset0, back0);
@@ -2353,7 +2366,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
             // Liquidity taken out and its fees left to collect later.
         }
         // CHN dust is not paid: owed (or, closing, left in the pool).
-        if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) {
+        if (pool.asset0.IsNull() && out0 < min_chn) {
             if (!change.close) position.owed0 += out0;
             out0 = 0;
         }
@@ -2381,6 +2394,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
 bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64_t supply, bool from_asset, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                        std::string& reject_reason) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto invalid{[&](const char* reason) {
         reject_reason = reason;
         return false;
@@ -2427,7 +2441,7 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
     plan.launch_created = true;
     // Its first buy: an order of the block through the curve, as SwapPools makes one.
     if (launch.first_buy > 0) {
-        if (launch.first_buy < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        if (launch.first_buy < min_chn) return invalid("bad-ba-chn-dust");
         Order order;
         order.txid = record.txid;
         order.path = {CHN, token};
@@ -2445,6 +2459,7 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
 bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                       const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit, std::string& reject_reason) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto invalid{[&](const char* reason) {
         reject_reason = reason;
         return false;
@@ -2482,15 +2497,15 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const auto tradable{[&](const AssetId& asset) { return asset.IsNull() || HasAsset(asset); }};
         if (!tradable(place->asset_sell) || !tradable(place->asset_buy)) return invalid("bad-ba-asset-unknown");
         if (place->expiry < height || int64_t{place->expiry} > int64_t{height} + MAX_ORDER_DURATION) return invalid("bad-ba-order-expiry");
-        // CHN goes back and out by the coinbase: MIN_CHN_PAYOUT at least.
-        if (place->asset_sell.IsNull() && place->amount < MIN_CHN_PAYOUT) return invalid("bad-ba-chn-dust");
+        // CHN goes back and out by the coinbase: min_chn at least.
+        if (place->asset_sell.IsNull() && place->amount < min_chn) return invalid("bad-ba-chn-dust");
         // Worth something: what it would buy at its limit (amount·num/den, in 128 bits) and, of a pair with CHN, its CHN
-        // side at least MIN_BOOK_CHN; of another pair, a whole unit of what it sells at least. A side is no place for dust.
+        // side at least MinBookChn; of another pair, a whole unit of what it sells at least. A side is no place for dust.
         const unsigned __int128 buys{static_cast<unsigned __int128>(place->amount) * place->price_num / place->price_den};
         if (buys == 0) return invalid("bad-ba-order-dust");
         if (place->asset_sell.IsNull() || place->asset_buy.IsNull()) {
             const unsigned __int128 chn{place->asset_sell.IsNull() ? place->amount : buys};
-            if (chn < MIN_BOOK_CHN) return invalid("bad-ba-order-dust");
+            if (chn < MinBookChn(height)) return invalid("bad-ba-order-dust");
         } else {
             uint64_t unit{1};
             for (uint8_t i{0}, d{GetAsset(place->asset_sell)->decimals}; i < d && unit <= MAX_AMOUNT / 10; ++i) unit *= 10;
@@ -2575,8 +2590,8 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const bool closes{settle->cancel || order.expiry < height || order.remaining == 0 || order.evicted != 0};
         uint64_t proceeds{order.proceeds}, left{closes ? order.remaining : 0};
         // CHN dust is not paid out: it stays with the order until there is more, or with the book once it closes.
-        if (bought.IsNull() && proceeds < MIN_CHN_PAYOUT) proceeds = 0;
-        if (sold.IsNull() && left < MIN_CHN_PAYOUT) left = 0;
+        if (bought.IsNull() && proceeds < min_chn) proceeds = 0;
+        if (sold.IsNull() && left < min_chn) left = 0;
         if (!closes && proceeds == 0) return invalid("bad-ba-order-nothing");
         if (!closes) plan.results.push_back({settle->order, 1, Token::Kind::ORDER});
         if (proceeds > 0) plan.results.push_back({bought, proceeds});
@@ -2604,8 +2619,8 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         if (!found) return invalid("bad-ba-no-launch");
         LaunchRecord record{*found};
         bool paid{false};
-        // Its part of the fees, CHN by the coinbase to its script (no dust: MIN_CHN_PAYOUT at least).
-        if (record.creator_fees >= MIN_CHN_PAYOUT) {
+        // Its part of the fees, CHN by the coinbase to its script (no dust: min_chn at least).
+        if (record.creator_fees >= min_chn) {
             plan.payouts.emplace_back(static_cast<CAmount>(record.creator_fees), record.creator);
             record.creator_paid += record.creator_fees;
             record.creator_fees = 0;
@@ -2723,9 +2738,9 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         if (params.GetCurve() == Curve::CONCENTRATED) return invalid("bad-ba-cl-pool");
         if (params.GetCurve() == Curve::BOOK) return invalid("bad-ba-book");
         auto [out0, out1]{curves::WithdrawOf(params, FeeOf(withdraw->pool, params, height), pool, withdraw->shares, withdraw->only)};
-        // CHN under MIN_CHN_PAYOUT is not paid out: it stays in the pool, for its providers.
-        if (pool.asset0.IsNull() && out0 < MIN_CHN_PAYOUT) out0 = 0;
-        if (pool.asset1.IsNull() && out1 < MIN_CHN_PAYOUT) out1 = 0;
+        // CHN under min_chn is not paid out: it stays in the pool, for its providers.
+        if (pool.asset0.IsNull() && out0 < min_chn) out0 = 0;
+        if (pool.asset1.IsNull() && out1 < min_chn) out1 = 0;
         if ((out0 == 0 && out1 == 0) || out0 < withdraw->min0 || out1 < withdraw->min1) return invalid("bad-ba-liquidity-price");
         pool.reserve0 -= out0;
         pool.reserve1 -= out1;
@@ -2970,7 +2985,7 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
     if (!orders.empty()) {
         ClearOrders(orders, payouts, height);
         // The places of CHN that are not paid (a CHN order filled, an order for CHN refunded): out of the
-        // payouts, the last first, so that the others keep theirs. CHN paid are MIN_CHN_PAYOUT at least.
+        // payouts, the last first, so that the others keep theirs. CHN paid are min_chn at least.
         std::vector<size_t> unused;
         for (uint32_t i{0}; i < orders.size(); ++i) {
             ORDERS.Erase(out, i);
@@ -3063,6 +3078,7 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
 
 void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& payouts, int height)
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const size_t n{orders.size()};
     using Pools = std::map<uint256, std::optional<Pool>>;
     const auto hop_pool{[&](size_t i, size_t hop) { return orders[i].PoolOfHop(hop); }};
@@ -3249,7 +3265,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         }
         // What comes out, against what each order asks (CHN: no less than is paid out).
         for (size_t i{0}; i < n; ++i) {
-            if (amount[i] && (*amount[i] < orders[i].min_out || (orders[i].path.back().IsNull() && *amount[i] < MIN_CHN_PAYOUT))) amount[i].reset();
+            if (amount[i] && (*amount[i] < orders[i].min_out || (orders[i].path.back().IsNull() && *amount[i] < min_chn))) amount[i].reset();
         }
         return amount;
     }};
@@ -3941,8 +3957,9 @@ void State::Graduate(const AssetId& token, int height)
     out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
 }
 
-bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) const
+bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const
 {
+    const uint64_t min_chn{MinChnPayout(height)};
     const auto marker{GetMarker(tx)};
     if (!marker || !marker->operation) return true;
     std::vector<AssetId> path;
@@ -3957,7 +3974,7 @@ bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) 
         min_out = route->min_out;
     } else if (const auto* named{std::get_if<SwapPools>(&*marker->operation)}) {
         const auto outs{dex::QuoteRoutePools(*this, named->asset_in, named->pools, named->amount_in, &path)};
-        if (!outs || outs->back() < named->min_out || (path.back().IsNull() && outs->back() < MIN_CHN_PAYOUT)) {
+        if (!outs || outs->back() < named->min_out || (path.back().IsNull() && outs->back() < min_chn)) {
             reject_reason = "ba-swap-price";
             return false;
         }
@@ -3966,7 +3983,7 @@ bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) 
         return true;
     }
     const auto outs{dex::QuoteRoute(*this, path, amount_in)};
-    if (!outs || outs->back() < min_out || (path.back().IsNull() && outs->back() < MIN_CHN_PAYOUT)) {
+    if (!outs || outs->back() < min_out || (path.back().IsNull() && outs->back() < min_chn)) {
         reject_reason = "ba-swap-price";
         return false;
     }

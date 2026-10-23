@@ -539,4 +539,43 @@ BOOST_AUTO_TEST_CASE(sweep_bounded)
     BOOST_CHECK(chain.Assets().BookSide(BookId(X, Y), X < Y, 1000, 0).empty());
 }
 
+namespace {
+/** Regtest with the DEX from the first block and smaller payouts from block 102 (the Chain starts at 100). */
+struct SmallPayoutsSetup : BasicTestingSetup {
+    SmallPayoutsSetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=smallpayouts@102"}}} {}
+};
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(smaller_orders_and_payouts_from_their_height, SmallPayoutsSetup)
+{
+    // The rules on both sides of the height: 0.0005 ECX paid out at least and 0.01 ECX an order before, 0.00005 for both from it.
+    BOOST_CHECK_EQUAL(MinChnPayout(101), MIN_CHN_PAYOUT_BEFORE_SMALL);
+    BOOST_CHECK_EQUAL(MinBookChn(101), MIN_BOOK_CHN_BEFORE_SMALL);
+    BOOST_CHECK_EQUAL(MinChnPayout(102), MIN_CHN_PAYOUT_SMALL);
+    BOOST_CHECK_EQUAL(MinBookChn(102), MIN_CHN_PAYOUT_SMALL);
+    BOOST_CHECK_EQUAL(MIN_CHN_PAYOUT_SMALL, 5'000U);
+    Chain chain;
+    const AssetId X{HashName("XXX")};
+    const AssetId CHN{};
+    const auto x{chain.Issue("XXX", {10'000, 5'000, 1'000'000}, /*decimals=*/2)};
+    // Before: an order selling X for 0.0001 ECX is dust (under 0.01 ECX), one paying 0.0001 ECX too.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[0]}, PlaceOrder{X, CHN, 10'000, 1, 1, chain.height + 10}, {std::nullopt})), "bad-ba-order-dust");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({}, PlaceOrder{CHN, X, 10'000, 1, 1, chain.height + 10}, {std::nullopt}, 10'000)), "bad-ba-chn-dust");
+    chain.EndBlock();
+    chain.EndBlock();
+    BOOST_REQUIRE_EQUAL(chain.height, 102);
+    // From the height: 0.00005 ECX (5 000 sat) either way; less still refused.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({x[1]}, PlaceOrder{X, CHN, 5'000, 4'999, 5'000, chain.height + 10}, {std::nullopt})), "bad-ba-order-dust");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({}, PlaceOrder{CHN, X, 4'999, 1, 1, chain.height + 10}, {std::nullopt}, 4'999)), "bad-ba-chn-dust");
+    const CTransaction sell{chain.Place(x[1], X, 5'000, CHN, 1, 1)};
+    const CTransaction buy{MakeTx({}, PlaceOrder{CHN, X, 5'000, 1, 1, chain.height + 10}, {std::nullopt}, 5'000)};
+    chain.Require(buy);
+    chain.EndBlock();
+    // They cross: the seller's 5 000 sat of ECX are paid out by the coinbase (the least payout now), none refused.
+    bool paid{false};
+    for (const CTxOut& out : chain.paid) paid |= out.nValue == 5'000;
+    const auto order{chain.Assets().GetOrder(OrderId(sell.GetHash()))};
+    BOOST_CHECK(paid || (order && order->proceeds == 5'000));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

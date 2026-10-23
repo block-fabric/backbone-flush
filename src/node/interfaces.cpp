@@ -909,6 +909,11 @@ public:
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.LaunchParamsActive(chainman().ActiveChain().Height() + 1);
     }
+    uint64_t getBitAssetsMinChnPayout() override
+    {
+        LOCK(::cs_main);
+        return bitassets::MinChnPayout(chainman().ActiveChain().Height() + 1);
+    }
     uint16_t getBitAssetsMaxLaunchAllocation() override
     {
         LOCK(::cs_main);

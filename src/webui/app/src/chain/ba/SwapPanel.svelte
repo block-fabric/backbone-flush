@@ -17,7 +17,7 @@
   import AssetSelect from './AssetSelect.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
-  import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
+  import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, minChnPayout, minChnText, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
   import { compactNumber } from './axis';
   import { hiddenAsset } from './visible.svelte';
   import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
@@ -193,8 +193,8 @@
       if (amount !== null && !quoting && (market || routes || !pool)) return simple ? 'No market trades these two yet.' : 'No pool or route trades these two yet: make a pool in Add liquidity or Create pool.';
       return '';
     }
-    if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return `Too little: the least ${TICKER} a pool pays out is 0.0005 ${TICKER}.`;
-    if (!plain && isChn(pay) && amount !== null && amount < MIN_CHN_PAYOUT) return `Too little: an order through the pools pays in 0.0005 ${TICKER} at least.`;
+    if (out !== null && isChn(get) && out < minChnPayout()) return `Too little: the least ${TICKER} a pool pays out is ${minChnText()} ${TICKER}.`;
+    if (!plain && isChn(pay) && amount !== null && amount < minChnPayout()) return `Too little: an order through the pools pays in ${minChnText()} ${TICKER} at least.`;
     if (impact > MAX_IMPACT) return 'Too large for this pool: you would pay more than 10% above its price. Trade less, or wait for more liquidity.';
     return '';
   });

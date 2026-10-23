@@ -150,6 +150,13 @@ struct SidechainParams {
      * unless a network sets it (regtest: 0, or -testactivationheight=allocation10@<height>).
      */
     int allocation10_height{std::numeric_limits<int>::max()};
+    /**
+     * Smaller payouts (bitassets::MinChnPayout): from this block the least CHN a pool, a book, a curve or an auction pays
+     * out is 5 000 sat (0.00005 ECX: an order of about $0.50 at $10 000 an ECX), 50 000 before. Never unless a network sets
+     * it (regtest: 0, or -testactivationheight=smallpayouts@<height>).
+     */
+    int small_payout_height{std::numeric_limits<int>::max()};
+    bool SmallPayoutsActive(int height) const { return DexActive(height) && height >= small_payout_height; }
     bool Allocation10Active(int height) const { return DexCurvesActive(height) && height >= allocation10_height; }
     /**
      * The parts of every DEX swap fee (all pool kinds and tiers; order books charge none), in millionths of the fee: the

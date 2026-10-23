@@ -1164,7 +1164,7 @@ BOOST_AUTO_TEST_CASE(assembly_fills_the_refund_and_payout_bounds)
         BOOST_REQUIRE_GE(paid.size(), 1 + sidechain::MAX_REFUNDS_PER_BLOCK + bitassets::MAX_TX_PAYOUTS_PER_BLOCK);
         for (size_t i{1}; i <= sidechain::MAX_REFUNDS_PER_BLOCK; ++i) BOOST_CHECK(paid[i] == (CTxOut{Params().min_withdrawal + MAIN_FEE, refund_script}));
         for (size_t i{1 + sidechain::MAX_REFUNDS_PER_BLOCK}; i < 1 + sidechain::MAX_REFUNDS_PER_BLOCK + bitassets::MAX_TX_PAYOUTS_PER_BLOCK; ++i) {
-            BOOST_CHECK(paid[i].scriptPubKey == script && paid[i].nValue >= static_cast<CAmount>(bitassets::MIN_CHN_PAYOUT));
+            BOOST_CHECK(paid[i].scriptPubKey == script && paid[i].nValue >= static_cast<CAmount>(bitassets::MIN_CHN_PAYOUT_BEFORE_SMALL));
         }
         check_valid(block);
     }

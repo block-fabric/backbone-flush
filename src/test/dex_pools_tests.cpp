@@ -299,10 +299,10 @@ BOOST_AUTO_TEST_CASE(routes_across_kinds)
     chain.Require(order);
     // Policy: one that would not fill alone is not relayed.
     std::string fills;
-    BOOST_CHECK(chain.Assets().OrderFillsAlone(order, fills));
+    BOOST_CHECK(chain.Assets().OrderFillsAlone(order, fills, chain.height));
     const CTransaction greedy{MakeTx({a[2]}, SwapPools{A, {ab, bc}, 100'000, quote->back() * 2, CScript{}}, {std::nullopt})};
     std::string why;
-    BOOST_CHECK(!chain.Assets().OrderFillsAlone(greedy, why));
+    BOOST_CHECK(!chain.Assets().OrderFillsAlone(greedy, why, chain.height));
     chain.EndBlock();
     BOOST_CHECK(chain.TokenAt(COutPoint{order.GetHash(), 0}) == AssetToken(C, quote->back()));
     // Pools that do not chain, or repeat an asset: refused.

@@ -21,7 +21,7 @@
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { claimable, creatorAllocation, curvePointAt, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
-  import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
+  import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, minChnPayout, minChnText, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
@@ -160,10 +160,10 @@
   const backUnits = $derived(quote ? unitsOf(quote.back, 8) : 0n);
   const problem = $derived.by(() => {
     if (!launch || amount === null) return '';
-    if (side === 'buy' && amount < MIN_CHN_PAYOUT) return `A buy pays 0.0005 ${TICKER} at least.`;
+    if (side === 'buy' && amount < minChnPayout()) return `A buy pays ${minChnText()} ${TICKER} at least.`;
     if (side === 'buy' && approx(launch.min_buy) > 0 && amount < unitsOf(launch.min_buy, 8)) return 'Less than the least a buy of this launch pays: it would be refunded.';
     if (side === 'buy' && approx(launch.max_buy) > 0 && amount > unitsOf(launch.max_buy, 8)) return 'More than the most a buy of this launch pays: it would be refunded.';
-    if (side === 'sell' && out !== null && out < MIN_CHN_PAYOUT) return `Too little: the least ${TICKER} paid out is 0.0005 ${TICKER}.`;
+    if (side === 'sell' && out !== null && out < minChnPayout()) return `Too little: the least ${TICKER} paid out is ${minChnText()} ${TICKER}.`;
     if (out === 0n) return 'Too little: it buys nothing.';
     return '';
   });

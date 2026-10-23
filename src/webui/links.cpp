@@ -591,8 +591,9 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.ticker_a = Ticker(need("asset_a"), "asset_a", true);
         r.ticker_b = Ticker(need("asset_b"), "asset_b", true);
         if (r.ticker_a == r.ticker_b) throw LinkError("asset_a and asset_b are the same");
-        r.price_lower = Amount(need("price_lower"), "price_lower");
-        r.price_upper = Amount(need("price_upper"), "price_upper");
+        // 0: no bound on that side (both 0: the full range).
+        r.price_lower = AmountOrZero(need("price_lower"), "price_lower");
+        r.price_upper = AmountOrZero(need("price_upper"), "price_upper");
         r.amount_a = AmountOrZero(need("amount_a"), "amount_a");
         r.amount_b = AmountOrZero(need("amount_b"), "amount_b");
         if (r.amount_a == "0" && r.amount_b == "0") throw LinkError("amount_a and amount_b: something to put in");

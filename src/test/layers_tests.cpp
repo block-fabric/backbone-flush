@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(asset_payouts_bound_counts_their_own_across_blocks_of_stake
     BOOST_CHECK_EQUAL(chain.state.AssetPayoutsQueued(), 1U);
 
     // More of the assets' payouts wait (blocks of stake pay none), up to one short of the bound.
-    for (size_t i{0}; i < MAX_TX_PAYOUTS_PER_BLOCK - 2; ++i) chain.payouts.emplace_back(MIN_CHN_PAYOUT, HOLDER);
+    for (size_t i{0}; i < MAX_TX_PAYOUTS_PER_BLOCK - 2; ++i) chain.payouts.emplace_back(MIN_CHN_PAYOUT_BEFORE_SMALL, HOLDER);
     chain.EndBlock(0);
     BOOST_CHECK_EQUAL(chain.state.AssetPayoutsQueued(), MAX_TX_PAYOUTS_PER_BLOCK - 1);
 

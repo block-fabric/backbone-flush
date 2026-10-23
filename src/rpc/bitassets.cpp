@@ -673,6 +673,9 @@ RPCMethod getbitassetsinfo()
             {RPCResult::Type::NUM, "logo_height", "The first block of the logos of assets (-1: never on this network)"},
             {RPCResult::Type::NUM, "max_logo_bytes", "The most bytes a logo may have"},
             {RPCResult::Type::NUM, "ticker_height", "The first block of tickers and display names (-1: never on this network): from it the name of a new asset is a ticker"},
+            {RPCResult::Type::STR_AMOUNT, "min_chn_payout", "The least " + CURRENCY_UNIT + " a pool, a book, a curve or an auction pays out in the next block"},
+            {RPCResult::Type::STR_AMOUNT, "min_book_chn", "The least an order of a pair with " + CURRENCY_UNIT + " is worth on its " + CURRENCY_UNIT + " side, in the next block"},
+            {RPCResult::Type::NUM, "small_payout_height", "The first block of payouts of 0.00005 at least (-1: never on this network)"},
             {RPCResult::Type::BOOL, "tickers_active", "Whether the next block has the rules of tickers and display names"},
             {RPCResult::Type::NUM, "min_ticker_length", "The fewest characters of a ticker"},
             {RPCResult::Type::NUM, "max_ticker_length", "The most characters of a ticker (A-Z, 0-9)"},
@@ -702,6 +705,11 @@ RPCMethod getbitassetsinfo()
     result.pushKV("min_ticker_length", static_cast<uint64_t>(bitassets::MIN_TICKER_SIZE));
     result.pushKV("max_ticker_length", static_cast<uint64_t>(bitassets::MAX_TICKER_SIZE));
     result.pushKV("max_display_name_bytes", static_cast<uint64_t>(bitassets::MAX_DISPLAY_NAME_SIZE));
+    // The least ECX paid out in the next block (0.00005 from small_payout_height, 0.0005 before).
+    result.pushKV("min_chn_payout", ValueFromAmount(static_cast<CAmount>(bitassets::MinChnPayout(chainman.ActiveChain().Height() + 1))));
+    result.pushKV("min_book_chn", ValueFromAmount(static_cast<CAmount>(bitassets::MinBookChn(chainman.ActiveChain().Height() + 1))));
+    const int small_height{chainman.GetConsensus().sidechain.small_payout_height};
+    result.pushKV("small_payout_height", small_height == std::numeric_limits<int>::max() ? -1 : small_height);
     return result;
 },
     };
@@ -3352,8 +3360,8 @@ RPCMethod quotepoolliquidity()
             only = asset == pool.asset0 ? 1 : 2;
         }
         auto [out0, out1]{bitassets::curves::WithdrawOf(kind, fee, pool, shares, only)};
-        if (pool.asset0.IsNull() && out0 < bitassets::MIN_CHN_PAYOUT) out0 = 0;
-        if (pool.asset1.IsNull() && out1 < bitassets::MIN_CHN_PAYOUT) out1 = 0;
+        if (pool.asset0.IsNull() && out0 < bitassets::MinChnPayout(next_height)) out0 = 0;
+        if (pool.asset1.IsNull() && out1 < bitassets::MinChnPayout(next_height)) out1 = 0;
         amounts.pushKV(LabelOf(state, pool.asset0), AmountToJSON(out0, d0));
         amounts.pushKV(LabelOf(state, pool.asset1), AmountToJSON(out1, d1));
         result.pushKV("shares", shares);
@@ -3516,7 +3524,7 @@ RPCMethod previewposition()
         "What openposition would make in a concentrated pool: the range in ticks (to the pool's spacing), the liquidity the amounts give, and what goes in of each.",
         {
             {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
-            {"price_lower", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "asset0 in asset1, whole units"},
+            {"price_lower", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "asset0 in asset1, whole units (0 with price_upper 0: the full range)"},
             {"price_upper", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, ""},
             {"amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::NO, "The most of each, by asset (its id or " + CURRENCY_UNIT + ")", {{"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, ""}}},
         },
@@ -3543,7 +3551,9 @@ RPCMethod previewposition()
         const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
         const int32_t spacing{bitassets::cl::TickSpacing(state.GetPoolParams(id).fee)};
         const auto tick_of{[&](double price, bool up) {
-            if (!(price > 0)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is above 0");
+            // 0: no bound on that side (full range: the lowest or the highest tick of the spacing).
+            if (price == 0) return up ? bitassets::cl::MAX_TICK / spacing * spacing : bitassets::cl::MIN_TICK / spacing * spacing;
+            if (!(price > 0)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is above 0 (0: no bound, the full range)");
             const double exact{std::log(price * std::pow(10.0, int{d1} - int{d0})) / std::log(1.0001)};
             int32_t tick{static_cast<int32_t>(std::clamp(std::floor(exact), double(bitassets::cl::MIN_TICK), double(bitassets::cl::MAX_TICK)))};
             int32_t aligned{tick / spacing * spacing};

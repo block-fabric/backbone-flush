@@ -18,7 +18,7 @@ import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo } from './kinds';
-import { EXACT_METHODS, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { EXACT_METHODS, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -601,6 +601,7 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
         if (nodeCalls) {
           const [info, assets, pools, auctions] = await nodeCalls;
           ba.info = info;
+          setLimits(info);
           // A list unchanged is kept (the pages work out nothing again: a burst of blocks redrew them for nothing).
           if (!same(ba.assets, assets ?? [])) ba.assets = assets ?? [];
           if (!same(ba.pools, pools ?? [])) ba.pools = pools ?? [];
@@ -612,6 +613,7 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
         } else {
           const info = await infoCall;
           ba.info = info;
+          setLimits(info);
           ba.height = info?.height ?? -1;
         }
         ba.error = '';
