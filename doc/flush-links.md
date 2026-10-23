@@ -39,7 +39,7 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   links of at most 512 characters with a plain host (no user name) and printable ASCII, the description and links at
   most 512 bytes together (the chain's info), `logo=sha256:<hex>`, a first buy with both `ecx` and `min_tokens`; and,
   from the chain's launch parameters, `supply` (whole units, digits only, at most 19), `decimals` (0–12, with a supply),
-  `fee_bps` (30–500) and `allocation_bps` (0–500);
+  `fee_bps` (30–500) and `allocation_bps` (0–2500 from `allocation25_height`, 0–500 before);
 - `register`: `ticker`, `name`?, `desc`?, `link`*, `logo`?, `supply`, `decimals`; `curve`: `asset` (id), `ticker`, `amount`,
   `fee_bps`, `min_buy`?, `max_buy`?; `pool`: `asset_a`, `ticker_a`, `asset_b`, `ticker_b` (an id, or `ECX` for the coin in
   both, and only for it), `kind` (`constant`, `stable`, `weighted`), `fee_ppm` (a fee tier: 100, 500, 3000, 10000),

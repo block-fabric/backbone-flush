@@ -22,6 +22,7 @@
   import LocalTxCell from '../LocalTxCell.svelte';
   import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
+  import MyLaunches from '../ba/MyLaunches.svelte';
   import Issue from './Issue.svelte';
   import HiddenToggle from '../ba/HiddenToggle.svelte';
   import { withoutHidden } from '../ba/visible.svelte';
@@ -322,6 +323,7 @@
     {#if tab === 'register'}
       <Issue embedded />
     {:else if tab === 'holdings'}
+      <MyLaunches />
       <HiddenToggle count={visible.hidden} bind:show={showHidden} />
       {#if holdings.length === 0}
         <div class="panel ba-empty">

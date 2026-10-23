@@ -701,6 +701,18 @@ bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::strin
     return true;
 }
 
+bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (!marker || !marker->operation) return true;
+    if (const auto* launch{std::get_if<LaunchToken>(&*marker->operation)}; launch && launch->allocation > MAX_LAUNCH_ALLOCATION_BEFORE_25) {
+        reject_reason = "bad-ba-launch";
+        return false;
+    }
+    return true;
+}
+
 const Register* RegisterOf(const Operation& op)
 {
     if (const auto* reg{std::get_if<Register>(&op)}) return reg;
@@ -777,7 +789,9 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
             } else if (reg->supply != 0 || reg->decimals != LAUNCH_DECIMALS) {
                 return invalid("bad-ba-launch");
             }
-            if (!Spendable(launch->creator) || launch->allocation > MAX_LAUNCH_ALLOCATION) return invalid("bad-ba-launch");
+            // Its allocation within the most (MAX_LAUNCH_ALLOCATION; before allocation25_height less,
+            // CheckAllocationActivation), its supply with it within an amount.
+            if (!Spendable(launch->creator) || !IsLaunchAllocation(launch->WithParams() ? reg->supply : LAUNCH_SUPPLY, launch->allocation)) return invalid("bad-ba-launch");
             if (launch->min_buy > MAX_AMOUNT || launch->max_buy > MAX_AMOUNT || (launch->max_buy != 0 && launch->max_buy < launch->min_buy)) return invalid("bad-ba-launch");
             if (launch->first_buy > MAX_AMOUNT || launch->first_min_out > MAX_AMOUNT || (launch->first_buy == 0 && launch->first_min_out != 0)) return invalid("bad-ba-launch");
             if (launch->first_buy > 0 && launch->chn_to.empty()) return invalid("bad-ba-chn-to");

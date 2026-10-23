@@ -4,7 +4,7 @@
 // locked pool with CHN. The curve, worked out from the rules (a constant product of virtual reserves: from (G/2, 9/8·S)
 // to (3/2·G, 3/8·S), G the graduation, S the supply), for its chart and the review of a launch; the queries of the
 // list; the options of launchtoken. Pure: no state, no calls (tested in chain/ba/launch.test.ts).
-import { approx, type Amount } from './model';
+import { approx, unitsOf, type Amount } from './model';
 import type { LaunchParamRules } from './create';
 import { TICKER } from '../config';
 
@@ -260,4 +260,19 @@ export function launchProblems(o: { allocation: number; maxAllocation: number; f
 /** What the creator can be paid now (claimlaunch): its fees (from 0.0005 CHN), its allocation once graduated and not minted. */
 export function claimable(l: Pick<Launch, 'creator_fees_owed' | 'status' | 'allocation' | 'allocation_claimed'>, minChn = 0.0005): { fees: boolean; allocation: boolean } {
   return { fees: approx(l.creator_fees_owed) >= minChn, allocation: l.status === 'graduated' && l.allocation > 0 && !l.allocation_claimed };
+}
+
+/**
+ * The creator's allocation of a launch, as My launches shows it: its percent, its amount (whole, exact: ⌊S·bps/10000⌋
+ * units as the chain mints it), the curve's progress, and what it is now: to come at graduation, to claim, or minted.
+ * null: no allocation.
+ */
+export function creatorAllocation(l: Pick<Launch, 'supply' | 'decimals' | 'allocation' | 'allocation_claimed' | 'status' | 'progress' | 'creator_fees_owed' | 'curve_supply' | 'pool_supply'>): { percent: number; units: bigint; decimals: number; progress: number; state: 'at-graduation' | 'claimable' | 'claimed' } | null {
+  if (!(l.allocation > 0)) return null;
+  const decimals = launchDecimals(l);
+  // The supply the allocation is of: the launch's own (curve + pool), the chain's supply on a node from before.
+  const supply = l.curve_supply !== undefined && l.pool_supply !== undefined ? unitsOf(l.curve_supply, decimals) + unitsOf(l.pool_supply, decimals) : unitsOf(l.supply, decimals);
+  const units = (supply * BigInt(Math.round(l.allocation * 100))) / 10_000n;
+  const state = l.status !== 'graduated' ? 'at-graduation' : l.allocation_claimed ? 'claimed' : 'claimable';
+  return { percent: l.allocation, units, decimals, progress: Math.max(0, Math.min(100, Number(l.progress) || 0)), state };
 }

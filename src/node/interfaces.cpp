@@ -909,6 +909,11 @@ public:
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.LaunchParamsActive(chainman().ActiveChain().Height() + 1);
     }
+    uint16_t getBitAssetsMaxLaunchAllocation() override
+    {
+        LOCK(::cs_main);
+        return bitassets::MaxLaunchAllocation(chainman().GetConsensus().sidechain.Allocation25Active(chainman().ActiveChain().Height() + 1));
+    }
     std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) override
     {
         LOCK(::cs_main);

@@ -2243,7 +2243,7 @@ RPCMethod launchtoken()
         "with parameters apply (getlaunchstats' rules.params_active), the supply, decimals and fee chosen. Buyers pay " + CURRENCY_UNIT + " into its curve and sellers get "
         "" + CURRENCY_UNIT + " back from it, in the block's batch; 3/4 of the supply is sold on the curve, and when it has raised what it graduates at (getlaunchstats), its "
         "" + CURRENCY_UNIT + " and the units left go with the last 1/4 into the asset's pool with " + CURRENCY_UNIT + ", whose shares nobody holds (locked for good). The creator gets its "
-        "part of the curve's fees (claimlaunch) and, if asked for, an allocation minted at graduation (at most 5 %, shown to everyone)." + HELP_REQUIRING_PASSPHRASE,
+        "part of the curve's fees (claimlaunch) and, if asked for, an allocation minted at graduation (at most getlaunchstats' rules.max_allocation: 25 % where allocations of up to 25 % apply, 5 % before; shown to everyone)." + HELP_REQUIRING_PASSPHRASE,
         {
             {"ticker", RPCArg::Type::STR, RPCArg::Optional::NO, "The ticker reserved"},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
@@ -2254,7 +2254,7 @@ RPCMethod launchtoken()
                 {"supply", RPCArg::Type::AMOUNT, RPCArg::Default{"1000000000"}, "Its supply, in whole units of its decimals (a launch with parameters: a multiple of 8 units, getlaunchstats' rules)"},
                 {"decimals", RPCArg::Type::NUM, RPCArg::Default{6}, "Its decimals, 0 to 12 (a launch with parameters)"},
                 {"fee", RPCArg::Type::NUM, RPCArg::DefaultHint{"the network's, getlaunchstats' rules.fee_default"}, "The fee of a trade on its curve, in percent: 0.3 to 5 (a launch with parameters); the parts as the network's"},
-                {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to 5)"},
+                {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to getlaunchstats' rules.max_allocation: 25, or 5 before rules.allocation25_height)"},
                 {"first_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, CURRENCY_UNIT + " the launch buys of its asset in its own block, at the block's price"},
                 {"first_min_out", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least the first buy gets (0: any): the rules refuse its order below it, its " + CURRENCY_UNIT + " back; refused here if its quote alone is less"},
                 {"min_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least " + CURRENCY_UNIT + " a buy on the curve pays (0: any)"},
@@ -2329,8 +2329,11 @@ RPCMethod launchtoken()
         if (!info.empty()) launch.reg.data.info = info;
     }
     const double allocation{options.exists("allocation") ? options["allocation"].get_real() : 0.0};
-    if (!(allocation >= 0 && allocation <= bitassets::MAX_LAUNCH_ALLOCATION / 100.0)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The allocation is 0 to 5 percent");
+    const uint16_t max_allocation{pwallet->chain().getBitAssetsMaxLaunchAllocation()};
+    if (!(allocation >= 0 && allocation <= max_allocation / 100.0)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The allocation is 0 to %d percent", max_allocation / 100));
     launch.allocation = static_cast<uint16_t>(std::llround(allocation * 100));
+    // The supply and the allocation minted on top of it are within an amount (bitassets::IsLaunchAllocation).
+    if (!bitassets::IsLaunchAllocation(supply, launch.allocation)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The supply with its allocation is more than an asset can have: a smaller supply or allocation");
     launch.creator = GetScriptForDestination(NewDestination(*pwallet, "launch creator"));
     const auto coin{[&](const char* key) { return options.exists(key) ? bitassets::ParseUnits(options[key], bitassets::CHN_DECIMALS, /*allow_zero=*/true) : uint64_t{0}; }};
     launch.min_buy = coin("min_buy");

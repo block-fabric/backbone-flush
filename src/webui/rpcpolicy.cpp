@@ -80,6 +80,8 @@ const std::map<std::string, Bridge::Thread>& Methods()
         {"verifymessage", WORKER},
         // Wallets: what the pages read. Unlocking is the host's (wallet.unlock: the passphrase typed in its dialog).
         {"getaddressinfo", WORKER},
+        // The launches this wallet made (My assets): its "launch creator" addresses.
+        {"getaddressesbylabel", WORKER},
         {"getbalances", WORKER},
         {"getnewaddress", WORKER},
         {"getwalletinfo", WORKER},
