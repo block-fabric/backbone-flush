@@ -99,9 +99,11 @@ the link's floor, and the node refuses at signing time if the pool or curve move
 its floor on chain (`first_min_out`; the rules refuse the order below it, its ECX back).
 
 What an action of a link brings in (its tokens, the coin paid out by the coinbase, a launch's creator address) goes to
-the wallet's `flush.markets` address, the one connect shares, for the time of the call (`setlinkdestination`, a hidden
-wallet method the pages cannot call; the address must be the wallet's own): the site, which knows that address only,
-shows it in its portfolio. Without such an address (no connect yet), the wallet's own new addresses, as before.
+the wallet's `flush.markets` address, the one connect shares: the link host sets it for its one call, on that call's
+thread alone (`ScopedLinkDestination`, rpc/request.h: thread-local, never set by any RPC), and the wallet uses it when the
+call runs (after the user accepted), refusing the call if the address is not its own. The site, which knows that address
+only, shows it in its portfolio. Without such an address (no connect yet), the wallet's own new addresses, as before.
+(`setlinkdestination`, a hidden wallet method of regtest only, does the same for the functional tests.)
 
 The wallet: the one the app shows (its preferences' `lastWallet`) if it is open, else the only open wallet; with none,
 or several and none chosen, the link is refused ("choose one in the app first").
@@ -149,7 +151,8 @@ or several and none chosen, the link is refused ("choose one in the app first").
 | 12 | **Slippage as a weapon** where no floor binds (positions). | `position`, `reposition`: at most 10 % (`MAX_BINDING_SLIPPAGE_BPS`), shown as binding. |
 | 13 | **A withdrawal to someone else's address** (a phishing link with the attacker's eCash address). | The address is shown whole as the destination, with a warning that a payment on eCash cannot be undone; the describer of `createwithdrawal` shows it again; the usual arming delay and blocking after declines. A withdrawal stays refundable until it is in a bundle. |
 | 14 | **A deposit credited elsewhere**. | The credited address is never the link's: the wallet's own `flush.markets` address, its deposit address made by the node; two questions (the link's, then the deposit's own with the paying eCash wallet). |
-| 15 | **Results sent to the shared address while another action runs** (`setlinkdestination` is per wallet). | Set for the link's call alone and cleared after it, even on an error (RAII); an action of the app's pages in the same wallet during that call would also land there (the same wallet; the site then sees it): links run one at a time, while their dialog is open. |
+| 15 | **Results of another action sent to the shared address** (security review 2026-10-23: a destination as wallet-wide state would apply to calls running at the same time). | Thread-local, for the link's one call (`ScopedLinkDestination`, cleared by RAII, on an error too): a call of another thread (the pages, RPC) never reads it; no RPC sets it on a real network; the wallet checks the address is its own (`rpc_tests/link_destination_is_of_one_thread_and_one_scope`). |
+| 16 | **A link's floor lowered to a slippage** (security review 2026-10-23: a deposit's or withdrawal's floor given as a percent of the app's quote would let a move between the quote and the signing go below what the user accepted). | The absolute floors go to the call (`addpoolliquidity` `min_shares`, `removepoolliquidity` `min_amounts`): the wallet refuses below them at signing and the transaction's own floors are never under them; swaps and routes (`min_out`), buys and sales (their floor) did so already; orders (a limit) and bids (a falling price) have none to lower. |
 
 ## Tests
 

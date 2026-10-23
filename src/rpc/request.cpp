@@ -255,3 +255,19 @@ void JSONRPCRequest::parse(const UniValue& valRequest)
     else
         throw JSONRPCError(RPC_INVALID_REQUEST, "Params must be an array or object");
 }
+
+namespace {
+thread_local std::string g_link_destination;
+} // namespace
+
+ScopedLinkDestination::ScopedLinkDestination(std::string address) : m_previous{std::move(g_link_destination)}
+{
+    g_link_destination = std::move(address);
+}
+
+ScopedLinkDestination::~ScopedLinkDestination()
+{
+    g_link_destination = std::move(m_previous);
+}
+
+const std::string& LinkDestinationOfThisThread() { return g_link_destination; }

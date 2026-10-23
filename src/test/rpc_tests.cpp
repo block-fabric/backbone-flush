@@ -3,10 +3,12 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <core_io.h>
+#include <thread>
 #include <interfaces/chain.h>
 #include <node/context.h>
 #include <rpc/blockchain.h>
 #include <rpc/client.h>
+#include <rpc/request.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
 #include <test/util/common.h>
@@ -674,6 +676,33 @@ BOOST_AUTO_TEST_CASE(rpc_arg_helper)
         };
     CheckRpc(params, UniValue{JSON(R"([5, "hello", null, null, null, null, null])")}, check_positional);
     CheckRpc(params, UniValue{JSON(R"([5, "hello", 4, "test", true, 1.23, "world"])")}, check_positional);
+}
+
+BOOST_AUTO_TEST_CASE(link_destination_is_of_one_thread_and_one_scope)
+{
+    // The app's link host sets it around the one call of a link: read on that thread, inside that scope, only.
+    BOOST_CHECK(LinkDestinationOfThisThread().empty());
+    {
+        const ScopedLinkDestination outer{"bcrt1qoutside"};
+        BOOST_CHECK_EQUAL(LinkDestinationOfThisThread(), "bcrt1qoutside");
+        std::string seen_elsewhere{"unset"};
+        std::thread other{[&] { seen_elsewhere = LinkDestinationOfThisThread(); }};
+        other.join();
+        BOOST_CHECK_EQUAL(seen_elsewhere, "");
+        {
+            const ScopedLinkDestination inner{"bcrt1qinner"};
+            BOOST_CHECK_EQUAL(LinkDestinationOfThisThread(), "bcrt1qinner");
+        }
+        BOOST_CHECK_EQUAL(LinkDestinationOfThisThread(), "bcrt1qoutside");
+    }
+    BOOST_CHECK(LinkDestinationOfThisThread().empty());
+    // Cleared on an error too (the scope ends as the exception leaves it).
+    try {
+        const ScopedLinkDestination scope{"bcrt1qthrown"};
+        throw std::runtime_error{"refused"};
+    } catch (const std::runtime_error&) {
+    }
+    BOOST_CHECK(LinkDestinationOfThisThread().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

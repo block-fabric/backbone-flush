@@ -721,14 +721,14 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     // deposit: the pool's assets named in either order, the shares quoted against the floor, the amounts by asset.
     const Plan deposit{plan("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20&amount_b=1&min_shares=990&slippage_bps=100")};
     BOOST_CHECK_EQUAL(deposit.method, "addpoolliquidity");
-    BOOST_CHECK_EQUAL(deposit.params.write(), R"([")" + POOL_ID + R"(",{"0x)" + GOLD_ID + R"(":"20","ECX":"1"},1.00])");
+    BOOST_CHECK_EQUAL(deposit.params.write(), R"([")" + POOL_ID + R"(",{"0x)" + GOLD_ID + R"(":"20","ECX":"1"},1.00,990])");
     BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20&amount_b=1&min_shares=1001", reader).find("1000 shares"), std::string::npos);
     BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=TIDE&asset_b=ECX&amount_a=20&amount_b=1&min_shares=1", reader).find("binds its assets"), std::string::npos);
     BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20.001&amount_b=1&min_shares=1", reader).find("places"), std::string::npos);
     // withdraw: exactly the link's shares, the floors of both checked, the slippage that keeps the tighter one.
     const Plan withdraw{plan("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=500&min_a=12&min_b=0.49")};
     BOOST_CHECK_EQUAL(withdraw.method, "removepoolliquidity");
-    BOOST_CHECK_EQUAL(withdraw.params.write(), R"([")" + POOL_ID + R"(",100,null,2.00,500])");
+    BOOST_CHECK_EQUAL(withdraw.params.write(), R"([")" + POOL_ID + R"(",100,null,2.00,500,{"0x)" + GOLD_ID + R"(":"12","ECX":"0.49"}])");
     BOOST_CHECK_NE(ResolveRefused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=500&min_a=13&min_b=0", reader).find("moved"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=05&min_a=1&min_b=0").find("shares"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=5&min_a=1&min_b=0&only=c").find("only"), std::string::npos);
