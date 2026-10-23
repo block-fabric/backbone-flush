@@ -924,6 +924,10 @@ public:
                 static constexpr int SLOT99_V2_HEIGHT{3300};
                 consensus.sidechain.launch_params_height = SLOT99_V2_HEIGHT;
                 consensus.pos.jail_fix_height = SLOT99_V2_HEIGHT;
+                // Upgrade v3 (doc/photon-slot.md, "Upgrade v3"), from block SLOT99_V3_HEIGHT: a launch's allocation up to
+                // 25 % (5 % before). In the fingerprint too: each node of v3 rebuilds its sidechain state once.
+                static constexpr int SLOT99_V3_HEIGHT{4110};
+                consensus.sidechain.allocation25_height = SLOT99_V3_HEIGHT;
                 m_temporary_notice = "Temporary: Flush on betanet slot 99 (Photon). A test chain in the slot voted in for Photon; it will be "
                                      "dropped when Flush gets its own slot (46). Do not keep value here.";
                 break;
