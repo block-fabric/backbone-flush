@@ -15,9 +15,12 @@
   import AssetBadge from './AssetBadge.svelte';
   import AssetSelect from './AssetSelect.svelte';
   import MyOrders from './MyOrders.svelte';
+  import BookCandles from './BookCandles.svelte';
+  import BookDepth from './BookDepth.svelte';
+  import { orderMarks } from './bookchart';
   import UnitsInput from './UnitsInput.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
-  import { buildLadder, DEFAULT_ORDER_BLOCKS, MAX_ORDER_DURATION, ORDER_DURATIONS, placeParams, planOrder, validDuration, type Book } from './book';
+  import { buildLadder, DEFAULT_ORDER_BLOCKS, MAX_ORDER_DURATION, ORDER_DURATIONS, placeParams, planOrder, validDuration, type Book, type BookOrder, type WalletOrder } from './book';
   import { isBook } from './markets';
   import { assetArg, CHN_ID, formatPrice, formatUnits, isChn, unitsAtMost } from './model';
   import { assetById, ba, decimalsOf, labelOf, nameOf, refreshBitAssets, tradeIntent } from './store.svelte';
@@ -65,7 +68,7 @@
     }
     let live = true;
     rpc
-      .raw<Book>('getbook', [assetArg(a), assetArg(b), 15])
+      .raw<Book>('getbook', [assetArg(a), assetArg(b), 50])
       .then((r) => {
         if (!live) return;
         book = r && typeof r === 'object' ? r : null;
@@ -81,6 +84,33 @@
     };
   });
   const ladder = $derived(buildLadder(book, 12));
+
+  // The wallet's open orders in this book, read whole (getorder: their limits), for the marks of the charts.
+  let mineOrders = $state.raw<BookOrder[]>([]);
+  $effect(() => {
+    const wallet = wallets.current;
+    const id = book?.book;
+    void ba.version;
+    if (wallet === null || !id) {
+      mineOrders = [];
+      return;
+    }
+    let live = true;
+    rpc
+      .raw<WalletOrder[]>('listorders', [], { wallet })
+      .then(async (list) => {
+        const here = (Array.isArray(list) ? list : []).filter((o) => o.book === id && !o.expired && !o.evicted).slice(0, 20);
+        const whole = await Promise.all(here.map((o) => rpc.raw<BookOrder>('getorder', [o.order]).catch(() => null)));
+        if (live) mineOrders = whole.filter((o): o is BookOrder => !!o && typeof o === 'object');
+      })
+      .catch(() => {
+        if (live) mineOrders = [];
+      });
+    return () => {
+      live = false;
+    };
+  });
+  const marks = $derived(orderMarks(mineOrders, base, quote));
   const fmt = (x: number, decimals: number) => x.toLocaleString('en-US', { maximumFractionDigits: Math.min(Math.max(decimals, 0), 6) });
 
   // --- A limit order ---
@@ -255,6 +285,20 @@
       <div class="row"><button type="submit" class="btn primary" disabled={busy || wallets.current === null || !plan || !plan.ok || !durationOk}><Icon name="book" size={16} /> {busy ? 'Placing…' : 'Place order'}</button></div>
     </form>
   </div>
+{/if}
+
+{#if pair && book}
+  <div class="ba-split charts">
+    <section class="panel">
+      <div class="panel-head"><h3>Depth</h3><span class="muted small">{t('Cumulative %1 around the middle price', baseLabel)}</span></div>
+      <div class="panel-body"><BookDepth {book} {marks} {baseLabel} {quoteLabel} /></div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h3>Price</h3><span class="muted small">{t('%1 for 1 %2, from its trades', quoteLabel, baseLabel)}</span></div>
+      <div class="panel-body"><BookCandles pool={book.book} {marks} {quoteLabel} /></div>
+    </section>
+  </div>
+  {#if marks.length}<p class="ba-help">Dashed lines: your open orders in this book, at their limits.</p>{/if}
 {/if}
 
 <MyOrders />

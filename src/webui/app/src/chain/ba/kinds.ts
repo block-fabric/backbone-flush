@@ -101,7 +101,7 @@ export const CURVE_NAMES: Record<Curve, string> = { constant_product: 'Constant 
 /** When to choose each curve, in a line (shown with t()). */
 export const CURVE_HELP: Record<Curve, string> = {
   constant_product: 'For two assets whose prices move freely against each other: liquidity at every price. The usual kind, and the one Add liquidity makes (at 0.3%).',
-  stable: 'For two assets meant to be worth about the same (two stablecoins, a token and its wrapped twin): far less slippage near the balance; A sets how flat it is there.',
+  stable: 'For two assets meant to be worth about the same (two stablecoins, an asset and its wrapped twin): far less slippage near the balance; A sets how flat it is there.',
   weighted: 'For a pool that holds more of one asset than of the other (such as 80/20): less exposure to the price of the lighter one, and more slippage.',
   concentrated: 'Liquidity between two prices you choose (positions), as Uniswap v3: far deeper where the price trades, and earning only while the price is in your range. Made at a price, empty: positions bring its liquidity.',
   launch: `The bonding curve of a launched token: it sells the token for ${TICKER} until it has raised what it graduates at, then the token trades in a locked pool. Nobody puts liquidity into it.`,

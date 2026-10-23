@@ -73,7 +73,7 @@
   const simple = $derived(simpleMode());
   const tabs = $derived(
     simple
-      ? TABS.filter((x) => x.id === 'holdings' || x.id === 'register' || x.id === 'issuing' || x.id === 'activity' || x.id === tab).map((x) => (x.id === 'issuing' ? { ...x, label: 'Being created' } : x.id === 'register' ? { ...x, label: 'Create a token' } : x))
+      ? TABS.filter((x) => x.id === 'holdings' || x.id === 'register' || x.id === 'issuing' || x.id === 'activity' || x.id === tab).map((x) => (x.id === 'issuing' ? { ...x, label: 'Being created' } : x.id === 'register' ? { ...x, label: 'Create an asset' } : x))
       : TABS,
   );
 
@@ -290,7 +290,7 @@
     <header class="page-head">
       <h1>My assets</h1>
       <div class="row">
-        <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create a token' : 'Register new asset'}</button>
+        <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create an asset' : 'Register new asset'}</button>
         {#if simple}<button type="button" class="btn small" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>{/if}
         <button type="button" class="btn small ghost" onclick={() => go('receive')} title="Assets are received at any address of this wallet"><Icon name="receive" size={15} /> Receive</button>
       </div>
@@ -325,8 +325,8 @@
       <HiddenToggle count={visible.hidden} bind:show={showHidden} />
       {#if holdings.length === 0}
         <div class="panel ba-empty">
-          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap {TICKER} for a token, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
-          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>{simple ? 'Create a token' : 'Register new asset'}</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>{simple ? 'Swap' : 'Trade'}</button></div>
+          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap {TICKER} for an asset, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
+          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>{simple ? 'Create an asset' : 'Register new asset'}</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>{simple ? 'Swap' : 'Trade'}</button></div>
         </div>
       {:else}
         <div class="ba-split">

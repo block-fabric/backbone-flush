@@ -52,6 +52,14 @@
     const all = [...ba.assets.map((x) => ({ id: x.asset, label: x.label, seq: x.seq })), ...(ba.mine?.assets ?? []).map((h) => ({ id: h.asset, label: h.label, seq: assetById(h.asset)?.seq ?? '' }))];
     return all.filter((c) => !seen.has(c.id) && (seen.add(c.id), true) && (c.id === a || c.id === b || !hiddenAsset(c.id, c.label)));
   });
+  // Two assets asked for by another page (an asset's "Open a market", the create wizard).
+  $effect(() => {
+    if (!tradeIntent.createA) return;
+    a = tradeIntent.createA;
+    if (tradeIntent.createB) b = tradeIntent.createB;
+    tradeIntent.createA = '';
+    tradeIntent.createB = '';
+  });
   $effect(() => {
     if (!a && choices.length) a = choices[0].id;
   });

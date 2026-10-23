@@ -40,6 +40,14 @@ export interface PendingIssue {
   logo?: string;
   /** Its display name (from ticker_height), registered with it; none if absent. Text of the user, in NFC. */
   display_name?: string;
+  /**
+   * A launch (the create wizard's bonding curve): launchtoken's options, sent instead of registerasset once the
+   * reservation is deep enough (the host asked both with the reservation: LaunchAfterReserve). The supply and decimals
+   * above are then the launch's.
+   */
+  launch?: Record<string, string | number>;
+  /** The market the wizard opens once it is registered (a pool, an auction): offered then, never sent by itself. */
+  follow?: 'pool' | 'auction';
   /** When it was reserved (seconds), and the reservation's transaction. */
   time: number;
   reservation: string;
@@ -202,9 +210,25 @@ export const ba = $state({
 /** What another page asks the Send page to send (an asset, by id). */
 export const sendIntent = $state({ asset: '' });
 /** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id), a book (its base and quote). */
-export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '' });
+export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '', createA: '', createB: '' });
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
+
+/** Open a market for an asset that exists: its pool with the coin (Create pool), or its auction (Sell by auction). */
+export function openMarketFor(asset: string, kind: 'pool' | 'auction' | 'book'): void {
+  if (kind === 'pool') {
+    tradeIntent.createA = asset;
+    tradeIntent.createB = '0'.repeat(64);
+    go('trade', 'create');
+  } else if (kind === 'book') {
+    tradeIntent.bookBase = asset;
+    tradeIntent.bookQuote = '0'.repeat(64);
+    go('trade', 'book');
+  } else {
+    sellIntent.asset = asset;
+    go('auctions', 'sell');
+  }
+}
 
 /** Open the Send page with an asset chosen. */
 export function sendAsset(id: string): void {
@@ -238,7 +262,7 @@ export function sanitizeJournal(raw: unknown): Journal {
   if (Array.isArray(r.pending)) {
     j.pending = r.pending
       .filter((p) => p && str(p.wallet) && str(p.name) && str(p.supply) && typeof p.decimals === 'number' && str(p.asset))
-      .map((p) => ({ ...p, display_name: str(p.display_name) && p.display_name.length > 0 && p.display_name.length <= 64 ? p.display_name : undefined, logo: str(p.logo) && p.logo.length <= MAX_LOGO_BASE64 && /^[A-Za-z0-9+/]+={0,2}$/.test(p.logo) ? p.logo : undefined, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, needsConfirm: undefined }))
+      .map((p) => ({ ...p, display_name: str(p.display_name) && p.display_name.length > 0 && p.display_name.length <= 64 ? p.display_name : undefined, logo: str(p.logo) && p.logo.length <= MAX_LOGO_BASE64 && /^[A-Za-z0-9+/]+={0,2}$/.test(p.logo) ? p.logo : undefined, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, launch: launchOf(p.launch), follow: p.follow === 'pool' || p.follow === 'auction' ? p.follow : undefined, needsConfirm: undefined }))
       .slice(-MAX_PENDING);
   }
   if (r.prices && typeof r.prices === 'object') {
@@ -247,6 +271,18 @@ export function sanitizeJournal(raw: unknown): Journal {
     }
   }
   return j;
+}
+
+/** A launch's options read back from the journal: text and numbers only, the logo bounded; anything else dropped. */
+function launchOf(v: unknown): Record<string, string | number> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string | number> = {};
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (!/^[a-z_]{1,20}$/.test(k)) continue;
+    if (typeof x === 'number' && Number.isFinite(x)) out[k] = x;
+    else if (typeof x === 'string' && x.length <= (k === 'logo' ? MAX_LOGO_BASE64 : 1024)) out[k] = x;
+  }
+  return out;
 }
 
 /** Write the journal; false (and the user told, once) when it cannot be. */
@@ -328,6 +364,12 @@ export function dropPending(wallet: string, name: string): void {
   ba.journal.pending = ba.journal.pending.filter((x) => !(x.wallet === wallet && x.name === name));
   if (ba.journal.pending.length !== before) saveJournal();
   publish();
+}
+
+/** The second step of an asset being created: registerasset, or launchtoken for a launch. */
+export function secondStepOf(p: PendingIssue): { method: 'registerasset' | 'launchtoken'; params: unknown[] } {
+  if (p.launch) return { method: 'launchtoken', params: [p.name, p.launch] };
+  return { method: 'registerasset', params: registerParams(p) };
 }
 
 /** The parameters of registerasset for an asset being created. */
@@ -418,7 +460,14 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       // In a block: in the assets of the wallet from now on.
       ba.journal.pending = ba.journal.pending.filter((x) => x !== p);
       recentDone.push({ wallet, name: p.name, asset: p.asset, ended: Date.now() });
-      toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', p.name), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
+      if (p.launch) {
+        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', p.name), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('trade', 'launches'); } }]);
+      } else if (p.follow) {
+        const follow = p.follow;
+        toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', p.name) : t('%1 is in your assets: now start its auction.', p.name), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);
+      } else {
+        toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', p.name), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
+      }
       changed = true;
       continue;
     }
@@ -439,7 +488,8 @@ async function registerReadyOnce(wallet: string): Promise<void> {
     }
     if (p.needsConfirm !== undefined && !p.registration) continue;
     try {
-      const done = await walletRpcIfAuthorized<{ txid: string }>(wallet, 'registerasset', registerParams(p));
+      const second = secondStepOf(p);
+      const done = await walletRpcIfAuthorized<{ txid: string }>(wallet, second.method, second.params);
       if ('needed' in done) {
         // The host would ask: the user confirms it on its card, told once.
         p.needsConfirm = done.needed;
@@ -468,7 +518,8 @@ async function registerReadyOnce(wallet: string): Promise<void> {
 
 /** Register an asset being created now, with the passphrase if the wallet needs it. */
 export async function registerNow(p: PendingIssue): Promise<string | null> {
-  const done = await walletRpc<{ txid: string }>(p.wallet, 'registerasset', registerParams(p));
+  const second = secondStepOf(p);
+  const done = await walletRpc<{ txid: string }>(p.wallet, second.method, second.params);
   if (!done) return null;
   p.registration = done.txid;
   p.registeredAt = ba.height;

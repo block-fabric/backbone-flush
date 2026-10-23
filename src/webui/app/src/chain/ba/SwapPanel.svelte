@@ -371,8 +371,8 @@
   <section class="panel">
     <div class="panel-head"><h3>How a swap works</h3></div>
     <div class="panel-body how">
-      <p>Each token trades with {TICKER} in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
-      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the token then shows in My assets.</p>
+      <p>Each asset trades with {TICKER} in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
+      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the asset then shows in My assets.</p>
       <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
     </div>
   </section>

@@ -135,15 +135,15 @@
         </select>
       </label>
       <span class="grow"></span>
-      <button type="button" class="btn small primary" onclick={() => (nav.tab = 'launch')}><Icon name="plus" size={14} /> Launch a token</button>
+      <button type="button" class="btn small primary" onclick={() => (nav.tab = 'launch')}><Icon name="plus" size={14} /> Launch an asset</button>
     </div>
     {#if error}<p class="ba-problems bad" role="alert"><SafeText text={error} /></p>{/if}
     {#if list.length === 0}
-      <p class="ba-empty">{loading ? t('Reading the launches…') : filter === 'all' ? t('No launch yet: launch the first token.') : t('No launch matches.')}</p>
+      <p class="ba-empty">{loading ? t('Reading the launches…') : filter === 'all' ? t('No launch yet: launch the first asset.') : t('No launch matches.')}</p>
     {:else}
       <div class="ba-wrap">
         <table class="ba-table" use:stacked aria-label="Launches">
-          <thead><tr><th>Token</th><th>To graduation</th><th class="end">Price</th><th class="end">Market value</th><th class="end">Volume</th><th>Status</th></tr></thead>
+          <thead><tr><th>Asset</th><th>To graduation</th><th class="end">Price</th><th class="end">Market value</th><th class="end">Volume</th><th>Status</th></tr></thead>
           <tbody>
             {#each list as l (l.token)}
               <tr class="pick" onclick={() => (open = l.token)} use:selectable={() => (open = l.token)}>

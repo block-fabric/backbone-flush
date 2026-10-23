@@ -1,14 +1,14 @@
 <script lang="ts">
-  // Browse assets: the assets of the chain, as cards to search (a name, a number such as 1739-0029, or a hash
+  // Browse assets: the registry of the chain's assets, as cards to search (a name, a number such as 1739-0029, or a hash
   // "0x…": also an asset whose name is private), filter (held or controlled by the wallet, with a market,
   // mintable, fixed, dead) and sort (newest, by name, by supply, by the value of the supply, most traded).
   // An asset opens whole (ba/AssetView.svelte). The Explore tab of the Qt window of BitAssets.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { errorText } from '../../lib/dialogs.svelte';
-  import { t } from '../../lib/i18n.svelte';
+  import { t, tn } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
-  import { nav, takeFocus } from '../../lib/nav.svelte';
+  import { go, nav, takeFocus } from '../../lib/nav.svelte';
   import { rpc } from '../../lib/rpc';
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
@@ -22,6 +22,7 @@
   import HiddenToggle from '../ba/HiddenToggle.svelte';
   import { wallets } from '../../lib/state.svelte';
   import { TICKER } from '../config';
+  import { MARKET_LABELS, marketOf } from '../ba/registry';
 
   $effect(() => startBitAssets());
 
@@ -181,6 +182,7 @@
     <header class="page-head">
       <h1>Browse assets</h1>
       {#if ba.info}<span class="muted">{formatCount(ba.info.assets)} assets · {formatCount(ba.info.pools)} pools · {formatCount(ba.info.auctions)} auctions · next block {formatCount(ba.info.height)}</span>{/if}
+      {#if wallets.current !== null}<button type="button" class="btn primary create" onclick={() => go('issue')}><Icon name="issue" size={15} /> Create an asset</button>{/if}
     </header>
 
     {#if ba.error}<p class="ba-problems bad" role="alert"><SafeText text={ba.error} /></p>{/if}
@@ -234,6 +236,7 @@
       <ul class="grid" aria-label="Assets">
         {#each list as a (a.asset)}
           {@const price = chnPrice(a.asset)}
+          {@const market = marketOf(a.asset, ba.pools, ba.auctions)}
           <li>
             <button type="button" class="panel tile" onclick={() => (shown = a.asset)}>
               <span class="top">
@@ -246,6 +249,7 @@
                 <span><span class="faint">Price</span> <strong class="num">{#if price !== undefined}{formatPrice(price)} {TICKER}{:else}–{/if}</strong></span>
               </span>
               <span class="tags">
+                <span class="ba-tag market {market.status}" data-testid="market-badge" title={market.kinds.length > 1 ? market.kinds.map((k) => t(k === 'none' ? 'No market' : k)).join(', ') : undefined}>{#if market.status === 'curve'}{t('On curve %1%', String(Math.round((market.progress ?? 0) * 100)))}{:else if market.status === 'pool'}{tn('%n pool(s)', market.pools)}{:else}{t(MARKET_LABELS[market.status])}{/if}</span>
                 {#if a.fixed}<span class="ba-tag">Fixed supply</span>{/if}
                 {#if mineIds.has(a.asset)}<span class="ba-tag accent">Yours</span>{/if}
                 {#if a.releasable}<span class="ba-tag danger">Dead</span>{/if}
@@ -349,6 +353,21 @@
     justify-content: space-between;
     gap: 0.4rem 1rem;
     font-size: 0.88rem;
+  }
+  .create {
+    margin-left: auto;
+  }
+  .ba-tag.market.curve {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .ba-tag.market.pool,
+  .ba-tag.market.book,
+  .ba-tag.market.auction {
+    color: var(--positive);
+  }
+  .ba-tag.market.none {
+    color: var(--text-faint, var(--text-muted));
   }
   .tags {
     display: flex;

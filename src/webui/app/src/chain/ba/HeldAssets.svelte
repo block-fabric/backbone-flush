@@ -87,7 +87,7 @@
   {/if}
   {#if home && wallets.current !== null}
     <div class="actions">
-      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create a token' : 'Issue'}</button>
+      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create an asset' : 'Issue'}</button>
       <button type="button" class="btn ghost small" onclick={() => go('send')}>Send</button>
     </div>
   {/if}

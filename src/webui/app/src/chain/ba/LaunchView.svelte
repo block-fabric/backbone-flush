@@ -20,7 +20,7 @@
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { claimable, curvePointAt, curveSeries, curveShape, LAUNCH_DECIMALS, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
+  import { claimable, curvePointAt, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
@@ -101,7 +101,9 @@
 
   const rules = $derived(rulesOf(stats?.rules));
   const graduated = $derived(launch?.status === 'graduated');
-  const shape = $derived(curveShape(launch ? approx(launch.graduation) : rules.graduation, rules.supply));
+  const shape = $derived(curveShape(launch ? approx(launch.graduation) : rules.graduation, launchSupply(launch, rules.supply)));
+  /** Its asset's decimals (6 before the launch parameters). */
+  const DEC = $derived(launchDecimals(launch));
   const raised = $derived(launch ? approx(launch.raised) : 0);
   const now = $derived(curvePointAt(shape, graduated ? shape.graduation : raised));
   const series = $derived(curveSeries(shape));
@@ -116,12 +118,12 @@
   let quote = $state<LaunchQuote | null>(null);
   let quoteError = $state('');
   let busy = $state(false);
-  const inDecimals = $derived(side === 'buy' ? 8 : LAUNCH_DECIMALS);
-  const outDecimals = $derived(side === 'buy' ? LAUNCH_DECIMALS : 8);
+  const inDecimals = $derived(side === 'buy' ? 8 : DEC);
+  const outDecimals = $derived(side === 'buy' ? DEC : 8);
   const held = $derived.by(() => {
     if (side === 'buy') return wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null;
     const h = ba.mine?.assets.find((x) => x.asset === token);
-    return h ? unitsAtMost(h.balance, LAUNCH_DECIMALS) : 0n;
+    return h ? unitsAtMost(h.balance, DEC) : 0n;
   });
   let generation = 0;
   $effect(() => {
@@ -262,7 +264,7 @@
 
     {#if graduated}
       <section class="panel graduated" data-testid="launch-graduated">
-        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} {TICKER}; that and the tokens left went into its pool with {TICKER} (constant product, 0.3%), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
+        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} {TICKER}; that and what was left of it went into its pool with {TICKER} (constant product, 0.3%), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
       </section>
     {/if}
 
@@ -279,10 +281,10 @@
 
     <div class="ba-cols">
       <section class="panel">
-        <div class="panel-head"><h3>The curve</h3><span class="muted small">price by tokens sold</span></div>
+        <div class="panel-head"><h3>The curve</h3><span class="muted small">price by the amount sold</span></div>
         <div class="panel-body">
-          <Chart points={series} marks={[{ x: now.sold, y: now.price }]} area label={t('The bonding curve of the launch: its price by the tokens it sold, and where it is')} formatX={(x) => compactNumber(x, 3)} formatY={(y) => formatPrice(y, 4)} />
-          <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} a token, 9 times more, over {compactNumber(shape.curveSupply, 3)} tokens; then {compactNumber(shape.poolSupply, 3)} go into its pool with the {TICKER} raised, at the curve's last price. {#if !graduated}It sold {compactNumber(Math.max(0, now.sold), 3)} so far.{/if}</p>
+          <Chart points={series} marks={[{ x: now.sold, y: now.price }]} area label={t('The bonding curve of the launch: its price by the amount it sold, and where it is')} formatX={(x) => compactNumber(x, 3)} formatY={(y) => formatPrice(y, 4)} />
+          <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} each, 9 times more, over {compactNumber(shape.curveSupply, 3)} of it; then {compactNumber(shape.poolSupply, 3)} go into its pool with the {TICKER} raised, at the curve's last price. {#if !graduated}It sold {compactNumber(Math.max(0, now.sold), 3)} so far.{/if}</p>
         </div>
       </section>
 
@@ -309,12 +311,12 @@
               <dt>You get about</dt><dd class="strong">{formatUnits(out, outDecimals)} {#if side === 'buy'}<SafeText text={launch.ticker} />{:else}{TICKER}{/if}</dd>
               <dt>At least</dt><dd>{formatUnits(least, outDecimals)}</dd>
               {#if backUnits > 0n}<dt>Back</dt><dd class="ba-warn">{formatUnits(backUnits, 8)} {TICKER}: the buy passes the curve's end</dd>{/if}
-              <dt>Price</dt><dd>{formatPrice(Number(quote.price))} {TICKER} a token</dd>
+              <dt>Price</dt><dd>{formatPrice(Number(quote.price))} {TICKER} each</dd>
               <dt>Price impact</dt><dd class:ba-good={Number(quote.price_impact) <= 1} class:ba-warn={Number(quote.price_impact) > 1}>{Number(quote.price_impact).toFixed(2)}%</dd>
               <dt>Fee ({launch.fee}%)</dt><dd>{formatAmount(quote.fee, 8)} {TICKER}</dd>
               <dt>To graduation after</dt><dd>{formatPercent(Number(quote.progress_after))}</dd>
             </dl>
-            {#if quote.graduates}<p class="ba-help strong" data-testid="launch-graduates"><Icon name="check" size={14} /> This trade takes the launch to graduation: its token then trades in its pool with {TICKER}.</p>{/if}
+            {#if quote.graduates}<p class="ba-help strong" data-testid="launch-graduates"><Icon name="check" size={14} /> This trade takes the launch to graduation: the asset then trades in its pool with {TICKER}.</p>{/if}
           {/if}
           <div class="row"><button type="submit" class="btn primary wide" disabled={busy || wallets.current === null || amount === null || out === null || !!problem || !!quoteError}>{busy ? t('Sending…') : side === 'buy' ? t('Buy') : t('Sell')}</button></div>
         </form>
@@ -328,7 +330,7 @@
           {#if launch.info}<p class="info"><SafeText text={launch.info} /></p>{:else}<p class="ba-empty">No description.</p>{/if}
           <dl class="ba-lines">
             <dt>Launched</dt><dd>block {formatCount(launch.height)}</dd>
-            <dt>Supply</dt><dd>{formatAmount(launch.supply, LAUNCH_DECIMALS, { max: 0 })}</dd>
+            <dt>Supply</dt><dd>{formatAmount(launch.supply, DEC, { max: 0 })}</dd>
             <dt>Fee</dt><dd data-testid="launch-fee-split">{split}</dd>
             <dt>Allocation</dt><dd>{#if launch.allocation > 0}{launch.allocation}% of the supply, minted to the creator at graduation (dilution){#if launch.allocation_claimed}, minted{/if}{:else}none{/if}</dd>
           </dl>
@@ -367,8 +369,8 @@
                   <td class="end">{r.orders}</td>
                   <td class="end">{formatAmount(r.coin_in, 8, { max: 4 })}</td>
                   <td class="end">{formatAmount(r.coin_out, 8, { max: 4 })}</td>
-                  <td class="end">{formatAmount(r.tokens_out, LAUNCH_DECIMALS, { max: 0 })}</td>
-                  <td class="end">{formatAmount(r.tokens_in, LAUNCH_DECIMALS, { max: 0 })}</td>
+                  <td class="end">{formatAmount(r.tokens_out, DEC, { max: 0 })}</td>
+                  <td class="end">{formatAmount(r.tokens_in, DEC, { max: 0 })}</td>
                   <td class="end">{formatAmount(r.fees, 8, { max: 6 })}</td>
                   <td>{#if r.created}<span class="ba-tag">launched</span>{/if}{#if r.graduated} <span class="ba-tag accent">graduated</span>{/if}</td>
                 </tr>

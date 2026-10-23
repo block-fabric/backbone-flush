@@ -132,7 +132,7 @@ export function buildCommands(): Command[] {
     { id: 'banking.transactions', group: 'Banking', label: 'Transactions', run: to('transactions'), shortcut: 'Alt+4', disabled: noWallet || prefs.mask, keywords: 'history', tip: 'Browse transaction history' },
     { id: 'banking.openUri', group: 'Banking', label: 'Open URI…', run: to('send', 'uri'), disabled: noWallet, keywords: `payment link ${CHAIN.uriScheme}:`, tip: t('Open a %1: URI', CHAIN.uriScheme) },
     { id: 'banking.pasteLink', group: 'Banking', label: 'Paste link…', run: to('send', 'uri'), disabled: noWallet, keywords: `flush.markets site buy sell swap launch connect ${CHAIN.uriScheme}:`, tip: t('Open a link of flush.markets: the app shows what it asks, quoted again, in its own dialog') },
-    { id: 'banking.importLaunch', group: 'Banking', label: 'Import launch file…', run: () => void importLaunchFile(), disabled: noWallet, keywords: 'flushlaunch json token create site', tip: t('Launch a token from a launch file saved on flush.markets') },
+    { id: 'banking.importLaunch', group: 'Banking', label: 'Import launch file…', run: () => void importLaunchFile(), disabled: noWallet, keywords: 'flushlaunch json token create site', tip: t('Launch an asset from a launch file saved on flush.markets') },
     { id: 'banking.proof', group: 'Banking', label: 'Proof of funds', run: to('proof'), disabled: noWallet, separator: true },
     { id: 'banking.multisig', group: 'Banking', label: 'Multisig lounge', run: to('multisig'), disabled: noWallet },
     { id: 'banking.psbtFile', group: 'Banking', label: 'Load PSBT from file…', run: to('psbt', 'file'), disabled: noWallet, separator: true, keywords: 'partially signed', tip: t('Load Partially Signed %1 Transaction', CHAIN.name) },

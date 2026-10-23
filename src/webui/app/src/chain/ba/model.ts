@@ -830,7 +830,7 @@ export const OPERATIONS: Record<string, string> = {
   'remove liquidity': 'Remove liquidity',
   'create pool': 'Create pool',
   route: 'Trade along a route',
-  launch: 'Launch a token',
+  launch: 'Launch an asset',
   'claim launch': 'Pay a launch\'s creator',
   auction: 'Auction',
   bid: 'Bid',

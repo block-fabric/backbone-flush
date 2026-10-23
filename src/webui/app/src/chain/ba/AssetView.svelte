@@ -1,6 +1,6 @@
 <script lang="ts">
   // An asset, whole: its supply (minted, burned), what the wallet holds of it, its markets (each pool with its
-  // price, depth and the price as this app saw it), its auctions, its data and the history of each field, who
+  // price, depth and the price as this app saw it; "Open a market": ba/OpenMarket.svelte), its auctions, its data and the history of each field, who
   // controls it, and retiring it once it is dead. The Explore panel of the Qt window of BitAssets, with more.
   import { stacked } from '../../lib/actions';
   import SafeText from '../../components/SafeText.svelte';
@@ -16,6 +16,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
   import Chart from './Chart.svelte';
+  import OpenMarket from './OpenMarket.svelte';
   import PoolKind from './PoolKind.svelte';
   import { flipKind, kindOf } from './kinds';
   import type { Launch } from './launch';
@@ -244,6 +245,8 @@
             </ul>
           {/if}
         </section>
+
+        {#if wallets.current !== null}<OpenMarket {asset} {pools} launched={!!launched} />{/if}
 
         {#if chnPool && !chnPool.abandoned}
           <section class="panel">

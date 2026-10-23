@@ -19,6 +19,7 @@ import Auctions from './pages/Auctions.svelte';
 import Issue from './pages/Issue.svelte';
 import MyAssets from './pages/MyAssets.svelte';
 import Trade from './pages/Trade.svelte';
+import AssetView from './ba/AssetView.svelte';
 import {
   assetArg,
   auctionBuysAt,
@@ -102,6 +103,8 @@ let activityCount = 1;
 let tickersOn = false;
 /** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
 let dexOn = false;
+/** The launch parameters (consensus "launchparams": a launch's own supply, decimals and fee; curveasset) apply. */
+let paramsOn = false;
 /** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
 let launchCount = 2;
 const MOON = id('m');
@@ -151,7 +154,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'openposition', 'changeposition'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'openposition', 'changeposition', 'curveasset', 'placeorder'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -304,7 +307,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
-      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true } };
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
     case 'listlaunches': {
       const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
       const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
@@ -329,6 +332,9 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return [{ height: 15, token: MOON, created: false, graduated: false, orders: 2, coin_in: '10.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 12000000, fees: '0.10000000', reserve_coin: '450.00000000', reserve_tokens: 625000000 }, { height: 12, token: MOON, created: true, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 4000000, fees: '0.01000000', reserve_coin: '251.00000000', reserve_tokens: 1120000000 }, { height: 13, token: STAR, created: false, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 1, fees: '0.01000000', reserve_coin: '1.00000000', reserve_tokens: 1 }];
     case 'launchtoken':
       return { txid: id('7'), token: MOON, ticker: p[0], pool: id('c') };
+    case 'curveasset':
+      if (!paramsOn) fail('Method not found', -32601);
+      return { txid: id('7'), asset: String(p[0]).replace(/^0x/, ''), pool: id('c'), curve_supply: '750', pool_supply: '250', fee: 1.15 };
     case 'buyfromlaunch':
       return { txid: id('7'), quote: 2469135.802469, min_out: 2444444.444444, back: '0.00000000' };
     case 'selltolaunch':
@@ -442,6 +448,7 @@ beforeEach(() => {
   activityCount = 1;
   tickersOn = false;
   dexOn = false;
+  paramsOn = false;
   launchCount = 2;
   store = null;
   locked = false;
@@ -762,23 +769,26 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(screen.getByText(/does not read as the number of an asset/)).toBeTruthy();
     await fireEvent.input(name, { target: { value: 'COPPER' } });
     await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    // One wizard (user decision, 2026-10-22): what it is (the description with the name), the supply, the market, the review.
+    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'Copper, by the gram' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000.25' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'Copper, by the gram' } });
+    // The market: none by default for "Register an asset".
+    expect(screen.getByRole('radio', { name: /No market/ }).getAttribute('aria-checked')).toBe('true');
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Review' })).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Reserve and issue/ }));
     await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
     await waitFor(() => expect(screen.getByRole('heading', { name: /COPPER is reserved/ })).toBeTruthy());
-    expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', asset: 'f'.repeat(64), supply: '1000.25', decimals: 2, data: { info: 'Copper, by the gram' }, public: true }] });
+    expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', asset: 'f'.repeat(64), supply: '1000.25', decimals: 8, data: { info: 'Copper, by the gram' }, public: true }] });
     // One question for both steps: the reservation and the registration exactly as it will be sent.
     expect(asked).toEqual(['reserveasset+registerasset']);
     // Deep enough: registered by itself, without a second question.
     mine.reservations.push({ txid: id('6'), name: 'COPPER', taken: false, height: 21, registers_from: 23, wait: 0 });
     await refreshBitAssets();
     await waitFor(() => expect(called('registerasset').length).toBe(1));
-    expect(called('registerasset')[0].params).toEqual(['COPPER', '1000.25', 2, { info: 'Copper, by the gram' }, true]);
+    expect(called('registerasset')[0].params).toEqual(['COPPER', '1000.25', 8, { info: 'Copper, by the gram' }, true]);
     expect(asked).toEqual(['reserveasset+registerasset']);
     expect(authorized).toEqual([]);
   });
@@ -1091,6 +1101,97 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const held = await waitFor(() => screen.getByTestId('held-assets'));
     await waitFor(() => expect(within(held).getByRole('button', { name: 'Register new asset' })).toBeTruthy());
     expect(within(held).getByRole('button', { name: 'Get assets in Trade' })).toBeTruthy();
+  });
+
+  it('Launch: the one create wizard, a curve of its own supply, decimals and fee (launchparams), launched by itself once deep enough', async () => {
+    dexOn = true;
+    paramsOn = true;
+    tickersOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    const name = (await screen.findByLabelText('Ticker')) as HTMLInputElement;
+    await fireEvent.input(name, { target: { value: 'COPPER' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'Copper on a curve' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // The rules' defaults first: a billion of 6 decimals.
+    await waitFor(() => expect((document.querySelector('#issue-supply') as HTMLInputElement).value).toBe('1000000000'));
+    // Too few units for a curve, then a supply that is no multiple of 8 units.
+    await fireEvent.input(document.querySelector('#issue-decimals')!, { target: { value: '0' } });
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000' } });
+    await waitFor(() => expect(screen.getByTestId('curve-supply-problem').textContent).toMatch(/1,000,000 units at least/));
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000001' } });
+    await waitFor(() => expect(screen.getByTestId('curve-supply-problem').textContent).toMatch(/multiple of 8 units/));
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.input(document.querySelector('#issue-decimals')!, { target: { value: '8' } });
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '21000000' } });
+    await waitFor(() => expect(screen.queryByTestId('curve-supply-problem')).toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('radio', { name: /Bonding curve/ }).getAttribute('aria-checked')).toBe('true');
+    await fireEvent.input(document.querySelector('#launch-fee')!, { target: { value: '250' } });
+    await waitFor(() => expect(screen.getByLabelText(/Trade fee on the curve: 2\.50%/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    const review = await screen.findByTestId('launch-review');
+    expect(review.textContent).toContain('21,000,000, 8 decimals, fixed');
+    expect(review.textContent).toMatch(/2\.5% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
+    await fireEvent.click(screen.getByRole('button', { name: /Reserve and launch/ }));
+    await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
+    // One question for both steps: the reservation and the launch exactly as it will be sent.
+    expect(asked).toEqual(['reserveasset+launchtoken']);
+    await waitFor(() => expect(store).toMatchObject({ pending: [{ name: 'COPPER', launch: { info: 'Copper on a curve', supply: '21000000', decimals: 8, fee: 2.5 } }] }));
+    mine.reservations.push({ txid: id('6'), name: 'COPPER', taken: false, height: 21, registers_from: 23, wait: 0 });
+    await refreshBitAssets();
+    await waitFor(() => expect(called('launchtoken').length).toBe(1));
+    expect(called('launchtoken')[0].params).toEqual(['COPPER', { info: 'Copper on a curve', supply: '21000000', decimals: 8, fee: 2.5 }]);
+    expect(asked).toEqual(['reserveasset+launchtoken']);
+  });
+
+  it('Register an asset, then its market: a pool offered once it is registered', async () => {
+    render(Issue);
+    render(DialogHost);
+    await waitFor(() => expect(ba.loaded).toBe(true));
+    await fireEvent.input(screen.getByLabelText('Its name'), { target: { value: 'COPPER' } });
+    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '500' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // No launches on this node: the curve is off; a pool is picked.
+    expect((screen.getByRole('radio', { name: /Bonding curve/ }) as HTMLButtonElement).disabled).toBe(true);
+    await fireEvent.click(screen.getByRole('radio', { name: /Pool/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Reserve and issue/ }));
+    await waitFor(() => expect(asked).toEqual(['reserveasset+registerasset']));
+    await waitFor(() => expect(store).toMatchObject({ pending: [{ name: 'COPPER', follow: 'pool' }] }));
+  });
+
+  it('Browse assets: the market of each asset, and Create an asset', async () => {
+    pools.push({ pool: id('b'), asset_a: 'ECX', asset_b: 'SILVER', asset_a_id: CHN_ID, asset_b_id: SILVER, reserve_a: 0, reserve_b: 0, price: 0, shares: 0, volume_a: 0, volume_b: 0, swaps: 0, created: 9, abandoned: false, curve: 'book' });
+    render(Assets);
+    await loaded();
+    const tiles = await screen.findByRole('list', { name: 'Assets' });
+    await waitFor(() => expect(within(tiles).getAllByTestId('market-badge').map((b) => b.textContent?.trim())).toEqual(expect.arrayContaining(['1 pool', 'Book', 'No market'])));
+    await fireEvent.click(screen.getByRole('button', { name: /Create an asset/ }));
+    expect(nav.page).toBe('my-assets');
+    expect(nav.tab).toBe('register');
+  });
+
+  it('an asset: open a market, a curve for its controller once the launch parameters apply', async () => {
+    dexOn = true;
+    paramsOn = true;
+    mine.assets[0] = { ...mine.assets[0], balance: 100000000 };
+    pools.splice(0);
+    render(AssetView, { id: GOLD });
+    render(DialogHost);
+    await refreshBitAssets();
+    await loaded();
+    const open = await screen.findByRole('region', { name: 'Open a market' });
+    await fireEvent.click(within(open).getByRole('button', { name: /Bonding curve/ }));
+    await fireEvent.input(within(open).getByLabelText(/Amount on the curve/), { target: { value: '80000' } });
+    await fireEvent.click(within(open).getByRole('button', { name: /Put it on a curve/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('curveasset')[0]?.params).toEqual([assetArg(GOLD), '80000', { fee: 1.15 }]));
   });
 });
 
@@ -1411,30 +1512,23 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
     expect(nav.tab).toBe('pools');
   });
 
-  it('Launch a token: a ticker reserved, then a reservation launched with what it is and its options, the allocation flagged', async () => {
+  it('Launch an asset: the create wizard, a reservation of the wallet launched with what it is and its options, the allocation flagged', async () => {
     dexOn = true;
-    nav.tab = 'launch';
-    render(Trade);
-    render(DialogHost);
-    await loaded();
-    await waitFor(() => expect(document.querySelector('#launch-ticker')).not.toBeNull());
-    await fireEvent.input(document.querySelector('#launch-ticker')!, { target: { value: 'MOON' } });
-    await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
-    // The host asks (one question: the launch is asked when the reservation is deep enough).
-    await fireEvent.click(screen.getByRole('button', { name: 'Reserve the ticker' }));
-    await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['MOON']));
-    cleanup();
-
+    tickersOn = true;
     nav.tab = 'launch';
     render(Trade);
     render(DialogHost);
     await loaded();
     // A reservation of this wallet (IRON, deep enough), not one a registration uses.
     await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
-    await waitFor(() => expect(screen.getByText(/ready to launch/)).toBeTruthy());
-    await fireEvent.input(document.querySelector('#launch-display')!, { target: { value: 'Iron age' } });
-    await fireEvent.input(document.querySelector('#launch-info')!, { target: { value: 'An iron token.' } });
+    await waitFor(() => expect(screen.getByText(/Reserved by this wallet/)).toBeTruthy());
+    await fireEvent.input(document.querySelector('#issue-display')!, { target: { value: 'Iron age' } });
+    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'An iron asset.' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // Before the launch parameters: a billion of 6 decimals, fixed.
+    expect(screen.getByTestId('curve-fixed-supply').textContent).toContain('1,000,000,000');
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('radio', { name: /Bonding curve/ }).getAttribute('aria-checked')).toBe('true');
     await fireEvent.input(document.querySelector('#launch-first')!, { target: { value: '1' } });
     await fireEvent.input(document.querySelector('#launch-allocation')!, { target: { value: '2' } });
     await waitFor(() => expect(screen.getByText(/Dilution\./)).toBeTruthy());
@@ -1445,7 +1539,7 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
     expect(review.textContent).toMatch(/1\.15% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
     await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
     await answer('yes');
-    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron token.', allocation: 2, first_buy: '1' }]));
+    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron asset.', allocation: 2, first_buy: '1' }]));
     // Then its page.
     await waitFor(() => expect(nav.tab).toBe('launches'));
   });
@@ -1491,33 +1585,33 @@ describe('Simple mode', () => {
     await waitFor(() => expect(screen.getByRole('table', { name: 'Pools' })).toBeTruthy());
   });
 
-  it('Create a token: the wizard of Advanced in plain words, the same calls', async () => {
+  it('Create an asset: the wizard of Advanced in plain words, the same calls', async () => {
     render(Issue);
     render(DialogHost);
     await waitFor(() => expect(ba.loaded).toBe(true));
-    expect(screen.getByRole('heading', { name: 'Create a token' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Create an asset' })).toBeTruthy();
     await fireEvent.input(screen.getByLabelText('Its name'), { target: { value: 'COPPER' } });
     await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    // The decimals under More options (2 by default).
-    expect(document.querySelector('#issue-decimals')).toBeNull();
-    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000.25' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.queryByRole('checkbox', { name: /Publish the name/ })).toBeNull();
     await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'Copper, by the gram' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    await fireEvent.click(screen.getByRole('button', { name: /Create the token/ }));
+    // The decimals under More options (8 by default).
+    expect(document.querySelector('#issue-decimals')).toBeNull();
+    await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '1000.25' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: /Create the asset/ }));
     await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
-    await waitFor(() => expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', supply: '1000.25', decimals: 2, data: { info: 'Copper, by the gram' }, public: true }] }));
+    await waitFor(() => expect(store).toMatchObject({ pending: [{ wallet: 'w', name: 'COPPER', supply: '1000.25', decimals: 8, data: { info: 'Copper, by the gram' }, public: true }] }));
   });
 
   it('My assets: holdings, what is being created and the activity; pool shares and auctions in Advanced', async () => {
     render(MyAssets);
     await loaded();
     const tabs = () => screen.getAllByRole('tab').map((x) => x.textContent?.trim());
-    await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Create a token', 'Being created', 'Activity']));
+    await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Create an asset', 'Being created', 'Activity']));
     expect(screen.getByRole('list', { name: 'Holdings' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Create a token/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Create an asset/ })).toBeTruthy();
     prefs.uiMode = 'advanced';
     await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Register new asset', 'Being issued', 'Pool shares', 'My auctions', 'Activity']));
   });
@@ -1527,7 +1621,7 @@ describe('Simple mode', () => {
     await loaded();
     await waitFor(() => expect(screen.getByRole('heading', { name: 'My assets' })).toBeTruthy());
     expect(screen.queryByRole('heading', { name: 'Auctions' })).toBeNull();
-    expect(screen.getByRole('button', { name: /Create a token/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Create an asset/ })).toBeTruthy();
   });
 });
 
@@ -1837,11 +1931,11 @@ describe('tickers and display names', () => {
     expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true);
     await fireEvent.input(display, { target: { value: 'Copper, by the gram' } });
     expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false);
+    // No private name from ticker_height: the ticker is published.
+    expect(screen.queryByText(/Publish the name/)).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await fireEvent.input(document.querySelector('#issue-supply')!, { target: { value: '5' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    // No private name from ticker_height: the ticker is published.
-    expect(screen.queryByText(/Publish the name/)).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     const review = await screen.findByRole('heading', { name: 'Review' });
     const lines = review.parentElement!.textContent ?? '';
@@ -1854,7 +1948,7 @@ describe('tickers and display names', () => {
     await refreshBitAssets();
     await waitFor(() => expect(called('registerasset').length).toBe(1));
     // The display name after the logo (none: null), as registerasset takes them.
-    expect(called('registerasset')[0].params).toEqual(['COPPER', '5', 2, {}, true, null, 'Copper, by the gram']);
+    expect(called('registerasset')[0].params).toEqual(['COPPER', '5', 8, {}, true, null, 'Copper, by the gram']);
     expect(asked).toEqual(['reserveasset+registerasset']);
   });
 

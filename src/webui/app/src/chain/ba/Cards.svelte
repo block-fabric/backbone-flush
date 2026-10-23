@@ -39,7 +39,7 @@
     <Card title="Markets" icon="swap" open={() => go('trade', simple ? 'swap' : 'pools')} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
       <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
       <dl class="pairs">
-        <dt>{simple ? 'Tokens to swap' : 'Pools with liquidity'}</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>
+        <dt>{simple ? 'Assets to swap' : 'Pools with liquidity'}</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>
         <dt>Trades, all told</dt><dd class="num">{formatCount(ba.pools.reduce((n, p) => n + p.swaps, 0))}</dd>
       </dl>
       {#if markets.length === 0}
