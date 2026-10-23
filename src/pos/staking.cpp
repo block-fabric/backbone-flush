@@ -14,6 +14,7 @@
 #include <util/strencodings.h>
 
 #include <algorithm>
+#include <map>
 #include <limits>
 
 namespace pos {
@@ -314,7 +315,8 @@ ValidatorSet Staking::MakeSet(const sidechain::StoreView& view, int64_t epoch) c
     return ValidatorSet{std::move(chosen), m_params};
 }
 
-Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint256& anchor, uint64_t anchors, int64_t slot, int64_t epoch, int64_t set_epoch, std::vector<CTxOut>& owed_tx) const
+Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint256& anchor, uint64_t anchors, int64_t slot, int64_t epoch, int64_t set_epoch, std::vector<CTxOut>& owed_tx,
+                                        bool keep_active) const
 {
     set_epoch = std::max(set_epoch, epoch);
     LoadGenesis(out);
@@ -364,6 +366,8 @@ Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint
         counted.emplace_back(key, liveness);
         return true;
     });
+    // (The records before the jails, to take them back if they would leave the set too small.)
+    std::map<uint256, ValidatorRecord> unjailed;
     for (const auto& [key, liveness] : counted) {
         LIVENESS.Erase(out, key);
         if (liveness.assigned < m_params.liveness_min_assigned) continue;
@@ -374,7 +378,13 @@ Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint
         // (From the epoch the set is made as of: from `epoch`, up to two hours before it for a BMM
         // block, the jail could be over already, and the set made below would keep the validator.)
         after.jailed_until_epoch = std::max(after.jailed_until_epoch, set_epoch + 1 + m_params.jail_epochs);
+        unjailed.emplace(key.pubkey, *before);
         PutValidator(out, key.pubkey, before, after);
+    }
+    // From jail_fix_height: no liveness jails that would leave the set too few validators to make blocks of stake (they
+    // would stop for good: who is jailed makes no block, and is charged again). (Their liveness of those epochs is dropped all the same.)
+    if (keep_active && !unjailed.empty() && !MakeSet(out, set_epoch).Active()) {
+        for (const auto& [pubkey, record] : unjailed) PutValidator(out, pubkey, VALIDATORS.Get(out, pubkey), record);
     }
 
     // The validator set this anchor makes, as of set_epoch: a new version if it changed. (Not as of

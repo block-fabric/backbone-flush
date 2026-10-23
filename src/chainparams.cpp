@@ -49,6 +49,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.dex_curves_height = *height;
         } else if (deployment_name == "feecurve2") {
             options.fee_curve2_height = *height;
+        } else if (deployment_name == "jailfix") {
+            options.jail_fix_height = *height;
         } else if (deployment_name == "ticker") {
             options.ticker_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {

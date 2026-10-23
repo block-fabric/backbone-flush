@@ -9,6 +9,7 @@
 #include <uint256.h>
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace Consensus {
@@ -65,6 +66,14 @@ struct PosParams {
      * unless -testactivationheight=feecurve2@<height>.
      */
     int fee_curve2_height{0};
+    /**
+     * The first block (of this chain) of the liveness fix (found on eCash betanet slot 99, where it jailed every
+     * genesis validator): the first block of stake charges no slot before it (the chain had no block of stake yet,
+     * so nobody's to fill), and a peg step applies no liveness jails if they would leave the set it makes with fewer
+     * than min_active_validators (blocks of stake would stop for want of validators). Below it, the rules before.
+     * Never on the networks that have launched without it; regtest 0, unless -testactivationheight=jailfix@<height>.
+     */
+    int jail_fix_height{std::numeric_limits<int>::max()};
     /**
      * The spacing of mainchain blocks the fee curves are drawn for (pos/feesplit.h): S is taken as
      * S * FEE_SPLIT_TARGET_SPACING / fee_target_spacing, so that the split is 50/50 at this spacing and below

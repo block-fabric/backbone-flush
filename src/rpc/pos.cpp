@@ -360,6 +360,7 @@ RPCMethod getposinfo()
             {RPCResult::Type::NUM, "maxunanchoredslots", "Blocks of stake go on for this many slots after the first one no anchor covers (max_unanchored_slots): how long the chain runs without a mainchain block"},
             {RPCResult::Type::NUM, "setleadseconds", "The validator set of an epoch is fixed by an anchor at least an epoch, and at least this long, before it starts (set_lead_seconds)"},
             {RPCResult::Type::NUM, "seedlookaheadseconds", "The seed of an epoch is the mainchain block this long before it starts (seed_lookahead_seconds)"},
+            {RPCResult::Type::NUM, "jailfixheight", "jail_fix_height: the first block of the liveness fix (no slot charged before the first block of stake, no jails that would leave too few validators)"},
             {RPCResult::Type::BOOL, "stalled", "Whether a BMM block built now may carry transactions (blocks of stake stalled)"},
             {RPCResult::Type::OBJ, "pot", "The fee pot",
             {
@@ -439,6 +440,7 @@ RPCMethod getposinfo()
     result.pushKV("setleadseconds", params.set_lead_seconds);
     result.pushKV("seedlookaheadseconds", params.seed_lookahead_seconds);
     const auto main_tip{chainman.m_mainchain ? chainman.m_mainchain->GetBlock(chainman.m_mainchain->Height()) : std::nullopt};
+    result.pushKV("jailfixheight", params.jail_fix_height);
     result.pushKV("stalled", hooks->Stalled(fast, main_tip ? main_tip->time : now, active));
     UniValue pot(UniValue::VOBJ);
     pot.pushKV("accrued", ValueFromAmount(fast.pot_accrued));

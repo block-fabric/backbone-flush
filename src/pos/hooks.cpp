@@ -844,7 +844,7 @@ bool FastBlocksHooks::BeforePegStep(sidechain::State& state, const CBlock& block
         }
     }
     std::vector<CTxOut> staking_owed;
-    const auto staked{m_staking.PegStep(out, block.GetHash(), fast.anchors, anchor_slot, EpochOf(earliest, m_params), set_epoch, staking_owed)};
+    const auto staked{m_staking.PegStep(out, block.GetHash(), fast.anchors, anchor_slot, EpochOf(earliest, m_params), set_epoch, staking_owed, JailFixActive(height))};
     // Each epoch's pool shared by stake among the validators of its set not jailed or banned now, to
     // their bond owners (P2WPKH of the owner key hash); a genesis validator without a bond's share to
     // the reserve; what rounding leaves, or a pool no validator can take, carried to the next epoch.
@@ -992,7 +992,11 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
         // of stake had stopped for want of anchors), nor those up to a BMM block the block follows
         // (which may end such a stop, or a stall, and whose slot is the earliest the leaders could
         // build on it). Leaders are not jailed for slots nobody could fill.
+        // From jail_fix_height, the first block of stake charges no slot: before it the chain had none, and the slots
+        // since its first block (or a BMM block long before) were nobody's to fill (on betanet slot 99 the first one
+        // came hours after the slot origin, and charged every genesis validator an epoch of misses).
         int64_t charged_from{std::max(fast.last_pos_slot + 1, slot - m_params.slots_per_epoch)};
+        if (fast.last_pos_slot < 0 && JailFixActive(height)) charged_from = slot;
         int64_t charged_until{slot};
         if (prev->nHeight > 0 && !prev->m_ext) {
             charged_from = std::max(charged_from, SlotOf(prev->nTime, m_params) + 1);

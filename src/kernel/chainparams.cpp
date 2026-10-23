@@ -671,6 +671,8 @@ public:
             consensus.pos.fee_split_height = opts.dep_opts.fee_split_height.value_or(std::numeric_limits<int>::max());
             // The second fee curve the same (-testactivationheight=feecurve2@<height>): the first until then.
             consensus.pos.fee_curve2_height = opts.dep_opts.fee_curve2_height.value_or(std::numeric_limits<int>::max());
+            // The liveness fix from the first block, unless a test asks (-testactivationheight=jailfix@<height>).
+            consensus.pos.jail_fix_height = opts.dep_opts.jail_fix_height.value_or(0);
             consensus.sidechain.bundle_retry_delay = 5;
             consensus.sidechain.bitassets_reveal_depth = 2;
             // Layers' DEX never, unless a test asks (-testactivationheight=dex@<height>): the tests of the
@@ -856,6 +858,8 @@ public:
         consensus.sidechain.dex_curves_height = 0;
         // Launches graduate at 500 ECX (a consensus parameter; doc/layers.md "Launches").
         consensus.sidechain.launch_graduation = 500 * COIN;
+        // The liveness fix (PosParams::jail_fix_height): never on the eCash networks until a height is decided.
+        consensus.pos.jail_fix_height = std::numeric_limits<int>::max();
         // The fees of the DEX (doc/layers.md "Fees of the DEX"; decided 2026-10-21): swap fees 85 % to the liquidity
         // providers, 11 % to the chain's security (the BMM bidder and the validators, by the curve of the network fees),
         // 4 % to the protocol's treasury; a launch's curve charges 1.15 % of a trade: 50 % to its creator, 30 % to the
