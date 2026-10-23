@@ -3367,8 +3367,14 @@ BOOST_FIXTURE_TEST_CASE(anchor_slot_from_the_commitment, FastBlocksSetup)
     BOOST_CHECK_EQUAL(set_anchors, 2U);
 }
 
-BOOST_FIXTURE_TEST_CASE(jailed_validator_back_after_pos_stops, FastBlocksSetup)
+/** The rules before the liveness fix (jail_fix_height never reached): jails that stop blocks of stake. */
+struct NoJailFixSetup : public FastBlocksSetup {
+    NoJailFixSetup() : FastBlocksSetup{/*with_validators=*/true, std::nullopt, std::nullopt, std::nullopt, std::numeric_limits<int>::max() - 1} {}
+};
+
+BOOST_FIXTURE_TEST_CASE(jailed_validator_back_after_pos_stops, NoJailFixSetup)
 {
+    // (Before jail_fix_height: from it, the jail below is not given, as it leaves too few validators: jailing_keeps_active.)
     // Review of audit 6, item 9 (testnet, 2026-10-13): a validator is jailed, and blocks of stake stop
     // without it (every validator is needed); BMM blocks follow, at the clock's time, one an epoch.
     // The sets their anchors make take the validator back as soon as its jail is over: they are made
