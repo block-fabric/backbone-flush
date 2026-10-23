@@ -1,8 +1,9 @@
 // The DEX's pool kinds as the pages see them (ba/kinds.ts): the kinds read, the ways a trade can go and how the
 // wallet sends the one chosen, the depth of a pool, liquidity by a pool's id.
 import { describe, expect, it } from 'vitest';
-import { alignDepth, chooseOption, clampAmp, defaultFee, depositAmounts, depthSeries, executionOf, feePercent, flipDepth, flipKind, kindOf, kindParam, quoteAmounts, sharesOf, slippageRows, tradeOptions, type DepthPoint, type MarketQuote, type RouteQuote } from './kinds';
-import { amountParam, CHN_ID } from './model';
+import { alignDepth, chooseOption, clampAmp, defaultFee, depositAmounts, depthSeries, executionOf, feePercent, flipDepth, flipKind, kindOf, kindParam, quoteAmounts, sharesOf, slippageRows, tradeOptions, venueOf, type DepthPoint, type MarketQuote, type RouteQuote } from './kinds';
+import { amountParam, CHN_ID, type Pool } from './model';
+import { liquidityState } from './liquidity';
 
 const id = (c: string) => c.repeat(64);
 const GOLD = id('a');
@@ -92,6 +93,47 @@ describe('ways to trade', () => {
     expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: false }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'ECX', `0x${SILVER}`], '10', 0.5, '9.85', [id('4'), id('5')]] });
     // Every pool of the default kind: the path alone names them (as before the pool kinds).
     expect(executionOf({ pools: [id('4'), id('5')], path: [GOLD, CHN_ID, SILVER], defaultPools: true }, a)).toEqual({ method: 'swaproute', params: [[`0x${GOLD}`, 'ECX', `0x${SILVER}`], '10', 0.5, '9.85'] });
+  });
+});
+
+describe('a swap of a pair of several kinds of pools (SwapPanel)', () => {
+  // The betanet's BROSEVELT/ECX, 2026-10-23: a concentrated pool at 0.05% alone; the panel took it for the pair's pool by
+  // poolOf (any kind), quoted it by quoteswap (the default pool only) and could send swapasset to a pool that is not.
+  const BROS = id('7');
+  const pool = (p: Partial<Pool>): Pool => ({ pool: id('0'), asset_a: 'BROS', asset_b: 'ECX', asset_a_id: BROS, asset_b_id: CHN_ID, reserve_a: 5.35, reserve_b: 0.00011, price: 0.00001, shares: 1001, volume_a: 0, volume_b: 0, swaps: 0, created: 3278, abandoned: false, ...p }) as Pool;
+  const cl = pool({ pool: id('c'), curve: 'concentrated', fee: 0.05, default_kind: false });
+  const cp = pool({ pool: id('d'), curve: 'constant_product', fee: 0.3, default_kind: true });
+  const quoteOf = (p: Pool, out: number) => ({ ...kindOf(p), pool: p.pool, amount_in: 0.001, amount_out: out, price: 0.00001, spot_price: 0.00001, price_impact: 1, fee_paid: 0.0000005, abandoned: false });
+  const a = { amount: '0.001', slippage: 0.5, minOut: '99', maxImpact: 10 };
+
+  it('a pair with a concentrated pool alone: no default pool to quote by quoteswap; the swap goes to that pool by its id', () => {
+    expect(liquidityState([cl], CHN_ID, BROS).pool).toBeUndefined();
+    const options = tradeOptions({ pay: CHN_ID, get: BROS, getDecimals: 2, single: null, market: { pools: [quoteOf(cl, 99.5)], best_pool: cl.pool } });
+    expect(options.map((o) => o.key)).toEqual([cl.pool]);
+    const best = chooseOption(options, '')!;
+    expect(best.defaultPools).toBe(false);
+    expect(executionOf(best, a)).toEqual({ method: 'swappools', params: ['ECX', '0.001', [cl.pool], 0.5, '99'] });
+    expect(venueOf(best)).toBe(`Concentrated pool at 0.05% (${'c'.repeat(8)}…)`);
+  });
+
+  it('a pair with a constant-product pool and a concentrated one: the one that gives more, each sent as it must be', () => {
+    expect(liquidityState([cl, cp], CHN_ID, BROS).pool?.pool).toBe(cp.pool);
+    const better = tradeOptions({ pay: CHN_ID, get: BROS, getDecimals: 2, market: { pools: [quoteOf(cl, 99.5), quoteOf(cp, 97)] } });
+    expect(better.map((o) => o.key)).toEqual([cl.pool, cp.pool]);
+    expect(executionOf(chooseOption(better, '')!, a).method).toBe('swappools');
+    const worse = tradeOptions({ pay: CHN_ID, get: BROS, getDecimals: 2, market: { pools: [quoteOf(cl, 90), quoteOf(cp, 97)] } });
+    expect(worse.map((o) => o.key)).toEqual([cp.pool, cl.pool]);
+    expect(executionOf(chooseOption(worse, '')!, a)).toEqual({ method: 'swapasset', params: ['ECX', '0.001', `0x${BROS}`, 0.5, 10, '99'] });
+    // The one picked, if still offered.
+    expect(chooseOption(worse, cl.pool)?.key).toBe(cl.pool);
+  });
+
+  it('names a route hop by hop', () => {
+    const hops = [
+      { pool: id('4'), from: GOLD, to: CHN_ID, kind: kindOf({ curve: 'weighted', fee: 0.3, weight_a: 80, default_kind: false }) },
+      { pool: id('5'), from: CHN_ID, to: SILVER, kind: kindOf({}) },
+    ];
+    expect(venueOf({ hops }, (x) => (x === CHN_ID ? 'ECX' : x))).toBe(`Weighted pool at 0.3% (${'4'.repeat(8)}…) → ECX → Constant product pool at 0.3% (${'5'.repeat(8)}…)`);
   });
 });
 
