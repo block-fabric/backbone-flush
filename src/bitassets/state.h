@@ -812,6 +812,12 @@ bool IsLaunchParamsOperation(const Operation& op);
  * marker is of their kinds is not valid before (bad-ba-marker), as no such marker was.
  */
 [[nodiscard]] bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::string& reject_reason);
+/**
+ * Whether a transaction may be in a block at a height where allocations of up to 25 % are `active`
+ * (SidechainParams::allocation25_height) or not: before it, a launch whose allocation is more than
+ * MAX_LAUNCH_ALLOCATION_BEFORE_25 is not valid (bad-ba-launch), as it never was.
+ */
+[[nodiscard]] bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
 /** Whether an operation sets a logo (SetLogo, or a Register with one): valid from SidechainParams::logo_height only. */
 bool IsLogoOperation(const Operation& op);
@@ -1028,8 +1034,24 @@ constexpr bool IsLaunchSupply(uint64_t supply) { return supply % LAUNCH_SUPPLY_M
 /** The fee of a launch's curve with parameters, in millionths: 0.3 % to 5 %. */
 inline constexpr uint32_t MIN_LAUNCH_FEE{3'000};
 inline constexpr uint32_t MAX_LAUNCH_FEE{50'000};
-/** Most a creator's allocation can be, in basis points of the supply, minted at graduation (shown as such). */
-inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{500};
+/**
+ * Most a creator's allocation can be, in basis points of the supply, minted at graduation (shown as such): 25 % from
+ * SidechainParams::allocation25_height, 5 % (MAX_LAUNCH_ALLOCATION_BEFORE_25) before it. A launch's supply and its
+ * allocation together are within MAX_AMOUNT (IsLaunchAllocation): at 25 % that bounds the most a supply can be below
+ * MAX_LAUNCH_SUPPLY. TODO(rug protection): the allocation is the creator's at graduation in one claim; a vesting or
+ * lock of it is to come.
+ */
+inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{2'500};
+inline constexpr uint16_t MAX_LAUNCH_ALLOCATION_BEFORE_25{500};
+/** The most a launch's allocation can be at a height where SidechainParams::Allocation25Active is `active` or not. */
+constexpr uint16_t MaxLaunchAllocation(bool allocation25_active) { return allocation25_active ? MAX_LAUNCH_ALLOCATION : MAX_LAUNCH_ALLOCATION_BEFORE_25; }
+/** The units an allocation of `allocation` basis points of `supply` mints: the floor of its share. */
+constexpr uint64_t LaunchAllocationUnits(uint64_t supply, uint16_t allocation) { return static_cast<uint64_t>(static_cast<unsigned __int128>(supply) * allocation / 10'000); }
+/** Whether a launch of `supply` units can have an allocation of `allocation` basis points: at most MAX_LAUNCH_ALLOCATION, the two within MAX_AMOUNT. */
+constexpr bool IsLaunchAllocation(uint64_t supply, uint16_t allocation)
+{
+    return allocation <= MAX_LAUNCH_ALLOCATION && static_cast<unsigned __int128>(supply) + LaunchAllocationUnits(supply, allocation) <= MAX_AMOUNT;
+}
 /** The blocks the launches' log keeps (State::GetLaunchLog): about a day and a half of 15-second blocks. */
 inline constexpr int32_t LAUNCH_LOG_BLOCKS{10'080};
 
@@ -1101,7 +1123,7 @@ struct LaunchRecord {
     uint64_t VirtualUnits() const { return Supply() / 8 * 9; }
     uint64_t CurveEnd() const { return Supply() / 8 * 3; }
     /** Its allocation in units: ⌊S·allocation/10000⌋ (exact for LAUNCH_SUPPLY). */
-    uint64_t AllocationUnits() const { return static_cast<uint64_t>(static_cast<unsigned __int128>(Supply()) * allocation / 10'000); }
+    uint64_t AllocationUnits() const { return LaunchAllocationUnits(Supply(), allocation); }
 };
 
 /** What a block did on a launch's curve (State::GetLaunchLog): the coin and tokens in and out, the fees, the price after, whether it graduated. */

@@ -20,7 +20,7 @@
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { claimable, curvePointAt, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
+  import { claimable, creatorAllocation, curvePointAt, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, MIN_CHN_PAYOUT, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
@@ -109,6 +109,8 @@
   const series = $derived(curveSeries(shape));
   const split = $derived(launch ? launchFeeSplit(launchFeeParts(launch)) : '');
   const owed = $derived(launch ? claimable(launch) : { fees: false, allocation: false });
+  // Shown to every buyer, above the curve: what the creator gets minted at graduation.
+  const allocationShown = $derived(launch ? creatorAllocation(launch) : null);
 
   // --- Buying and selling on the curve ---
   let side = $state<'buy' | 'sell'>('buy');
@@ -261,6 +263,9 @@
         <button type="button" class="btn" onclick={openPool}><Icon name="pool" size={15} /> Its pool</button>
       {/if}
     </header>
+    {#if allocationShown}
+      <p class="ba-problems alloc" role="note" data-testid="launch-allocation"><strong>{t('Creator allocation: %1% minted to the creator at graduation', String(launch.allocation))}</strong> ({formatUnits(allocationShown.units, allocationShown.decimals, { max: 2 })} {launch.ticker}, {t('on top of the supply: holders are diluted by it')}){#if launch.allocation_claimed}. {t('Minted.')}{/if}</p>
+    {/if}
 
     {#if graduated}
       <section class="panel graduated" data-testid="launch-graduated">

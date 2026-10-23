@@ -343,6 +343,9 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return { txid: id('7'), fees: '0.01000000', allocation: 0 };
     case 'getaddressinfo':
       return { ismine: p[0] === ME };
+    // The wallet's "launch creator" addresses (My launches).
+    case 'getaddressesbylabel':
+      return p[0] === 'launch creator' ? { [ME]: { purpose: 'receive' } } : {};
     case 'addpoolliquidity':
       return { txid: id('7'), shares: 1234 };
     case 'removepoolliquidity':
@@ -1058,6 +1061,27 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(css).toMatch(/\.ba-wrap \{[^}]*container-type: inline-size/);
     expect(css).toMatch(/@container \(max-width: 56rem\) \{[\s\S]*\.ba-table thead \{\s*display: none;/);
     expect(css).toMatch(/\.ba-page \.faint \{\s*color: var\(--text-muted\);/);
+  });
+
+  it('My assets: My launches, the allocation claimable at graduation with the progress, Claim once graduated (allocation and fees)', async () => {
+    dexOn = true;
+    render(MyAssets);
+    render(DialogHost);
+    await loaded();
+    const panel = await waitFor(() => screen.getByTestId('my-launches'));
+    expect(called('getaddressesbylabel').at(-1)?.params).toEqual(['launch creator']);
+    const rows = within(panel).getAllByTestId('my-launch');
+    const moon = rows.find((r) => r.textContent?.includes('MOON'))!;
+    const star = rows.find((r) => r.textContent?.includes('STAR'))!;
+    // On its curve: the allocation, its amount, claimable at graduation; the progress; fees owed: Claim (the fees alone).
+    expect(moon.textContent).toMatch(/MOON: 2% allocation \(20[,\u202f\u00a0 ]?000[,\u202f\u00a0 ]?000 MOON\), claimable at graduation/);
+    expect(moon.textContent).toMatch(/40.*to graduation/);
+    // Graduated, not minted: claimable now, and Claim sends claimlaunch.
+    expect(star.textContent).toMatch(/STAR: 2% allocation .*claimable now/);
+    expect(star.textContent).toMatch(/graduated/);
+    await fireEvent.click(within(star).getByRole('button', { name: /Claim/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('claimlaunch').at(-1)?.params).toEqual([assetArg(STAR)]));
   });
 
   it('the cards of the home: holdings, markets, auctions', async () => {

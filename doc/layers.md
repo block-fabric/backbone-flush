@@ -489,7 +489,8 @@ satoshis of rounding (the chord's ceiling); `getlaunch` says it exactly.
 curve, split between the creator (`ClaimLaunch`, kind 23, sent by anyone: the coin by the coinbase to the creator's
 script), the protocol (the treasury) and the chain's security (the block's BMM bidder and validators), the remainder into
 the pool at graduation. No protocol token, no buybacks (the treasury has no spending rule yet). A creator's allocation is
-optional, at most `MAX_LAUNCH_ALLOCATION` (5 %), minted only at graduation (to the creator, by a claim): until
+optional, at most `MAX_LAUNCH_ALLOCATION` (25 % from `SidechainParams::allocation25_height`, 5 % before it;
+the supply and its allocation together within `MAX_AMOUNT`), minted only at graduation (to the creator, by a claim): until
 then no token exists but those the curve sold, so the curve always holds the coin to buy them back; the
 allocation is shown on every launch (`allocation`). Anti-abuse: the ticker rules of assets (reservation and
 reveal, no look-alikes), per-launch `min_buy` and `max_buy` (CHN; a buy outside is refunded), and the batch

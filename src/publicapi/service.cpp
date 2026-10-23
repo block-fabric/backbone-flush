@@ -552,6 +552,17 @@ private:
         (void)state;
     }
 
+    /** The most a launch's allocation is in the next block, in basis points (SidechainParams::allocation25_height). */
+    uint16_t MaxAllocationNow() const
+    {
+        int height;
+        {
+            LOCK(::cs_main);
+            height = m_node.chainman->ActiveChain().Height() + 1;
+        }
+        return bitassets::MaxLaunchAllocation(Params().GetConsensus().sidechain.Allocation25Active(height));
+    }
+
     /** A launch's own curve: its supply and decimals, its virtual reserves. */
     Message CurveOfLaunch(const bitassets::LaunchRecord& rec, int decimals) const
     {
@@ -563,7 +574,7 @@ private:
         c.SetDouble("virtual_tokens", Whole(rec.VirtualUnits(), decimals));
         c.SetDouble("graduation_ecx", static_cast<double>(rec.graduation) / COIN);
         c.SetUInt("decimals", static_cast<uint32_t>(decimals));
-        c.SetDouble("max_allocation_percent", bitassets::MAX_LAUNCH_ALLOCATION / 100.0);
+        c.SetDouble("max_allocation_percent", MaxAllocationNow() / 100.0);
         return c;
     }
 
@@ -578,7 +589,7 @@ private:
         c.SetDouble("virtual_tokens", bitassets::LAUNCH_VIRTUAL_TOKENS / whole);
         c.SetDouble("graduation_ecx", static_cast<double>(graduation) / COIN);
         c.SetUInt("decimals", bitassets::LAUNCH_DECIMALS);
-        c.SetDouble("max_allocation_percent", bitassets::MAX_LAUNCH_ALLOCATION / 100.0);
+        c.SetDouble("max_allocation_percent", MaxAllocationNow() / 100.0);
         (void)fee;
         return c;
     }
@@ -1342,7 +1353,7 @@ private:
             }
             if (req.GetUInt("allocation_bps") != 0) {
                 const uint32_t bps{static_cast<uint32_t>(req.GetUInt("allocation_bps"))};
-                if (bps > bitassets::MAX_LAUNCH_ALLOCATION) Fail(Code::INVALID_ARGUMENT, "allocation_bps: 0 to 500");
+                if (bps > MaxAllocationNow()) Fail(Code::INVALID_ARGUMENT, strprintf("allocation_bps: 0 to %u", MaxAllocationNow()));
                 uri.emplace_back("allocation_bps", util::ToString(bps));
                 payload["allocation_bps"] = UniValue{static_cast<int>(bps)};
             }
@@ -1527,6 +1538,9 @@ private:
             lp.SetUInt("supply_multiple_units", bitassets::LAUNCH_SUPPLY_MULTIPLE);
             lp.SetUInt("decimals_max", bitassets::MAX_DECIMALS);
             lp.SetUInt("decimals_default", bitassets::LAUNCH_DECIMALS);
+            // The most a launch's allocation is in the next block (25 % from allocation25_height, 5 % before), and that height.
+            lp.SetUInt("allocation_max_bps", bitassets::MaxLaunchAllocation(rules.Allocation25Active(tip.height + 1)));
+            lp.SetInt("allocation25_height", rules.allocation25_height == std::numeric_limits<int>::max() ? -1 : rules.allocation25_height);
             return s;
         });
 
