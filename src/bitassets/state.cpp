@@ -1614,6 +1614,11 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (!found) return invalid("bad-ba-asset-unknown");
         if (!spends(Token::Kind::CONTROL, curve->asset)) return invalid("bad-ba-no-control");
         if (GetLaunch(curve->asset)) return invalid("bad-ba-launch-again");
+        // Its control coin goes with it: its supply is fixed for good (nobody mints more to sell into the curve or its pool).
+        debit(Token::Kind::CONTROL, curve->asset, 1);
+        AssetRecord fixed{*found};
+        fixed.fixed = true;
+        plan.assets.emplace_back(curve->asset, std::move(fixed));
         if (GetPool(PoolId(CHN, curve->asset))) return invalid("bad-ba-launch-pooled");
         LaunchToken launch;
         launch.reg.name = curve->asset;
@@ -3067,7 +3072,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             kind.fee = FeeOf(id, kind.params, height);
             if (kind.params.GetCurve() == Curve::LAUNCH && pool) {
                 kind.token = pool->asset1;
-                if (const auto record{GetLaunch(pool->asset1)}) kind.launch = curves::LaunchCurve{record->fee, record->CurveEnd(), record->max_buy, record->min_buy, record->StrictEnd()};
+                if (const auto record{GetLaunch(pool->asset1)}) kind.launch = curves::LaunchCurve{record->fee, record->CurveEnd(), record->max_buy, record->min_buy, record->StrictEnd(), record->StartBound()};
             }
             kinds.emplace(id, kind);
         }

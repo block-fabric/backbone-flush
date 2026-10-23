@@ -2163,7 +2163,7 @@ std::pair<bitassets::LaunchRecord, std::optional<std::pair<bitassets::Pool, bita
 /** What a trade of `amount` alone on a launch's curve gives (and gives back), from its record: the rules' arithmetic. */
 std::optional<bitassets::dex::Clearing> LaunchQuote(const bitassets::LaunchRecord& launch, const bitassets::Pool& curve, bool buy, uint64_t amount)
 {
-    return bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, launch.CurveEnd(), launch.max_buy, launch.min_buy, launch.StrictEnd()}, curve.reserve0, curve.reserve1,
+    return bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, launch.CurveEnd(), launch.max_buy, launch.min_buy, launch.StrictEnd(), launch.StartBound()}, curve.reserve0, curve.reserve1,
                                           {bitassets::dex::HopIn{buy, amount}}, {true});
 }
 } // namespace
@@ -2364,9 +2364,10 @@ RPCMethod curveasset()
     return RPCMethod{
         "curveasset",
         "Put part of an existing asset on a bonding curve, as a launch's (where launches with parameters apply: getlaunchstats' rules.params_active). This wallet "
-        "holds the asset's control coin (it stays here) and the amount, which goes into the curve: 3/4 of it is sold for " + CURRENCY_UNIT + " on the curve, and at graduation "
+        "holds the asset's control coin, which goes with it (the supply is fixed for good: nobody mints more), and the amount, which goes into the curve: 3/4 of it is sold for " + CURRENCY_UNIT + " on the curve, and at graduation "
         "the " + CURRENCY_UNIT + " raised and the units left go with the last 1/4 into the asset's pool with " + CURRENCY_UNIT + ", locked for good. Only for an asset never launched "
-        "nor put on a curve, with no pool with " + CURRENCY_UNIT + " of the kind addliquidity makes; until it graduates no new pool of it is made. Its fees as a launch's "
+        "nor put on a curve, with no pool with " + CURRENCY_UNIT + " of the kind addliquidity makes; until it graduates no new pool of it is made. The curve "
+        "buys back no more units than it sold (the units kept elsewhere trade in the pool once it graduates). Its fees as a launch's "
         "(the creator's part to this wallet: claimlaunch); no allocation." + HELP_REQUIRING_PASSPHRASE,
         {
             {"asset", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::AssetArgHelp()},
@@ -2418,10 +2419,10 @@ RPCMethod curveasset()
     curve.first_buy = coin("first_buy");
     if (options.exists("first_min_out")) curve.first_min_out = bitassets::ParseUnits(options["first_min_out"], asset.decimals, /*allow_zero=*/true);
     CheckFirstBuy(amount, curve.fee, curve.first_buy, curve.first_min_out, curve.min_buy, curve.max_buy, asset.decimals);
-    // The control coin, back to this wallet; the amount, from its coins (the change back).
+    // The control coin goes with it (the supply fixed for good); the amount, from its coins (the change back).
     const auto [control, one]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
     std::vector<COutPoint> inputs{control};
-    std::vector<Out> outs{{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset.id)}};
+    std::vector<Out> outs;
     CAmount chn_in{0};
     PayIn(*pwallet, asset, amount, inputs, outs, chn_in);
     if (curve.first_buy > 0) {

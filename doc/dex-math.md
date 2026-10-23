@@ -100,16 +100,24 @@ Parameters, for a launch of supply S units (on the curve and in its pool), G = g
   (⌊S·a/10^4⌋, a ≤ 500 basis points) < 2^63 − 1.
 - **Fee.** f ∈ [3000, 50000] millionths (0.3 % to 5 %), `MIN_LAUNCH_FEE`..`MAX_LAUNCH_FEE`; its parts as the network's
   (Flush: creator 50 %, treasury 30 %, security 20 %; the roundings' remainder into the pool at graduation).
+- **Never below the virtual coin** (`LaunchCurve::start` = Tv, launches from `launch_params_height`): the curve takes back no
+  more units than it sold. A round that would leave y > Tv (so x < V: coin it never took in) clears without its sales, which
+  miss (0 out, their units back from the batch); a round past the end that would do it does not clear. Since k never falls,
+  y ≤ Tv gives x ≥ k/y ≥ V: the curve can only ever pay out coin buyers paid in. Units held outside the curve (an existing
+  asset's other units) are alike to it, and bounded the same.
 - **An existing asset on a curve** (`CurveAsset`): S is the amount its controller puts in (taken from its coins); the same
-  curve and pool parts; the asset keeps its other units, its supply and its control coin; no allocation. Allowed for an asset
-  never launched whose default pool with the coin does not exist (graduation makes that pool).
+  curve and pool parts; its control coin goes with it (the supply is fixed for good: nobody mints more into the curve or the
+  pool); the asset keeps its other units, which trade in the pool once it graduates (on the curve only up to what it sold,
+  by the bound above); no allocation. Allowed for an asset never launched whose default pool with the coin does not exist
+  (graduation makes that pool).
 - A launch without parameters (and every launch before `launch_params_height`) has S = 10^15 (10^9 units of 6 decimals).
 
 Property tests (`dex_launch_tests`): `curve_constants_any_supply` (the identities above, at the bounds and 500 random S),
 `graduation_exact_any_supply_and_fee` (one buy of 2G: exactly C out for exactly G in, the fee, the refund, at three fees and
 57 supplies), `rounds_conserve_any_supply` (300 runs of random rounds at random S and f: every round clears, coin and units
 conserved, the product never falls, the end never passed), and a launch of 21 million of 8 decimals and an existing asset
-traded to graduation on a state (every unit accounted for).
+traded to graduation on a state (every unit accounted for), its issuer dumping its retained units into the curve (they
+miss), and `outside_sales_never_drain_a_curve` (300 runs of sales of up to the whole supply: x ≥ V, y ≤ Tv, conservation).
 
 **Order book** (`ClearBook`, a call auction): candidates are the limits of the best 256 live orders of each side.
 For a price P (asset1 per asset0): supply(P) = takers' asset0 + Σ asks with limit ≤ P; spend(P) = takers' asset1 + Σ bids

@@ -496,8 +496,24 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
     clearing.reserve0 = x;
     clearing.reserve1 = y;
     if (net.empty()) return clearing;
-    const auto cleared{ClearConstantProduct(/*fee=*/0, x, y, net)};
+    if (curve.start != 0 && y > curve.start) return std::nullopt;
+    auto cleared{ClearConstantProduct(/*fee=*/0, x, y, net)};
     if (!cleared) return std::nullopt;
+    if (curve.start != 0 && cleared->reserve1 > curve.start) {
+        // More units back than it sold: the sales miss (their units back), the buys clear alone.
+        net.clear();
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!in_play[i]) continue;
+            if (!orders[i].zero_in) {
+                in_play[i] = false;
+                continue;
+            }
+            net.push_back({true, orders[i].amount - fee_of(orders[i].amount)});
+        }
+        if (net.empty()) return clearing;
+        cleared = ClearConstantProduct(/*fee=*/0, x, y, net);
+        if (!cleared) return std::nullopt;
+    }
     uint64_t fees{0};
     if (cleared->reserve1 >= curve.end) {
         // Not past the end: a constant-product round of the fee-free amounts; the sellers' fee out of what they get.
@@ -575,6 +591,7 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
         coin_in += pays;
     }
     if (coin_in < coin_out || given > tokens) return std::nullopt;
+    if (curve.start != 0 && y + sold_in - given > curve.start) return std::nullopt;
     clearing.reserve0 = x + coin_in - coin_out;
     clearing.reserve1 = y + sold_in - given;
     clearing.fees = fees;

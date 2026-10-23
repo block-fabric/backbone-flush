@@ -162,6 +162,11 @@ struct LaunchCurve {
     //! SidechainParams::launch_params_height): without it, a round whose buys past the end all miss (routed in) or cannot
     //! pay for the last units still ends it, and it graduates with less raised.
     bool strict_end{false};
+    //! The curve's virtual units at its start (Tv; 0: no bound, the launches of before launch_params_height, whose units all
+    //! came off their curve). With it the curve never takes back more units than it sold: a round that would leave it
+    //! above Tv (its coin below the virtual V: coin it never took in) clears without its sales, which miss (0 out: the
+    //! batch gives their units back). An existing asset's units held outside the curve cannot drain it.
+    uint64_t start{0};
 };
 std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, uint64_t y, const std::vector<dex::HopIn>& orders, const std::vector<bool>& direct);
 

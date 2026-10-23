@@ -173,7 +173,7 @@ uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const
     if (params.GetCurve() == Curve::LAUNCH) {
         const auto launch{state.GetLaunch(pool.asset1)};
         if (!launch) return 0;
-        const auto cleared{curves::ClearLaunch(curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd()}, pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}}, {in.IsNull()})};
+        const auto cleared{curves::ClearLaunch(curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd(), launch->StartBound()}, pool.reserve0, pool.reserve1, {HopIn{pool.asset0 == in, amount}}, {in.IsNull()})};
         return cleared ? cleared->outs[0] : 0;
     }
     // ClearPool's own result for the pools AddLiquidity makes (curves::ClearPoolOf at 0.30 % is it).

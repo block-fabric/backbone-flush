@@ -1094,6 +1094,8 @@ struct LaunchRecord {
     uint64_t Supply() const { return supply == 0 ? LAUNCH_SUPPLY : supply; }
     /** Whether its curve ends only at its end exactly (curves::LaunchCurve::strict_end): those made from launch_params_height, which write their supply. */
     bool StrictEnd() const { return supply != 0; }
+    /** The bound of its curve's units (curves::LaunchCurve::start): its virtual units, for those made from launch_params_height. */
+    uint64_t StartBound() const { return supply != 0 ? VirtualUnits() : 0; }
     uint64_t CurveSupply() const { return Supply() / 8 * 6; }
     uint64_t PoolSupply() const { return Supply() / 8 * 2; }
     uint64_t VirtualUnits() const { return Supply() / 8 * 9; }

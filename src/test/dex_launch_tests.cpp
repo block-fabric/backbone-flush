@@ -726,7 +726,7 @@ BOOST_AUTO_TEST_CASE(existing_asset_on_a_curve)
 {
     Chain chain;
     const AssetId GOLD{HashName("GOLD")};
-    // A million GOLD of 6 decimals; 800 000 of them on a curve.
+    // A million GOLD of 6 decimals; 800 000 of them on a curve, 200 000 kept by the issuer.
     const uint64_t supply{1'000'000ULL * 1'000'000}, D{800'000ULL * 1'000'000};
     const auto [control, coins]{chain.Issue("GOLD", supply, 6)};
     chain.EndBlock();
@@ -739,42 +739,111 @@ BOOST_AUTO_TEST_CASE(existing_asset_on_a_curve)
     BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coins}, curve, {Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-no-control");
     // Before launch_params_height: not a marker of its time.
     chain.params.launch_params_height = chain.height + 1;
-    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-marker");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-marker");
     chain.params.launch_params_height = 0;
-    // The units have to go in: listing them all out again is unbacked.
-    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply}})), "bad-ba-tokens-unbacked");
-    const CTransaction put{MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D}})};
+    // The control coin goes with it (the supply fixed): listing it out again is unbacked; so is listing the units again.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D}})), "bad-ba-tokens-unbacked");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({control, coins}, curve, {Token{Token::Kind::ASSET, GOLD, supply}})), "bad-ba-tokens-unbacked");
+    const CTransaction put{MakeTx({control, coins}, curve, {Token{Token::Kind::ASSET, GOLD, supply - D}})};
     chain.Require(put);
+    const COutPoint retained{put.GetHash(), 0};
     const auto record{chain.Assets().GetLaunch(GOLD)};
     BOOST_REQUIRE(record);
     BOOST_CHECK(record->from_asset);
     BOOST_CHECK_EQUAL(record->Supply(), D);
     BOOST_CHECK_EQUAL(record->allocation, 0);
     BOOST_CHECK(chain.Assets().Launching(GOLD));
-    // The asset as it was: its supply, its control coin (with the holder).
+    // The asset: its supply as it was, fixed for good (no control coin).
     BOOST_CHECK_EQUAL(chain.Assets().GetAsset(GOLD)->supply, supply);
-    BOOST_CHECK(!chain.Assets().GetAsset(GOLD)->fixed);
+    BOOST_CHECK(chain.Assets().GetAsset(GOLD)->fixed);
+    BOOST_CHECK(!chain.Assets().FirstTokenOf(GOLD, Token::Kind::CONTROL));
     chain.EndBlock();
-    // Not twice.
-    {
-        CurveAsset small{curve};
-        small.amount = 8'000'000;
-        BOOST_CHECK_EQUAL(chain.Refused(MakeTx({COutPoint{put.GetHash(), 0}, COutPoint{put.GetHash(), 1}}, small,
-                                               {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, supply - D - small.amount}})), "bad-ba-launch-again");
-    }
+    // The issuer dumps its retained units into the curve before anyone bought: the sale misses (nothing sold, nothing
+    // to buy back), its units back; the curve keeps its virtual coin, and pays out no coin it never took in.
+    const CTransaction dump{MakeTx({retained}, SwapPools{GOLD, {record->pool}, supply - D, 1, PAYEE}, {std::nullopt})};
+    chain.Require(dump);
+    chain.EndBlock();
+    BOOST_CHECK(chain.paid.empty());
+    BOOST_CHECK(chain.TokenAt(COutPoint{dump.GetHash(), 0}) == (Token{Token::Kind::ASSET, GOLD, supply - D}));
+    BOOST_CHECK_EQUAL(chain.Assets().GetPool(record->pool)->reserve0, record->virtual_coin);
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
+    // Someone buys 10 coins' worth; the issuer then dumps all it kept: more than the curve sold, so it misses again.
+    const CTransaction small{chain.Buy(GOLD, 10 * COIN_UNITS)};
+    chain.EndBlock();
+    const uint64_t sold{chain.TokenAt(COutPoint{small.GetHash(), 0})->amount};
+    const CTransaction dump2{MakeTx({COutPoint{dump.GetHash(), 0}}, SwapPools{GOLD, {record->pool}, supply - D, 1, PAYEE}, {std::nullopt})};
+    chain.Require(dump2);
+    chain.EndBlock();
+    BOOST_CHECK(chain.paid.empty());
+    BOOST_CHECK(chain.TokenAt(COutPoint{dump2.GetHash(), 0}) == (Token{Token::Kind::ASSET, GOLD, supply - D}));
+    BOOST_CHECK_GE(chain.Assets().GetPool(record->pool)->reserve0, record->virtual_coin);
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
+    // Up to what the curve sold, a sale clears (any holder's units are alike): never below the virtual coin.
+    const CTransaction back{MakeTx({COutPoint{dump2.GetHash(), 0}}, SwapPools{GOLD, {record->pool}, sold, 1, PAYEE}, {std::nullopt, Token{Token::Kind::ASSET, GOLD, supply - D - sold}})};
+    chain.Require(back);
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.paid.size(), 1U);
+    BOOST_CHECK_GE(chain.Assets().GetPool(record->pool)->reserve0, record->virtual_coin);
+    BOOST_CHECK_LE(chain.Assets().GetPool(record->pool)->reserve1, record->VirtualUnits());
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
     // Traded to graduation: every unit of the asset accounted for.
     const CTransaction whale{chain.Buy(GOLD, 2 * G)};
     chain.EndBlock();
     BOOST_REQUIRE(chain.Assets().GetLaunch(GOLD)->Graduated());
     const auto pool{chain.Assets().FindPool(GOLD, CHN)};
     BOOST_REQUIRE(pool);
-    const uint64_t bought{chain.TokenAt(COutPoint{whale.GetHash(), 0})->amount};
-    BOOST_CHECK_EQUAL(bought, D / 8 * 6);
+    const uint64_t bought{chain.TokenAt(COutPoint{whale.GetHash(), 0})->amount + chain.TokenAt(COutPoint{small.GetHash(), 0})->amount};
+    // The curve sold its 3/4 and the units it bought back again; its last quarter into the pool.
+    BOOST_CHECK_EQUAL(bought, D / 8 * 6 + sold);
     BOOST_CHECK_EQUAL(pool->reserve1, D / 4);
-    BOOST_CHECK_EQUAL(bought + pool->reserve1 + chain.TokenAt(COutPoint{put.GetHash(), 1})->amount, supply);
+    BOOST_CHECK_EQUAL(chain.TokenAt(COutPoint{whale.GetHash(), 0})->amount + pool->reserve1 + chain.TokenAt(COutPoint{small.GetHash(), 0})->amount + chain.TokenAt(COutPoint{back.GetHash(), 1})->amount, supply);
     BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
-    // The controller keeps control: it mints after graduation as before.
-    chain.Require(MakeTx({COutPoint{put.GetHash(), 0}}, Mint{GOLD, 5}, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, 5}}));
+}
+
+BOOST_AUTO_TEST_CASE(outside_sales_never_drain_a_curve)
+{
+    // Property: whatever is sold into a bounded curve (units from anywhere, any amounts, mixed with buys), its coin never
+    // falls below the virtual V and its units never rise above Tv; coin and units conserved each round.
+    FastRandomContext rng{/*fDeterministic=*/true};
+    for (int run{0}; run < 300; ++run) {
+        const uint64_t S{run % 2 ? MIN_LAUNCH_SUPPLY + rng.randrange(1'000'000'000) * 8 : MAX_LAUNCH_SUPPLY - rng.randrange(1'000'000) * 8};
+        LaunchCurve curve{CurveOf(S, static_cast<uint32_t>(MIN_LAUNCH_FEE + rng.randrange(MAX_LAUNCH_FEE - MIN_LAUNCH_FEE + 1)))};
+        curve.start = S / 8 * 9;
+        uint64_t x{V}, y{curve.start};
+        for (int round{0}; round < 20 && y > curve.end; ++round) {
+            std::vector<dex::HopIn> orders;
+            for (int i{0}, m{1 + static_cast<int>(rng.randrange(4))}; i < m; ++i) {
+                const bool buy{rng.randbool()};
+                // Sales of up to the whole supply: units held outside the curve.
+                orders.push_back({buy, buy ? 1 + rng.randrange(G / 4) : 1 + rng.randrange(S)});
+            }
+            const auto cleared{ClearLaunch(curve, x, y, orders, std::vector<bool>(orders.size(), true))};
+            if (!cleared) continue;
+            BOOST_CHECK_GE(cleared->reserve0, V);
+            BOOST_CHECK_LE(cleared->reserve1, curve.start);
+            unsigned __int128 coin_in{0}, coin_out{0}, units_in{0}, units_out{0}, all_in{0};
+            for (size_t i{0}; i < orders.size(); ++i) {
+                if (orders[i].zero_in) {
+                    if (cleared->outs[i] > 0) {
+                        coin_in += orders[i].amount - cleared->refunds[i];
+                        units_out += cleared->outs[i];
+                    }
+                } else {
+                    all_in += orders[i].amount;
+                    if (cleared->outs[i] > 0) {
+                        units_in += orders[i].amount;
+                        coin_out += cleared->outs[i];
+                    }
+                }
+            }
+            BOOST_CHECK(static_cast<unsigned __int128>(x) + coin_in == static_cast<unsigned __int128>(cleared->reserve0) + coin_out + cleared->fees);
+            // The units: the sales that cleared (or all of them, a sale's whole output taken by its fee).
+            BOOST_CHECK(static_cast<unsigned __int128>(y) + units_in == static_cast<unsigned __int128>(cleared->reserve1) + units_out ||
+                        static_cast<unsigned __int128>(y) + all_in == static_cast<unsigned __int128>(cleared->reserve1) + units_out);
+            x = cleared->reserve0;
+            y = cleared->reserve1;
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(existing_asset_with_a_pool_refused)
