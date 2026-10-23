@@ -34,7 +34,7 @@ export const SORT_NAMES: Record<MarketSort, string> = { depth: 'Most liquidity',
 
 /** What a sort leaves out, on the node's side (shown with t()), or ''. */
 export const SORT_NOTES: Record<MarketSort, string> = {
-  depth: `Sorted by liquidity: pairs with ${TICKER} only.`,
+  depth: `Sorted by liquidity: pairs with ${TICKER} first, then the others, newest first.`,
   volume: 'Sorted by volume: pairs traded in the window only.',
   price_change: '',
   newest: '',

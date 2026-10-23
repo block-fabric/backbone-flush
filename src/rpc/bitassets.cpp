@@ -1889,7 +1889,10 @@ RPCMethod searchpools()
     return RPCMethod{
         "searchpools",
         "Search and sort the pools, a page at a time, by the node's search index. A text matches the names of their assets as\n"
-        "searchassets matches them (the pools of the first 1000 assets it matches, found within the search's budget).",
+        "searchassets matches them (the pools of the first 1000 assets it matches, found within the search's budget).\n"
+        "No text and no filters (the default): every pool of every kind (constant product, stable, weighted, concentrated,\n"
+        "launch curve, book) that someone provides liquidity to, the pools with " + CURRENCY_UNIT + " by depth first, then the others, newest\n"
+        "first. A first argument that is a JSON object (searchpools '{...}') is taken for the filters, with no text.",
         {
             {"query", RPCArg::Type::STR, RPCArg::Default{""}, "Text, a number or a hash, matched against either asset"},
             {"filters", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "(the filters of searchassets that are not these are taken and left aside)",
@@ -1900,7 +1903,7 @@ RPCMethod searchpools()
                 {"exclude_keywords", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "Leave out those with an asset with any of these words in its name",
                     {{"keyword", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
             }},
-            {"sort", RPCArg::Type::STR, RPCArg::Default{"depth"}, "depth (" + CURRENCY_UNIT + " held; pools with " + CURRENCY_UNIT + " only), volume (" + CURRENCY_UNIT + " traded in the window; those traded only), "
+            {"sort", RPCArg::Type::STR, RPCArg::Default{"depth"}, "depth (" + CURRENCY_UNIT + " held, most first; then the pools without " + CURRENCY_UNIT + ", newest first), volume (" + CURRENCY_UNIT + " traded in the window; those traded only), "
                 "price_change (of the second asset in the first, " + CURRENCY_UNIT + " for a pool with " + CURRENCY_UNIT + ", over the window; largest rise first), newest. "
                 "The sorts of searchassets map onto these: relevance, pool_depth, name, supply, oldest: depth; activity: volume"},
             {"cursor", RPCArg::Type::STR_HEX, RPCArg::Default{""}, "\"next_cursor\" of the page before"},
@@ -1921,18 +1924,27 @@ RPCMethod searchpools()
             {RPCResult::Type::NUM, "scanned", "Entries looked at"},
             {RPCResult::Type::NUM, "height", "The height of the tip"},
         }},
-        RPCExamples{HelpExampleCli("searchpools", "") + HelpExampleCli("searchpools", "\"gold\" '{}' volume")},
+        RPCExamples{HelpExampleCli("searchpools", "") + HelpExampleCli("searchpools", "'{\"exclude_abandoned\": false}'") + HelpExampleCli("searchpools", "\"gold\" '{}' volume")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
     using namespace bitassets::index;
     ChainstateManager& chainman{EnsureAnyChainman(request.context)};
     PoolRequest search;
-    const std::string query{request.params[0].isNull() ? "" : request.params[0].get_str()};
+    std::string query{request.params[0].isNull() ? "" : request.params[0].get_str()};
+    UniValue filters{request.params[1]};
+    // `searchpools {}` (the filters given first, the text left out): no text, those filters, not the text "{}".
+    if (filters.isNull() && !query.empty() && query.front() == '{') {
+        if (UniValue parsed; parsed.read(query) && parsed.isObject()) {
+            filters = std::move(parsed);
+            query.clear();
+        }
+    }
     search.sort = PoolSortOf(request.params[2].isNull() ? "depth" : request.params[2].get_str());
     search.cursor = ParseCursor(request.params[3]);
     search.limit = ParseLimit(request.params[4]);
     std::vector<std::string> keywords;
-    if (const UniValue& filters{request.params[1]}; !filters.isNull()) {
+    if (!filters.isNull()) {
+        if (!filters.isObject()) throw JSONRPCError(RPC_TYPE_ERROR, "filters: an object");
         for (const std::string& key : filters.getKeys()) {
             const UniValue& v{filters[key]};
             if (v.isNull() || AssetOnlyFilter(key)) continue;
