@@ -22,6 +22,7 @@
 """
 
 from decimal import Decimal
+import os
 
 from feature_layers import LayersTest
 from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
@@ -251,10 +252,17 @@ class LayersLaunchTest(LayersTest):
         assert_raises_rpc_error(-8, "0 to 5 percent", n0.launchtoken, "QUARTER", {"allocation": 5.01})
         # 5 % itself, before the height: valid on every node, the old one too.
         self.log.info("A node without the rule (allocation25 never, as an old node) follows a 5 % launch")
-        self.restart_node(2, extra_args=self.extra_args[2] + ["-testactivationheight=allocation25@1000000"])
+        # FLUSHD_OLD: a flushd of before the rule (v2) as that node, a rehearsal of the upgrade; else this one without it.
+        old = os.environ.get("FLUSHD_OLD")
+        if old:
+            n2.args[0] = old
+            self.restart_node(2, extra_args=[a for a in self.extra_args[2] if not a.startswith("-testactivationheight=allocation25")])
+        else:
+            self.restart_node(2, extra_args=self.extra_args[2] + ["-testactivationheight=allocation25@1000000"])
         self.connect_nodes(2, 0)
         self.connect_nodes(2, 1)
-        assert_equal(n2.getlaunchstats()["rules"]["allocation25_height"], 1000000)
+        if not old:
+            assert_equal(n2.getlaunchstats()["rules"]["allocation25_height"], 1000000)
         n0.launchtoken("EARLY", {"allocation": 5})
         self.bmm()
         assert_equal(n2.getlaunch("EARLY")["allocation"], Decimal("5"))
