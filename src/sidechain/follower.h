@@ -144,6 +144,10 @@ public:
         //! Mine a block for every block of the mainchain, with or without fees, and offer `amount` for each. For tests.
         bool always{false};
         CAmount amount{0};
+        //! With `always`: offer the first output of the coinbase (what the block pays its merged miner: the bidder's
+        //! share and the pot) whole, `amount` at least and `max_amount` at most (a validator's anchorer in fees mode).
+        bool pass_fees{false};
+        std::optional<CAmount> max_amount;
         //! Whether mining is on but waits, because a block would not have the fees to pay for itself.
         bool idle{false};
         //! The fees of the block last asked for, and what was offered for it.

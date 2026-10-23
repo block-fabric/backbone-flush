@@ -1893,15 +1893,18 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         if (mining.enabled || !validator) return false;
         sidechain::Follower::Mining own;
         own.enabled = true;
-        own.coinbase_script = validator->first;
+        own.coinbase_script = validator->payee;
         own.always = true;
-        own.amount = validator->second;
+        own.amount = validator->floor;
+        // Fees mode: what the block pays its merged miner (the bidder's share and the pot), whole.
+        own.pass_fees = validator->fees;
+        own.max_amount = validator->cap;
         follower.MineWith(own);
         return true;
     }
     // Otherwise anchors: a ticket per mainchain block.
     if (!mining.enabled && !validator) return true;
-    const CScript payee{mining.enabled ? mining.coinbase_script : validator->first};
+    const CScript payee{mining.enabled ? mining.coinbase_script : validator->payee};
     if (!IsValidPayee(payee)) return true;
     const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
     // A commitment of the last mainchain block not acknowledged yet. If it is this node's ticket, it goes
@@ -1952,6 +1955,9 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     }
 
     AnchorTicket ticket;
+    // The height of the block the waiting commitment's ticket anchors, if this node knows it: that anchor pays
+    // the pot up to it, before this one is acknowledged.
+    std::optional<int> waiting_height;
     {
         LOCK(::cs_main);
         const CBlockIndex* target{TicketTarget(*tip, fast, slot, /*after_anchor_point=*/!pending)};
@@ -1961,6 +1967,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         // skipped). Two mainchain blocks within a slot: the tip, the second time.
         if (const auto waiting{pending ? GetTicket(*record.BmmAt(main_height)) : std::nullopt}) {
             const CBlockIndex* before{chainman->m_blockman.LookupBlockIndex(waiting->anchored)};
+            if (before) waiting_height = before->nHeight;
             if (before && target->nHeight <= before->nHeight) target = tip;
             if (before && target->nHeight <= before->nHeight) {
                 LOCK(m_anchor_mutex);
@@ -1972,11 +1979,21 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     }
     ticket.payee = payee;
     // Bid what the pot will pay, but the operator's share, or what the operator said (for tests); a
-    // validator at least its own bid.
-    const int64_t expected{WITH_LOCK(::cs_main, return PotAccruedAt(chainman->ActiveChainstate().SideState().View(),
-                                                                    chainman->m_blockman.LookupBlockIndex(ticket.anchored)->nHeight)) - fast.pot_paid};
+    // validator at least its own bid. A validator's own anchorer bids as its options say (ValidatorBid::For:
+    // in fees mode the pot whole, the bidder's share of the fees this anchor earns), and always, at 0 too.
+    // (Less what the waiting commitment's anchor will pay first: its pot is not this one's, nor bid twice.)
+    const int64_t expected{WITH_LOCK(::cs_main, {
+        const sidechain::StoreView& view{chainman->ActiveChainstate().SideState().View()};
+        const int64_t paid_first{waiting_height ? std::max<int64_t>(fast.pot_paid, PotAccruedAt(view, *waiting_height)) : fast.pot_paid};
+        return PotAccruedAt(view, chainman->m_blockman.LookupBlockIndex(ticket.anchored)->nHeight) - paid_first;
+    })};
+    const bool own_bid{!mining.enabled && validator};
     CAmount offer{mining.enabled && mining.always ? mining.amount : sidechain::Follower::Offer(expected)};
-    if (!(mining.enabled && mining.always) && validator) offer = std::max(offer, validator->second);
+    if (own_bid) {
+        offer = validator->For(expected);
+    } else if (!(mining.enabled && mining.always) && validator) {
+        offer = std::max(offer, validator->floor);
+    }
     // (Made again: more than the bid it replaces in the mainchain's mempool.)
     if (again) offer = std::max(offer, last_offer + sidechain::Follower::MIN_OFFER);
     {
@@ -1987,7 +2004,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
             m_bid = Bid{.main_tip = main_tip, .offer = offer, .after_anchor_point = !pending, .made = true};
         }
     }
-    if (offer < sidechain::Follower::MIN_OFFER) return true;
+    if (!own_bid && offer < sidechain::Follower::MIN_OFFER) return true;
     std::string error;
     // (Whatever mainchain block the request follows: a ticket does not depend on it. A request made as
     // the mainchain moved on is in its mempool all the same, for the next block: its ticket must be
@@ -2011,11 +2028,17 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     return true;
 }
 
-std::optional<std::pair<CScript, CAmount>> FastBlocksHooks::ValidatorAnchoring() const
+CAmount FastBlocksHooks::ValidatorBid::For(CAmount pot) const
+{
+    pot = std::max<CAmount>(pot, 0);
+    if (!fees) return std::max(sidechain::Follower::Offer(pot), floor);
+    return std::max(cap ? std::min(pot, *cap) : pot, floor);
+}
+
+std::optional<FastBlocksHooks::ValidatorBid> FastBlocksHooks::ValidatorAnchoring() const
 {
     LOCK(m_anchor_mutex);
-    if (!m_validator_payee || m_validator_bid <= 0) return std::nullopt;
-    return std::make_pair(*m_validator_payee, m_validator_bid);
+    return m_validator;
 }
 
 void FastBlocksHooks::StartServices(node::NodeContext& node) const
@@ -2031,24 +2054,52 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
     if (m_producer) {
         m_producer->Start();
         // Its own anchorer: a ticket for every mainchain block, its bid whatever the fees, the pot to the producer's payout.
-        CAmount bid{m_chain_params.GetChainType() == ChainType::REGTEST ? 0 : DEFAULT_VALIDATOR_ANCHOR_BID};
-        if (node.args && node.args->IsArgSet("-validatoranchorbid")) {
-            const auto parsed{ParseMoney(node.args->GetArg("-validatoranchorbid", ""))};
-            if (!parsed || *parsed < 0) {
+        // Off on regtest unless given, and with -novalidatoranchorbid or -validatoranchorbid=off; 0 is a bid of 0
+        // (a request that pays the mainchain no fee: only a miner that takes those includes it).
+        std::optional<ValidatorBid> own;
+        if (m_chain_params.GetChainType() != ChainType::REGTEST) own = ValidatorBid{.floor = DEFAULT_VALIDATOR_ANCHOR_BID};
+        if (node.args && node.args->IsArgNegated("-validatoranchorbid")) {
+            own.reset();
+        } else if (node.args && node.args->IsArgSet("-validatoranchorbid")) {
+            const std::string value{node.args->GetArg("-validatoranchorbid", "")};
+            const auto parsed{ParseMoney(value)};
+            if (value == "off") {
+                own.reset();
+            } else if (!parsed || *parsed < 0) {
                 LogError("FastBlocks: -validatoranchorbid is not an amount: the validator's anchorer is off");
-                bid = 0;
+                own.reset();
             } else {
-                bid = *parsed;
+                own = ValidatorBid{.floor = *parsed};
             }
         }
-        if (bid > 0 && bid < sidechain::Follower::MIN_OFFER) {
-            LogWarning("FastBlocks: -validatoranchorbid below %s does not pay for a request's place in a mainchain block: %s bid", FormatMoney(sidechain::Follower::MIN_OFFER), FormatMoney(sidechain::Follower::MIN_OFFER));
-            bid = sidechain::Follower::MIN_OFFER;
+        if (own && node.args) {
+            const std::string mode{node.args->GetArg("-validatoranchorbidmode", "standard")};
+            if (mode == "fees") {
+                own->fees = true;
+            } else if (mode != "standard") {
+                LogError("FastBlocks: -validatoranchorbidmode is standard or fees, not %s: standard", mode);
+            }
+            if (node.args->IsArgSet("-validatoranchorbidmax")) {
+                const auto cap{ParseMoney(node.args->GetArg("-validatoranchorbidmax", ""))};
+                if (!cap || *cap < 0) {
+                    LogError("FastBlocks: -validatoranchorbidmax is not an amount: no cap");
+                } else {
+                    own->cap = *cap;
+                    if (!own->fees) LogWarning("FastBlocks: -validatoranchorbidmax caps the bid in fees mode only (-validatoranchorbidmode=fees)");
+                    if (*cap < own->floor) LogWarning("FastBlocks: -validatoranchorbidmax below -validatoranchorbid: the bid is %s", FormatMoney(own->floor));
+                }
+            }
+        }
+        if (own) {
+            own->payee = m_producer->Payout();
+            LogInfo("FastBlocks: the validator's anchorer bids for every mainchain block: %s%s (-validatoranchorbid%s)",
+                    own->fees ? "the bidder's share of the fees it anchors, at least " : "what the pot will pay less 1 %, at least ",
+                    FormatMoney(own->floor) + (own->fees && own->cap ? strprintf(", at most %s", FormatMoney(*own->cap)) : ""),
+                    own->fees ? ", -validatoranchorbidmode=fees" : "");
+            if (own->floor == 0) LogInfo("FastBlocks: a bid of 0 pays the mainchain no fee: only a miner that takes such requests includes it (Backbone -bmmzerofee, or -minrelaytxfee=0)");
         }
         LOCK(m_anchor_mutex);
-        m_validator_bid = bid;
-        m_validator_payee = m_producer->Payout();
-        if (bid > 0) LogInfo("FastBlocks: the validator's anchorer bids %s a mainchain block at least (-validatoranchorbid)", FormatMoney(bid));
+        m_validator = own;
     }
     // The acknowledgements of the recent blocks of the active chain, so that a commitment the mainchain
     // drops takes the blocks that rest on it with it.
@@ -2070,8 +2121,7 @@ void FastBlocksHooks::StopServices(node::NodeContext&) const
     if (m_producer) m_producer->Stop();
     {
         LOCK(m_anchor_mutex);
-        m_validator_payee.reset();
-        m_validator_bid = 0;
+        m_validator.reset();
     }
     m_producer.reset();
     m_node = nullptr;
