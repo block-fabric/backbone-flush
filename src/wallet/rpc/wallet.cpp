@@ -1098,6 +1098,7 @@ RPCMethod removeliquidity();
 RPCMethod createpool();
 RPCMethod addpoolliquidity();
 RPCMethod removepoolliquidity();
+RPCMethod setlinkdestination();
 RPCMethod swappools();
 RPCMethod launchtoken();
 RPCMethod curveasset();
@@ -1217,6 +1218,7 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &buyfromlaunch},
         {"wallet", &selltolaunch},
         {"wallet", &claimlaunch},
+        {"hidden", &setlinkdestination},
         {"wallet", &openposition},
         {"wallet", &changeposition},
         {"wallet", &listpositions},

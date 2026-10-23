@@ -27,7 +27,7 @@ from decimal import Decimal
 
 from feature_layers import LayersTest
 from test_framework.publicapi import (PublicApi, URI_PARAMS, action_hash, decode, encode, grpc_call, parse_uri, protoc_available)
-from test_framework.util import assert_equal, assert_greater_than
+from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
 from test_framework.test_framework import SkipTest
 
 DEX_HEIGHT = 10
@@ -374,7 +374,7 @@ class PublicApiTest(LayersTest):
         built = api.rest("build/deposit", {"pool": cp["pool"], "amount_a": str(Decimal(dq["amount_a_units"]).scaleb(-decimals[cp["asset_a"]])),
                                            "amount_b": str(Decimal(dq["amount_b_units"]).scaleb(-decimals[cp["asset_b"]]))})
         assert_equal(built["verb"], "deposit")
-        assert not built["app_ready"]
+        assert built["app_ready"]
         assert_equal(built["payload_hash"], action_hash(built["payload"]))
         clpool = n0.createpool("0x" + x, 1, "0x" + y, 1, {"curve": "concentrated", "fee": 0.05})["pool"]
         self.bmm()
@@ -501,6 +501,79 @@ class PublicApiTest(LayersTest):
         assert_greater_than(moon_held["amount"], 0)
         assert_greater_than(moon_held["value_ecx"], 0)
         assert_equal(api.get("addresses/notanaddress/holdings").status, 400)
+
+        self.log.info("The site's DEX: what an address holds and made (portfolio), what a link's call brings in going to it, builds of each verb")
+        mine = n0.getnewaddress("flush.markets")
+        # What the actions bring in goes to the address while it is set (as while the app runs a link of the site).
+        n0.setlinkdestination(mine)
+        assert_raises_rpc_error(-5, "Not an address of this wallet", n0.setlinkdestination, n1.getnewaddress())
+        pos = n0.openposition(clpool, Decimal("0.99"), Decimal("1.01"), {"0x" + x: 1000, "0x" + y: 1000})
+        order = n0.placeorder("USDX", 10, "USDY", 3)
+        auction = n0.createauction("USDY", 50, "ECX", 5, 1, 100)
+        n0.setlinkdestination()
+        self.bmm()
+        folio = api.rest(f"addresses/{mine}/portfolio")
+        assert_equal(folio["address"], mine)
+        assert_equal([p["id"] for p in folio["positions"]], [pos["position"]])
+        assert_equal(folio["positions"][0]["liquidity"], n0.getposition(pos["position"])["liquidity"])
+        assert_equal([o["order"] for o in folio["orders"]], [order["order"]])
+        assert_equal((folio["orders"][0]["sell"]["ticker"], folio["orders"][0]["buy"]["ticker"], folio["orders"][0]["status"]), ("USDX", "USDY", "open"))
+        assert_equal([a["auction"] for a in folio["auctions"]], [auction["txid"]])
+        assert_equal(folio["auctions"][0]["base"]["ticker"], "USDY")
+        assert_equal(api.get("addresses/notanaddress/portfolio").status, 400)
+        # A launch's creator: MOON's (n0's "launch creator" address).
+        creator = n0.getlaunch("MOON")["creator"]
+        made = api.rest(f"addresses/{creator}/portfolio")
+        moon = next(l for l in made["launches"] if l["ticker"] == "MOON")
+        assert_equal(moon["state"], n0.getlaunch("MOON")["status"])
+        assert_equal(moon["claimable_fees"], n0.getlaunch("MOON")["creator_fees_owed"] >= Decimal("0.0005"))
+        main_address = self.main.getnewaddress()
+        # For the website's test: the address with a position, an order and an auction, and an address of eCash.
+        self.e2e_env = {"E2E_ADDRESS": mine, "E2E_ECASH_ADDRESS": main_address}
+        for verb, query in [
+            ("position", {"pool": clpool, "price_lower": "0.98", "price_upper": "1.02", "amount_a": "100", "amount_b": "100", "slippage_bps": "100"}),
+            ("reposition", {"position": pos["position"], "action": "remove", "percent": "50", "slippage_bps": "100"}),
+            ("reposition", {"position": pos["position"], "action": "collect"}),
+            ("settle", {"order": order["order"], "cancel": "true"}),
+            ("bid", {"auction": auction["txid"], "amount": "1"}),
+            ("collect", {"auction": auction["txid"]}),
+            ("claim", {"launch": "MOON"}),
+            ("pegin", {"amount": "1.5", "address": mine}),
+            ("pegout", {"address": main_address, "amount": "1"}),
+            ("withdraw", {"pool": cp["pool"], "shares": "1000", "only": "a"}),
+        ]:
+            built = api.rest(f"build/{verb}", query)
+            got, params, _ = parse_uri(built["uri"])
+            assert_equal(got, verb)
+            assert set(params) - {"network", "exp"} <= URI_PARAMS[verb], (verb, params)
+            assert built["app_ready"]
+            assert_equal(built["payload_hash"], action_hash(built["payload"]))
+            if verb == "pegin":
+                assert_equal(built["deposit_address"], n0.getdepositaddress(mine)["depositaddress"])
+            if verb in {"reposition", "settle", "bid", "claim", "pegout"}:
+                assert built["facts"], verb
+        assert_equal(api.get("build/reposition", {"position": pos["position"], "action": "remove", "percent": "101"}).status, 400)
+        assert_equal(api.get("build/pegout", {"address": main_address, "amount": "0.00000001"}).status, 400)
+        assert api.get("build/settle", {"order": "00" * 32}).status in (400, 404)
+        # The calls the app's link host makes for these verbs, in exactly its shapes (src/webui/linkhost.cpp Resolve).
+        # (Nothing owed yet: a collect alone is refused by the wallet, with what it is.)
+        assert_raises_rpc_error(-8, "Nothing to collect yet", n0.changeposition, pos["position"], {"collect": True})
+        n0.changeposition(pos["position"], {"remove": 25, "collect": True, "slippage": 0.5})
+        n0.settleorder(order["order"], True)
+        held_shares = n0.listmyassets()["pools"] if "pools" in n0.listmyassets() else []
+        added = n0.addpoolliquidity(cp["pool"], {"0x" + x: 10, "ECX": Decimal("0.005")}, 1.0)
+        self.bmm()
+        part = added["shares"] // 2
+        taken = n0.removepoolliquidity(cp["pool"], 100, None, 2.0, part)
+        assert_equal(taken["shares"], part)
+        assert_raises_rpc_error(-8, "fewer than", n0.removepoolliquidity, cp["pool"], 100, None, 1, 10**15)
+        n0.collectauction(auction["txid"])
+        self.bmm()
+        assert added["txid"] and held_shares is not None
+        # A route through two pools: the link verb route, which the app now takes.
+        routed = api.rest("build/swap", {"from": "ECX", "to": "USDY", "amount": "0.01", "slippage_bps": "100", "max_hops": "3"})
+        assert routed["app_ready"]
+        assert_equal(parse_uri(routed["uri"])[0], routed["verb"])
         assert_equal(api.rest("tickers/MOON"), {"ticker": "MOON", "available": False, "reason": "taken"})
         assert_equal(api.rest("tickers/fresh1")["available"], True)
         assert_equal(api.rest("tickers/a")["available"], False)
@@ -657,7 +730,7 @@ class PublicApiTest(LayersTest):
             self.log.info("The website against this API (flush-web scripts/e2e-live.mjs)")
             import subprocess
             env = dict(os.environ, E2E_API=f"http://127.0.0.1:{api_port(0)}", E2E_PORT=str(api_port(0) + 10), E2E_CURVE="SUN", E2E_GRADUATED="MOON", E2E_PLAIN="PLAIN", E2E_BOOK="USDX",
-                       E2E_SHOTS=self.options.site_shots or os.path.join(self.options.tmpdir, "site-shots"), PLAYWRIGHT=self.options.playwright or "")
+                       E2E_SHOTS=self.options.site_shots or os.path.join(self.options.tmpdir, "site-shots"), PLAYWRIGHT=self.options.playwright or "", **getattr(self, "e2e_env", {}))
             result = subprocess.run(["node", "scripts/e2e-live.mjs"], cwd=self.options.site, env=env, capture_output=True, text=True, timeout=600)
             for line in result.stdout.splitlines():
                 self.log.info("site: " + line)

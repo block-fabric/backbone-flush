@@ -33,12 +33,23 @@ std::string_view VerbName(Verb verb)
     case Verb::POOL: return "pool";
     case Verb::AUCTION: return "auction";
     case Verb::ORDER: return "order";
+    case Verb::ROUTE: return "route";
+    case Verb::DEPOSIT: return "deposit";
+    case Verb::WITHDRAW: return "withdraw";
+    case Verb::POSITION: return "position";
+    case Verb::REPOSITION: return "reposition";
+    case Verb::SETTLE: return "settle";
+    case Verb::BID: return "bid";
+    case Verb::COLLECT: return "collect";
+    case Verb::CLAIM: return "claim";
+    case Verb::PEGIN: return "pegin";
+    case Verb::PEGOUT: return "pegout";
     }
     return "?";
 }
 
 namespace {
-constexpr std::array<std::pair<std::string_view, Verb>, 10> VERBS{{
+constexpr std::array<std::pair<std::string_view, Verb>, 21> VERBS{{
     {"connect", Verb::CONNECT},
     {"launch", Verb::LAUNCH},
     {"buy", Verb::BUY},
@@ -49,6 +60,17 @@ constexpr std::array<std::pair<std::string_view, Verb>, 10> VERBS{{
     {"pool", Verb::POOL},
     {"auction", Verb::AUCTION},
     {"order", Verb::ORDER},
+    {"route", Verb::ROUTE},
+    {"deposit", Verb::DEPOSIT},
+    {"withdraw", Verb::WITHDRAW},
+    {"position", Verb::POSITION},
+    {"reposition", Verb::REPOSITION},
+    {"settle", Verb::SETTLE},
+    {"bid", Verb::BID},
+    {"collect", Verb::COLLECT},
+    {"claim", Verb::CLAIM},
+    {"pegin", Verb::PEGIN},
+    {"pegout", Verb::PEGOUT},
 }};
 
 bool Lower(char c) { return c >= 'a' && c <= 'z'; }
@@ -165,6 +187,13 @@ std::string Amount(const std::string& text, const char* key)
     return text;
 }
 
+/** An amount that may be 0 (a floor of nothing, one side of a position). */
+std::string AmountOrZero(const std::string& text, const char* key)
+{
+    if (!IsDecimal(text)) throw LinkError(strprintf("%s: an amount is a decimal of at most 8 places, without sign or exponent (\"%s\")", key, text.substr(0, 40)));
+    return text.find_first_not_of("0.") == std::string::npos ? std::string{"0"} : text;
+}
+
 uint256 Id(const std::string& text, const char* key)
 {
     if (text.size() != 64 || !std::all_of(text.begin(), text.end(), [](char c) { return Digit(c) || (c >= 'a' && c <= 'f'); })) {
@@ -213,6 +242,33 @@ std::string SideTicker(const std::string& text, const uint256& asset, const char
     const std::string ticker{Ticker(text, key, true)};
     if ((ticker == COIN_TICKER) != asset.IsNull()) throw LinkError(strprintf("%s: %s names the coin exactly when its asset is %s", key, std::string{COIN_TICKER}, std::string{COIN_TICKER}));
     return ticker;
+}
+
+/** A whole number of units (shares), digits only, at most MAX_SUPPLY_DIGITS, more than 0. */
+std::string Units19(const std::string& text, const char* key)
+{
+    if (text.empty() || text.size() > MAX_SUPPLY_DIGITS || !std::all_of(text.begin(), text.end(), Digit) || text[0] == '0' || !ToIntegral<uint64_t>(text)) {
+        throw LinkError(strprintf("%s: a whole number of units, more than 0", key));
+    }
+    return text;
+}
+
+/** 0 or 1. */
+bool Flag(const std::string& text, const char* key)
+{
+    if (text != "0" && text != "1") throw LinkError(strprintf("%s: 0 or 1", key));
+    return text == "1";
+}
+
+/** An address of eCash, as its wallets write them: lowercase letters, digits and a prefix's colon, of a bounded size (the node of eCash reads it). */
+std::string MainAddress(const std::string& text)
+{
+    if (text.empty() || text.size() > MAX_MAIN_ADDRESS) throw LinkError(strprintf("address: an address of eCash, at most %u characters", MAX_MAIN_ADDRESS));
+    if (std::count(text.begin(), text.end(), ':') > 1 || text.front() == ':' || text.back() == ':' ||
+        !std::all_of(text.begin(), text.end(), [](char c) { return Lower(c) || Digit(c) || c == ':' || (c >= 'A' && c <= 'Z'); })) {
+        throw LinkError("address: an address of eCash (letters, digits and its prefix)");
+    }
+    return text;
 }
 
 int Slippage(const std::string& text)
@@ -321,7 +377,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     const size_t q{rest.find('?')};
     const std::string verb_text{rest.substr(0, q)};
     const auto verb{std::find_if(VERBS.begin(), VERBS.end(), [&](const auto& v) { return v.first == verb_text; })};
-    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (connect, launch, buy, sell, swap, register, curve, pool, auction, order)", verb_text.substr(0, 20)));
+    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (connect, launch, buy, sell, swap, register, curve, pool, auction, order, route, deposit, withdraw, position, reposition, settle, bid, collect, claim, pegin, pegout)", verb_text.substr(0, 20)));
 
     // The parameters, each once (link: up to MAX_LINKS times).
     std::map<std::string, std::string> params;
@@ -484,6 +540,98 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.amount = Amount(need("amount"), "amount");
         r.floor = Amount(need("min_out"), "min_out");
         if (auto s{take("slippage_bps")}) r.slippage_bps = Slippage(*s);
+        break;
+    case Verb::ROUTE: {
+        const std::string list{need("pools")};
+        size_t start{0};
+        while (start <= list.size()) {
+            size_t comma{list.find(',', start)};
+            if (comma == std::string::npos) comma = list.size();
+            if (r.pools.size() >= MAX_ROUTE_POOLS) throw LinkError(strprintf("pools: at most %u", MAX_ROUTE_POOLS));
+            r.pools.push_back(Id(list.substr(start, comma - start), "pools"));
+            start = comma + 1;
+        }
+        if (r.pools.size() < 2) throw LinkError("pools: a route goes through 2 pools at least (one pool: swap)");
+        for (size_t i{0}; i < r.pools.size(); ++i) {
+            for (size_t j{i + 1}; j < r.pools.size(); ++j) {
+                if (r.pools[i] == r.pools[j]) throw LinkError("pools: a pool twice in a route");
+            }
+        }
+        r.from = Ticker(need("from"), "from", true);
+        r.to = Ticker(need("to"), "to", true);
+        if (r.from == r.to) throw LinkError("from and to are the same");
+        r.amount = Amount(need("amount"), "amount");
+        r.floor = Amount(need("min_out"), "min_out");
+        if (auto s{take("slippage_bps")}) r.slippage_bps = Slippage(*s);
+        break;
+    }
+    case Verb::DEPOSIT:
+    case Verb::WITHDRAW:
+        r.pool = Id(need("pool"), "pool");
+        r.ticker_a = Ticker(need("asset_a"), "asset_a", true);
+        r.ticker_b = Ticker(need("asset_b"), "asset_b", true);
+        if (r.ticker_a == r.ticker_b) throw LinkError("asset_a and asset_b are the same");
+        if (r.verb == Verb::DEPOSIT) {
+            r.amount_a = Amount(need("amount_a"), "amount_a");
+            r.amount_b = Amount(need("amount_b"), "amount_b");
+            r.shares = Units19(need("min_shares"), "min_shares");
+        } else {
+            r.shares = Units19(need("shares"), "shares");
+            r.min_a = AmountOrZero(need("min_a"), "min_a");
+            r.min_b = AmountOrZero(need("min_b"), "min_b");
+            if (auto o{take("only")}) {
+                if (*o != "a" && *o != "b") throw LinkError("only: a or b");
+                r.only = *o;
+            }
+        }
+        if (auto s{take("slippage_bps")}) r.slippage_bps = Slippage(*s);
+        break;
+    case Verb::POSITION:
+        r.pool = Id(need("pool"), "pool");
+        r.ticker_a = Ticker(need("asset_a"), "asset_a", true);
+        r.ticker_b = Ticker(need("asset_b"), "asset_b", true);
+        if (r.ticker_a == r.ticker_b) throw LinkError("asset_a and asset_b are the same");
+        r.price_lower = Amount(need("price_lower"), "price_lower");
+        r.price_upper = Amount(need("price_upper"), "price_upper");
+        r.amount_a = AmountOrZero(need("amount_a"), "amount_a");
+        r.amount_b = AmountOrZero(need("amount_b"), "amount_b");
+        if (r.amount_a == "0" && r.amount_b == "0") throw LinkError("amount_a and amount_b: something to put in");
+        r.slippage_bps = Slippage(need("slippage_bps"));
+        // Here the slippage binds (the call's own bound, no floor in the link): at most MAX_BINDING_SLIPPAGE_BPS.
+        if (*r.slippage_bps > MAX_BINDING_SLIPPAGE_BPS) throw LinkError(strprintf("slippage_bps: at most %d here (it binds)", MAX_BINDING_SLIPPAGE_BPS));
+        break;
+    case Verb::REPOSITION:
+        r.target = Id(need("position"), "position");
+        r.action = need("action");
+        if (r.action != "collect" && r.action != "remove" && r.action != "close") throw LinkError("action: collect, remove or close");
+        if (r.action == "remove") r.percent = Int(need("percent"), "percent", 1, 100);
+        r.slippage_bps = Slippage(need("slippage_bps"));
+        // Here the slippage binds (the call's own bound, no floor in the link): at most MAX_BINDING_SLIPPAGE_BPS.
+        if (*r.slippage_bps > MAX_BINDING_SLIPPAGE_BPS) throw LinkError(strprintf("slippage_bps: at most %d here (it binds)", MAX_BINDING_SLIPPAGE_BPS));
+        break;
+    case Verb::SETTLE:
+        r.target = Id(need("order"), "order");
+        r.cancel = Flag(need("cancel"), "cancel");
+        break;
+    case Verb::BID:
+        r.target = Id(need("auction"), "auction");
+        r.amount = Amount(need("amount"), "amount");
+        if (auto v{take("buy_all")}) r.buy_all = Flag(*v, "buy_all");
+        break;
+    case Verb::COLLECT:
+        r.target = Id(need("auction"), "auction");
+        break;
+    case Verb::CLAIM:
+        r.ticker = Ticker(need("launch"), "launch", false);
+        r.asset = Id(need("asset"), "asset");
+        break;
+    case Verb::PEGIN:
+        r.amount = Amount(need("amount"), "amount");
+        break;
+    case Verb::PEGOUT:
+        r.address = MainAddress(need("address"));
+        r.amount = Amount(need("amount"), "amount");
+        r.fee = Amount(need("fee"), "fee");
         break;
     }
     // Nothing else: a parameter this app does not know (or one for a later version, req-...) is refused, never ignored.

@@ -100,11 +100,12 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 | `books/{base}[/{quote}]?depth≤100` | GetBook | the ladder (`getbook`), totals, spread; each level's `price_exact` (the orders' limit, 18 significant digits) and `amount_units`; `best_ask_exact`, `best_bid_exact`. A book's candles: `pools/{book}/candles` |
 | `tickers/{ticker}` | GetTicker | `{ ticker, available, reason }` (reservations are hidden: available can still lose a race) |
 | `addresses/{address}/holdings` | GetHoldings | assets (value in ECX), LP shares, positions, orders of an address |
+| `addresses/{address}/portfolio` | GetPortfolio | what an address holds and made: assets (value in ECX), shares of pools (share, what they are worth, the pool), positions (as `positions/{id}`), orders (status open, filled, expired, evicted), auctions it sells, launches it created (fees owed, allocation, what is claimable); at most 500 outputs and 100 of them read whole (cost 4) |
 | `verifications?assets=A,B&curators=<id>,…` | GetVerifications | per **the client's own** curator list (1–20), 1–50 assets (`getverifications`) |
 | `quote/swap?from=&to=&amount=&slippage_bps=&max_hops=` | QuoteSwap | every pool of the pair (books included: `getswapquote`) and routes (`quoteroute`), best first, the floor |
 | `quote/deposit?pool=&amount_a=&amount_b=`, `quote/withdraw?pool=&shares=&only=a\|b` | QuoteLiquidity | `quotepoolliquidity`, floors |
 | `quote/position?pool=&price_lower=&price_upper=&amount_a=&amount_b=` | QuotePosition | `previewposition` |
-| `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order}?…` | BuildAction | the action, unsigned (below) |
+| `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order\|position\|reposition\|settle\|bid\|collect\|claim\|pegin\|pegout}?…` | BuildAction | the action, unsigned (below); `facts` (what to show beside it), `deposit_address` (pegin with an address) |
 | POST `broadcast` `{"hex": "…"}` | Broadcast | `{ txid }` |
 
 **One implementation of quotes.** Every quote is the node's own RPC method, called in process: `quotelaunch`,
@@ -139,9 +140,13 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
   `decimals`, `fee_bps`, `allocation_bps` from the launch parameters), `register` (ticker, name, description, links,
   logo_sha256, supply, decimals), `curve` (asset, amount, fee_bps, min_buy, max_buy), `pool` (asset_a, asset_b, kind,
   fee_ppm, amount_a, amount_b, amp, weight_a), `auction` (base, amount, quote, start_price, end_price, duration, delay),
-  `order` (sell, buy, amount, price, expiry_blocks) (`app_ready: true`; the builds resolve the tickers from the ids). Built for wallet extensions and later apps, refused by today's app (it fails closed):
-  `route` (several pools: `pools=<id>,<id>`), `deposit` (`pool`, `asset_a`, `asset_b`, `amount_a`, `amount_b`,
-  `min_shares`), `withdraw` (`pool`, `asset_a`, `asset_b`, `shares`, `min_a`, `min_b`, `only`).
+  `order` (sell, buy, amount, price, expiry_blocks), and the site's DEX: `route` (a swap through several pools:
+  `pools=<id>,<id>`), `deposit` (`pool`, `asset_a`, `asset_b`, `amount_a`, `amount_b`, `min_shares`), `withdraw`
+  (`pool`, `asset_a`, `asset_b`, `shares`, `min_a`, `min_b`, `only`), `position` (`pool`, `price_lower`, `price_upper`,
+  `amount_a`, `amount_b`, `slippage_bps`), `reposition` (`position`, `action`, `percent`), `settle` (`order`, `cancel`),
+  `bid` (`auction`, `amount`, `buy_all`), `collect` (`auction`), `claim` (`launch`), `pegin` (`amount`, `address`),
+  `pegout` (`address`, `amount`, `fee`) (`app_ready: true` for all; an app of before refuses the newer verbs: it fails
+  closed).
 - **The payload** is the same action as canonical JSON: keys sorted, no spaces, every amount a decimal string,
   integers for `v`, `expires`, `slippage_bps`, `quote_height`; `format: "flush-action"`. Its hash is
   SHA-256(`"flush-action/v1\n"` ‖ payload bytes as given), hex; `check_code` its first 8 digits, which a wallet

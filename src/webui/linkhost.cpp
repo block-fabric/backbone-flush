@@ -175,6 +175,68 @@ void QuoteRows(std::vector<dialog::Row>& rows, const std::string& quote, const s
     rows.push_back(confirm::Text("Least it gives", floor + ": the link's floor — refused rather than less"));
     if (slippage) rows.push_back(confirm::Text("Slippage the site showed", Bps(*slippage) + " (shown only: the floor binds)"));
 }
+
+/** A pool's two assets, by id: the coin, or the asset of the id. */
+std::pair<Reader::Asset, Reader::Asset> PoolSides(Reader& reader, const uint256& id, Reader::Pool& pool_out)
+{
+    const auto pool{reader.PoolById(id)};
+    if (!pool) throw LinkError(strprintf("No pool has the id %s on this chain: nothing was done", id.GetHex()));
+    pool_out = *pool;
+    const auto side{[&](const uint256& asset_id) {
+        if (asset_id.IsNull()) return CoinAsset();
+        const auto asset{reader.AssetById(asset_id)};
+        if (!asset) throw LinkError("The pool holds an asset this node does not know");
+        return *asset;
+    }};
+    return {side(pool->asset0), side(pool->asset1)};
+}
+
+/** A link's two tickers of a pool, checked against its two assets in the pool's order (asset_a its first). */
+void CheckPoolTickers(const Request& r, const Reader::Asset& a, const Reader::Asset& b)
+{
+    if (r.ticker_a != a.ticker || r.ticker_b != b.ticker) {
+        throw LinkError(strprintf("The pool %s is of %s and %s, in that order: the link says %s and %s. Refused (the pool's id binds its assets).", Short(r.pool),
+                                  a.ticker.empty() ? "?" : a.ticker, b.ticker.empty() ? "?" : b.ticker, r.ticker_a, r.ticker_b));
+    }
+}
+
+/** A link's two tickers of a pool in either order: the pool's two assets as the link names them (asset_a, asset_b). */
+std::pair<Reader::Asset, Reader::Asset> Oriented(const Request& r, const Reader::Asset& a, const Reader::Asset& b)
+{
+    if (r.ticker_a == a.ticker && r.ticker_b == b.ticker) return {a, b};
+    if (r.ticker_a == b.ticker && r.ticker_b == a.ticker) return {b, a};
+    throw LinkError(strprintf("The pool %s is of %s and %s: the link says %s and %s. Refused (the pool's id binds its assets).", Short(r.pool),
+                              a.ticker.empty() ? "?" : a.ticker, b.ticker.empty() ? "?" : b.ticker, r.ticker_a, r.ticker_b));
+}
+
+/** A number of a node's reply (exact: its text), in units of `decimals` places; 0 if none. */
+uint64_t UnitsOf(const UniValue& v, int decimals)
+{
+    if (!v.isNum() && !v.isStr()) return 0;
+    return Units(v.getValStr(), decimals, Rounding::EXACT).value_or(0);
+}
+
+/** The value of an object by the asset's label as the node writes it (its ticker, the coin's), or by its ref. */
+const UniValue& ByAsset(const UniValue& obj, const Reader::Asset& asset)
+{
+    if (!obj.isObject()) return NullUniValue;
+    for (const std::string& key : {asset.id.IsNull() ? std::string{COIN_TICKER} : asset.ticker, Ref(asset.id), asset.id.IsNull() ? std::string{} : asset.id.GetHex()}) {
+        if (key.empty()) continue;
+        const UniValue& v{obj.find_value(key)};
+        if (!v.isNull()) return v;
+    }
+    return NullUniValue;
+}
+
+/** The least of two slippages that each make their RPC floor at least the link's (a side with no floor asks none). */
+UniValue SlippageForBoth(uint64_t quote_a, uint64_t floor_a, uint64_t quote_b, uint64_t floor_b)
+{
+    const auto bps{[](uint64_t q, uint64_t f) -> uint64_t { return f == 0 || q == 0 ? 10000 : static_cast<uint64_t>((static_cast<unsigned __int128>(q - f) * 10000) / q); }};
+    const uint64_t least{std::min(bps(quote_a, floor_a), bps(quote_b, floor_b))};
+    UniValue out;
+    out.setNumStr(strprintf("%d.%02d", least / 100, least % 100));
+    return out;
+}
 } // namespace
 
 std::string SourceText(Source source)
@@ -426,6 +488,258 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         plan.params.push_back(r.blocks);
         break;
     }
+    case Verb::ROUTE: {
+        // The path: from the link's `from` through each pool to the other side, to its `to`.
+        std::vector<Reader::Asset> path;
+        Reader::Asset at;
+        bool first{true};
+        for (const uint256& id : r.pools) {
+            Reader::Pool pool;
+            const auto [a, b]{PoolSides(reader, id, pool)};
+            if (pool.abandoned) throw LinkError(strprintf("Nobody provides liquidity to the pool %s any more: the route would get almost nothing", Short(id)));
+            if (first) {
+                if (a.ticker == r.from && b.ticker != r.from) at = a;
+                else if (b.ticker == r.from && a.ticker != r.from) at = b;
+                else throw LinkError(strprintf("The route's first pool %s is of %s and %s: the link's from %s is not one of them", Short(id), a.ticker, b.ticker, r.from));
+                path.push_back(at);
+                first = false;
+            }
+            if (at.id == a.id) at = b;
+            else if (at.id == b.id) at = a;
+            else throw LinkError(strprintf("The pool %s does not take %s: the route's pools do not follow one another", Short(id), at.ticker.empty() ? "?" : at.ticker));
+            path.push_back(at);
+        }
+        if (path.back().ticker != r.to) throw LinkError(strprintf("The route ends in %s, and the link's to is %s: refused", path.back().ticker.empty() ? "?" : path.back().ticker, r.to));
+        const Reader::Asset& from{path.front()};
+        const Reader::Asset& to{path.back()};
+        const uint64_t amount{Exact(r.amount, from.decimals, "amount")};
+        if (from.id.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("A swap pays in %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
+        const uint64_t floor{Floor(r.floor, to.decimals)};
+        // The quote of now, hop by hop, each pool alone.
+        uint64_t quote{amount};
+        for (size_t i{0}; i < r.pools.size() && quote > 0; ++i) quote = reader.QuotePool(path[i].id, r.pools[i], quote);
+        if (quote == 0 || (to.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT)) throw LinkError("The route takes no such swap now");
+        if (quote < floor) {
+            throw LinkError(strprintf("The pools moved: the route now gives %s, less than the %s the link asks at least. Nothing was done: quote it again on the site.", Of(quote, to), Of(floor, to)));
+        }
+        plan.summary = strprintf("Swap %s for %s through %u pools", Of(amount, from), to.ticker, r.pools.size());
+        rows = Head(r, source, plan.summary, now);
+        std::string through;
+        for (size_t i{0}; i < path.size(); ++i) through += (i ? " → " : "") + (path[i].ticker.empty() ? std::string{"?"} : path[i].ticker);
+        rows.push_back(confirm::Text("Route", through));
+        rows.push_back(confirm::Text("Pays in", SideName(from)));
+        rows.push_back(confirm::Text("Gets", SideName(to)));
+        QuoteRows(rows, Of(quote, to), Of(floor, to), r.slippage_bps);
+        plan.method = "swaproute";
+        UniValue assets{UniValue::VARR};
+        for (const Reader::Asset& asset : path) assets.push_back(Ref(asset.id));
+        UniValue pools{UniValue::VARR};
+        for (const uint256& id : r.pools) pools.push_back(id.GetHex());
+        plan.params.push_back(std::move(assets));
+        plan.params.push_back(Decimal(amount, from.decimals));
+        plan.params.push_back(SlippageFor(quote, floor));
+        plan.params.push_back(Decimal(floor, to.decimals));
+        plan.params.push_back(std::move(pools));
+        break;
+    }
+    case Verb::DEPOSIT:
+    case Verb::WITHDRAW: {
+        Reader::Pool pool;
+        const auto [p0, p1]{PoolSides(reader, r.pool, pool)};
+        // asset_a and asset_b as the link names them (either order); amounts, floors and `only` follow its names.
+        const auto [a, b]{Oriented(r, p0, p1)};
+        const bool in{r.verb == Verb::DEPOSIT};
+        UniValue args{UniValue::VARR};
+        args.push_back(r.pool.GetHex());
+        uint64_t amount_a{0}, amount_b{0};
+        if (in) {
+            amount_a = Exact(r.amount_a, a.decimals, "amount_a");
+            amount_b = Exact(r.amount_b, b.decimals, "amount_b");
+            UniValue amounts{UniValue::VOBJ};
+            amounts.pushKV(Ref(a.id), Decimal(amount_a, a.decimals));
+            amounts.pushKV(Ref(b.id), Decimal(amount_b, b.decimals));
+            args.push_back(std::move(amounts));
+        } else {
+            args.push_back(UniValue{UniValue::VOBJ});
+            UniValue shares;
+            shares.setNumStr(r.shares);
+            args.push_back(std::move(shares));
+            if (!r.only.empty()) args.push_back(Ref(r.only == "a" ? a.id : b.id));
+        }
+        const UniValue q{reader.Read("quotepoolliquidity", args)};
+        const uint64_t shares_link{*ToIntegral<uint64_t>(r.shares)};
+        if (in) {
+            const uint64_t shares{UnitsOf(q.find_value("shares"), 0)};
+            if (shares < shares_link) {
+                throw LinkError(strprintf("The pool moved: these amounts now get %u shares, less than the %s the link asks at least. Nothing was done: quote it again on the site.", shares, r.shares));
+            }
+            plan.summary = strprintf("Add %s and %s to the pool", Of(amount_a, a), Of(amount_b, b));
+            rows = Head(r, source, plan.summary, now);
+            rows.push_back(confirm::Text("Pool", strprintf("%s and %s (0x%s)", a.ticker, b.ticker, Short(r.pool))));
+            QuoteRows(rows, strprintf("%u shares", shares), strprintf("%s shares", r.shares), r.slippage_bps);
+            plan.method = "addpoolliquidity";
+            plan.params.push_back(r.pool.GetHex());
+            plan.params.push_back(args[1]);
+            plan.params.push_back(SlippageFor(shares, shares_link));
+        } else {
+            const uint64_t out_a{UnitsOf(ByAsset(q.find_value("amounts"), a), a.decimals)}, out_b{UnitsOf(ByAsset(q.find_value("amounts"), b), b.decimals)};
+            const uint64_t min_a{r.min_a == "0" ? 0 : Floor(r.min_a, a.decimals)}, min_b{r.min_b == "0" ? 0 : Floor(r.min_b, b.decimals)};
+            if (out_a < min_a || out_b < min_b) {
+                throw LinkError(strprintf("The pool moved: these shares now take out %s and %s, less than the %s and %s the link asks at least. Nothing was done.", Of(out_a, a), Of(out_b, b), Of(min_a, a), Of(min_b, b)));
+            }
+            plan.summary = strprintf("Take %s shares out of the pool of %s and %s", r.shares, a.ticker, b.ticker);
+            rows = Head(r, source, plan.summary, now);
+            rows.push_back(confirm::Text("Pool", strprintf("%s and %s (0x%s)", a.ticker, b.ticker, Short(r.pool))));
+            if (!r.only.empty()) rows.push_back(confirm::Text("Comes out as", (r.only == "a" ? a.ticker : b.ticker) + " alone (the rest traded in the pool, its fee paid)"));
+            QuoteRows(rows, Of(out_a, a) + " and " + Of(out_b, b), Of(min_a, a) + " and " + Of(min_b, b), r.slippage_bps);
+            plan.method = "removepoolliquidity";
+            plan.params.push_back(r.pool.GetHex());
+            plan.params.push_back(100);
+            plan.params.push_back(r.only.empty() ? UniValue{} : UniValue{Ref(r.only == "a" ? a.id : b.id)});
+            plan.params.push_back(SlippageForBoth(out_a, min_a, out_b, min_b));
+            UniValue shares;
+            shares.setNumStr(r.shares);
+            plan.params.push_back(std::move(shares));
+        }
+        break;
+    }
+    case Verb::POSITION: {
+        Reader::Pool pool;
+        const auto [a, b]{PoolSides(reader, r.pool, pool)};
+        CheckPoolTickers(r, a, b);
+        Exact(r.price_lower, 8, "price_lower");
+        Exact(r.price_upper, 8, "price_upper");
+        UniValue amounts{UniValue::VOBJ};
+        if (r.amount_a != "0") amounts.pushKV(Ref(a.id), Decimal(Exact(r.amount_a, a.decimals, "amount_a"), a.decimals));
+        if (r.amount_b != "0") amounts.pushKV(Ref(b.id), Decimal(Exact(r.amount_b, b.decimals, "amount_b"), b.decimals));
+        UniValue args{UniValue::VARR};
+        args.push_back(r.pool.GetHex());
+        args.push_back(r.price_lower);
+        args.push_back(r.price_upper);
+        args.push_back(amounts);
+        const UniValue preview{reader.Read("previewposition", args)};
+        plan.summary = strprintf("Open a position in the pool of %s and %s, from %s to %s", a.ticker, b.ticker, r.price_lower, r.price_upper);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Pool", strprintf("%s and %s (0x%s), concentrated", a.ticker, b.ticker, Short(r.pool))));
+        rows.push_back(confirm::Text("Range", strprintf("%s to %s %s per %s", r.price_lower, r.price_upper, b.ticker, a.ticker)));
+        const UniValue& in_range{preview.find_value("in_range")};
+        if (in_range.isBool()) rows.push_back(confirm::Text("Now", in_range.get_bool() ? "the pool's price is in this range: it earns fees at once" : "the pool's price is outside this range: it earns nothing until the price comes in"));
+        rows.push_back(confirm::Text("Slippage", Bps(*r.slippage_bps) + " at most if the pool moves first (binds)"));
+        plan.method = "openposition";
+        plan.params.push_back(r.pool.GetHex());
+        plan.params.push_back(r.price_lower);
+        plan.params.push_back(r.price_upper);
+        plan.params.push_back(std::move(amounts));
+        plan.params.push_back(Percent(*r.slippage_bps));
+        break;
+    }
+    case Verb::REPOSITION: {
+        UniValue args{UniValue::VARR};
+        args.push_back(r.target.GetHex());
+        const UniValue pos{reader.Read("getposition", args)};
+        const UniValue& pool{pos.find_value("pool")};
+        plan.summary = r.action == "collect" ? "Collect the fees of a position" : r.action == "close" ? "Close a position (all of it out, with its fees)" : strprintf("Take %d %% of a position out, with its fees", r.percent);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Position", "0x" + Short(r.target) + (pool.isStr() ? " in the pool 0x" + pool.get_str().substr(0, 8) + "…" : std::string{})));
+        const UniValue& fees0{pos.find_value("fees0")};
+        const UniValue& fees1{pos.find_value("fees1")};
+        if (!fees0.isNull() || !fees1.isNull()) rows.push_back(confirm::Text("Fees owed now", fees0.getValStr() + " " + pos.find_value("asset0").getValStr() + " and " + fees1.getValStr() + " " + pos.find_value("asset1").getValStr()));
+        if (r.action != "collect") rows.push_back(confirm::Text("Slippage", Bps(*r.slippage_bps) + " at most if the pool moves first (binds)"));
+        UniValue change{UniValue::VOBJ};
+        if (r.action == "collect") change.pushKV("collect", true);
+        else if (r.action == "close") change.pushKV("close", true);
+        else {
+            change.pushKV("remove", r.percent);
+            change.pushKV("collect", true);
+        }
+        if (r.action != "collect") change.pushKV("slippage", Percent(*r.slippage_bps));
+        plan.method = "changeposition";
+        plan.params.push_back(r.target.GetHex());
+        plan.params.push_back(std::move(change));
+        break;
+    }
+    case Verb::SETTLE: {
+        UniValue args{UniValue::VARR};
+        args.push_back(r.target.GetHex());
+        const UniValue order{reader.Read("getorder", args)};
+        plan.summary = r.cancel ? "Cancel an order: what it got and what is left come back" : "Collect what an order got (it stays open)";
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Order", "0x" + Short(r.target)));
+        for (const char* key : {"sells", "buys", "remaining", "to_collect", "status"}) {
+            const UniValue& v{order.find_value(key)};
+            if (!v.isNull() && !v.isObject() && !v.isArray()) rows.push_back(confirm::Text(key, v.getValStr()));
+        }
+        plan.method = "settleorder";
+        plan.params.push_back(r.target.GetHex());
+        plan.params.push_back(r.cancel);
+        break;
+    }
+    case Verb::BID:
+    case Verb::COLLECT: {
+        UniValue args{UniValue::VARR};
+        args.push_back(r.target.GetHex());
+        const UniValue auction{reader.Read("getauction", args)};
+        const bool bid{r.verb == Verb::BID};
+        plan.summary = bid ? strprintf("Bid %s%s on an auction", r.amount, r.buy_all ? " at most, for all that is left," : "") : "Collect an auction: what it brought in and what is left of what it sold";
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Auction", "0x" + Short(r.target)));
+        for (const char* key : {"base", "quote", "price", "remaining", "status"}) {
+            const UniValue& v{auction.find_value(key)};
+            if (!v.isNull() && !v.isObject() && !v.isArray()) rows.push_back(confirm::Text(key, v.getValStr()));
+        }
+        plan.method = bid ? "bidauction" : "collectauction";
+        plan.params.push_back(r.target.GetHex());
+        if (bid) {
+            plan.params.push_back(r.amount);
+            plan.params.push_back(r.buy_all);
+        }
+        break;
+    }
+    case Verb::CLAIM: {
+        const Reader::Asset token{Token(reader, r.asset, r.ticker)};
+        if (!reader.LaunchOf(r.asset)) throw LinkError(strprintf("%s was not launched: it has no creator to pay", r.ticker));
+        UniValue args{UniValue::VARR};
+        args.push_back(Ref(r.asset));
+        const UniValue launch{reader.Read("getlaunch", args)};
+        plan.summary = strprintf("Pay the creator of %s what it is owed (its fees, its allocation once graduated)", r.ticker);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Launch", Named(token)));
+        rows.push_back(confirm::Text("Fees owed", launch.find_value("creator_fees_owed").getValStr() + " " + std::string{COIN_TICKER}));
+        const UniValue& allocation{launch.find_value("allocation")};
+        if (allocation.isNum() && allocation.getValStr() != "0") {
+            const bool claimed{launch.find_value("allocation_claimed").isTrue()};
+            rows.push_back(confirm::Text("Allocation", allocation.getValStr() + "% of the supply" + (claimed ? ", minted already" : launch.find_value("status").getValStr() == "graduated" ? ", minted now" : ", at graduation (not yet)")));
+        }
+        rows.push_back(confirm::Note("Anyone may send this: what is owed goes to the launch's creator address only, never elsewhere."));
+        plan.method = "claimlaunch";
+        plan.params.push_back(Ref(r.asset));
+        break;
+    }
+    case Verb::PEGIN: {
+        const uint64_t amount{Exact(r.amount, bitassets::CHN_DECIMALS, "amount")};
+        plan.summary = strprintf("Deposit %s from eCash into this wallet", Coin(amount));
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Paid by", "the wallet of the eCash node this app is linked to (its own question comes next)"));
+        rows.push_back(confirm::Text("Credited to", "this wallet's flush.markets address, once the deposit is in an eCash block and a block of this chain takes it"));
+        rows.push_back(confirm::Note("A deposit moves coins from eCash into this sidechain's escrow: coins come back only by a withdrawal, which takes long."));
+        plan.amount_units = amount;
+        break;
+    }
+    case Verb::PEGOUT: {
+        const uint64_t amount{Exact(r.amount, bitassets::CHN_DECIMALS, "amount")};
+        const uint64_t fee{Exact(r.fee, bitassets::CHN_DECIMALS, "fee")};
+        plan.summary = strprintf("Withdraw %s to eCash, to %s", Coin(amount), r.address);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Destination("eCash address paid", r.address));
+        rows.push_back(confirm::Text("Fee to eCash's miners", Coin(fee) + ", on top of the amount"));
+        rows.push_back(confirm::Note("A withdrawal leaves this wallet at once and is paid on eCash only once a bundle of withdrawals is voted through by eCash's miners: "
+                                     "that takes long (weeks). Until it is in a bundle it can be taken back (refundwithdrawal). Check the address: a payment on eCash cannot be undone."));
+        plan.method = "createwithdrawal";
+        plan.params.push_back(r.address);
+        plan.params.push_back(Decimal(amount, bitassets::CHN_DECIMALS));
+        plan.params.push_back(Decimal(fee, bitassets::CHN_DECIMALS));
+        break;
+    }
     }
     rows.push_back(Warning());
     plan.preface = std::move(rows);
@@ -456,7 +770,19 @@ namespace {
 class NodeChainReader : public Reader
 {
 public:
-    explicit NodeChainReader(interfaces::Chain& chain) : m_chain{chain} {}
+    NodeChainReader(interfaces::Node& node, interfaces::Chain& chain) : m_node{node}, m_chain{chain} {}
+    UniValue Read(const std::string& method, const UniValue& params) override
+    {
+        // The node's own reads only (none of a wallet's): the methods a link's question shows.
+        static const std::set<std::string> READS{"getorder", "getauction", "getposition", "getlaunch", "quotepoolliquidity", "previewposition"};
+        if (!READS.contains(method)) throw LinkError("Not a read of a link");
+        try {
+            return m_node.executeRpc(method, params, "/");
+        } catch (const UniValue& error) {
+            const UniValue& message{error.find_value("message")};
+            throw LinkError(message.isStr() ? message.get_str() : std::string{"The node refused it"});
+        }
+    }
     std::optional<Asset> AssetById(const uint256& id) override
     {
         const auto record{m_chain.getBitAsset(id)};
@@ -517,6 +843,7 @@ public:
     }
 
 private:
+    interfaces::Node& m_node;
     interfaces::Chain& m_chain;
 };
 } // namespace
@@ -525,7 +852,7 @@ std::unique_ptr<Reader> NodeReader(interfaces::Node& node)
 {
     node::NodeContext* context{node.context()};
     if (!context || !context->chain) throw HostError(BRIDGE_NOT_READY, "The node is still starting");
-    return std::make_unique<NodeChainReader>(*context->chain);
+    return std::make_unique<NodeChainReader>(node, *context->chain);
 }
 
 LinkHost::LinkHost(Deps deps) : m_deps{std::move(deps)}
@@ -639,11 +966,10 @@ UniValue LinkHost::ImportLaunch(const std::string& json)
     return Run(std::move(request), Source::FILE, {});
 }
 
-UniValue LinkHost::Connect(const Request& request, Source source, const std::string& wallet)
+namespace {
+/** The wallet's address of the label flush.markets (a connect's), if it has one. */
+std::string ConnectAddress(interfaces::Node& node, const std::string& wallet)
 {
-    interfaces::Node& node{m_deps.node()};
-    // The wallet's address for the site: the one of its label, else a new one with it.
-    std::string address;
     try {
         UniValue args{UniValue::VARR};
         args.push_back(CONNECT_LABEL);
@@ -651,15 +977,53 @@ UniValue LinkHost::Connect(const Request& request, Source source, const std::str
         if (found.isObject()) {
             for (const std::string& key : found.getKeys()) {
                 const UniValue& purpose{found.find_value(key).find_value("purpose")};
-                if (purpose.isStr() && purpose.get_str() == "receive") {
-                    address = key;
-                    break;
-                }
+                if (purpose.isStr() && purpose.get_str() == "receive") return key;
             }
         }
     } catch (...) {
-        // No address of the label yet.
     }
+    return {};
+}
+
+/** For the time of a link's call: what it brings in goes to the wallet's flush.markets address (setlinkdestination). */
+class LinkDestination
+{
+public:
+    LinkDestination(interfaces::Node& node, std::string wallet) : m_node{node}, m_wallet{std::move(wallet)}
+    {
+        const std::string address{ConnectAddress(m_node, m_wallet)};
+        if (address.empty()) return;
+        UniValue args{UniValue::VARR};
+        args.push_back(address);
+        try {
+            m_node.executeRpc("setlinkdestination", args, WalletUri(m_wallet));
+            m_set = true;
+        } catch (...) {
+        }
+    }
+    ~LinkDestination()
+    {
+        if (!m_set) return;
+        try {
+            m_node.executeRpc("setlinkdestination", UniValue{UniValue::VARR}, WalletUri(m_wallet));
+        } catch (...) {
+        }
+    }
+    LinkDestination(const LinkDestination&) = delete;
+    LinkDestination& operator=(const LinkDestination&) = delete;
+
+private:
+    interfaces::Node& m_node;
+    std::string m_wallet;
+    bool m_set{false};
+};
+} // namespace
+
+UniValue LinkHost::Connect(const Request& request, Source source, const std::string& wallet)
+{
+    interfaces::Node& node{m_deps.node()};
+    // The wallet's address for the site: the one of its label, else a new one with it.
+    std::string address{ConnectAddress(node, wallet)};
     if (address.empty()) {
         UniValue args{UniValue::VARR};
         args.push_back(CONNECT_LABEL);
@@ -710,6 +1074,7 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
     }
     const auto reader{m_deps.reader(node)};
     Plan plan{Resolve(request, source, *reader, m_deps.now())};
+    if (request.verb == Verb::PEGIN) return Deposit(plan, wallet);
     UniValue call{UniValue::VOBJ};
     call.pushKV("method", plan.method);
     call.pushKV("params", plan.params);
@@ -723,6 +1088,7 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
     UniValue result;
     {
         confirm::Preface preface{plan.preface, plan.message, "link"};
+        const LinkDestination destination{node, wallet};
         result = m_deps.confirmed(call);
     }
     LogInfo("webui: a link ran as accepted: %s", plan.summary);
@@ -734,6 +1100,39 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
         }
     }
     return result;
+}
+
+UniValue LinkHost::Deposit(const Plan& plan, const std::string& wallet)
+{
+    interfaces::Node& node{m_deps.node()};
+    if (!m_deps.deposit) throw LinkError("This app makes no deposits from eCash: deposit with an eCash wallet to the address the site shows");
+    // Credited to the wallet's flush.markets address (the one the site knows); a new one of the label if none yet.
+    std::string address{ConnectAddress(node, wallet)};
+    UniValue args{UniValue::VARR};
+    if (!address.empty()) args.push_back(address);
+    UniValue made;
+    try {
+        made = node.executeRpc("getdepositaddress", args, WalletUri(wallet));
+    } catch (const UniValue& error) {
+        const UniValue& message{error.find_value("message")};
+        throw LinkError(message.isStr() ? message.get_str() : std::string{"No deposit address"});
+    }
+    const UniValue& deposit_address{made.find_value("depositaddress")};
+    const UniValue& credited{made.find_value("address")};
+    if (!deposit_address.isStr() || !credited.isStr()) throw LinkError("No deposit address");
+    // The link's question first (where it comes from, what it asks), then the deposit's own (the amount, the eCash wallet that pays).
+    Window::ConfirmDialog question;
+    question.title = "Deposit from eCash";
+    question.accept = "Continue";
+    question.level = dialog::Level::WARNING;
+    question.kind = "link:pegin";
+    question.message = plan.message;
+    question.rows = plan.preface;
+    question.rows.insert(question.rows.end() - 1, confirm::Destination("Credited to", credited.get_str() + " (this wallet: " + (wallet.empty() ? std::string{"the default wallet"} : wallet) + ")"));
+    question.rows.insert(question.rows.end() - 1, confirm::Destination("Deposit address", deposit_address.get_str()));
+    if (!m_deps.ask || !m_deps.ask(question).accepted) throw HostError(BRIDGE_CANCELLED, "Not deposited: it was declined.");
+    LogInfo("webui: a link's deposit goes on to its own question: %s", plan.summary);
+    return m_deps.deposit(deposit_address.get_str(), Decimal(plan.amount_units, bitassets::CHN_DECIMALS));
 }
 
 void LinkHost::WaitAndLaunch(Plan plan, std::string wallet, std::string reserve_txid)
@@ -762,6 +1161,7 @@ void LinkHost::WaitAndLaunch(Plan plan, std::string wallet, std::string reserve_
     call.pushKV("wallet", wallet);
     try {
         confirm::Preface preface{plan.preface, plan.message, "link"};
+        const LinkDestination destination{m_deps.node(), wallet};
         const UniValue result{m_deps.confirmed(call)};
         const bool launch{plan.then_method == "launchtoken"};
         LogInfo("webui: the %s of %s was sent: %s", launch ? "launch" : "registration", plan.request.ticker, result.write());
