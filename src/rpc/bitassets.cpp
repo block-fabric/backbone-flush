@@ -2842,7 +2842,7 @@ std::vector<RPCResult> LaunchResults()
         {RPCResult::Type::STR_AMOUNT, "raised", CURRENCY_UNIT + " the curve raised (graduated: what it had raised)"},
         {RPCResult::Type::STR_AMOUNT, "graduation", "What it graduates at"},
         {RPCResult::Type::NUM, "progress", "Percent of that raised (100 once graduated)"},
-        {RPCResult::Type::NUM, "price", CURRENCY_UNIT + " for a whole token now (the curve's, or the pool's)"},
+        {RPCResult::Type::NUM, "price", CURRENCY_UNIT + " for a whole unit now (the curve's, or the pool's)"},
         {RPCResult::Type::STR_AMOUNT, "market_cap", "The price times the supply"},
         {RPCResult::Type::NUM, "supply", "Whole units of the asset there are"},
         {RPCResult::Type::NUM, "decimals", "The asset's decimals"},
@@ -2943,7 +2943,7 @@ RPCMethod getlaunch()
 {
     return RPCMethod{
         "getlaunch",
-        "A launch (launchtoken): its token, curve, progress to graduation, price, fees and creator.",
+        "A launch (launchtoken): its asset, curve, progress to graduation, price, fees and creator.",
         {{"token", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::AssetArgHelp()}},
         RPCResult{RPCResult::Type::OBJ, "", "", LaunchResults()},
         RPCExamples{HelpExampleCli("getlaunch", "\"MOON\"")},
@@ -3045,20 +3045,20 @@ RPCMethod quotelaunch()
 {
     return RPCMethod{
         "quotelaunch",
-        "What a buy (" + CURRENCY_UNIT + " in) or a sale (tokens in) on a launch's curve gives now, alone in its block: what comes out, what comes back if it would "
+        "What a buy (" + CURRENCY_UNIT + " in) or a sale (units of the asset in) on a launch's curve gives now, alone in its block: what comes out, what comes back if it would "
         "take the curve past its end, the fee, the price, and whether the launch would graduate.",
         {
             {"token", RPCArg::Type::STR, RPCArg::Optional::NO, bitassets::AssetArgHelp()},
-            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, CURRENCY_UNIT + " to pay in (buy), or tokens to sell"},
+            {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, CURRENCY_UNIT + " to pay in (buy), or units of the asset to sell"},
             {"side", RPCArg::Type::STR, RPCArg::Default{"buy"}, "buy or sell"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
             {RPCResult::Type::NUM, "amount_in", "What goes in"},
-            {RPCResult::Type::NUM, "amount_out", "What comes out (tokens for a buy, " + CURRENCY_UNIT + " for a sale, the fee taken)"},
+            {RPCResult::Type::NUM, "amount_out", "What comes out (units of the asset for a buy, " + CURRENCY_UNIT + " for a sale, the fee taken)"},
             {RPCResult::Type::STR_AMOUNT, "back", CURRENCY_UNIT + " back (a buy past the curve's end)"},
             {RPCResult::Type::STR_AMOUNT, "fee", "The fee, in " + CURRENCY_UNIT},
-            {RPCResult::Type::NUM, "price", CURRENCY_UNIT + " for a whole token, this trade"},
+            {RPCResult::Type::NUM, "price", CURRENCY_UNIT + " for a whole unit, this trade"},
             {RPCResult::Type::NUM, "spot_price", "The curve's price before"},
             {RPCResult::Type::NUM, "price_after", "And after"},
             {RPCResult::Type::NUM, "price_impact", "How much worse than the spot price, in percent (the fee included)"},
@@ -3208,7 +3208,7 @@ RPCMethod getlaunchlog()
 {
     return RPCMethod{
         "getlaunchlog",
-        "For indexers: what blocks did on launch curves, a row per block and launch: made, " + CURRENCY_UNIT + " and tokens in and out, fees, the curve after, "
+        "For indexers: what blocks did on launch curves, a row per block and launch: made, " + CURRENCY_UNIT + " and units of the asset in and out, fees, the curve after, "
         "graduated. The last 10080 blocks are kept (getlaunchstats' log_blocks); a reorganisation takes rows back with their blocks.",
         {
             {"from_height", RPCArg::Type::NUM, RPCArg::Optional::NO, "The first block"},

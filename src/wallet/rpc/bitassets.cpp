@@ -2447,10 +2447,10 @@ RPCMethod buyfromlaunch()
 {
     return RPCMethod{
         "buyfromlaunch",
-        "Layers' launches: buy a launched token from its curve with " + CURRENCY_UNIT + ", for at least the quote less the slippage: an order of the block's batch. "
+        "Layers' launches: buy an asset from its launch curve with " + CURRENCY_UNIT + ", for at least the quote less the slippage: an order of the block's batch. "
         "A buy that would take the curve past its end gets the curve's last tokens and the rest of its " + CURRENCY_UNIT + " back (the launch then graduates)." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + bitassets::AssetArgHelp()},
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The asset (launched, or put on a curve). " + bitassets::AssetArgHelp()},
             {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, CURRENCY_UNIT + " to pay in (the fee included)"},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than the quote, in percent, it may give"},
             {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least the caller showed: refused rather than signed for less"},
@@ -2458,7 +2458,7 @@ RPCMethod buyfromlaunch()
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
             {RPCResult::Type::STR_HEX, "txid", "The transaction"},
-            {RPCResult::Type::NUM, "quote", "The tokens it gets alone in its block"},
+            {RPCResult::Type::NUM, "quote", "The units it gets alone in its block"},
             {RPCResult::Type::NUM, "min_out", "The least it gets"},
             {RPCResult::Type::STR_AMOUNT, "back", CURRENCY_UNIT + " it would get back if it took the curve to its end"},
         }},
@@ -2470,7 +2470,7 @@ RPCMethod buyfromlaunch()
     NeedCurves(*pwallet);
     const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
     const auto [launch, curve]{LaunchOf(*pwallet, token)};
-    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: its token trades in its pool now (swapasset)");
+    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: the asset trades in its pool now (swapasset)");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], bitassets::CHN_DECIMALS)};
     if (amount < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A buy pays %s %s at least", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
     const auto quote{LaunchQuote(launch, curve->first, true, amount)};
@@ -2496,10 +2496,10 @@ RPCMethod selltolaunch()
 {
     return RPCMethod{
         "selltolaunch",
-        "Layers' launches: sell a launched token back to its curve for " + CURRENCY_UNIT + " (the fee taken out of what comes out), for at least the quote less the "
+        "Layers' launches: sell an asset back to its launch curve for " + CURRENCY_UNIT + " (the fee taken out of what comes out), for at least the quote less the "
         "slippage: an order of the block's batch; the " + CURRENCY_UNIT + " by the coinbase." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + bitassets::AssetArgHelp()},
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The asset (launched, or put on a curve). " + bitassets::AssetArgHelp()},
             {"amount", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "How much of it"},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than the quote, in percent, it may give"},
             {"min_out", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least " + CURRENCY_UNIT + " the caller showed"},
@@ -2518,7 +2518,7 @@ RPCMethod selltolaunch()
     NeedCurves(*pwallet);
     const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
     const auto [launch, curve]{LaunchOf(*pwallet, token)};
-    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: its token trades in its pool now (swapasset)");
+    if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: the asset trades in its pool now (swapasset)");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], token.decimals)};
     const auto quote{LaunchQuote(launch, curve->first, false, amount)};
     if (!quote || quote->outs[0] < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
@@ -2547,7 +2547,7 @@ RPCMethod claimlaunch()
         "Layers' launches: pay a launch's creator what it is owed: its part of the curve's fees (" + CURRENCY_UNIT + ", by the coinbase to its address) and, once "
         "graduated, its allocation (to its address). Anyone may send it; nothing goes anywhere but to the creator." + HELP_REQUIRING_PASSPHRASE,
         {
-            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The token. " + bitassets::AssetArgHelp()},
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The asset (launched, or put on a curve). " + bitassets::AssetArgHelp()},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
