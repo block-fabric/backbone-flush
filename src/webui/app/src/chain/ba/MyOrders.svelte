@@ -14,6 +14,7 @@
   import { orderActions, orderStatus, ORDER_STATUS, ORDER_STATUS_TAG, type BookOrder, type WalletOrder } from './book';
   import { formatAmount, formatPrice, type Amount } from './model';
   import { ba, decimalsOf, refreshBitAssets } from './store.svelte';
+  import { TICKER } from '../config';
 
   let list = $state<WalletOrder[] | null>(null);
   let error = $state('');
@@ -67,7 +68,7 @@
     const r = await ask({
       title: cancel ? t('Cancel an order') : t('Collect an order'),
       message: closes ? t('Take back %1 %2 and collect %3 %4? The order is gone.', left, o.sells, got, o.buys) : t('Collect %1 %2? The order stays in the book.', got, o.buys),
-      informative: t('ECX comes by the coinbase of the next block; assets as coins of the transaction.'),
+      informative: t('%1 comes by the coinbase of the next block; assets as coins of the transaction.', TICKER),
       level: cancel ? 'warning' : 'question',
       choices: [
         { id: 'no', label: 'Back' },

@@ -8,6 +8,7 @@
   import { request } from '../../lib/bridge';
   import { t } from '../../lib/i18n.svelte';
   import { checkLogo, cropRect, encodeLogo, LOGO_SIZE, logoVsize, MAX_LOGO_BYTES, toBase64, type LogoFormat } from './logo';
+  import { TICKER } from '../config';
 
   export interface PickedLogo {
     base64: string;
@@ -220,7 +221,7 @@
         {#if busy}<span class="hint" role="status">Encoding…</span>
         {:else if logo}
           <span class="hint ba-good" role="status" data-testid="logo-size">{logo.kind}: {kb(logo.size)} KB of at most {kb(MAX_LOGO_BYTES)} KB</span>
-          <span class="hint">About {vsize} vB on the chain: about {(vsize / 1e8).toFixed(8)} ECX at 1 sat/vB. The confirmation shows the fee.</span>
+          <span class="hint">About {vsize} vB on the chain: about {(vsize / 1e8).toFixed(8)} {TICKER} at 1 sat/vB. The confirmation shows the fee.</span>
         {/if}
       </div>
     </div>

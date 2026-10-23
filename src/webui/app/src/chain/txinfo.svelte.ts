@@ -7,6 +7,7 @@ import { formatAmount, OPERATIONS, type AssetTx } from './ba/model';
 import { ba, holdingOf, refreshBitAssets, startBitAssets } from './ba/store.svelte';
 import { ignoreAsset } from './ba/hide.svelte';
 import { hiddenAsset } from './ba/visible.svelte';
+import { TICKER } from './config';
 
 export interface ChainTx {
   type: string;
@@ -206,7 +207,7 @@ export function chainTxHidden(txid: string): boolean {
  */
 export function chainTxDetails(txid: string): { hideZero: boolean; raw: Record<string, string>; simpleRows?: string[] } | undefined {
   if (!assetMovesOf(txid).length) return undefined;
-  return { hideZero: true, raw: { 'Output index': 'Output index of the ECX record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] };
+  return { hideZero: true, raw: { 'Output index': `Output index of the ${TICKER} record` }, simpleRows: ['Status', 'Date', 'Transaction fee'] };
 }
 
 /** What the notice of an asset received offers (Ignore this asset) and warns of (a name like one the wallet holds). */

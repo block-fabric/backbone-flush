@@ -3,6 +3,7 @@
 // node (depth, volume, price_change, newest). The columns of the table and the sorts they stand for, and how a page is
 // put after those shown. Pure: no state, no calls (tested in chain/ba/markets.test.ts).
 import { approx, type Amount, type Pool } from './model';
+import { TICKER } from '../config';
 
 /** The sorts of searchpools. */
 export type MarketSort = 'depth' | 'volume' | 'price_change' | 'newest';
@@ -33,7 +34,7 @@ export const SORT_NAMES: Record<MarketSort, string> = { depth: 'Most liquidity',
 
 /** What a sort leaves out, on the node's side (shown with t()), or ''. */
 export const SORT_NOTES: Record<MarketSort, string> = {
-  depth: 'Sorted by liquidity: pairs with ECX only.',
+  depth: `Sorted by liquidity: pairs with ${TICKER} only.`,
   volume: 'Sorted by volume: pairs traded in the window only.',
   price_change: '',
   newest: '',

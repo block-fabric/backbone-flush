@@ -117,7 +117,12 @@ URI_PARAMS = {
     "buy": {"launch", "asset", "ecx", "min_tokens", "slippage_bps"},
     "sell": {"launch", "asset", "tokens", "min_ecx", "slippage_bps"},
     "swap": {"pool", "from", "to", "amount", "min_out", "slippage_bps"},
-    "launch": {"ticker", "name", "logo", "desc", "link", "ecx", "min_tokens", "slippage_bps"},
+    "launch": {"ticker", "name", "logo", "desc", "link", "ecx", "min_tokens", "slippage_bps", "supply", "decimals", "fee_bps", "allocation_bps"},
+    "register": {"ticker", "name", "logo", "desc", "link", "supply", "decimals"},
+    "curve": {"asset", "ticker", "amount", "fee_bps", "min_buy", "max_buy"},
+    "pool": {"asset_a", "ticker_a", "asset_b", "ticker_b", "kind", "fee_ppm", "amount_a", "amount_b", "amp", "weight_a"},
+    "auction": {"base", "base_ticker", "amount", "quote", "quote_ticker", "start_price", "end_price", "duration", "delay"},
+    "order": {"sell", "sell_ticker", "buy", "buy_ticker", "amount", "price", "expiry_blocks"},
 }
 UNRESERVED = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%")
 

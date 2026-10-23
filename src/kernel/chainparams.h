@@ -154,6 +154,8 @@ public:
         std::optional<int> logo_height{};
         //! BitAssets: Consensus::SidechainParams::ticker_height (-testactivationheight=ticker@<height>; regtest only).
         std::optional<int> ticker_height{};
+        //! Launches with parameters: Consensus::SidechainParams::launch_params_height (-testactivationheight=launchparams@<height>; regtest only).
+        std::optional<int> launch_params_height{};
     };
 
     /**

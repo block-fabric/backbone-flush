@@ -51,6 +51,16 @@ void WriteOperation(DataStream& s, const Register& op)
     }
 }
 
+/** A launch with its own parameters is a marker of its own kind: the launch, then its curve's fee. */
+void WriteOperation(DataStream& s, const LaunchToken& op)
+{
+    if (op.WithParams()) {
+        s << LAUNCH_WITH_PARAMS_KIND << op << VARINT(op.fee);
+    } else {
+        s << LaunchToken::KIND << op;
+    }
+}
+
 template <typename T>
 void ReadOperation(DataStream& s, std::optional<Operation>& out)
 {
@@ -248,6 +258,14 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
             s >> reg >> reg.logo >> reg.display_name;
             // One without a display name is written as another kind (the check below).
             marker.operation = std::move(reg);
+            break;
+        }
+        case CurveAsset::KIND: ReadOperation<CurveAsset>(s, marker.operation); break;
+        case LAUNCH_WITH_PARAMS_KIND: {
+            LaunchToken launch;
+            s >> launch >> VARINT(launch.fee);
+            // One of fee 0 is written as a LaunchToken of its own kind (the check below): one way to write a marker.
+            marker.operation = std::move(launch);
             break;
         }
         case REGISTER_WITH_LOGO_KIND: {
@@ -650,6 +668,7 @@ const CScript* ChnTo(const Operation& op)
     if (const auto* withdraw{std::get_if<PoolWithdraw>(&op)}) return &withdraw->chn_to;
     if (const auto* swap{std::get_if<SwapPools>(&op)}) return &swap->chn_to;
     if (const auto* launch{std::get_if<LaunchToken>(&op)}) return &launch->chn_to;
+    if (const auto* curve{std::get_if<CurveAsset>(&op)}) return &curve->chn_to;
     if (const auto* open{std::get_if<OpenPosition>(&op)}) return &open->chn_to;
     if (const auto* change{std::get_if<ChangePosition>(&op)}) return &change->chn_to;
     if (const auto* settle{std::get_if<SettleOrder>(&op)}) return &settle->chn_to;
@@ -662,7 +681,24 @@ bool IsCurveOperation(const Operation& op)
     return std::holds_alternative<CreatePool>(op) || std::holds_alternative<PoolDeposit>(op) || std::holds_alternative<PoolWithdraw>(op) ||
            std::holds_alternative<SwapPools>(op) || std::holds_alternative<LaunchToken>(op) || std::holds_alternative<ClaimLaunch>(op) ||
            std::holds_alternative<OpenPosition>(op) || std::holds_alternative<ChangePosition>(op) || std::holds_alternative<PlaceOrder>(op) ||
-           std::holds_alternative<SettleOrder>(op);
+           std::holds_alternative<SettleOrder>(op) || std::holds_alternative<CurveAsset>(op);
+}
+
+bool IsLaunchParamsOperation(const Operation& op)
+{
+    if (const auto* launch{std::get_if<LaunchToken>(&op)}) return launch->WithParams();
+    return std::holds_alternative<CurveAsset>(op);
+}
+
+bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (marker && marker->operation && IsLaunchParamsOperation(*marker->operation)) {
+        reject_reason = "bad-ba-marker";
+        return false;
+    }
+    return true;
 }
 
 const Register* RegisterOf(const Operation& op)
@@ -733,8 +769,14 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
     if (const auto* reg{RegisterOf(op)}) {
         if (reg->supply > MAX_AMOUNT || reg->decimals > MAX_DECIMALS) return invalid("bad-ba-supply");
         if (const auto* launch{std::get_if<LaunchToken>(&op)}) {
-            // A launch's supply and decimals are the rules' (LAUNCH_SUPPLY, LAUNCH_DECIMALS); its name is public.
-            if (reg->supply != 0 || reg->decimals != LAUNCH_DECIMALS || !reg->text) return invalid("bad-ba-launch");
+            // A launch's supply and decimals are the rules' (LAUNCH_SUPPLY, LAUNCH_DECIMALS), or, with parameters, its
+            // own (IsLaunchSupply, any decimals) with a fee within the bounds; its name is public.
+            if (!reg->text) return invalid("bad-ba-launch");
+            if (launch->WithParams()) {
+                if (!IsLaunchSupply(reg->supply) || launch->fee < MIN_LAUNCH_FEE || launch->fee > MAX_LAUNCH_FEE) return invalid("bad-ba-launch");
+            } else if (reg->supply != 0 || reg->decimals != LAUNCH_DECIMALS) {
+                return invalid("bad-ba-launch");
+            }
             if (!Spendable(launch->creator) || launch->allocation > MAX_LAUNCH_ALLOCATION) return invalid("bad-ba-launch");
             if (launch->min_buy > MAX_AMOUNT || launch->max_buy > MAX_AMOUNT || (launch->max_buy != 0 && launch->max_buy < launch->min_buy)) return invalid("bad-ba-launch");
             if (launch->first_buy > MAX_AMOUNT || launch->first_min_out > MAX_AMOUNT || (launch->first_buy == 0 && launch->first_min_out != 0)) return invalid("bad-ba-launch");
@@ -791,6 +833,11 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         if (!positive(withdraw->shares) || withdraw->only > 2 || withdraw->min0 > MAX_AMOUNT || withdraw->min1 > MAX_AMOUNT) return invalid("bad-ba-liquidity");
     } else if (const auto* claim{std::get_if<ClaimLaunch>(&op)}) {
         if (claim->token.IsNull()) return invalid("bad-ba-launch");
+    } else if (const auto* curve{std::get_if<CurveAsset>(&op)}) {
+        if (curve->asset.IsNull() || !IsLaunchSupply(curve->amount) || curve->fee < MIN_LAUNCH_FEE || curve->fee > MAX_LAUNCH_FEE || !Spendable(curve->creator)) return invalid("bad-ba-launch");
+        if (curve->min_buy > MAX_AMOUNT || curve->max_buy > MAX_AMOUNT || (curve->max_buy != 0 && curve->max_buy < curve->min_buy)) return invalid("bad-ba-launch");
+        if (curve->first_buy > MAX_AMOUNT || curve->first_min_out > MAX_AMOUNT || (curve->first_buy == 0 && curve->first_min_out != 0)) return invalid("bad-ba-launch");
+        if (curve->first_buy > 0 && curve->chn_to.empty()) return invalid("bad-ba-chn-to");
     } else if (const auto* open{std::get_if<OpenPosition>(&op)}) {
         if (open->Liquidity() == 0 || open->tick_lower >= open->tick_upper || open->tick_lower < cl::MIN_TICK || open->tick_upper > cl::MAX_TICK) return invalid("bad-ba-position");
         if (open->max0 > MAX_AMOUNT || open->max1 > MAX_AMOUNT) return invalid("bad-ba-position");
@@ -1551,7 +1598,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         return record ? record->registration : Txid{};
     }};
 
-    if (op && m_dex && (std::holds_alternative<Swap>(*op) || IsDexOperation(*op)) && !std::holds_alternative<LaunchToken>(*op)) {
+    if (op && m_dex && (std::holds_alternative<Swap>(*op) || IsDexOperation(*op)) && !std::holds_alternative<LaunchToken>(*op) && !std::holds_alternative<CurveAsset>(*op)) {
         // The DEX: swaps and routes are orders of the block's batch; oracles and their contracts; pools of every kind.
         if (std::holds_alternative<OpenPosition>(*op) || std::holds_alternative<ChangePosition>(*op)) {
             if (!PlanPosition(tx, *op, height, plan, take, credit, debit, reject_reason)) return std::nullopt;
@@ -1560,6 +1607,30 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         } else if (!PlanDex(tx, *op, height, plan, chn_taken, take, reject_reason)) {
             return std::nullopt;
         }
+    } else if (const auto* curve{op ? std::get_if<CurveAsset>(op) : nullptr}) {
+        // An existing asset on a curve: by its controller, an asset never launched, with no pool of the coin of the kind
+        // it graduates into (Graduate makes that one), its units taken in.
+        const auto found{GetAsset(curve->asset)};
+        if (!found) return invalid("bad-ba-asset-unknown");
+        if (!spends(Token::Kind::CONTROL, curve->asset)) return invalid("bad-ba-no-control");
+        if (GetLaunch(curve->asset)) return invalid("bad-ba-launch-again");
+        // Its control coin goes with it: its supply is fixed for good (nobody mints more to sell into the curve or its pool).
+        debit(Token::Kind::CONTROL, curve->asset, 1);
+        AssetRecord fixed{*found};
+        fixed.fixed = true;
+        plan.assets.emplace_back(curve->asset, std::move(fixed));
+        if (GetPool(PoolId(CHN, curve->asset))) return invalid("bad-ba-launch-pooled");
+        LaunchToken launch;
+        launch.reg.name = curve->asset;
+        launch.creator = curve->creator;
+        launch.min_buy = curve->min_buy;
+        launch.max_buy = curve->max_buy;
+        launch.first_buy = curve->first_buy;
+        launch.first_min_out = curve->first_min_out;
+        launch.chn_to = curve->chn_to;
+        launch.fee = curve->fee;
+        take(curve->asset, curve->amount);
+        if (!PlanLaunch(tx, launch, curve->amount, /*from_asset=*/true, height, plan, take, reject_reason)) return std::nullopt;
     } else if (const auto* reserve{op ? std::get_if<Reserve>(op) : nullptr}) {
         credit(Token::Kind::RESERVATION, txid.ToUint256(), 1);
         plan.reservation_made = std::make_pair(txid, reserve->commitment);
@@ -1608,7 +1679,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         record.height = height;
         if (reg->text) record.text = *reg->text;
         record.decimals = reg->decimals;
-        record.supply = record.minted = launch ? LAUNCH_SUPPLY : reg->supply;
+        record.supply = record.minted = launch && !launch->WithParams() ? LAUNCH_SUPPLY : reg->supply;
         record.fixed = launch != nullptr;
         // Its pool with the coin: the curve's until it graduates (counted as the pools with providers are).
         if (launch) record.provided_pools = 0;
@@ -1626,7 +1697,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
             plan.logo = Plan::Logo{reg->name, reg->logo, *Assert(CheckLogo(reg->logo, why))};
         }
         if (!reg->display_name.empty()) plan.display_name = std::make_pair(reg->name, reg->display_name);
-        if (launch && !PlanLaunch(tx, *launch, height, plan, take, reject_reason)) return std::nullopt;
+        if (launch && !PlanLaunch(tx, *launch, launch->WithParams() ? reg->supply : 0, /*from_asset=*/false, height, plan, take, reject_reason)) return std::nullopt;
     } else if (const auto* mint{op ? std::get_if<Mint>(op) : nullptr}) {
         const auto found{GetAsset(mint->asset)};
         if (!found) return invalid("bad-ba-asset-unknown");
@@ -2293,7 +2364,8 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     return true;
 }
 
-bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take, std::string& reject_reason) const
+bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64_t supply, bool from_asset, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
+                       std::string& reject_reason) const
 {
     const auto invalid{[&](const char* reason) {
         reject_reason = reason;
@@ -2309,7 +2381,11 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int he
     record.allocation = launch.allocation;
     record.min_buy = launch.min_buy;
     record.max_buy = launch.max_buy;
-    record.fee = rules.launch_fee;
+    // Its own fee and supply with parameters (CheckMarker: within the bounds), the network's otherwise.
+    record.fee = launch.WithParams() ? launch.fee : rules.launch_fee;
+    // From launch_params_height every launch writes its supply (the network's too): its curve ends at its end exactly (StrictEnd).
+    record.supply = supply != 0 ? supply : rules.LaunchParamsActive(height) ? LAUNCH_SUPPLY : 0;
+    record.from_asset = from_asset;
     record.creator_share = rules.launch_creator_share;
     record.protocol_share = rules.launch_protocol_share;
     record.security_share = rules.launch_security_share;
@@ -2326,7 +2402,7 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int he
     pool.asset0 = CHN;
     pool.asset1 = token;
     pool.reserve0 = record.virtual_coin;
-    pool.reserve1 = LAUNCH_VIRTUAL_TOKENS;
+    pool.reserve1 = record.VirtualUnits();
     // Open (above MIN_LIQUIDITY) with no shares anyone holds.
     pool.shares = MIN_LIQUIDITY + 1;
     pool.creation = record.txid;
@@ -2781,7 +2857,7 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             if (const auto bytes{out.Get(HeightKey(LAUNCH_LOG, height, token))}) entry = sidechain::DecodeValue<LaunchLogEntry>(*bytes);
             entry.created = true;
             entry.reserve_coin = record.virtual_coin;
-            entry.reserve_tokens = LAUNCH_VIRTUAL_TOKENS;
+            entry.reserve_tokens = record.VirtualUnits();
             out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
         }
     }
@@ -2996,7 +3072,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             kind.fee = FeeOf(id, kind.params, height);
             if (kind.params.GetCurve() == Curve::LAUNCH && pool) {
                 kind.token = pool->asset1;
-                if (const auto record{GetLaunch(pool->asset1)}) kind.launch = curves::LaunchCurve{record->fee, LAUNCH_CURVE_END, record->max_buy, record->min_buy};
+                if (const auto record{GetLaunch(pool->asset1)}) kind.launch = curves::LaunchCurve{record->fee, record->CurveEnd(), record->max_buy, record->min_buy, record->StrictEnd(), record->StartBound()};
             }
             kinds.emplace(id, kind);
         }
@@ -3824,12 +3900,12 @@ void State::Graduate(const AssetId& token, int height)
     const Pool curve{*Assert(GetPool(record.pool))};
     // What the curve raised (its coin less the virtual), the tokens it has left, and the fees kept for the pool.
     const uint64_t raised{curve.reserve0 - std::min(curve.reserve0, record.virtual_coin)};
-    const uint64_t left{curve.reserve1 - std::min(curve.reserve1, LAUNCH_CURVE_END)};
+    const uint64_t left{curve.reserve1 - std::min(curve.reserve1, record.CurveEnd())};
     Pool pool;
     pool.asset0 = CHN;
     pool.asset1 = token;
     pool.reserve0 = raised + record.pool_fees;
-    pool.reserve1 = left + LAUNCH_POOL_SUPPLY;
+    pool.reserve1 = left + record.PoolSupply();
     // Every share locked: nobody holds any, and nobody ever can.
     pool.shares = Isqrt(static_cast<unsigned __int128>(pool.reserve0) * pool.reserve1);
     pool.creation = record.txid;

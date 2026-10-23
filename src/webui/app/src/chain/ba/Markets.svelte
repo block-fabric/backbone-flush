@@ -21,6 +21,7 @@
   import { searchPools } from './search';
   import { ba, tradeIntent } from './store.svelte';
   import { hiddenAsset } from './visible.svelte';
+  import { TICKER } from '../config';
 
   const PAGE = 50;
   let query = $state('');
@@ -119,7 +120,7 @@
       </select>
     </label>
   </div>
-  <p class="ba-help note">Volume and liquidity are counted in ECX, for pairs with ECX (the ECX traded over about a day, the ECX held). {#if SORT_NOTES[sort]}{t(SORT_NOTES[sort])}{/if}{#if fallback} This node has no market index: the pools it lists, without their change and volume.{/if}</p>
+  <p class="ba-help note">Volume and liquidity are counted in {TICKER}, for pairs with {TICKER} (the {TICKER} traded over about a day, the {TICKER} held). {#if SORT_NOTES[sort]}{t(SORT_NOTES[sort])}{/if}{#if fallback} This node has no market index: the pools it lists, without their change and volume.{/if}</p>
   <HiddenToggle count={hiddenCount} bind:show={showHidden} />
   {#if error}<p class="ba-problems bad" role="alert"><SafeText text={error} /></p>{/if}
   {#if shown.length === 0}

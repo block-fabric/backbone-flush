@@ -108,6 +108,9 @@ struct RestMatch {
 //! (HTTP method, path after the prefix, query, body) -> the call, or a status (NOT_FOUND for an unknown path).
 using RestRouter = std::function<std::variant<RestMatch, Status>(const std::string& method, const std::string& path, const std::string& query, const std::string& body)>;
 
+//! Reply bytes waiting for the socket above which a connection takes nothing more from its calls (backpressure).
+inline constexpr size_t REPLY_HIGH_WATER{1 << 20};
+
 struct Options {
     //! Largest request message, in bytes.
     size_t max_request_bytes{16 << 20};
@@ -144,6 +147,15 @@ struct Options {
     //! Close a connection whose replies the peer took no byte of for this long (slow reads: in the socket, the calls or
     //! behind HTTP/2 flow control; a stream whose window stays closed so long is reset); 0: never.
     int write_timeout_seconds{0};
+    //! With write_timeout_seconds: over each such window with replies waiting, the client must take at least this many
+    //! bytes a second of them (or all that was waiting when the window began, if less); a byte now and then does not
+    //! keep it open. 0: one byte a window is enough.
+    size_t min_read_bytes_per_second{0};
+    //! Reply bytes one connection may hold at once (0: no bound): those not sent to the socket yet, those of the
+    //! protocol layer and those its calls wrote and did not hand over; past it the connection is closed. Above
+    //! REPLY_HIGH_WATER bytes waiting for the socket, nothing more is taken from the calls (backpressure: their own
+    //! bound, max_response_bytes, then ends them).
+    size_t max_reply_buffer{0};
     //! Past this many requests (0: no bound), a connection takes no new one (HTTP/2: GOAWAY) and is closed once its
     //! calls are over; past this many streams reset before their call was over (by the client, or by the server
     //! because of it: Rapid Reset, MadeYouReset), it is closed at once.
@@ -252,6 +264,12 @@ public:
     std::optional<NodeClock::time_point> OldestRequest() const;
     /** Reply bytes the calls wrote and the connection has not taken yet (HTTP/2: held back by flow control). */
     size_t Undelivered() const;
+    /** Every reply byte the connection holds: Undelivered, and what the protocol layer made and TakeOutput did not take. */
+    size_t Buffered() const;
+    /** Take nothing more from the calls while `hold` (backpressure: the socket does not take what is waiting). */
+    void Hold(bool hold);
+    /** HTTP/2: bytes of output that are not the replies' DATA payload (control frames, frame headers), so far. */
+    uint64_t ControlBytes() const;
     /** Take no new request (HTTP/2: GOAWAY); the running calls go on. */
     void Drain();
     /** Requests begun, all in, and streams reset before their call was over. */

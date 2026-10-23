@@ -6,6 +6,7 @@
 // chain/ba/fees.test.ts).
 import { t } from '../../lib/i18n.svelte';
 import { approx, isChn, type Amount } from './model';
+import { TICKER } from '../config';
 
 /** The parts of every swap fee, in percent of it (getdexinfo swap_fee_parts). */
 export interface SwapFeeParts {
@@ -119,6 +120,6 @@ export interface TreasuryRow {
 export function treasuryRows(list: readonly TreasuryBalance[] | null | undefined): TreasuryRow[] {
   const rows = (list ?? [])
     .filter((b) => b && typeof b.asset_id === 'string')
-    .map((b) => ({ id: b.asset_id, label: isChn(b.asset_id) ? 'CHN' : String(b.asset ?? ''), balance: b.balance ?? 0, fromSwaps: b.from_swaps ?? 0, fromLaunches: b.from_launches ?? 0, securityHeld: b.security_held ?? 0, empty: approx(b.balance) <= 0 && approx(b.security_held) <= 0 }));
+    .map((b) => ({ id: b.asset_id, label: isChn(b.asset_id) ? TICKER : String(b.asset ?? ''), balance: b.balance ?? 0, fromSwaps: b.from_swaps ?? 0, fromLaunches: b.from_launches ?? 0, securityHeld: b.security_held ?? 0, empty: approx(b.balance) <= 0 && approx(b.security_held) <= 0 }));
   return rows.sort((x, y) => Number(isChn(y.id)) - Number(isChn(x.id)) || Number(x.empty) - Number(y.empty) || approx(y.balance) - approx(x.balance) || x.label.localeCompare(y.label));
 }

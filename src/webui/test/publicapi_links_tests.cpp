@@ -52,6 +52,19 @@ BOOST_AUTO_TEST_CASE(built_links_are_read_by_the_app)
     BOOST_REQUIRE_EQUAL(launch.links.size(), 2U);
     BOOST_CHECK_EQUAL(launch.links[0], "https://lumen.example/a?b=c&d=e");
     BOOST_CHECK(launch.logo_sha256);
+    // The verbs of the asset registry, as BuildAction writes them.
+    const Request reg{Parse(ActionUri("register", NET, NOW + 3600, {{"ticker", "BROSE"}, {"name", "Bro Se"}, {"supply", "21000000"}, {"decimals", "8"}}), NET, NOW)};
+    BOOST_CHECK(reg.verb == Verb::REGISTER && reg.supply == "21000000" && *reg.decimals == 8);
+    const Request wide{Parse(ActionUri("launch", NET, NOW + 3600, {{"ticker", "WIDE"}, {"name", "Wide"}, {"supply", "21000000"}, {"decimals", "8"}, {"fee_bps", "200"}, {"allocation_bps", "100"}}), NET, NOW)};
+    BOOST_CHECK(*wide.fee_bps == 200 && *wide.allocation_bps == 100);
+    const Request curve{Parse(ActionUri("curve", NET, NOW + 600, {{"asset", TOKEN}, {"ticker", "GOLD"}, {"amount", Decimal(80'000'000'000, 6, 12)}, {"fee_bps", "115"}}), NET, NOW)};
+    BOOST_CHECK(curve.verb == Verb::CURVE && curve.amount == "80000");
+    const Request pool{Parse(ActionUri("pool", NET, NOW + 600, {{"asset_a", "ECX"}, {"ticker_a", "ECX"}, {"asset_b", TOKEN}, {"ticker_b", "GOLD"}, {"kind", "stable"}, {"fee_ppm", "500"}, {"amount_a", "1"}, {"amount_b", "2"}, {"amp", "100"}}), NET, NOW)};
+    BOOST_CHECK(pool.verb == Verb::POOL && pool.asset_a.IsNull() && *pool.amp == 100);
+    const Request auction{Parse(ActionUri("auction", NET, NOW + 600, {{"base", TOKEN}, {"base_ticker", "GOLD"}, {"amount", "10"}, {"quote", "ECX"}, {"quote_ticker", "ECX"}, {"start_price", "5"}, {"end_price", "1"}, {"duration", "100"}}), NET, NOW)};
+    BOOST_CHECK(auction.verb == Verb::AUCTION && auction.blocks == 100);
+    const Request order{Parse(ActionUri("order", NET, NOW + 600, {{"sell", TOKEN}, {"sell_ticker", "GOLD"}, {"buy", "ECX"}, {"buy_ticker", "ECX"}, {"amount", "5"}, {"price", "0.25"}, {"expiry_blocks", "40320"}}), NET, NOW)};
+    BOOST_CHECK(order.verb == Verb::ORDER && order.price == "0.25");
     // The verbs the app does not take yet (built for wallet extensions) are refused by it, as they must be.
     BOOST_CHECK_THROW(Parse(ActionUri("deposit", NET, NOW + 600, {{"pool", POOL + "c"}}), NET, NOW), LinkError);
     BOOST_CHECK_THROW(Parse(ActionUri("route", NET, NOW + 600, {{"pools", POOL + "c"}}), NET, NOW), LinkError);

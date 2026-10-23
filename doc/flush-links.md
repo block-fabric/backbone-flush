@@ -19,12 +19,12 @@ own dialog. The format is the site's `docs/uri.md` (repository flush-web); this 
 
 ```
 flush:<address>?amount=…                         a payment (BIP 21): the page's, as before
-flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: connect, launch, buy, sell, swap
+flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: connect, launch, buy, sell, swap, register, curve, pool, auction, order
 ```
 
 What the parser takes (anything else is refused with what is wrong, before anything is resolved or shown):
 
-- the scheme in any case, then a verb of lowercase letters and `?`; one of the five verbs;
+- the scheme in any case, then a verb of lowercase letters and `?`; one of the ten verbs;
 - `v=1`, `network` equal to the app's own network (`ecash`, `ecashbeta`, `ecashtest`; `regtest` for the tests), and
   `exp`, a Unix time not past (two minutes of clock difference forgiven) and at most a day ahead;
 - each parameter of the verb once (`link` up to 4 times), **no other parameter** (`req-…` included);
@@ -37,10 +37,19 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   list), a `nonce` of 16 to 64 `A–Z a–z 0–9 - _`;
 - `launch`: a display name the chain's rules take (1 to 64 bytes), a description of at most 512 bytes, `https://`
   links of at most 512 characters with a plain host (no user name) and printable ASCII, the description and links at
-  most 512 bytes together (the chain's info), `logo=sha256:<hex>`, a first buy with both `ecx` and `min_tokens`.
+  most 512 bytes together (the chain's info), `logo=sha256:<hex>`, a first buy with both `ecx` and `min_tokens`; and,
+  from the chain's launch parameters, `supply` (whole units, digits only, at most 19), `decimals` (0–12, with a supply),
+  `fee_bps` (30–500) and `allocation_bps` (0–500);
+- `register`: `ticker`, `name`?, `desc`?, `link`*, `logo`?, `supply`, `decimals`; `curve`: `asset` (id), `ticker`, `amount`,
+  `fee_bps`, `min_buy`?, `max_buy`?; `pool`: `asset_a`, `ticker_a`, `asset_b`, `ticker_b` (an id, or `ECX` for the coin in
+  both, and only for it), `kind` (`constant`, `stable`, `weighted`), `fee_ppm` (a fee tier: 100, 500, 3000, 10000),
+  `amount_a`, `amount_b`, `amp`? (stable only), `weight_a` (weighted only, required); `auction`: `base` (id),
+  `base_ticker`, `amount`, `quote`, `quote_ticker`, `start_price`, `end_price` (of all of it, falling), `duration`
+  (blocks), `delay`?; `order`: `sell`, `sell_ticker`, `buy`, `buy_ticker`, `amount`, `price` (bought per whole unit sold),
+  `expiry_blocks`.
 
-A launch file (`*.flushlaunch.json`, at most 64 KB) is read as strictly: exactly the keys of version 1, `network`
-required, amounts as text, its logo's bytes with the SHA-256 it says.
+A launch file (`*.flushlaunch.json`, at most 64 KB) is read as strictly: exactly the keys of version 1 (`supply`, `decimals`, `fee_bps`,
+`allocation_bps` optional), `network` required, amounts as text, its logo's bytes with the SHA-256 it says.
 
 ## What each verb does
 
@@ -57,6 +66,11 @@ any page can open one*. Nothing runs unless the user accepts there.
 | `sell` | The same; `tokens` exactly in the token's places; the floor in ECX. | `selltolaunch ["0x<id>", tokens, slippage, floor]` |
 | `swap` | The pool by its id; `from` and `to` must be its two assets, by their tickers; not abandoned; the amount exactly in its asset's places; the floor rounded up; the pool's quote now must meet it. | `swaproute [[from, to], amount, slippage, floor, [pool]]` |
 | `launch` | The ticker free; launches active; the logo the link names (a file chooser of the host: refused if its SHA-256 differs, or the rules refuse it); the first buy's quote on a new curve must meet `min_tokens`. | One question for `reserveasset [ticker]` and `launchtoken [ticker, {display_name, info, logo, first_buy, first_min_out}]`; the launch is sent by the app once the reservation is deep enough (`confirm::Authorizations`: within an hour, for at most the fee shown). |
+| `register` | The ticker free; the supply within what an asset can have at its decimals; the logo as a launch's. | One question for `reserveasset [ticker]` and `registerasset [ticker, supply, decimals, {info}, true, logo, display_name]`, the registration sent by the app once the reservation is deep enough (as a launch). |
+| `curve` | Launch parameters active; the asset by id, its ticker the link's; never launched nor on a curve, no pool with ECX of the default kind; the amount exactly in its places, a curve's supply (a multiple of 8 units, at least 10^6). | `curveasset ["0x<id>", amount, {fee, min_buy, max_buy}]` (the control coin goes with it: the supply fixed for good). |
+| `pool` | Both sides by id with their tickers (ECX only as itself); the amounts exactly in their places. | `createpool [a, amount_a, b, amount_b, {curve, fee, amp, weight_a}]` |
+| `auction` | Both sides by id with their tickers; amounts and prices exactly in their places; the price falls. | `createauction [base, amount, quote, start_price, end_price, duration, delay]` |
+| `order` | Both sides by id with their tickers; the amount exactly in its places. | `placeorder [sell, amount, buy, price, expiry_blocks]` |
 | `connect` | The wallet's address of the label `flush.markets` (made once). | A question: the site, the address shared (whole), the wallet, where the answer goes. On **Share**: the system's browser opens `https://flush.markets/connect#address=…&nonce=…&network=…`. |
 
 The floor binds: `slippage_bps` is shown only. The host gives the node the slippage that makes the order's own

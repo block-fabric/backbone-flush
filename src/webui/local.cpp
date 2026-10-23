@@ -14,6 +14,7 @@
 // journal of what the chain does not keep (the assets being created, the prices of the pools as the app saw them),
 // in a file of the data directory.
 
+#include <policy/feerate.h>
 #include <webui/local.h>
 
 #include <addresstype.h>
@@ -284,6 +285,7 @@ std::map<std::string, Bridge::Thread> RpcMethods()
         {"listpositions", Bridge::Thread::WORKER},
         // Order books: read only.
         {"getbook", Bridge::Thread::WORKER},
+        {"getpoolcandles", Bridge::Thread::WORKER},
         {"getorder", Bridge::Thread::WORKER},
         {"listorders", Bridge::Thread::WORKER},
         {"getverifications", Bridge::Thread::WORKER},
@@ -622,7 +624,7 @@ std::string ResolvedPool(const confirm::Call& call, const UniValue& value)
     if (!pool.isObject() || !pool.find_value("pool").isStr() || pool.find_value("pool").get_str() != value.get_str()) throw HostError(BRIDGE_INVALID_REQUEST, "No such pool");
     const auto side{[&](const char* key) {
         const std::string id{pool.find_value(key).get_str()};
-        return ResolvedAsset(call, UniValue{uint256::FromHex(id) && uint256::FromHex(id)->IsNull() ? std::string{"CHN"} : "0x" + id});
+        return ResolvedAsset(call, UniValue{uint256::FromHex(id) && uint256::FromHex(id)->IsNull() ? std::string{CURRENCY_UNIT} : "0x" + id});
     }};
     std::string kind{pool.find_value("curve").isStr() ? pool.find_value("curve").get_str() : "constant_product"};
     if (pool.find_value("amp").isNum()) kind += strprintf(", A %s", pool.find_value("amp").getValStr());
@@ -725,7 +727,7 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
     UniValue first{UniValue::VARR};
     first.push_back(ticker);
     confirm::Call shown{call.node, call.wallet, call.method, first, call.fee_for};
-    auto dialog{WithNames(confirm::Generic("Launch a token", "Launch", "The wallet launches a token on a bonding curve, from its reservation of the ticker: a billion tokens, fixed; buyers pay ECX into its curve and sellers get ECX back from it, until it graduates into a locked pool. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false)(shown)};
+    auto dialog{WithNames(confirm::Generic("Launch an asset", "Launch", "The wallet launches an asset on a bonding curve, from its reservation of the ticker: its supply fixed (a billion units unless shown), 3/4 sold on the curve; buyers pay " + CURRENCY_UNIT + " into its curve and sellers get " + CURRENCY_UNIT + " back from it, until it graduates into a locked pool with the last 1/4. The first buy shown, if any, is paid now."), 0, SIZE_MAX, false)(shown)};
     if (!dialog || options.isNull()) return dialog;
     const auto coins{[&](const char* key) {
         try {
@@ -751,6 +753,13 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
         } else if (key == "info") {
             if (!value.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: info is text");
             if (!value.get_str().empty()) dialog->rows.push_back(confirm::Text("Description and links", value.get_str()));
+        } else if (key == "supply") {
+            dialog->rows.push_back(confirm::Text("Supply", confirm::ValueText(value) + " (fixed: 3/4 on the curve, 1/4 into the pool at graduation)"));
+        } else if (key == "decimals") {
+            if (!value.isNum()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: decimals is a number");
+            dialog->rows.push_back(confirm::Text("Decimals", confirm::ValueText(value)));
+        } else if (key == "fee") {
+            dialog->rows.push_back(confirm::Text("Curve's fee", confirm::ValueText(value) + " % of each trade (its parts as the network's: creator, treasury, security)"));
         } else if (key == "allocation") {
             dialog->rows.push_back(confirm::Text("Creator's allocation", confirm::ValueText(value) + " % of the supply, minted to you at graduation (shown to everyone)"));
         } else if (key == "first_buy") {
@@ -758,7 +767,7 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
             row.label = "First buy, paid now";
             dialog->rows.push_back(std::move(row));
         } else if (key == "first_min_out") {
-            dialog->rows.push_back(confirm::Text("First buy gets at least", confirm::ValueText(value) + " tokens (refused by the rules below it, its ECX back)"));
+            dialog->rows.push_back(confirm::Text("First buy gets at least", confirm::ValueText(value) + " units (refused by the rules below it, its " + CURRENCY_UNIT + " back)"));
         } else if (key == "min_buy" || key == "max_buy") {
             auto row{coins(key.c_str())};
             row.label = key == "min_buy" ? "Least a buy pays" : "Most a buy pays";
@@ -775,12 +784,12 @@ confirm::Reveal LaunchAfterReserve()
 {
     confirm::Reveal reveal;
     reveal.method = "launchtoken";
-    reveal.title = "Launch a token";
+    reveal.title = "Launch an asset";
     reveal.accept = "Reserve and launch";
     reveal.first_label = "Reservation";
     reveal.second_label = "Launch";
     reveal.what = "Two transactions: the reservation hides the ticker until it is deep enough, so that nobody who sees it coming can "
-                  "take it first; the launch then puts the token on its curve with what is below (and its first buy, if any).";
+                  "take it first; the launch then puts the asset on its curve with what is below (and its first buy, if any).";
     reveal.matches = confirm::SameFirstParam;
     reveal.second_vsize = [](const UniValue& params) {
         const UniValue& options{params.size() > 1 && params[1].isObject() ? params[1] : NullUniValue};
@@ -822,10 +831,11 @@ std::map<std::string, confirm::Method> ConfirmedRpcMethods()
         {"createpool", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Create a pool", "Create the pool", "The wallet makes a pool of the kind shown and puts both amounts into it, for shares of it: they set its price.", {}, {"amount_a", "amount_b"}), {.assets = {0, 2}}), /*fee_unknown=*/true}},
         {"addpoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Add liquidity", "Add", "The wallet puts the amounts shown into the pool, for shares of it; out of the pool's proportions, it pays the pool's fee on the part a swap would trade."), {.asset_keys = {1}, .pools = {0}}), /*fee_unknown=*/true}},
         {"removepoolliquidity", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Remove liquidity", "Remove", "The wallet takes its shares out of the pool shown, for its assets (or the one shown alone, its fee paid on the part traded)."), {.assets = {2}, .pools = {0}}), /*fee_unknown=*/true}},
-        // Launches: the token resolved and shown (WithAssets); a launch names its ticker, which its reservation reveals.
+        // Launches: the asset resolved and shown (WithAssets); a launch names its ticker, which its reservation reveals.
         {"launchtoken", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, DescribeLaunch, /*fee_unknown=*/true}},
-        {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", (std::string{"The wallet pays "} + std::string{chain::TICKER} + std::string{" into the token's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its "} + std::string{chain::TICKER} + std::string{" back."}), {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
-        {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", (std::string{"The wallet sells the token back to its curve for at least the "} + std::string{chain::TICKER} + std::string{" shown (min_out), paid by the coinbase."}), {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"buyfromlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Buy from a launch", "Buy", (std::string{"The wallet pays "} + std::string{chain::TICKER} + std::string{" into the asset's curve, for at least what is shown (min_out): its order clears at the end of its block; past the curve's end it gets the rest of its "} + std::string{chain::TICKER} + std::string{" back."}), {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"selltolaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Sell to a launch", "Sell", (std::string{"The wallet sells the asset back to its curve for at least the "} + std::string{chain::TICKER} + std::string{" shown (min_out), paid by the coinbase."}), {}, {"amount", "min_out"}), {.assets = {0}}), /*fee_unknown=*/true}},
+        {"curveasset", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Put an asset on a bonding curve", "Put on a curve", "The wallet puts the amount shown of an asset it controls on a bonding curve, priced in " + CURRENCY_UNIT + ": 3/4 of it sold on the curve, 1/4 into the asset's pool with " + CURRENCY_UNIT + " at graduation, locked for good. It does not come back. The control coin goes with it: the supply is fixed for good. The curve buys back no more than it sold.", {}, {"amount"}), {.assets = {0}}), /*fee_unknown=*/true}},
         {"claimlaunch", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Pay a launch's creator", "Pay", "The wallet sends what pays the launch's creator what it is owed (its fees, its allocation once graduated): nothing goes anywhere else."), {.assets = {0}}), /*fee_unknown=*/true}},
         // Concentrated liquidity: the pool shown resolved (its assets and kind); a position by its id.
         {"openposition", {confirm::Method::Kind::SPEND, Bridge::Thread::LONG, WithAssets(confirm::Generic("Open a position", "Open", "The wallet puts liquidity into the pool shown between the two prices shown, for at most the amounts shown (the rest back): a position, a token of its own, which earns the pool's fees while the price is in its range.", {}, {}), {.asset_keys = {3}, .pools = {0}}), /*fee_unknown=*/true}},

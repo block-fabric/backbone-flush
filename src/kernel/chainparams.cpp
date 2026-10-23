@@ -691,6 +691,8 @@ public:
             // Tickers and display names only if a test asks (-testactivationheight=ticker@<height>):
             // the names of the tests of before are not tickers.
             if (opts.dep_opts.ticker_height) consensus.sidechain.ticker_height = *opts.dep_opts.ticker_height;
+            // Launches with parameters from the first block, unless a test asks (-testactivationheight=launchparams@<height>).
+            consensus.sidechain.launch_params_height = opts.dep_opts.launch_params_height.value_or(0);
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -866,6 +868,9 @@ public:
         consensus.sidechain.launch_creator_share = 500'000;
         consensus.sidechain.launch_protocol_share = 300'000;
         consensus.sidechain.launch_security_share = 200'000;
+        // Launches with parameters (supply, decimals, the curve's fee; an existing asset on a curve): never on the eCash
+        // networks until a height is decided (a network that takes them sets it; doc/dex-math.md "Launch curve").
+        consensus.sidechain.launch_params_height = std::numeric_limits<int>::max();
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
