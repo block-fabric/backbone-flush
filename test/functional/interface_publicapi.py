@@ -414,6 +414,18 @@ class PublicApiTest(LayersTest):
         assert_equal(n0.getpoolcandles(rbook["book"], "1h"), n0.getpoolcandles(rbook["book"]))
 
         self.log.info("The asset registry: every asset with its markets; builds of the new verbs")
+        # A book of USDX with ECX, both sides (not crossing): the site's book page draws it.
+        n0.placeorder("USDX", 100, "ECX", Decimal("0.001"))
+        n0.placeorder("ECX", Decimal("0.1"), "USDX", 2000)
+        n0.reserveasset("PLAIN")
+        self.bmm_to(n0.getblockcount() + 3)
+        n0.registerasset("PLAIN", 1000000, 6)
+        self.bmm()
+        plain = api.rest("assets/PLAIN")
+        assert_equal((plain["market"]["status"], plain["market"]["kinds"]), ("none", []))
+        assert plain["can_curve"]["allowed"], plain["can_curve"]
+        built = api.rest("build/curve", {"asset": "PLAIN", "amount": "800000", "fee_bps": "100"})
+        assert_equal(parse_uri(built["uri"])[1]["ticker"], "PLAIN")
         status = api.rest("status")
         assert status["launch_params"]["active"]
         assert_equal((status["launch_params"]["fee_min_bps"], status["launch_params"]["fee_max_bps"]), (30, 500))
@@ -430,7 +442,7 @@ class PublicApiTest(LayersTest):
         detail = api.rest("assets/USDX")
         assert_equal(detail["id"], x)
         assert detail["books"] and detail["pools"]
-        assert_equal(detail["books"][0]["id"], rbook["book"])
+        assert rbook["book"] in [b["id"] for b in detail["books"]]
         assert not detail["launch"]
         assert detail["can_curve"]["allowed"] is False  # it has a pool with ECX
         assert_equal(api.get("assets/NOPE99").status, 404)
@@ -624,7 +636,7 @@ class PublicApiTest(LayersTest):
         if self.options.site:
             self.log.info("The website against this API (flush-web scripts/e2e-live.mjs)")
             import subprocess
-            env = dict(os.environ, E2E_API=f"http://127.0.0.1:{api_port(0)}", E2E_PORT=str(api_port(0) + 10), E2E_CURVE="SUN", E2E_GRADUATED="MOON",
+            env = dict(os.environ, E2E_API=f"http://127.0.0.1:{api_port(0)}", E2E_PORT=str(api_port(0) + 10), E2E_CURVE="SUN", E2E_GRADUATED="MOON", E2E_PLAIN="PLAIN", E2E_BOOK="USDX",
                        E2E_SHOTS=self.options.site_shots or os.path.join(self.options.tmpdir, "site-shots"), PLAYWRIGHT=self.options.playwright or "")
             result = subprocess.run(["node", "scripts/e2e-live.mjs"], cwd=self.options.site, env=env, capture_output=True, text=True, timeout=600)
             for line in result.stdout.splitlines():
