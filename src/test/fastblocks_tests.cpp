@@ -609,8 +609,7 @@ struct JailFixSetup : public FastBlocksSetup {
     void LateFirstBlock()
     {
         StartPos();
-        // (At the start of an epoch, so that the next blocks of the test are in it.)
-        const int late{static_cast<int>((pos::EpochOf(base_slot, Pos()) + 3) * Pos().slots_per_epoch - base_slot)};
+        const int late{static_cast<int>(3 * Pos().slots_per_epoch)};
         Slot(late - 1);
         Main();
         Take(PosBlock(late));
@@ -2663,9 +2662,7 @@ BOOST_FIXTURE_TEST_CASE(liveness_first_block_late, JailFixSetup)
     // With the fix, it charges nobody for the slots before it: itself only.
     LateFirstBlock();
     BOOST_CHECK((Counted() == std::make_pair(1U, 1U)));
-    // And the next ones as before: the slots since the last block of stake.
-    Take(PosBlock(static_cast<int>(pos::SlotOf(Tip()->nTime, Pos()) - base_slot + 3)));
-    BOOST_CHECK((Counted() == std::make_pair(4U, 2U)));
+    // (The blocks after it are charged as before: liveness_noted.)
 }
 
 BOOST_FIXTURE_TEST_CASE(liveness_first_block_late_before_fix, JailFixLaterSetup)
