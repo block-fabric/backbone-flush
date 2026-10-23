@@ -3,7 +3,8 @@
   // liquidity to, the second amount follows from the first at the pool's price (only what its price takes goes
   // in); a new pool, or one everyone left (its dust counts toward the amounts), takes both, which set its price
   // (asked about first). The shares and the share of the pool it gives, worked out as the chain works them out
-  // (amm::Provide). The Add liquidity card of the Trade tab of the Qt window of BitAssets.
+  // (amm::Provide). The Add liquidity card of the Trade tab of the Qt window of BitAssets. Only the pool of the kind addliquidity makes
+  // (ba/liquidity.ts): another kind of the same pair is added to from its page.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
@@ -14,7 +15,10 @@
   import { hiddenAsset } from './visible.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { amountParam, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, isChn, MIN_LIQUIDITY, MIN_OPEN_CHN, MIN_OPEN_SHARES, pairedAmount, provide, unitsAtMost, unitsOf, type Pool, type Amount } from './model';
-  import { assetById, ba, decimalsOf, labelOf, nameOf, poolOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, decimalsOf, labelOf, nameOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { isNoPoolError, liquidityState, recheck, type Reread } from './liquidity';
+  import { CURVE_NAMES, feePercent, kindOf } from './kinds';
+  import { nav } from '../../lib/nav.svelte';
   import { TICKER } from '../config';
 
   let a = $state('');
@@ -45,8 +49,11 @@
 
   const da = $derived(decimalsOf(a));
   const db = $derived(decimalsOf(b));
-  const pool = $derived(a && b && a !== b ? poolOf(a, b) : undefined);
-  const setsPrice = $derived(!pool || pool.abandoned);
+  // The pool addliquidity names (the default kind, as getpool by the pair reads it), never one of another kind of
+  // the pair (a concentrated pool, say): those are added to from their page, by their id.
+  const lq = $derived(liquidityState(ba.pools, a, b));
+  const pool = $derived(lq.pool);
+  const setsPrice = $derived(lq.setsPrice);
   /** The pool as the chain keeps it, in units: the first asset of the form first. */
   const units = $derived.by(() => {
     if (!pool) return { reserve0: 0n, reserve1: 0n, shares: 0n, chn0: isChn(a), chn1: isChn(b) };
@@ -101,6 +108,8 @@
     const sDb = db;
     const sSetsPrice = setsPrice;
     const sAbandoned = !!pool?.abandoned;
+    const sMode = lq.mode;
+    const sPoolId = pool?.pool;
     const sDeposit = deposit;
     const sSlippage = slippage;
     const sShare = shareAfter;
@@ -108,15 +117,16 @@
     const la = nameOf(sA);
     const lb = nameOf(sB);
     // The pool may have changed since the amounts were typed (made, reopened or left): asked again.
-    let now: Pool | null = null;
+    // getpool by the pair reads the pool addliquidity names, as the form does; only its "no pool" means none.
+    let now: Reread;
     try {
-      now = await rpc.raw<Pool>('getpool', [assetArg(sA), assetArg(sB)]);
-    } catch {
-      now = null;
+      now = { pool: await rpc.raw<Pool>('getpool', [assetArg(sA), assetArg(sB)]) };
+    } catch (e) {
+      now = isNoPoolError(e) ? { none: true } : { error: errorText(e) };
     }
-    const nowSets = !now || now.abandoned;
-    if (nowSets !== sSetsPrice) {
-      await inform(t('Add liquidity'), nowSets ? t('Nobody provides liquidity to this pool any more since you typed the amounts: give both amounts, which set its price.') : t('A pool of these assets was made meanwhile: its price sets the second amount now. Check the amounts.'), 'warning');
+    const check = recheck({ mode: sMode, poolId: sPoolId }, now);
+    if (!check.ok) {
+      await inform(t('Add liquidity'), t(check.message), check.kind === 'error' ? 'error' : 'warning');
       void refreshBitAssets();
       return;
     }
@@ -178,12 +188,15 @@
 
     {#if a && b && a !== b}
       {#if !pool}
-        <p class="ba-help"><strong>A new pool:</strong> your amounts set its price. It opens with at least 0.01 {TICKER} on a {TICKER} side, and keeps 1,000 shares for good, so that it is never emptied.</p>
+        <p class="ba-help"><strong>A new pool:</strong> there is no constant-product pool (0.3%) of these assets yet. Give both amounts: they set its price. It opens with at least 0.01 {TICKER} on a {TICKER} side, and keeps 1,000 shares for good, so that it is never emptied.</p>
       {:else if pool.abandoned}
         <p class="ba-problems"><strong>Nobody provides liquidity to this pool any more.</strong> It holds only the dust every pool keeps ({formatAmount(pool.asset_a_id === a ? pool.reserve_a : pool.reserve_b, da)} <SafeText text={labelOf(a)} /> and {formatAmount(pool.asset_a_id === a ? pool.reserve_b : pool.reserve_a, db)} <SafeText text={labelOf(b)} />), at whatever price it was left at: your amounts set its price, as for a new pool, and the dust counts toward them.</p>
       {:else}
         <p class="ba-help">1 <SafeText text={labelOf(a)} /> = {formatPrice(units.reserve0 > 0n ? Number(units.reserve1) / 10 ** db / (Number(units.reserve0) / 10 ** da) : undefined)} <SafeText text={labelOf(b)} /> · the pool holds {formatUnits(units.reserve0, da)} <SafeText text={labelOf(a)} /> and {formatUnits(units.reserve1, db)} <SafeText text={labelOf(b)} />.</p>
       {/if}
+      {#each lq.others as o (o.pool)}
+        <p class="ba-help">These assets also have a {CURVE_NAMES[kindOf(o).curve]} pool at {feePercent(kindOf(o).fee)}: this form does not add to it. <button type="button" class="btn small ghost" onclick={() => { tradeIntent.pool = o.pool; nav.tab = 'pools'; }}>Add to it from its page</button></p>
+      {/each}
     {/if}
 
     {#if problem}<p class="ba-problems" role="status">{t(problem)}</p>{/if}
