@@ -252,6 +252,8 @@ public:
     virtual bool getBitAssetsLaunchParamsActive() = 0;
     //! Launches: the most a launch's allocation can be in the next block, in basis points (SidechainParams::allocation10_height).
     virtual uint16_t getBitAssetsMaxLaunchAllocation() = 0;
+    //! The least CHN paid out in the next block (bitassets::MinChnPayout: SidechainParams::small_payout_height).
+    virtual uint64_t getBitAssetsMinChnPayout() = 0;
     //! Layers' DEX: an oracle, by id.
     virtual std::optional<bitassets::OracleRecord> getBitAssetsOracle(const uint256& id) = 0;
     //! Layers' DEX: what an oracle attested for an event.

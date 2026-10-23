@@ -441,11 +441,11 @@ BOOST_AUTO_TEST_CASE(dex_batch_uniform_price_refund_and_undo)
     std::string reason;
     BOOST_CHECK(!chain.Apply(MakeTx({}, Swap{CHN, 1'000'000, GOLD, 1, CScript{}}, {std::nullopt}, 1'000'000), reason));
     BOOST_CHECK_EQUAL(reason, "bad-ba-chn-to");
-    BOOST_CHECK(!chain.Apply(MakeTx({}, Swap{CHN, MIN_CHN_PAYOUT - 1, GOLD, 1, OTHER}, {std::nullopt}, MIN_CHN_PAYOUT - 1), reason));
+    BOOST_CHECK(!chain.Apply(MakeTx({}, Swap{CHN, MIN_CHN_PAYOUT_BEFORE_SMALL - 1, GOLD, 1, OTHER}, {std::nullopt}, MIN_CHN_PAYOUT_BEFORE_SMALL - 1), reason));
     BOOST_CHECK_EQUAL(reason, "bad-ba-chn-dust");
     // Policy: the mempool does not relay an order that cannot fill alone.
-    BOOST_CHECK(!chain.Assets().OrderFillsAlone(tight, reason));
-    BOOST_CHECK(chain.Assets().OrderFillsAlone(loose, reason));
+    BOOST_CHECK(!chain.Assets().OrderFillsAlone(tight, reason, chain.height));
+    BOOST_CHECK(chain.Assets().OrderFillsAlone(loose, reason, chain.height));
     // Nothing of the block's orders is left in the store after its end.
     for (uint8_t table : {0x82, 0x83, 0x84, 0x85}) {
         const sidechain::StoreBytes prefix{table};

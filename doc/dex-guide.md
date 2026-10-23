@@ -84,7 +84,7 @@ Place an order: what you sell, how much, your price (the least you accept per un
   it got). Once it expires, collect it the same way to get everything back.
 - A book holds at most 1000 orders per side. When a side is full, a new order can only take the place of the
   *worst-priced* order and only if it is at least as large; that order is marked **Evicted**: it trades no more, and
-  settling it returns everything it holds. Orders have a minimum size (0.01 CHN worth on the CHN side; one whole unit
+  settling it returns everything it holds. Orders have a minimum size (0.01 CHN worth on the CHN side, 0.00005 from `small_payout_height`; one whole unit
   otherwise).
 
 CLI: `getbook GOLD CHN`, `placeorder GOLD 10 CHN 0.05 (blocks)`, `listorders`, `settleorder <order> (true to cancel)`.

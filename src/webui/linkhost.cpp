@@ -267,12 +267,12 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         if (!launch) throw LinkError(strprintf("%s is not on a curve: it has none to trade with", r.ticker));
         if (launch->graduated) throw LinkError(strprintf("%s graduated: it trades in its pool now (ask the site for a swap)", r.ticker));
         const uint64_t amount{buy ? Exact(r.amount, bitassets::CHN_DECIMALS, "ecx") : Exact(r.amount, token.decimals, "tokens")};
-        if (buy && amount < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("A buy pays %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
+        if (buy && amount < reader.MinChnPayout()) throw LinkError(strprintf("A buy pays %s at least", Coin(reader.MinChnPayout())));
         const uint64_t floor{Floor(r.floor, buy ? token.decimals : bitassets::CHN_DECIMALS)};
         const uint64_t quote{reader.QuoteLaunch(r.asset, buy, amount)};
         const std::string quoted{buy ? Of(quote, token) : Coin(quote)};
         const std::string floored{buy ? Of(floor, token) : Coin(floor)};
-        if (quote == 0 || (!buy && quote < bitassets::MIN_CHN_PAYOUT)) throw LinkError(strprintf("The curve of %s takes no such %s now", r.ticker, buy ? "buy" : "sale"));
+        if (quote == 0 || (!buy && quote < reader.MinChnPayout())) throw LinkError(strprintf("The curve of %s takes no such %s now", r.ticker, buy ? "buy" : "sale"));
         if (quote < floor) {
             throw LinkError(strprintf("The curve moved: %s now gives %s, less than the %s the link asks at least. Nothing was done: quote it again on the site.",
                                       buy ? "the buy" : "the sale", quoted, floored));
@@ -307,10 +307,10 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         }};
         const Reader::Asset from{pick(r.from, "from")}, to{pick(r.to, "to")};
         const uint64_t amount{Exact(r.amount, from.decimals, "amount")};
-        if (from.id.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("A swap pays in %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
+        if (from.id.IsNull() && amount < reader.MinChnPayout()) throw LinkError(strprintf("A swap pays in %s at least", Coin(reader.MinChnPayout())));
         const uint64_t floor{Floor(r.floor, to.decimals)};
         const uint64_t quote{reader.QuotePool(from.id, r.pool, amount)};
-        if (quote == 0 || (to.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT)) throw LinkError("The pool takes no such swap now");
+        if (quote == 0 || (to.id.IsNull() && quote < reader.MinChnPayout())) throw LinkError("The pool takes no such swap now");
         if (quote < floor) {
             throw LinkError(strprintf("The pool moved: the swap now gives %s, less than the %s the link asks at least. Nothing was done: quote it again on the site.", Of(quote, to), Of(floor, to)));
         }
@@ -361,7 +361,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         std::string quoted, floored;
         if (!r.amount.empty()) {
             const uint64_t ecx{Exact(r.amount, bitassets::CHN_DECIMALS, "ecx")};
-            if (ecx < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("The first buy pays %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
+            if (ecx < reader.MinChnPayout()) throw LinkError(strprintf("The first buy pays %s at least", Coin(reader.MinChnPayout())));
             const uint64_t floor{Floor(r.floor, decimals)};
             const uint64_t quote{reader.QuoteFirstBuy(ecx, supply, fee)};
             quoted = Decimal(quote, decimals) + " " + r.ticker;
@@ -514,12 +514,12 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const Reader::Asset& from{path.front()};
         const Reader::Asset& to{path.back()};
         const uint64_t amount{Exact(r.amount, from.decimals, "amount")};
-        if (from.id.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("A swap pays in %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
+        if (from.id.IsNull() && amount < reader.MinChnPayout()) throw LinkError(strprintf("A swap pays in %s at least", Coin(reader.MinChnPayout())));
         const uint64_t floor{Floor(r.floor, to.decimals)};
         // The quote of now, hop by hop, each pool alone.
         uint64_t quote{amount};
         for (size_t i{0}; i < r.pools.size() && quote > 0; ++i) quote = reader.QuotePool(path[i].id, r.pools[i], quote);
-        if (quote == 0 || (to.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT)) throw LinkError("The route takes no such swap now");
+        if (quote == 0 || (to.id.IsNull() && quote < reader.MinChnPayout())) throw LinkError("The route takes no such swap now");
         if (quote < floor) {
             throw LinkError(strprintf("The pools moved: the route now gives %s, less than the %s the link asks at least. Nothing was done: quote it again on the site.", Of(quote, to), Of(floor, to)));
         }
@@ -617,8 +617,9 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         Reader::Pool pool;
         const auto [a, b]{PoolSides(reader, r.pool, pool)};
         CheckPoolTickers(r, a, b);
-        Exact(r.price_lower, 8, "price_lower");
-        Exact(r.price_upper, 8, "price_upper");
+        if (r.price_lower != "0") Exact(r.price_lower, 8, "price_lower");
+        if (r.price_upper != "0") Exact(r.price_upper, 8, "price_upper");
+        const bool full{r.price_lower == "0" && r.price_upper == "0"};
         UniValue amounts{UniValue::VOBJ};
         if (r.amount_a != "0") amounts.pushKV(Ref(a.id), Decimal(Exact(r.amount_a, a.decimals, "amount_a"), a.decimals));
         if (r.amount_b != "0") amounts.pushKV(Ref(b.id), Decimal(Exact(r.amount_b, b.decimals, "amount_b"), b.decimals));
@@ -628,10 +629,11 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         args.push_back(r.price_upper);
         args.push_back(amounts);
         const UniValue preview{reader.Read("previewposition", args)};
-        plan.summary = strprintf("Open a position in the pool of %s and %s, from %s to %s", a.ticker, b.ticker, r.price_lower, r.price_upper);
+        plan.summary = full ? strprintf("Open a full-range position in the pool of %s and %s", a.ticker, b.ticker)
+                            : strprintf("Open a position in the pool of %s and %s, from %s to %s", a.ticker, b.ticker, r.price_lower == "0" ? std::string{"no bound"} : r.price_lower, r.price_upper == "0" ? std::string{"no bound"} : r.price_upper);
         rows = Head(r, source, plan.summary, now);
         rows.push_back(confirm::Text("Pool", strprintf("%s and %s (0x%s), concentrated", a.ticker, b.ticker, Short(r.pool))));
-        rows.push_back(confirm::Text("Range", strprintf("%s to %s %s per %s", r.price_lower, r.price_upper, b.ticker, a.ticker)));
+        rows.push_back(confirm::Text("Range", full ? std::string{"the full range: every price (as a constant-product pool)"} : strprintf("%s to %s %s per %s", r.price_lower == "0" ? std::string{"no bound"} : r.price_lower, r.price_upper == "0" ? std::string{"no bound"} : r.price_upper, b.ticker, a.ticker)));
         const UniValue& in_range{preview.find_value("in_range")};
         if (in_range.isBool()) rows.push_back(confirm::Text("Now", in_range.get_bool() ? "the pool's price is in this range: it earns fees at once" : "the pool's price is outside this range: it earns nothing until the price comes in"));
         rows.push_back(confirm::Text("Slippage", Bps(*r.slippage_bps) + " at most if the pool moves first (binds)"));
@@ -845,6 +847,7 @@ public:
         return outs && !outs->empty() ? outs->back() : 0;
     }
     bool LaunchesActive() override { return m_chain.getBitAssetsDexCurvesActive(); }
+    uint64_t MinChnPayout() override { return m_chain.getBitAssetsMinChnPayout(); }
     std::optional<int> RevealWait(const uint256& txid) override
     {
         const auto made{m_chain.getBitAssetsReservationHeight(Txid::FromUint256(txid))};

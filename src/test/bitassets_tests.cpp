@@ -445,7 +445,7 @@ BOOST_AUTO_TEST_CASE(liquidity_reopen_front_run)
     // Alice reopens it at 5000 satoshis a unit: 100'000 units and 5 CHN, what the pool reopens with,
     // the dust counted (the wallet offers the rest). Quoted: isqrt(5e13) shares, MIN_LIQUIDITY aside.
     const uint64_t alice_chn{500'000'000 - dust_chn}, alice_units{100'000 - dust_gold};
-    const auto quote{amm::Provide(dusty, alice_chn, alice_units)};
+    const auto quote{amm::Provide(dusty, alice_chn, alice_units, MIN_CHN_PAYOUT_BEFORE_SMALL)};
     BOOST_REQUIRE(quote && quote->opens);
     BOOST_CHECK_EQUAL(quote->shares, 7'071'067u - MIN_LIQUIDITY);
     const auto alice_tx{[&](uint64_t min_shares) {
@@ -511,7 +511,7 @@ BOOST_AUTO_TEST_CASE(liquidity_reopen_front_run)
     // Too much GOLD into a live pool: its excess comes back as GOLD, to the second result output.
     const COutPoint more_gold{raced.GetHash(), 0};
     const Pool live{g.state.Pools().at(id)};
-    const auto deposit{amm::Provide(live, 5'000'000, 500'000)};
+    const auto deposit{amm::Provide(live, 5'000'000, 500'000, MIN_CHN_PAYOUT_BEFORE_SMALL)};
     BOOST_REQUIRE(deposit && !deposit->opens);
     BOOST_CHECK_EQUAL(deposit->take0, 5'000'000u);
     const uint64_t back{500'000 - deposit->take1};
@@ -666,7 +666,7 @@ BOOST_AUTO_TEST_CASE(small_providers_and_dust)
     const uint64_t chn_held{f.state.Tokens().at(chn_lp).amount};
     // 40 shares: 894 sat of CHN (stays) and 1 GOLD.
     BOOST_CHECK(amm::Withdraw(f.state.Pools().at(chn_id), 40) == std::make_pair(uint64_t{894}, uint64_t{1}));
-    BOOST_CHECK(amm::WithdrawPaid(f.state.Pools().at(chn_id), 40) == std::make_pair(uint64_t{0}, uint64_t{1}));
+    BOOST_CHECK(amm::WithdrawPaid(f.state.Pools().at(chn_id), 40, MIN_CHN_PAYOUT_BEFORE_SMALL) == std::make_pair(uint64_t{0}, uint64_t{1}));
     const uint64_t chn_before{f.state.Pools().at(chn_id).reserve0};
     f.payouts.clear();
     const CTransaction out_gold{MakeTx({chn_lp}, RemoveLiquidity{GOLD, CHN, 40, 1, 0, HOLDER}, {Token{Token::Kind::LP, chn_id, chn_held - 40}, std::nullopt})};
@@ -678,10 +678,10 @@ BOOST_AUTO_TEST_CASE(small_providers_and_dust)
 
     // A swap or a bid paying CHN dust: refused.
     const COutPoint some_gold{chn_pool.GetHash(), 0};
-    BOOST_CHECK(amm::SwapOut(100'000, chn_before, 1) < MIN_CHN_PAYOUT);
+    BOOST_CHECK(amm::SwapOut(100'000, chn_before, 1) < MIN_CHN_PAYOUT_BEFORE_SMALL);
     BOOST_CHECK_EQUAL(f.Reject(MakeTx({some_gold}, Swap{GOLD, 1, CHN, 1, HOLDER}, {Asset(GOLD, 9'899'999)})), "bad-ba-chn-dust");
     BOOST_CHECK_EQUAL(f.Reject(MakeTx({some_gold}, Swap{GOLD, 10, CHN, 1, HOLDER}, {Asset(GOLD, 9'899'990)})), "bad-ba-chn-dust");
-    BOOST_CHECK(amm::SwapOut(100'000, chn_before, 200) >= MIN_CHN_PAYOUT);
+    BOOST_CHECK(amm::SwapOut(100'000, chn_before, 200) >= MIN_CHN_PAYOUT_BEFORE_SMALL);
     BOOST_CHECK(f.Apply(MakeTx({some_gold}, Swap{GOLD, 200, CHN, 1, HOLDER}, {Asset(GOLD, 9'899'800)})));
 
     // CHN dust in an auction: a bid paying it is refused (auction_chn_dust), and collecting pays none out.
@@ -698,13 +698,13 @@ BOOST_AUTO_TEST_CASE(small_providers_and_dust)
 
 BOOST_AUTO_TEST_CASE(auction_chn_dust)
 {
-    // The fifth audit: CHN under MIN_CHN_PAYOUT in an auction could never be paid out -- sold (nobody
+    // The fifth audit: CHN under MIN_CHN_PAYOUT_BEFORE_SMALL in an auction could never be paid out -- sold (nobody
     // could buy it, collecting did not pay it), left over by bids, or brought in by them.
     Fixture f;
     const auto [gc, gold]{f.Issue("GOLD", 1'000'000)};
     std::string reason;
     const Token receipt{Unit(Token::Kind::RECEIPT, uint256{})};
-    BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, CreateAuction{CHN, MIN_CHN_PAYOUT - 1, GOLD, 300, 300, f.height, 10}, {receipt}, MIN_CHN_PAYOUT - 1)), "bad-ba-chn-dust");
+    BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, CreateAuction{CHN, MIN_CHN_PAYOUT_BEFORE_SMALL - 1, GOLD, 300, 300, f.height, 10}, {receipt}, MIN_CHN_PAYOUT_BEFORE_SMALL - 1)), "bad-ba-chn-dust");
     // 1.5 times the least, for 300 GOLD all of it: 1 GOLD buys 250 satoshis.
     const CTransaction sells{MakeTx({}, CreateAuction{CHN, 75'000, GOLD, 300, 300, f.height, 10}, {receipt}, 75'000)};
     BOOST_REQUIRE_MESSAGE(f.Apply(sells, &reason), reason);
@@ -717,18 +717,18 @@ BOOST_AUTO_TEST_CASE(auction_chn_dust)
     BOOST_REQUIRE_MESSAGE(f.Apply(all, &reason), reason);
     BOOST_REQUIRE_EQUAL(f.payouts.size(), 1U);
     BOOST_CHECK_EQUAL(f.payouts[0].nValue, 75'000);
-    const CTransaction more{MakeTx({}, CreateAuction{CHN, 2 * MIN_CHN_PAYOUT, GOLD, 400, 400, f.height, 10}, {receipt}, 2 * MIN_CHN_PAYOUT)};
+    const CTransaction more{MakeTx({}, CreateAuction{CHN, 2 * MIN_CHN_PAYOUT_BEFORE_SMALL, GOLD, 400, 400, f.height, 10}, {receipt}, 2 * MIN_CHN_PAYOUT_BEFORE_SMALL)};
     BOOST_REQUIRE_MESSAGE(f.Apply(more, &reason), reason);
     const CTransaction half{MakeTx({COutPoint{all.GetHash(), 0}}, Bid{more.GetHash(), 200, 1, HOLDER}, {Asset(GOLD, 999'500)})};
     BOOST_CHECK_MESSAGE(f.Apply(half, &reason), reason);
-    BOOST_CHECK_EQUAL(f.state.Auctions().at(more.GetHash()).remaining, MIN_CHN_PAYOUT);
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(more.GetHash()).remaining, MIN_CHN_PAYOUT_BEFORE_SMALL);
 
-    // Selling GOLD for CHN: a bid pays MIN_CHN_PAYOUT at least, so that what it brings in is paid out.
+    // Selling GOLD for CHN: a bid pays MIN_CHN_PAYOUT_BEFORE_SMALL at least, so that what it brings in is paid out.
     const CTransaction for_chn{MakeTx({COutPoint{half.GetHash(), 0}}, CreateAuction{GOLD, 100, CHN, 1'000'000, 1'000'000, f.height, 10}, {Asset(GOLD, 999'400), receipt})};
     BOOST_REQUIRE_MESSAGE(f.Apply(for_chn, &reason), reason);
-    BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, Bid{for_chn.GetHash(), MIN_CHN_PAYOUT - 1, 1, CScript{}}, {std::nullopt}, MIN_CHN_PAYOUT - 1)), "bad-ba-chn-dust");
-    BOOST_CHECK_MESSAGE(f.Apply(MakeTx({}, Bid{for_chn.GetHash(), MIN_CHN_PAYOUT, 1, CScript{}}, {std::nullopt}, MIN_CHN_PAYOUT), &reason), reason);
-    BOOST_CHECK_EQUAL(f.state.Auctions().at(for_chn.GetHash()).proceeds, MIN_CHN_PAYOUT);
+    BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, Bid{for_chn.GetHash(), MIN_CHN_PAYOUT_BEFORE_SMALL - 1, 1, CScript{}}, {std::nullopt}, MIN_CHN_PAYOUT_BEFORE_SMALL - 1)), "bad-ba-chn-dust");
+    BOOST_CHECK_MESSAGE(f.Apply(MakeTx({}, Bid{for_chn.GetHash(), MIN_CHN_PAYOUT_BEFORE_SMALL, 1, CScript{}}, {std::nullopt}, MIN_CHN_PAYOUT_BEFORE_SMALL), &reason), reason);
+    BOOST_CHECK_EQUAL(f.state.Auctions().at(for_chn.GetHash()).proceeds, MIN_CHN_PAYOUT_BEFORE_SMALL);
 }
 
 BOOST_AUTO_TEST_CASE(auction_buy_all_later)
@@ -800,7 +800,7 @@ BOOST_AUTO_TEST_CASE(payouts_per_block)
     std::string reason;
     BOOST_REQUIRE_MESSAGE(f.Apply(chn_pool, &reason), reason);
     // What the block's earlier transactions pay out.
-    f.payouts.assign(MAX_TX_PAYOUTS_PER_BLOCK - 1, CTxOut{MIN_CHN_PAYOUT, HOLDER});
+    f.payouts.assign(MAX_TX_PAYOUTS_PER_BLOCK - 1, CTxOut{MIN_CHN_PAYOUT_BEFORE_SMALL, HOLDER});
     const CTransaction last{MakeTx({COutPoint{chn_pool.GetHash(), 0}}, Swap{GOLD, 10'000, CHN, 1, HOLDER}, {Asset(GOLD, 9'990'000)})};
     BOOST_REQUIRE_MESSAGE(f.Apply(last, &reason), reason);
     BOOST_CHECK_EQUAL(f.payouts.size(), MAX_TX_PAYOUTS_PER_BLOCK);
@@ -906,7 +906,7 @@ BOOST_AUTO_TEST_CASE(auctions)
     BOOST_CHECK_EQUAL(f.Reject(MakeTx({}, Bid{id, 4'000'000, 1, CScript{}}, {std::nullopt}, 4'000'000)), "bad-ba-bid-price");
     // With a bid, it cannot be collected while it runs.
     BOOST_CHECK_EQUAL(f.Reject(MakeTx({receipt}, Collect{id, HOLDER}, {std::nullopt})), "bad-ba-auction-running");
-    // In its last block, at the end price (the original's node stopped here): 400000 for 40, 10000 per unit (a bid in CHN pays at least MIN_CHN_PAYOUT).
+    // In its last block, at the end price (the original's node stopped here): 400000 for 40, 10000 per unit (a bid in CHN pays at least MIN_CHN_PAYOUT_BEFORE_SMALL).
     f.height = 110;
     const CTransaction last{MakeTx({}, Bid{id, 100'000, 10, CScript{}}, {std::nullopt}, 100'000)};
     BOOST_REQUIRE_MESSAGE(f.Apply(last, &reason), reason);
@@ -1164,7 +1164,7 @@ BOOST_AUTO_TEST_CASE(release_of_one_satoshi)
     const uint256 id{PoolId(GOLD, CHN)};
     const bitassets::Pool pool{*side.BitAssets().GetPool(id)};
     const uint64_t held{pool.shares - MIN_LIQUIDITY};
-    const auto [out0, out1]{amm::WithdrawPaid(pool, held)};
+    const auto [out0, out1]{amm::WithdrawPaid(pool, held, MIN_CHN_PAYOUT_BEFORE_SMALL)};
     const CTransaction removed{MakeTx({COutPoint{added.GetHash(), 0}}, RemoveLiquidity{GOLD, CHN, held, out1, out0, HOLDER}, {std::nullopt})};
     BOOST_REQUIRE(apply(removed));
     BOOST_REQUIRE_EQUAL(side.BitAssets().GetPool(id)->reserve0, 1u);
@@ -1480,7 +1480,7 @@ BOOST_AUTO_TEST_CASE(plan_rejects)
     const auto [g_control, g_gold]{g.Issue("GOLD", 1'000'000)};
     const CTransaction chn_auction{MakeTx({}, CreateAuction{CHN, 1'000'000, GOLD, 1'000, 1'000, g.height, 10}, {Unit(Token::Kind::RECEIPT, uint256{})}, 1'000'000)};
     BOOST_REQUIRE_MESSAGE(g.Apply(chn_auction, &reason), reason);
-    // 10 GOLD buys 10 000 satoshis: under MIN_CHN_PAYOUT; 50 buy as much as that.
+    // 10 GOLD buys 10 000 satoshis: under MIN_CHN_PAYOUT_BEFORE_SMALL; 50 buy as much as that.
     BOOST_CHECK_EQUAL(g.Reject(MakeTx({g_gold}, Bid{chn_auction.GetHash(), 10, 1, HOLDER}, {Asset(GOLD, 999'990)})), "bad-ba-chn-dust");
     BOOST_CHECK(g.Apply(MakeTx({g_gold}, Bid{chn_auction.GetHash(), 50, 1, HOLDER}, {Asset(GOLD, 999'950)}), &reason));
 

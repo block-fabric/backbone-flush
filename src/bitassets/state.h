@@ -86,18 +86,29 @@ inline constexpr int32_t MAX_AUCTION_DURATION{1'000'000};
 /** Latest an auction may start, in blocks after the one that makes it: about a year. */
 inline constexpr int32_t MAX_AUCTION_DELAY{52'560};
 /**
- * Least CHN a pool or an auction pays out: 0.0005 CHN. A payout takes a
- * place in the coinbase's queue, which pays a bounded number per block (half of MAX_PAYOUTS_PER_BLOCK
- * for the sidechain's own): small payouts would delay everyone's. Filling the queue for a block takes
- * 500 swaps of this much each (0.25 CHN turned over, 0.3% of it to the pools each way, and the fees),
- * not 500 of 1000 satoshis (0.000005 CHN); a payout of it is five times the least withdrawal, and an
- * output worth spending at any fee rate below about 700 sat/vB. Less from a swap or a bid is refused;
- * less taken out of a pool, or coming back from a deposit, stays in it, for its providers. An auction
- * selling CHN sells this much at least, and a bid leaves no less of it (or none); a bid in CHN pays
- * this much at least: whatever an auction holds in CHN can be paid out. (Less from collecting an
- * auction is not paid: the CHN were burned when they went in.)
+ * Least CHN (ECX) a pool, a book, a curve or an auction pays out, MinChnPayout(height): 0.0005 ECX
+ * (50 000 sat, MIN_CHN_PAYOUT_BEFORE_SMALL) before SidechainParams::small_payout_height, 0.00005 ECX (5 000 sat,
+ * MIN_CHN_PAYOUT_SMALL) from it: about $0.50 at $10 000 an ECX, the least order of a book that still means something.
+ * A payout takes a place in the coinbase's queue, which pays a bounded number per block
+ * (MAX_TX_PAYOUTS_PER_BLOCK for the transactions' payouts, half of MAX_PAYOUTS_PER_BLOCK): small payouts cannot delay
+ * anyone's by more than a block, whatever their size, as the queue is bounded, not their amount. What a smaller
+ * least changes is the cost of filling that queue: 500 swaps of 5 000 sat (0.025 ECX turned over, each paying its
+ * pool's fee and the relay fee of PAYOUT_POLICY_VSIZE for its payout, so about 0.0004 ECX of fees a block at the
+ * minimum relay fee, and a pool's fee each way), against 0.25 ECX turned over before; the fees, not the amounts, are
+ * what such a flood costs, and they stay. A payout of 5 000 sat is half the least withdrawal (min_withdrawal, 10 000
+ * sat: a withdrawal of it gathers two), and an output worth spending at any fee rate below about 70 sat/vB (an input
+ * of about 68 vbytes), seventy times eCash's usual 1 sat/byte; the UTXO set grows by at most 500 such outputs a
+ * block, as before. Less from a swap or a bid is refused; less taken out of a pool, or coming back from a deposit,
+ * stays in it, for its providers. An auction selling CHN sells this much at least, and a bid leaves no less of it
+ * (or none); a bid in CHN pays this much at least: whatever an auction holds in CHN can be paid out. (Less from
+ * collecting an auction is not paid: the CHN were burned when they went in.)
  */
-inline constexpr uint64_t MIN_CHN_PAYOUT{50'000};
+inline constexpr uint64_t MIN_CHN_PAYOUT_BEFORE_SMALL{50'000};
+inline constexpr uint64_t MIN_CHN_PAYOUT_SMALL{5'000};
+/** The least CHN paid out in a block at `height` (SidechainParams::SmallPayoutsActive, the network's rules). */
+uint64_t MinChnPayout(int height);
+/** The least CHN paid out where small payouts are `active` or not. */
+constexpr uint64_t MinChnPayoutOf(bool small_payouts_active) { return small_payouts_active ? MIN_CHN_PAYOUT_SMALL : MIN_CHN_PAYOUT_BEFORE_SMALL; }
 /**
  * Most CHN payouts the transactions of a block may give rise to (swaps, bids, liquidity taken out,
  * auctions collected); a transaction that would go beyond is not valid in that block, and waits for
@@ -106,7 +117,8 @@ inline constexpr uint64_t MIN_CHN_PAYOUT{50'000};
  * that queue grow, so a flood of small swaps delays nobody's payout by more than a block, and refunds
  * and deposits, which have the other half, not at all. A transaction has one action and so at most
  * two payouts; 500 is about one in eight of the transactions a full block holds, many more than
- * pay out CHN in ordinary use.
+ * pay out CHN in ordinary use. Kept at 500 with the smaller least payout (MinChnPayout): it bounds the count of
+ * payouts and their outputs, which a smaller amount does not change.
  */
 inline constexpr size_t MAX_TX_PAYOUTS_PER_BLOCK{500};
 /**
@@ -339,7 +351,7 @@ struct Swap {
  * The amounts are the most that goes in (amm::Provide), and the marker lists two result outputs. Into a pool someone provides
  * liquidity to, the side that gives fewer shares goes in whole, and of the other only what those
  * shares are worth at the pool's price: the rest goes back, as asset coins to the second result
- * output, or, for CHN, paid by the coinbase to its script (CHN under MIN_CHN_PAYOUT stays in the
+ * output, or, for CHN, paid by the coinbase to its script (CHN under MinChnPayout stays in the
  * pool). A new pool, or one nobody provides liquidity to any more, is opened by the amounts as a
  * new pool is made, what it holds merged in, and nothing goes back: the second output carries nothing.
  */
@@ -1244,8 +1256,14 @@ inline constexpr size_t MAX_BOOK_SCAN{8192};
  * side's expired entries out itself.
  */
 inline constexpr size_t MAX_BOOK_SWEEP{5000};
-/** The least an order of a pair with CHN is worth, in CHN (satoshis), on its CHN side: 0.01 CHN. */
-inline constexpr uint64_t MIN_BOOK_CHN{1'000'000};
+/**
+ * The least an order of a pair with CHN is worth, in CHN (satoshis), on its CHN side, MinBookChn(height): 0.01 ECX before
+ * SidechainParams::small_payout_height, the least payout (0.00005 ECX: about $0.50 at $10 000 an ECX) from it. A side
+ * still holds MAX_BOOK_SIDE orders at most, a better and larger order evicting the worst: small orders cannot crowd a
+ * book out, each holds what it sells until it is filled, settled or evicted.
+ */
+inline constexpr uint64_t MIN_BOOK_CHN_BEFORE_SMALL{1'000'000};
+uint64_t MinBookChn(int height);
 
 /**
  * The volatility of a pool with a dynamic fee (POOL_FLAG_DYNAMIC_FEE): the last block's clearing price (UQ64.64) and a
@@ -1442,18 +1460,18 @@ struct Deposit {
  * A deposit of at most `amount0` and `amount1` into a pool; nullopt
  * if it gives no shares. Into a pool someone provides liquidity to, it gives the shares of the side
  * that gives fewer, which goes in whole; of the other side, what those shares are worth, rounded up
- * (the pool never loses), unless what would go back is CHN under MIN_CHN_PAYOUT (it goes in too). A
+ * (the pool never loses), unless what would go back is CHN under `min_chn` (MinChnPayout; it goes in too). A
  * pool nobody provides liquidity to (a new one, or one everyone left) is opened as a new pool is
  * made, with what it holds merged in: isqrt of the product of its reserves after, MIN_LIQUIDITY of
  * them kept for good; both amounts go in. Its price is then the deposit's, its dust aside: nobody's
  * deposit can be taken in at the price of the dust, and a deposit that comes after another opened
  * the pool goes in at that one's price, its excess back, or is refused by its least shares.
  */
-std::optional<Deposit> Provide(const Pool& pool, uint64_t amount0, uint64_t amount1);
+std::optional<Deposit> Provide(const Pool& pool, uint64_t amount0, uint64_t amount1, uint64_t min_chn);
 /** What `shares` are worth of a pool, rounded down. */
 std::pair<uint64_t, uint64_t> Withdraw(const Pool& pool, uint64_t shares);
-/** What `shares` take out of a pool: CHN below MIN_CHN_PAYOUT is not taken out, it stays in the pool. */
-std::pair<uint64_t, uint64_t> WithdrawPaid(const Pool& pool, uint64_t shares);
+/** What `shares` take out of a pool: CHN below `min_chn` (MinChnPayout) is not taken out, it stays in the pool. */
+std::pair<uint64_t, uint64_t> WithdrawPaid(const Pool& pool, uint64_t shares, uint64_t min_chn);
 /**
  * How much worse, in percent, a trade's price is than the pool's price before it (the fee
  * included). Not a rule: what wallets warn about.
@@ -1563,7 +1581,7 @@ public:
      */
     void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts);
     /** Policy (the mempool): whether a transaction's order, alone against the pools as they are, gives its min_out (true if it has none). */
-    bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason) const;
+    bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const;
     /** Whether an asset is dead and can be retired; if not, why (`why`). */
     bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
     /**

@@ -1494,8 +1494,9 @@ private:
             if (!pool) Fail(Code::NOT_FOUND, "no such pool");
             const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
             const std::string lower{req.GetString("price_lower")}, upper{req.GetString("price_upper")};
-            ParseAmount(lower, 8, "price_lower");
-            ParseAmount(upper, 8, "price_upper");
+            // 0: no bound on that side (both 0: the full range).
+            if (lower != "0") ParseAmount(lower, 8, "price_lower");
+            if (upper != "0") ParseAmount(upper, 8, "price_upper");
             const uint64_t a{req.GetString("amount_a").empty() ? 0 : ParseAmount(req.GetString("amount_a"), d0, "amount_a")};
             const uint64_t b{req.GetString("amount_b").empty() ? 0 : ParseAmount(req.GetString("amount_b"), d1, "amount_b")};
             if (a == 0 && b == 0) Fail(Code::INVALID_ARGUMENT, "amount_a and/or amount_b: the most of each");
@@ -1766,7 +1767,7 @@ private:
             c.SetDouble("allocation_percent", l.rec.allocation / 100.0);
             c.SetBool("allocation_claimed", l.rec.allocation_claimed);
             c.SetDouble("creator_fees_owed_ecx", static_cast<double>(l.rec.creator_fees) / COIN);
-            c.SetBool("claimable_fees", l.rec.creator_fees >= bitassets::MIN_CHN_PAYOUT);
+            c.SetBool("claimable_fees", l.rec.creator_fees >= bitassets::MinChnPayout(tip.height + 1));
             c.SetBool("claimable_allocation", l.rec.Graduated() && l.rec.allocation > 0 && !l.rec.allocation_claimed);
         }
         return m;
@@ -1810,6 +1811,13 @@ private:
             s.SetUInt("indexer_lag", 0);
             s.SetUInt("updated", static_cast<uint32_t>(GetTime()));
             s.SetBool("market_index", bitassets::market::Enabled());
+            // The least ECX paid out in the next block (an order's, a swap's, a buy's, a bid's), and the height it became 5 000 sat.
+            s.SetUInt("min_payout_sat", static_cast<uint32_t>(bitassets::MinChnPayout(tip.height + 1)));
+            s.SetUInt("min_order_sat", static_cast<uint32_t>(bitassets::MinBookChn(tip.height + 1)));
+            {
+                const int small{Params().GetConsensus().sidechain.small_payout_height};
+                s.SetInt("small_payout_height", small == std::numeric_limits<int>::max() ? -1 : small);
+            }
             const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
             Message& lp{s.Mutable("launch_params")};
             lp.SetBool("active", rules.LaunchParamsActive(tip.height + 1));
@@ -2517,7 +2525,9 @@ private:
             const auto pool{state.GetPool(*uint256::FromHex(id))};
             if (!pool) Fail(Code::NOT_FOUND, "no such pool");
             const double lower{req.GetDouble("price_lower")}, upper{req.GetDouble("price_upper")};
-            if (!(lower > 0) || !(upper > lower) || !std::isfinite(upper)) Fail(Code::INVALID_ARGUMENT, "price_lower and price_upper: 0 < lower < upper");
+            // Both 0: the full range; else 0 < lower < upper (an upper of 0: no upper bound).
+            const bool full{lower == 0 && upper == 0};
+            if (!full && (!(lower > 0) || !(upper == 0 || upper > lower) || !std::isfinite(upper))) Fail(Code::INVALID_ARGUMENT, "price_lower and price_upper: 0 < lower < upper, or both 0 (the full range)");
             const uint8_t d0{DecimalsOf(state, pool->asset0)}, d1{DecimalsOf(state, pool->asset1)};
             UniValue amounts(UniValue::VOBJ);
             if (!req.GetString("amount_a").empty()) amounts.pushKV(ArgOf(pool->asset0), Decimal(ParseAmount(req.GetString("amount_a"), d0, "amount_a"), d0, d0));

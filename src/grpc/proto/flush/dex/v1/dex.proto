@@ -56,6 +56,12 @@ message ChainStatus {
   bool market_index = 10;
   // The rules of launches with parameters (a supply, decimals and fee of their own; an existing asset on a curve).
   LaunchParams launch_params = 11;
+  // The least ECX paid out in the next block, in satoshis (an order's, a swap's, a buy's, a bid's: 5000 from
+  // small_payout_height, 50000 before), and that height (-1: never on this network).
+  uint32 min_payout_sat = 12;
+  int32 small_payout_height = 13;
+  // The least an order of a pair with ECX is worth on its ECX side, in satoshis (5000 from small_payout_height, 1000000 before).
+  uint32 min_order_sat = 14;
 }
 
 message LaunchParams {

@@ -86,6 +86,9 @@ std::optional<CTxDestination> LinkDestination(const CWallet& wallet)
     return it->second;
 }
 
+/** The least CHN paid out in the next block (bitassets::MinChnPayout: 0.00005 ECX from small_payout_height, 0.0005 before). */
+uint64_t MinChn(CWallet& wallet) { return wallet.chain().getBitAssetsMinChnPayout(); }
+
 CTxDestination NewDestination(CWallet& wallet, const std::string& label = "")
 {
     // What an action brings in (its creator's address, the coin paid out), during a link's call: the link's address.
@@ -1209,8 +1212,8 @@ RPCMethod swapasset()
     const bool zero_in{pool->asset0 == in.id};
     const uint64_t quote{bitassets::amm::SwapOut(zero_in ? pool->reserve0 : pool->reserve1, zero_in ? pool->reserve1 : pool->reserve0, amount_in)};
     if (quote == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing");
-    if (out.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (out.id.IsNull() && quote < MinChn(*pwallet)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
     }
     const double max_impact{request.params[4].isNull() ? 10.0 : request.params[4].get_real()};
     if (!(max_impact >= 0 && max_impact <= 100)) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_impact is a percentage, from 0 to 100");
@@ -1324,8 +1327,8 @@ RPCMethod swaproute()
         quote = outs ? outs->back() : 0;
         if (quote == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: it buys nothing");
     }
-    if (out.id.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
-    if (in.id.IsNull() && amount_in < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s %s at least (what comes back is paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+    if (out.id.IsNull() && quote < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
+    if (in.id.IsNull() && amount_in < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s %s at least (what comes back is paid out)", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
     const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote, slippage))};
     if (!request.params[3].isNull()) {
         const uint64_t confirmed{bitassets::ParseUnits(request.params[3], out.decimals)};
@@ -1582,7 +1585,7 @@ RPCMethod createoraclecontract()
     const int32_t expiry{request.params[6].getInt<int32_t>()};
     const int next{pwallet->chain().getBitAssetsHeight()};
     if (expiry < next || int64_t{expiry} > int64_t{next} + bitassets::MAX_CONTRACT_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, "The expiry is from the next block to about a year after");
-    if (asset.id.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (asset.id.IsNull() && amount < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
     std::vector<COutPoint> inputs;
     std::vector<Out> outs;
     CAmount chn_in{0};
@@ -1715,7 +1718,7 @@ RPCMethod addliquidity()
         offer_a = amount_a - dust_a;
         offer_b = amount_b - dust_b;
     }
-    const auto deposit{bitassets::amm::Provide(current, a_first ? offer_a : offer_b, a_first ? offer_b : offer_a)};
+    const auto deposit{bitassets::amm::Provide(current, a_first ? offer_a : offer_b, a_first ? offer_b : offer_a, MinChn(*pwallet))};
     if (deposit) {
         shares = deposit->shares;
         // Into a pool someone provides liquidity to, only what its price takes is offered: nothing
@@ -1796,7 +1799,7 @@ RPCMethod removeliquidity()
     const uint64_t shares{percent >= 100 ? held : static_cast<uint64_t>(static_cast<long double>(held) * percent / 100)};
     if (shares == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is no share at all");
     // A side that rounds to nothing, or to CHN dust (which stays in the pool), is left out.
-    const auto [out0, out1]{bitassets::amm::WithdrawPaid(*pool, shares)};
+    const auto [out0, out1]{bitassets::amm::WithdrawPaid(*pool, shares, MinChn(*pwallet))};
     const bool a_first{pool->asset0 == a.id};
     const uint64_t out_a{a_first ? out0 : out1}, out_b{a_first ? out1 : out0};
     if (out_a == 0 && out_b == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too few shares: they take nothing out of the pool");
@@ -2119,8 +2122,8 @@ RPCMethod removepoolliquidity()
     if (shares == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is no share at all");
     if (shares > pool.shares - std::min(pool.shares, bitassets::MIN_LIQUIDITY)) throw JSONRPCError(RPC_INVALID_PARAMETER, "More shares than the pool can give back");
     auto [out0, out1]{bitassets::curves::WithdrawOf(kind, pwallet->chain().getBitAssetsPoolFee(id), pool, shares, only)};
-    if (pool.asset0.IsNull() && out0 < bitassets::MIN_CHN_PAYOUT) out0 = 0;
-    if (pool.asset1.IsNull() && out1 < bitassets::MIN_CHN_PAYOUT) out1 = 0;
+    if (pool.asset0.IsNull() && out0 < MinChn(*pwallet)) out0 = 0;
+    if (pool.asset1.IsNull() && out1 < MinChn(*pwallet)) out1 = 0;
     if (out0 == 0 && out1 == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too few shares: they take nothing out of the pool");
     const auto [inputs, total]{Select(*pwallet, Token::Kind::LP, id, shares, "shares of this pool")};
     std::vector<Out> outs;
@@ -2217,8 +2220,8 @@ RPCMethod swappools()
     }
     const AssetId out{path.back()};
     const uint8_t dout{DecimalsOf(*pwallet, out)};
-    if (out.IsNull() && quote < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
-    if (in.id.IsNull() && amount_in < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s %s at least (what comes back is paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+    if (out.IsNull() && quote < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
+    if (in.id.IsNull() && amount_in < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an order pays in %s %s at least (what comes back is paid out)", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
     const uint64_t min_out{std::max<uint64_t>(1, LessSlippage(quote, slippage))};
     if (!request.params[4].isNull()) {
         const uint64_t confirmed{bitassets::ParseUnits(request.params[4], dout)};
@@ -2437,7 +2440,7 @@ RPCMethod launchtoken()
     CheckFirstBuy(supply, fee, launch.first_buy, launch.first_min_out, launch.min_buy, launch.max_buy, static_cast<uint8_t>(decimals));
     std::vector<Out> outs;
     if (launch.first_buy > 0) {
-        if (launch.first_buy < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+        if (launch.first_buy < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
         launch.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
         outs.push_back({ChangeDestination(*pwallet), std::nullopt});
     }
@@ -2522,7 +2525,7 @@ RPCMethod curveasset()
     CAmount chn_in{0};
     PayIn(*pwallet, asset, amount, inputs, outs, chn_in);
     if (curve.first_buy > 0) {
-        if (curve.first_buy < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+        if (curve.first_buy < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
         curve.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
         outs.push_back({ChangeDestination(*pwallet), std::nullopt});
     }
@@ -2568,7 +2571,7 @@ RPCMethod buyfromlaunch()
     const auto [launch, curve]{LaunchOf(*pwallet, token)};
     if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: the asset trades in its pool now (swapasset)");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], bitassets::CHN_DECIMALS)};
-    if (amount < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A buy pays %s %s at least", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+    if (amount < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A buy pays %s %s at least", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
     const auto quote{LaunchQuote(launch, curve->first, true, amount)};
     if (!quote || quote->outs[0] == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve takes no such buy (its bounds: getlaunch's min_buy and max_buy)");
     const uint64_t slippage{Slippage(request.params[2], 1)};
@@ -2617,9 +2620,9 @@ RPCMethod selltolaunch()
     if (launch.Graduated() || !curve) throw JSONRPCError(RPC_INVALID_PARAMETER, "The launch graduated: the asset trades in its pool now (swapasset)");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], token.decimals)};
     const auto quote{LaunchQuote(launch, curve->first, false, amount)};
-    if (!quote || quote->outs[0] < bitassets::MIN_CHN_PAYOUT) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (!quote || quote->outs[0] < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
     const uint64_t slippage{Slippage(request.params[2], 1)};
-    const uint64_t min_out{std::max<uint64_t>(bitassets::MIN_CHN_PAYOUT, LessSlippage(quote->outs[0], slippage))};
+    const uint64_t min_out{std::max<uint64_t>(MinChn(*pwallet), LessSlippage(quote->outs[0], slippage))};
     if (!request.params[3].isNull() && min_out < bitassets::ParseUnits(request.params[3], bitassets::CHN_DECIMALS)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve moved: the sale now gives less than min_out. Quote it again");
     std::vector<COutPoint> inputs;
     std::vector<Out> outs;
@@ -2659,7 +2662,7 @@ RPCMethod claimlaunch()
     NeedCurves(*pwallet);
     const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
     const auto [launch, curve]{LaunchOf(*pwallet, token)};
-    const uint64_t fees{launch.creator_fees >= bitassets::MIN_CHN_PAYOUT ? launch.creator_fees : 0};
+    const uint64_t fees{launch.creator_fees >= MinChn(*pwallet) ? launch.creator_fees : 0};
     const bool allocation{launch.Graduated() && !launch.allocation_claimed && launch.allocation > 0};
     if (fees == 0 && !allocation) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing is owed to the creator now");
     std::vector<Out> outs;
@@ -2697,7 +2700,9 @@ double PriceArg(const UniValue& value)
 /** A tick from a price of asset0 in asset1 in whole units (as getpool by id gives the pool's assets), to the tick spacing: down (lower) or up (upper). */
 int32_t TickOfPrice(double price, uint8_t d0, uint8_t d1, int32_t spacing, bool up)
 {
-    if (!(price > 0) || !std::isfinite(price)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is above 0");
+    // 0: no bound on that side (full range: the lowest or the highest tick of the spacing).
+    if (price == 0) return up ? bitassets::cl::MAX_TICK / spacing * spacing : bitassets::cl::MIN_TICK / spacing * spacing;
+    if (!(price > 0) || !std::isfinite(price)) throw JSONRPCError(RPC_INVALID_PARAMETER, "A price is above 0 (0: no bound, the full range)");
     // Units of asset1 per unit of asset0; its tick, log base 1.0001 (the wallet's choice of a range, not a rule).
     const long double raw{static_cast<long double>(price) * std::pow(10.0L, static_cast<int>(d1) - static_cast<int>(d0))};
     const long double exact{std::log(raw) / std::log(1.0001L)};
@@ -2735,7 +2740,7 @@ RPCMethod openposition()
         "accrue while the price is in its range (changeposition collects them)." + HELP_REQUIRING_PASSPHRASE,
         {
             {"pool", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool"},
-            {"price_lower", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "The lower price of the range: of the pool's first asset (asset0, getpool by id: the lower id; " + CURRENCY_UNIT + " if it has " + CURRENCY_UNIT + ") in its second, in whole units"},
+            {"price_lower", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "The lower price of the range (0: no lower bound; 0 for both: the full range): of the pool's first asset (asset0, getpool by id: the lower id; " + CURRENCY_UNIT + " if it has " + CURRENCY_UNIT + ") in its second, in whole units"},
             {"price_upper", RPCArg::Type::AMOUNT, RPCArg::Optional::NO, "The upper price"},
             {"amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::NO, "The most of each asset to put in, by asset (its id or " + CURRENCY_UNIT + ")",
             {
@@ -2791,7 +2796,7 @@ RPCMethod openposition()
     const auto needed{bitassets::cl::AmountsForLiquidity(price, sa, sb, liquidity, true)};
     outs.push_back({ChangeDestination(*pwallet), std::nullopt});
     std::vector<AssetId> backs;
-    if (needed && max0 > needed->first && !(pool.asset0.IsNull() && max0 - needed->first < bitassets::MIN_CHN_PAYOUT)) backs.push_back(pool.asset0);
+    if (needed && max0 > needed->first && !(pool.asset0.IsNull() && max0 - needed->first < MinChn(*pwallet))) backs.push_back(pool.asset0);
     if (needed && max1 > needed->second) backs.push_back(pool.asset1);
     ResultOuts(*pwallet, backs, outs);
     open.chn_to = ChnTo(*pwallet, backs);
@@ -2862,7 +2867,7 @@ RPCMethod changeposition()
         if (max0 > 0) PayIn(*pwallet, info0, max0, inputs, outs, chn_in);
         if (max1 > 0) PayIn(*pwallet, info1, max1, inputs, outs, chn_in);
         const auto needed{bitassets::cl::AmountsForLiquidity(price, sa, sb, delta, true)};
-        if (needed && max0 > needed->first && !(pool.asset0.IsNull() && max0 - needed->first < bitassets::MIN_CHN_PAYOUT)) results.push_back(pool.asset0);
+        if (needed && max0 > needed->first && !(pool.asset0.IsNull() && max0 - needed->first < MinChn(*pwallet))) results.push_back(pool.asset0);
         if (needed && max1 > needed->second) results.push_back(pool.asset1);
     } else if (o.exists("remove") || change.close) {
         const double percent{change.close ? 100.0 : o["remove"].get_real()};
@@ -2873,10 +2878,10 @@ RPCMethod changeposition()
         change.limit0 = LessSlippage(amounts->first, slippage);
         change.limit1 = LessSlippage(amounts->second, slippage);
         const uint64_t out0{amounts->first + (change.collect || change.close ? fee0 : 0)}, out1{amounts->second + (change.collect || change.close ? fee1 : 0)};
-        if (out0 > 0 && !(pool.asset0.IsNull() && out0 < bitassets::MIN_CHN_PAYOUT)) results.push_back(pool.asset0);
+        if (out0 > 0 && !(pool.asset0.IsNull() && out0 < MinChn(*pwallet))) results.push_back(pool.asset0);
         if (out1 > 0) results.push_back(pool.asset1);
     } else if (change.collect) {
-        if (fee0 > 0 && !(pool.asset0.IsNull() && fee0 < bitassets::MIN_CHN_PAYOUT)) results.push_back(pool.asset0);
+        if (fee0 > 0 && !(pool.asset0.IsNull() && fee0 < MinChn(*pwallet))) results.push_back(pool.asset0);
         if (fee1 > 0) results.push_back(pool.asset1);
         if (results.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to collect yet");
     } else {
@@ -3062,8 +3067,8 @@ RPCMethod settleorder()
     if (!book) throw JSONRPCError(RPC_MISC_ERROR, "Its book is gone");
     const AssetId sold{order->sells0 ? book->asset0 : book->asset1}, bought{order->sells0 ? book->asset1 : book->asset0};
     const bool closes{cancel || order->expiry < pwallet->chain().getBitAssetsHeight() || order->remaining == 0 || order->evicted != 0};
-    const uint64_t proceeds{bought.IsNull() && order->proceeds < bitassets::MIN_CHN_PAYOUT ? 0 : order->proceeds};
-    const uint64_t left{closes ? (sold.IsNull() && order->remaining < bitassets::MIN_CHN_PAYOUT ? 0 : order->remaining) : 0};
+    const uint64_t proceeds{bought.IsNull() && order->proceeds < MinChn(*pwallet) ? 0 : order->proceeds};
+    const uint64_t left{closes ? (sold.IsNull() && order->remaining < MinChn(*pwallet) ? 0 : order->remaining) : 0};
     if (!closes && proceeds == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to collect yet");
     const auto [held, total]{Select(*pwallet, Token::Kind::ORDER, id, 1, "this order")};
     std::vector<Out> outs;
@@ -3170,8 +3175,8 @@ RPCMethod createauction()
     create.start_price = bitassets::ParseUnits(request.params[3], quote.decimals);
     create.end_price = bitassets::ParseUnits(request.params[4], quote.decimals);
     if (create.end_price > create.start_price) throw JSONRPCError(RPC_INVALID_PARAMETER, "The price falls: the end price is at most the start price");
-    if (create.base.IsNull() && create.base_amount < bitassets::MIN_CHN_PAYOUT) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an auction sells %s %s at least (the least %s paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT, CURRENCY_UNIT));
+    if (create.base.IsNull() && create.base_amount < MinChn(*pwallet)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: an auction sells %s %s at least (the least %s paid out)", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT, CURRENCY_UNIT));
     }
     create.duration = request.params[5].getInt<int>();
     if (create.duration < 1 || create.duration > bitassets::MAX_AUCTION_DURATION) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The duration is 1 to %u blocks", bitassets::MAX_AUCTION_DURATION));
@@ -3251,14 +3256,14 @@ RPCMethod bidauction()
         amount = std::min(amount, cost);
         buys = auction->remaining;
     }
-    if (auction->base.IsNull() && buys < bitassets::MIN_CHN_PAYOUT) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(bitassets::MIN_CHN_PAYOUT)));
+    if (auction->base.IsNull() && buys < MinChn(*pwallet)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: the least %s paid out is %s", CURRENCY_UNIT, FormatMoney(MinChn(*pwallet))));
     }
-    if (auction->base.IsNull() && buys < auction->remaining && auction->remaining - buys < bitassets::MIN_CHN_PAYOUT) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("It would leave less than %s %s, which nobody could buy: buy all that is left, or less", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT));
+    if (auction->base.IsNull() && buys < auction->remaining && auction->remaining - buys < MinChn(*pwallet)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("It would leave less than %s %s, which nobody could buy: buy all that is left, or less", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
     }
-    if (auction->quote.IsNull() && amount < bitassets::MIN_CHN_PAYOUT) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: a bid pays %s %s at least (the least %s paid out)", FormatMoney(bitassets::MIN_CHN_PAYOUT), CURRENCY_UNIT, CURRENCY_UNIT));
+    if (auction->quote.IsNull() && amount < MinChn(*pwallet)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Too little: a bid pays %s %s at least (the least %s paid out)", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT, CURRENCY_UNIT));
     }
     const AssetInfo quote{auction->quote, std::nullopt, dq, LabelOfAsset(*pwallet, auction->quote)};
     std::vector<COutPoint> inputs;
@@ -3302,7 +3307,7 @@ RPCMethod collectauction()
     }
     const auto [inputs, total]{Select(*pwallet, Token::Kind::RECEIPT, id.ToUint256(), 1, "the receipt of this auction")};
     // CHN dust is not paid out (it is burned).
-    const auto paid{[&](const AssetId& asset, uint64_t amount) { return amount > 0 && !(asset.IsNull() && amount < bitassets::MIN_CHN_PAYOUT); }};
+    const auto paid{[&](const AssetId& asset, uint64_t amount) { return amount > 0 && !(asset.IsNull() && amount < MinChn(*pwallet)); }};
     std::vector<AssetId> results;
     if (paid(auction->base, auction->remaining)) results.push_back(auction->base);
     if (paid(auction->quote, auction->proceeds)) results.push_back(auction->quote);

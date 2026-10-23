@@ -16,7 +16,37 @@ export const MAX_AMOUNT = (1n << 63n) - 1n;
 export const MIN_LIQUIDITY = 1000n;
 export const MIN_OPEN_SHARES = 100_000n;
 export const MIN_OPEN_CHN = 1_000_000n;
-export const MIN_CHN_PAYOUT = 50_000n;
+/**
+ * The least CHN (ECX) a pool, a book, a curve or an auction pays out, and the least an order of a pair with it is worth
+ * on its side, in satoshis: the node's for its next block (getbitassetsinfo min_chn_payout, min_book_chn: 0.00005 ECX
+ * from small_payout_height, 0.0005 and 0.01 before); the values of before until it says.
+ */
+export const limits = { minChnPayout: 50_000n, minBookChn: 1_000_000n };
+export function minChnPayout(): bigint {
+  return limits.minChnPayout;
+}
+export function minBookChn(): bigint {
+  return limits.minBookChn;
+}
+/** The limits of the node's getbitassetsinfo (coins, as it writes them), kept for the pages' checks. */
+export function setLimits(info: { min_chn_payout?: Amount; min_book_chn?: Amount } | null | undefined): void {
+  const sat = (v: Amount | undefined): bigint | null => {
+    if (v === undefined || v === null) return null;
+    try {
+      return unitsOf(v, 8);
+    } catch {
+      return null;
+    }
+  };
+  const p = sat(info?.min_chn_payout);
+  const b = sat(info?.min_book_chn);
+  if (p !== null && p > 0n) limits.minChnPayout = p;
+  if (b !== null && b > 0n) limits.minBookChn = b;
+}
+/** The least payout as the pages write it (0.00005 ECX). */
+export function minChnText(): string {
+  return formatUnits(limits.minChnPayout, 8);
+}
 export const SWAP_FEE_PER_MILLE = 3n;
 export const MAX_AUCTION_DURATION = 1_000_000;
 export const MAX_AUCTION_DELAY = 52_560;
@@ -27,6 +57,9 @@ export const WARN_IMPACT = 2;
 // --- What the node answers ---
 
 export interface BitAssetsInfo {
+  /** The least ECX paid out in the next block, and the least an order with ECX is worth on its side (newer nodes). */
+  min_chn_payout?: Amount;
+  min_book_chn?: Amount;
   assets: number;
   reservations: number;
   pools: number;
@@ -681,8 +714,8 @@ export function provide(pool: PoolUnits, amount0: bigint, amount1: bigint): Depo
   let take1 = amount1;
   if (s0 <= s1) take1 = worth(pool.reserve1);
   else take0 = worth(pool.reserve0);
-  if (pool.chn0 && amount0 - take0 < MIN_CHN_PAYOUT) take0 = amount0;
-  if (pool.chn1 && amount1 - take1 < MIN_CHN_PAYOUT) take1 = amount1;
+  if (pool.chn0 && amount0 - take0 < minChnPayout()) take0 = amount0;
+  if (pool.chn1 && amount1 - take1 < minChnPayout()) take1 = amount1;
   return { shares, take0, take1, opens: false };
 }
 
@@ -691,8 +724,8 @@ export function withdraw(pool: PoolUnits, shares: bigint): [bigint, bigint] {
   if (pool.shares <= 0n || shares > pool.shares) return [0n, 0n];
   let out0 = (pool.reserve0 * shares) / pool.shares;
   let out1 = (pool.reserve1 * shares) / pool.shares;
-  if (pool.chn0 && out0 < MIN_CHN_PAYOUT) out0 = 0n;
-  if (pool.chn1 && out1 < MIN_CHN_PAYOUT) out1 = 0n;
+  if (pool.chn0 && out0 < minChnPayout()) out0 = 0n;
+  if (pool.chn1 && out1 < minChnPayout()) out1 = 0n;
   return [out0, out1];
 }
 
@@ -789,7 +822,7 @@ export function auctionProblems(f: {
   if (f.sameAsset) out.push('An auction sells one asset for another.');
   if (!f.amount.ok) out.push(f.amount.error);
   else if (f.held !== undefined && f.held !== null && f.amount.units > f.held) out.push('This wallet holds less than that.');
-  else if (f.sellsChn && f.amount.units < MIN_CHN_PAYOUT) out.push(`An auction sells 0.0005 ${TICKER} at least (the least ${TICKER} paid out).`);
+  else if (f.sellsChn && f.amount.units < minChnPayout()) out.push(`An auction sells ${minChnText()} ${TICKER} at least (the least ${TICKER} paid out).`);
   if (!f.start.ok) out.push(`Start price: ${f.start.error}`);
   if (!f.end.ok) out.push(`End price: ${f.end.error}`);
   if (f.start.ok && f.end.ok && f.end.units > f.start.units) out.push('The price falls: the end price is at most the start price.');

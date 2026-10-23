@@ -49,6 +49,7 @@
     type Auction,
     type Position,
     type Reservation,
+    minChnText,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
   import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
@@ -447,7 +448,7 @@
                       <dt>You get about</dt><dd>{formatUnits(out.a, decimalsOf(pos.asset_a_id))} <SafeText text={pos.asset_a} /></dd>
                       <dt></dt><dd>{formatUnits(out.b, decimalsOf(pos.asset_b_id))} <SafeText text={pos.asset_b} /></dd>
                     </dl>
-                    {#if out.a === 0n || out.b === 0n}<p class="ba-help">A side that rounds to nothing (or to less {TICKER} than the least paid out, 0.0005) stays in the pool.</p>{/if}
+                    {#if out.a === 0n || out.b === 0n}<p class="ba-help">{t('A side that rounds to nothing (or to less %1 than the least paid out, %2) stays in the pool.', TICKER, minChnText())}</p>{/if}
                   {/if}
                   <div class="row"><button type="button" class="btn primary small" onclick={() => removeLiquidity(pos)}>Take out</button><button type="button" class="btn small" onclick={() => (removing = null)}>Cancel</button></div>
                 </div>

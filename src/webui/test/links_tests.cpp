@@ -344,6 +344,8 @@ struct FakeReader : Reader {
     }
     uint64_t QuotePool(const uint256&, const uint256&, uint64_t) override { return pool_quote; }
     bool LaunchesActive() override { return true; }
+    uint64_t min_payout{50'000};
+    uint64_t MinChnPayout() override { return min_payout; }
     std::optional<int> RevealWait(const uint256&) override { return 0; }
 };
 
@@ -738,6 +740,10 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     BOOST_CHECK_EQUAL(position.method, "openposition");
     BOOST_CHECK_EQUAL(position.params.write(), R"([")" + POOL_ID + R"(","10","30",{"ECX":"1"},1.00])");
     BOOST_CHECK(HasRow(position.preface, "Now", "in this range"));
+    // The full range: both prices 0 (no bound either side).
+    const Plan full{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=0&price_upper=0&amount_a=1&amount_b=20&slippage_bps=100")};
+    BOOST_CHECK_EQUAL(full.params[1].get_str(), "0");
+    BOOST_CHECK(HasRow(full.preface, "Range", "the full range"));
     BOOST_CHECK_NE(ResolveRefused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&price_lower=10&price_upper=30&amount_a=1&amount_b=0&slippage_bps=100", reader).find("in that order"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=10&price_upper=30&amount_a=0&amount_b=0&slippage_bps=100").find("something to put in"), std::string::npos);
     // reposition: collect, remove (with its fees), close.

@@ -153,7 +153,7 @@ any other table's.
 to 5 assets, all different, so 1 to 4 pools; `amount_in`, one `min_out` for the whole path,
 `chn_to`) are *orders*. An order has exactly one result output; `chn_to` is required when either
 end is CHN (CHN out, or CHN back, is paid there by the coinbase); an order paying CHN in pays at
-least `MIN_CHN_PAYOUT` (what comes back is paid out). Its transaction takes what it pays in at once
+least `MinChnPayout` (what comes back is paid out). Its transaction takes what it pays in at once
 (the marker burns the CHN), checks that every pool of the path exists and is open, takes one place
 among the block's payouts if an end is CHN (counted against `MAX_TX_PAYOUTS_PER_BLOCK` whether used
 or not), and waits for the end of the block. A block clears at most `MAX_BLOCK_ORDERS` (500)
@@ -177,7 +177,7 @@ and BMM blocks), every order of the block clears together (`bitassets::State::Cl
    order of every hop, and rounding is down, so the product of the reserves never falls; one order
    alone gets exactly what `amm::SwapOut` gave before the DEX. What a hop gives is the next hop's
    input. An order *misses* if a pool of its path is gone or closed (no providers) by then, if a hop
-   gives nothing, or if what comes out is below its `min_out` (CHN: below `MIN_CHN_PAYOUT`).
+   gives nothing, or if what comes out is below its `min_out` (CHN: below `MinChnPayout`).
 2. If no order missed, the pass is the result. Otherwise the orders that missed are taken out and
    the rest cleared again from the reserves the block's transactions left, up to
    `MAX_CLEARING_PASSES` (8) passes. If it still does not settle, the block's orders execute one
@@ -230,7 +230,7 @@ signatures (the proof and the attestations). RPCs name an oracle by its id or it
 `getoraclevalue oracle event`.
 
 **Oracle contracts.** `createoraclecontract oracle event asset amount outcomes refund_address
-expiry` (kind 16) locks an amount of an asset or CHN (CHN at least `MIN_CHN_PAYOUT`) with 1 to 8
+expiry` (kind 16) locks an amount of an asset or CHN (CHN at least `MinChnPayout`: 0.0005 before `small_payout_height`, 0.00005 from it) with 1 to 8
 outcomes (a range of values and a script each, in order) and a refund script, expiring at most
 `MAX_CONTRACT_DURATION` blocks ahead. `settleoraclecontract contract` (kind 17), by anyone: if a
 block up to the expiry has the oracle's attestation of the event, the first outcome whose range
@@ -537,7 +537,7 @@ At a block's end, the books it placed orders in clear once more without takers: 
 
 **Settling.** `settleorder order (cancel)` spends the order's token: it pays what the order got and has not collected;
 cancelled, expired or filled, what is left of what it sells comes back too and the order is gone; else its token comes
-back. CHN goes by the coinbase (`MIN_CHN_PAYOUT` at least; less waits).
+back. CHN goes by the coinbase (`MinChnPayout` at least; less waits).
 
 **Security.** (1) *A side's limit is a count of its index*: each side's entries are counted in the state (table
 `0x9c`: one more when placed, one less when filled, settled, swept or evicted; undone with a block like the rest), and a
@@ -552,7 +552,7 @@ no cheap grief*: full of live orders, an order takes the place of the side's wor
 id) only if its limit is better and it sells at least what the worst has left (the same asset: worth as much at least);
 the worst leaves the book flagged `evicted` (`getorder`'s `evicted_height`, `listorders`' `evicted`) and its holder
 settles it for all it holds, nothing lost; anything else is refused (`bad-ba-book-full`). (4) *No dust*: an order buys
-something at its limit; of a pair with CHN, its CHN side is worth `MIN_BOOK_CHN` (0.01 CHN) at least; of another pair,
+something at its limit; of a pair with CHN, its CHN side is worth `MinBookChn` at least (0.01 CHN before `small_payout_height`, 0.00005 from it); of another pair,
 it sells a whole unit (10^decimals) at least (`bad-ba-order-dust`). (5) *State written before the counts*: orders can
 exist only from the pool kinds' height, which no running network has reached; a store with orders and without the
 books' layout marker (`0x9d`, written with the first order: a development build) is not current

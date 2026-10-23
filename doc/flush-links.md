@@ -72,7 +72,7 @@ any page can open one*. Nothing runs unless the user accepts there.
 
 | Verb | Resolved | Runs |
 |---|---|---|
-| `buy` | The token by its id; the link's ticker must be its name; a launch, not graduated; `ecx` exactly in 8 places (at least 0.0005); the floor in the token's places (rounded up); the curve's quote now must meet it. | `buyfromlaunch ["0x<id>", ecx, slippage, floor]` |
+| `buy` | The token by its id; the link's ticker must be its name; a launch, not graduated; `ecx` exactly in 8 places (at least the node's least payout: 0.0005 ECX, 0.00005 from `small_payout_height`); the floor in the token's places (rounded up); the curve's quote now must meet it. | `buyfromlaunch ["0x<id>", ecx, slippage, floor]` |
 | `sell` | The same; `tokens` exactly in the token's places; the floor in ECX. | `selltolaunch ["0x<id>", tokens, slippage, floor]` |
 | `swap` | The pool by its id; `from` and `to` must be its two assets, by their tickers; not abandoned; the amount exactly in its asset's places; the floor rounded up; the pool's quote now must meet it. | `swaproute [[from, to], amount, slippage, floor, [pool]]` |
 | `launch` | The ticker free; launches active; the logo the link names (a file chooser of the host: refused if its SHA-256 differs, or the rules refuse it); the first buy's quote on a new curve must meet `min_tokens`. | One question for `reserveasset [ticker]` and `launchtoken [ticker, {display_name, info, logo, first_buy, first_min_out}]`; the launch is sent by the app once the reservation is deep enough (`confirm::Authorizations`: within an hour, for at most the fee shown). |
