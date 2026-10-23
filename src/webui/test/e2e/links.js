@@ -78,7 +78,7 @@
       const open = $$('dialog[open]');
       const it = open.find((x) => x.textContent.includes(why));
       if (it) return it;
-      const other = open.find((x) => /Launched|Link refused/.test(x.textContent));
+      const other = open.find((x) => /Launched|Registered|Link refused/.test(x.textContent));
       const ok = other && [...other.querySelectorAll('button')].find((b) => b.textContent.trim() === 'OK');
       if (ok) ok.click();
       return null;
@@ -230,7 +230,7 @@
       ['both steps in one question', rows.includes('Step 1 of 2') && rows.includes('Step 2 of 2') && s.accept === 'Reserve and launch'],
       ['the ticker, the display name, the description and links', rows.includes('Ticker LUMEN') && rows.includes('Display name Lumen Works') && rows.includes('Light for night markets.')],
       ['the logo as a picture, checked against its hash', s.img && rows.includes(art.sha256.slice(0, 16))],
-      ['the first buy and its floor on chain', rows.includes('First buy, paid now') && rows.includes('First buy gets at least 1 tokens')],
+      ['the first buy and its floor on chain', rows.includes('First buy, paid now') && rows.includes('First buy gets at least 1 units')],
     ]);
     const lumen = await waitFor('LUMEN launched by the app once its reservation was deep enough', async () => rpc('getlaunch', ['LUMEN']), 600000);
     const lumenAsset = await rpc('getasset', ['LUMEN']);
@@ -244,6 +244,31 @@
     ]);
     await waitFor('COMET launched', async () => rpc('getlaunch', ['COMET']), 600000);
     await check('launch-link: COMET is on its curve', true);
+
+    // --- register (the same wizard as a launch, no market), then that asset put on a curve, then an order: from the browser ---
+    const regLink = link('register', [['ticker', 'REGONE'], ['name', 'Reg One'], ['desc', 'Registered from a link.'], ['supply', '1000000'], ['decimals', '6']], { exp: now() + 3600 });
+    await confirmLink('register-link', fromBrowser(regLink), (s, rows) => [
+      ['what it asks', rows.includes('It asks Register REGONE (Reg One): 1000000 of 6 decimals to this wallet, no market')],
+      ['both steps', rows.includes('Step 1 of 2') && rows.includes('Command reserveasset') && rows.includes('Command registerasset')],
+    ]);
+    const reg = await waitFor('REGONE registered by the app once its reservation was deep enough', async () => rpc('getasset', ['REGONE']), 600000);
+    await check('register-link: its supply and display name', Number(reg.supply) === 1000000 && reg.display_name === 'Reg One', JSON.stringify(reg));
+    await waitFor('REGONE in the wallet', async () => (await balance(reg.asset)) >= 1000000, 300000);
+    const curveLink = link('curve', [['asset', reg.asset], ['ticker', 'REGONE'], ['amount', '800000'], ['fee_bps', '100']]);
+    await confirmLink('curve-link', fromBrowser(curveLink), (s, rows) => [
+      ['what it asks', rows.includes('It asks Put 800000 REGONE on a bonding curve at 1.00 %')],
+      ['the parts', rows.includes('600000 REGONE sold for ECX') && rows.includes('200000 REGONE into the locked pool')],
+      ['the command', rows.includes('Command curveasset')],
+    ]);
+    const onCurve = await waitFor('REGONE on its curve', async () => rpc('getlaunch', ['REGONE']), 300000);
+    await check('curve-link: an existing asset on a curve, its supply fixed', onCurve.from_asset === true && (await rpc('getasset', ['REGONE'])).fixed === true, JSON.stringify(onCurve));
+    const orderLink = link('order', [['sell', grad], ['sell_ticker', 'GRAD'], ['buy', 'ECX'], ['buy_ticker', 'ECX'], ['amount', '10'], ['price', '0.5'], ['expiry_blocks', '1000']]);
+    await confirmLink('order-link', fromBrowser(orderLink), (s, rows) => [
+      ['what it asks', rows.includes('It asks Sell 10 GRAD for ECX at 0.5 ECX each at least, for 1000 blocks')],
+      ['the command', rows.includes('Command placeorder')],
+    ]);
+    await waitFor('the order in its book', async () => (await rpc('listorders', [], W)).length > 0 || null, 300000);
+    await refused('curve of an asset on a curve', fromBrowser(link('curve', [['asset', reg.asset], ['ticker', 'REGONE'], ['amount', '8'], ['fee_bps', '100']])), 'was launched or put on a curve already');
 
     // --- connect, from the browser: the callback with the address, the nonce and the network ---
     const nonce = 'e2e0123456789abcdef01234';
