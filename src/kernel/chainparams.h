@@ -158,6 +158,8 @@ public:
         std::optional<int> ticker_height{};
         //! Launches with parameters: Consensus::SidechainParams::launch_params_height (-testactivationheight=launchparams@<height>; regtest only).
         std::optional<int> launch_params_height{};
+        //! Allocations of up to 25 %: Consensus::SidechainParams::allocation25_height (-testactivationheight=allocation25@<height>; regtest only).
+        std::optional<int> allocation25_height{};
     };
 
     /**

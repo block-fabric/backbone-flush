@@ -145,6 +145,13 @@ struct SidechainParams {
     int launch_params_height{std::numeric_limits<int>::max()};
     bool LaunchParamsActive(int height) const { return DexCurvesActive(height) && height >= launch_params_height; }
     /**
+     * Allocations of up to 25 % (bitassets::MAX_LAUNCH_ALLOCATION): from this block a launch's creator may have up to
+     * 25 % of its supply minted to it at graduation; before it, 5 % at most (MAX_LAUNCH_ALLOCATION_BEFORE_25). Never
+     * unless a network sets it (regtest: 0, or -testactivationheight=allocation25@<height>).
+     */
+    int allocation25_height{std::numeric_limits<int>::max()};
+    bool Allocation25Active(int height) const { return DexCurvesActive(height) && height >= allocation25_height; }
+    /**
      * The parts of every DEX swap fee (all pool kinds and tiers; order books charge none), in millionths of the fee: the
      * chain's security (paid with the block's fees: the BMM bidder and the validators by the curve of the network fees,
      * when the fee is in the chain's coin; held by the treasury per asset otherwise) and the protocol's (to the

@@ -695,6 +695,8 @@ public:
             if (opts.dep_opts.ticker_height) consensus.sidechain.ticker_height = *opts.dep_opts.ticker_height;
             // Launches with parameters from the first block, unless a test asks (-testactivationheight=launchparams@<height>).
             consensus.sidechain.launch_params_height = opts.dep_opts.launch_params_height.value_or(0);
+            // Allocations of up to 25 % from the first block, unless a test asks (-testactivationheight=allocation25@<height>).
+            consensus.sidechain.allocation25_height = opts.dep_opts.allocation25_height.value_or(0);
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -875,6 +877,8 @@ public:
         // Launches with parameters (supply, decimals, the curve's fee; an existing asset on a curve): never on the eCash
         // networks until a height is decided (a network that takes them sets it; doc/dex-math.md "Launch curve").
         consensus.sidechain.launch_params_height = std::numeric_limits<int>::max();
+        // Allocations of up to 25 % of a launch's supply: never on the eCash networks until a height is decided (5 % at most until then).
+        consensus.sidechain.allocation25_height = std::numeric_limits<int>::max();
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
@@ -920,6 +924,10 @@ public:
                 static constexpr int SLOT99_V2_HEIGHT{3300};
                 consensus.sidechain.launch_params_height = SLOT99_V2_HEIGHT;
                 consensus.pos.jail_fix_height = SLOT99_V2_HEIGHT;
+                // Upgrade v3 (doc/photon-slot.md, "Upgrade v3"), from block SLOT99_V3_HEIGHT: a launch's allocation up to
+                // 25 % (5 % before). In the fingerprint too: each node of v3 rebuilds its sidechain state once.
+                static constexpr int SLOT99_V3_HEIGHT{4110};
+                consensus.sidechain.allocation25_height = SLOT99_V3_HEIGHT;
                 m_temporary_notice = "Temporary: Flush on betanet slot 99 (Photon). A test chain in the slot voted in for Photon; it will be "
                                      "dropped when Flush gets its own slot (46). Do not keep value here.";
                 break;

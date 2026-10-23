@@ -15,22 +15,28 @@
   - getlaunchlog, listlaunches, getlaunchstats; the peg balance throughout;
   - launches with parameters (launchparams): a supply, decimals and fee of its own, to graduation (its pool a quarter of
     its supply); an existing asset put on a curve by its controller (curveasset: the control coin goes, the supply fixed),
-    its issuer's retained units refused by the curve beyond what it sold, to graduation.
+    its issuer's retained units refused by the curve beyond what it sold, to graduation;
+  - allocations of up to 25 % (allocation25): 5 % at most before ALLOC25_HEIGHT, 25 % from it (getlaunchstats'
+    rules.max_allocation), minted on top of the supply at graduation and claimed by the creator; a node without the
+    rule (an old node: allocation25 never) follows the chain until the first launch past 5 %, and forks off there.
 """
 
 from decimal import Decimal
+import os
 
 from feature_layers import LayersTest
 from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
 
 DEX_HEIGHT = 10
 CURVES_HEIGHT = 15
+# Past the blocks the parts before take (about 60).
+ALLOC25_HEIGHT = 120
 
 
 class LayersLaunchTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}", "-testactivationheight=ticker@0", "-txindex"]
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}", "-testactivationheight=ticker@0", f"-testactivationheight=allocation25@{ALLOC25_HEIGHT}", "-txindex"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
@@ -219,6 +225,83 @@ class LayersLaunchTest(LayersTest):
         assert_equal(n1.getlaunch("GOLD")["status"], "graduated")
         assert_equal(n1.getpool("GOLD", "CHN")["reserve_a"], Decimal("200000"))
         assert_peg_balance(main, self.nodes)
+
+        self.allocation_up_to_25(assert_peg_balance)
+
+    def bmm_on(self, nodes):
+        """A BMM block by n0 that the nodes `nodes` take (a node that forked off never does)."""
+        from test_framework.fastblocks import SLOT
+        self.sync_mempools(nodes)
+        block = nodes[0].createbmmblock(self.side_address)
+        self.main.createbmmrequest(SLOT, block["hash"], Decimal("0.001"))
+        self.mine_main()
+        self.wait_until(lambda: all(n.getbestblockhash() == block["hash"] for n in nodes))
+        return block["hash"]
+
+    def allocation_up_to_25(self, assert_peg_balance):
+        main = self.main
+        n0, n1, n2 = self.nodes
+        self.log.info("Allocations of up to 25 %: 5 % at most before allocation25_height")
+        assert_greater_than(ALLOC25_HEIGHT, n0.getblockcount() + 4)
+        rules = n0.getlaunchstats()["rules"]
+        assert_equal((rules["max_allocation"], rules["allocation25_height"]), (Decimal("5"), ALLOC25_HEIGHT))
+        n0.reserveasset("QUARTER")
+        n0.reserveasset("EARLY")
+        self.bmm_to(n0.getblockcount() + 3)
+        assert_raises_rpc_error(-8, "0 to 5 percent", n0.launchtoken, "QUARTER", {"allocation": 25})
+        assert_raises_rpc_error(-8, "0 to 5 percent", n0.launchtoken, "QUARTER", {"allocation": 5.01})
+        # 5 % itself, before the height: valid on every node, the old one too.
+        self.log.info("A node without the rule (allocation25 never, as an old node) follows a 5 % launch")
+        # FLUSHD_OLD: a flushd of before the rule (v2) as that node, a rehearsal of the upgrade; else this one without it.
+        old = os.environ.get("FLUSHD_OLD")
+        if old:
+            n2.args[0] = old
+            self.restart_node(2, extra_args=[a for a in self.extra_args[2] if not a.startswith("-testactivationheight=allocation25")])
+        else:
+            self.restart_node(2, extra_args=self.extra_args[2] + ["-testactivationheight=allocation25@1000000"])
+        self.connect_nodes(2, 0)
+        self.connect_nodes(2, 1)
+        if not old:
+            assert_equal(n2.getlaunchstats()["rules"]["allocation25_height"], 1000000)
+        n0.launchtoken("EARLY", {"allocation": 5})
+        self.bmm()
+        assert_equal(n2.getlaunch("EARLY")["allocation"], Decimal("5"))
+
+        self.log.info("From allocation25_height: 25 %, never more; the old node forks off at the first launch past 5 %")
+        self.bmm_to(ALLOC25_HEIGHT - 1)
+        rules = n0.getlaunchstats()["rules"]
+        assert_equal(rules["max_allocation"], Decimal("25"))
+        assert_equal(n2.getlaunchstats()["rules"]["max_allocation"], Decimal("5"))
+        assert_raises_rpc_error(-8, "0 to 25 percent", n0.launchtoken, "QUARTER", {"allocation": 25.01})
+        # (At 25 % a supply with its allocation past MAX_AMOUNT is refused by the rules, dex_launch_tests: the RPC's
+        # amounts stop below 10^18 units, short of it.)
+        made = n0.launchtoken("QUARTER", {"allocation": 25})
+        # The old node never takes it: not in its mempool, nor the block with it.
+        assert made["txid"] not in n2.getrawmempool()
+        fork = self.bmm_on([n0, n1])
+        assert_equal(n0.getblockheader(fork)["height"], ALLOC25_HEIGHT)
+        self.wait_until(lambda: any(t["hash"] == fork and t["status"] == "invalid" for t in n2.getchaintips()))
+        assert_equal(n2.getblockcount(), ALLOC25_HEIGHT - 1)
+        launch = n1.getlaunch("QUARTER")
+        assert_equal((launch["allocation"], launch["supply"]), (Decimal("25"), Decimal("1000000000")))
+
+        self.log.info("Its graduation as any (500 raised, a quarter of the supply into its pool); 25 % minted on top, to the creator")
+        n0.buyfromlaunch("QUARTER", 600)
+        self.bmm_on([n0, n1])
+        done = n1.getlaunch("QUARTER")
+        assert_equal(done["status"], "graduated")
+        assert Decimal("500") <= done["raised"] <= Decimal("500.00001"), done["raised"]
+        assert_equal(n1.getpool("QUARTER", "CHN")["reserve_a"], Decimal("250000000"))
+        before = self.holding(n0, "QUARTER")
+        n1.claimlaunch("QUARTER")
+        self.bmm_on([n0, n1])
+        assert_equal(self.holding(n0, "QUARTER") - before, Decimal("250000000"))
+        claimed = n1.getlaunch("QUARTER")
+        assert claimed["allocation_claimed"]
+        assert_equal(claimed["supply"], Decimal("1250000000"))
+        assert_equal(n1.getpool("QUARTER", "CHN")["reserve_a"], Decimal("250000000"))
+        assert_raises_rpc_error(-8, "Nothing is owed", n1.claimlaunch, "QUARTER")
+        assert_peg_balance(main, [n0, n1])
 
 
 if __name__ == "__main__":
