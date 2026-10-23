@@ -17,6 +17,7 @@
 #include <common/messages.h>
 #include <consensus/consensus.h>
 #include <node/types.h>
+#include <policy/feerate.h>
 #include <consensus/amount.h>
 #include <core_io.h>
 #include <grpc/standard.h>
@@ -71,7 +72,7 @@ constexpr size_t MAX_BROADCAST_BYTES{100'000};
 /** The node's own RPC methods the API may call: the DEX's reads and quotes, never a wallet's. */
 const std::set<std::string> NODE_METHODS{
     "getpool", "searchpools", "getswapquote", "quoteroute", "quotelaunch", "quotepoolliquidity", "previewposition",
-    "getbook", "getposition", "getpoolticks", "getverifications", "getlaunchstats", "getlaunchlog", "getpeginfo",
+    "getbook", "getposition", "getpoolticks", "getverifications", "getlaunchstats", "getlaunchlog", "getpeginfo", "searchassets",
 };
 
 /** An error of an RPC method, as a status. */
@@ -84,7 +85,7 @@ Status FromRpcError(const UniValue& error)
     case RPC_TYPE_ERROR:
     case RPC_INVALID_ADDRESS_OR_KEY:
     case RPC_DESERIALIZATION_ERROR:
-        if (message.starts_with("No such") || message.starts_with("Not a launched token") || message.starts_with("There is no pool")) return {Code::NOT_FOUND, message};
+        if (message.starts_with("No such") || message.starts_with("Not an asset on a curve") || message.starts_with("There is no pool")) return {Code::NOT_FOUND, message};
         return {Code::INVALID_ARGUMENT, message};
     case RPC_IN_WARMUP: return {Code::UNAVAILABLE, "the node is starting: " + message};
     case RPC_MISC_ERROR: return {Code::FAILED_PRECONDITION, message};
@@ -159,8 +160,7 @@ std::string LinkLabel(const std::string& url)
 
 const std::string& Coin()
 {
-    static const std::string coin{"ECX"};
-    return coin;
+    return CURRENCY_UNIT;
 }
 
 } // namespace
@@ -204,7 +204,7 @@ CreatorText SplitInfo(const std::string& info)
 double CostOf(const std::string& method_path)
 {
     const std::string method{method_path.substr(method_path.rfind('/') + 1)};
-    if (method.starts_with("Quote") || method == "BuildAction") return 4;
+    if (method.starts_with("Quote") || method == "BuildAction" || method == "GetAsset" || method == "ListAssets") return 4;
     if (method == "ListLaunches" || method == "ListPools" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
     if (method == "ServerReflectionInfo") return 2;
     return 1;
@@ -360,7 +360,7 @@ private:
     /** An asset a client names: ECX, a ticker or name (any case for a ticker), 64 hex digits, or its number. */
     static AssetId Resolve(const bitassets::State& state, const std::string& text)
     {
-        if (text.empty() || text.size() > 128) Fail(Code::INVALID_ARGUMENT, "name an asset: ECX, a ticker, or its id");
+        if (text.empty() || text.size() > 128) Fail(Code::INVALID_ARGUMENT, "name an asset: " + CURRENCY_UNIT + ", a ticker, or its id");
         if (text == "ECX" || text == "ecx" || text == "CHN") return AssetId{};
         if (text.size() == 64 && IsHex(text)) return AssetId{*uint256::FromHex(ToLower(text))};
         if (bitassets::IsTicker(ToUpper(text))) {
@@ -390,7 +390,7 @@ private:
         return {id, *launch};
     }
 
-    static std::string ArgOf(const AssetId& asset) { return asset.IsNull() ? "CHN" : "0x" + asset.GetHex(); }
+    static std::string ArgOf(const AssetId& asset) { return asset.IsNull() ? CURRENCY_UNIT : "0x" + asset.GetHex(); }
 
     static std::optional<std::string> LogoUrl(const bitassets::State& state, const AssetId& asset, bool launch)
     {
@@ -442,6 +442,7 @@ private:
         bool logo{false};
         uint32_t created_time{0};
         double raised{0}, sold{0}, price{0}, mcap{0}, progress{0}, curve_left{0}, volume_total{0};
+        int decimals{bitassets::LAUNCH_DECIMALS};
         Window day;
         uint64_t holders{0};
         uint256 pool;
@@ -474,7 +475,6 @@ private:
                 if (const CBlockIndex* block{chain[height]}) times[height] = static_cast<uint32_t>(block->GetBlockTime());
             }
         }
-        const double whole{std::pow(10.0, bitassets::LAUNCH_DECIMALS)};
         for (const auto& [height, token] : tokens) {
             const auto rec{state.GetLaunch(token)};
             if (!rec) continue;
@@ -482,6 +482,8 @@ private:
             l.token = token;
             l.rec = *rec;
             const auto record{state.GetAsset(token)};
+            l.decimals = record ? record->decimals : bitassets::LAUNCH_DECIMALS;
+            const double whole{std::pow(10.0, l.decimals)};
             l.ticker = record && !record->text.empty() ? record->text : "0x" + token.GetHex();
             const auto display{state.GetDisplayName(token)};
             l.name = display ? display->text : l.ticker;
@@ -493,13 +495,14 @@ private:
             uint64_t raised{rec->raised_at_graduation}, left{0};
             if (pool && !rec->Graduated()) {
                 raised = pool->reserve0 - std::min(pool->reserve0, rec->virtual_coin);
-                left = pool->reserve1 - std::min(pool->reserve1, bitassets::LAUNCH_CURVE_END);
+                left = pool->reserve1 - std::min(pool->reserve1, rec->CurveEnd());
             }
             if (pool && pool->reserve1 > 0) l.price = (static_cast<double>(pool->reserve0) / COIN) / (static_cast<double>(pool->reserve1) / whole);
             l.raised = static_cast<double>(raised) / COIN;
             l.curve_left = static_cast<double>(left) / whole;
-            l.sold = rec->Graduated() ? static_cast<double>(bitassets::LAUNCH_CURVE_SUPPLY) / whole : static_cast<double>(bitassets::LAUNCH_CURVE_SUPPLY - std::min(left, bitassets::LAUNCH_CURVE_SUPPLY)) / whole;
-            const uint64_t supply{record ? record->supply : bitassets::LAUNCH_SUPPLY};
+            const uint64_t curve_supply{rec->CurveSupply()};
+            l.sold = rec->Graduated() ? static_cast<double>(curve_supply) / whole : static_cast<double>(curve_supply - std::min(left, curve_supply)) / whole;
+            const uint64_t supply{record ? record->supply : rec->Supply()};
             l.mcap = l.price * (static_cast<double>(supply) / whole);
             l.progress = rec->Graduated() ? 100.0 : std::min(100.0, 100.0 * static_cast<double>(raised) / static_cast<double>(std::max<uint64_t>(rec->graduation, 1)));
             l.volume_total = static_cast<double>(rec->volume) / COIN;
@@ -541,7 +544,27 @@ private:
         m.SetString("pool_id", Hex(l.rec.pool));
         m.SetDouble("volume_total", l.volume_total);
         m.SetUInt("trades_total", l.rec.trades);
+        m.SetUInt("decimals", static_cast<uint32_t>(l.decimals));
+        m.SetDouble("curve_supply", Whole(l.rec.CurveSupply(), l.decimals));
+        m.SetDouble("pool_supply", Whole(l.rec.PoolSupply(), l.decimals));
+        m.SetBool("from_asset", l.rec.from_asset);
+        m.SetDouble("fee_bps", l.rec.fee / 100.0);
         (void)state;
+    }
+
+    /** A launch's own curve: its supply and decimals, its virtual reserves. */
+    Message CurveOfLaunch(const bitassets::LaunchRecord& rec, int decimals) const
+    {
+        Message c{New("CurveParams")};
+        c.SetDouble("supply", Whole(rec.Supply(), decimals));
+        c.SetDouble("sale_supply", Whole(rec.CurveSupply(), decimals));
+        c.SetDouble("pool_supply", Whole(rec.PoolSupply(), decimals));
+        c.SetDouble("virtual_ecx", static_cast<double>(rec.virtual_coin) / COIN);
+        c.SetDouble("virtual_tokens", Whole(rec.VirtualUnits(), decimals));
+        c.SetDouble("graduation_ecx", static_cast<double>(rec.graduation) / COIN);
+        c.SetUInt("decimals", static_cast<uint32_t>(decimals));
+        c.SetDouble("max_allocation_percent", bitassets::MAX_LAUNCH_ALLOCATION / 100.0);
+        return c;
     }
 
     Message CurveOf(uint64_t graduation, uint32_t fee) const
@@ -748,7 +771,8 @@ private:
         const std::string side{side_text.empty() ? "buy" : side_text};
         if (side != "buy" && side != "sell") Fail(Code::INVALID_ARGUMENT, "side: buy or sell");
         const bool buy{side == "buy"};
-        const int din{buy ? bitassets::CHN_DECIMALS : bitassets::LAUNCH_DECIMALS}, dout{buy ? bitassets::LAUNCH_DECIMALS : bitassets::CHN_DECIMALS};
+        const int dt{DecimalsOf(state, token)};
+        const int din{buy ? bitassets::CHN_DECIMALS : dt}, dout{buy ? dt : bitassets::CHN_DECIMALS};
         const uint64_t amount{FloorUnits(ParseAmount(amount_text, din, "amount"), din)};
         if (amount == 0) Fail(Code::INVALID_ARGUMENT, "amount: too small");
         const uint32_t slippage{Slippage(slippage_in)};
@@ -941,7 +965,7 @@ private:
         const UniValue& amounts{q["amounts"]};
         const auto amount_of{[&](const AssetId& asset) {
             const std::string label{Label(state, asset)};
-            return amounts.exists(label) ? amounts[label] : amounts[std::string{"CHN"}];
+            return amounts.exists(label) ? amounts[label] : amounts[std::string{CURRENCY_UNIT}];
         }};
         const uint64_t u0{UnitsOf(amount_of(A), d0)};
         const uint64_t u1{UnitsOf(amount_of(B), d1)};
@@ -965,14 +989,162 @@ private:
     }
 
     /** The first buy of a launch not made yet: on a fresh curve of the rules of the next block (the chain's own curve code). */
-    std::pair<uint64_t, uint64_t> FirstBuy(uint64_t ecx) const
+    std::pair<uint64_t, uint64_t> FirstBuy(uint64_t ecx, uint64_t supply = 0, uint32_t fee = 0) const
     {
         const Consensus::SidechainParams& params{Params().GetConsensus().sidechain};
         const uint64_t graduation{static_cast<uint64_t>(params.launch_graduation)};
-        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{params.launch_fee, bitassets::LAUNCH_CURVE_END, 0, 0}, graduation / 2,
-                                                          bitassets::LAUNCH_VIRTUAL_TOKENS, {bitassets::dex::HopIn{true, ecx}}, {true})};
+        const uint64_t units{supply == 0 ? bitassets::LAUNCH_SUPPLY : supply};
+        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee == 0 ? params.launch_fee : fee, units / 8 * 3, 0, 0, true}, graduation / 2,
+                                                          units / 8 * 9, {bitassets::dex::HopIn{true, ecx}}, {true})};
         if (!cleared) Fail(Code::INVALID_ARGUMENT, "the curve cannot take this first buy");
         return {cleared->outs[0], cleared->refunds[0]};
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // The asset registry
+
+    //! The most pools of an asset a row of the registry reads from the state (more: the index's count alone).
+    static constexpr int64_t MAX_ASSET_POOLS_READ{32};
+
+    /** An asset of the registry from its row of searchassets and the state: its markets of every kind. */
+    void FillAsset(Message& m, const UniValue& row, const bitassets::State& state, const Tip& tip, bool whole_info) const
+    {
+        const AssetId id{*uint256::FromHex(row["asset"].get_str())};
+        const auto record{state.GetAsset(id)};
+        const int d{record ? record->decimals : row["decimals"].getInt<int>()};
+        m.SetString("id", Hex(id));
+        m.SetString("ticker", row.exists("name") ? row["name"].get_str() : row["label"].get_str());
+        if (row.exists("display_name")) m.SetString("display_name", row["display_name"].get_str());
+        const std::string info{record && record->data.info ? *record->data.info : std::string{}};
+        const CreatorText text{SplitInfo(info)};
+        m.SetString("info", whole_info ? text.description : text.description.substr(0, 280));
+        m.SetUInt("decimals", static_cast<uint32_t>(d));
+        const uint64_t supply{record ? record->supply : 0};
+        m.SetDouble("supply", Whole(supply, d));
+        m.SetString("supply_units", util::ToString(supply));
+        m.SetUInt("holders", bitassets::market::Enabled() ? bitassets::market::HolderCount(*tip.view, id, bitassets::Token::Kind::ASSET) : 0);
+        if (const auto url{LogoUrl(state, id, false)}) m.SetString("logo", *url);
+        const auto control{state.FirstTokenOf(id, bitassets::Token::Kind::CONTROL)};
+        m.SetBool("fixed_supply", !control);
+        if (row.exists("control") && row["control"].exists("address")) m.SetString("controller", row["control"]["address"].get_str());
+        if (record) {
+            m.SetUInt("registered_height", static_cast<uint32_t>(record->height));
+            m.SetString("registration_txid", record->registration.GetHex());
+            m.SetUInt("seq", record->seq);
+        }
+        const auto launch{state.GetLaunch(id)};
+        m.SetBool("launched", launch.has_value());
+        const auto launch_of_row{[&](const AssetId&) { return launch.has_value(); }};
+        // Its markets: a curve not graduated, then pools, books, auctions.
+        Message& market{m.Mutable("market")};
+        // Its pools by kind, from the state for an asset of a few pools (MAX_ASSET_POOLS_READ), else the index's count (books
+        // then not told apart): the work of a row bounded, whatever an asset has.
+        uint32_t pools{0}, books{0};
+        const int64_t indexed{row.exists("pools") ? row["pools"].getInt<int64_t>() : 0};
+        if (indexed > MAX_ASSET_POOLS_READ) {
+            pools = static_cast<uint32_t>(indexed);
+        } else if (indexed > 0 || launch_of_row(id)) {
+            for (const auto& [pid, pool] : state.PoolsOf(id)) {
+                const auto curve{state.GetPoolParams(pid).GetCurve()};
+                if (curve == bitassets::Curve::LAUNCH) continue;
+                if (curve == bitassets::Curve::BOOK) {
+                    if (pool.shares > bitassets::MIN_LIQUIDITY) ++books;
+                } else if (!bitassets::amm::Abandoned(pool)) {
+                    ++pools;
+                }
+            }
+        }
+        const uint32_t auctions{static_cast<uint32_t>(state.AuctionsOf(id, 20).size())};
+        const bool on_curve{launch && !launch->Graduated()};
+        std::vector<std::string> kinds;
+        if (on_curve) kinds.emplace_back("curve");
+        if (pools) kinds.emplace_back("pool");
+        if (books) kinds.emplace_back("book");
+        if (auctions) kinds.emplace_back("auction");
+        market.SetString("status", kinds.empty() ? "none" : kinds.front());
+        for (const std::string& k : kinds) market.AddString("kinds", k);
+        market.SetUInt("pools", pools);
+        market.SetUInt("books", books);
+        market.SetUInt("auctions", auctions);
+        std::optional<double> price;
+        if (launch) {
+            if (const auto pool{state.GetPool(launch->pool)}) {
+                if (on_curve) {
+                    const uint64_t raised{pool->reserve0 - std::min(pool->reserve0, launch->virtual_coin)};
+                    market.SetDouble("progress", std::min(1.0, static_cast<double>(raised) / static_cast<double>(std::max<uint64_t>(launch->graduation, 1))));
+                }
+                if (pool->reserve1 > 0) price = (static_cast<double>(pool->reserve0) / COIN) / Whole(pool->reserve1, d);
+            }
+        } else if (const auto pool{state.GetPool(bitassets::PoolId(bitassets::CHN, id))}; pool && pool->reserve1 > 0 && !bitassets::amm::Abandoned(*pool)) {
+            price = (static_cast<double>(pool->reserve0) / COIN) / Whole(pool->reserve1, d);
+        }
+        if (price) market.SetDouble("price_ecx", *price);
+        market.SetDouble("volume_24h_ecx", row.exists("volume") ? row["volume"].get_real() : 0.0);
+    }
+
+    /** The rows of searchassets for a request (its sort mapped), a page. */
+    UniValue SearchAssets(const std::string& q, const std::string& sort, const std::string& cursor, uint32_t limit, const UniValue& filters) const
+    {
+        UniValue params(UniValue::VARR);
+        params.push_back(q);
+        params.push_back(filters);
+        params.push_back(sort);
+        params.push_back(cursor);
+        params.push_back(static_cast<int>(limit));
+        return Rpc("searchassets", params);
+    }
+
+    /** Whole units of a supply (digits only) at `decimals`, in units; refused past what an asset can have. */
+    static uint64_t WholeSupply(const std::string& text, int decimals)
+    {
+        if (text.empty() || text.size() > 19 || text.find_first_not_of("0123456789") != std::string::npos || text[0] == '0') Fail(Code::INVALID_ARGUMENT, "supply: whole units, digits only");
+        unsigned __int128 units{0};
+        for (const char c : text) units = units * 10 + static_cast<unsigned>(c - '0');
+        for (int i{0}; i < decimals; ++i) units *= 10;
+        if (units > bitassets::MAX_AMOUNT) Fail(Code::INVALID_ARGUMENT, "supply: more than an asset can have at these decimals");
+        return static_cast<uint64_t>(units);
+    }
+
+    struct Creator {
+        std::string name, desc;
+        UniValue links;
+        std::string logo;
+    };
+    /** The creator's fields of a launch or a registration: the display name, the description and https links (the chain's 512 bytes), the logo's hash. */
+    static Creator CreatorFields(const Message& req)
+    {
+        Creator c;
+        c.name = req.GetString("name");
+        if (c.name.empty() || c.name.size() > bitassets::MAX_DISPLAY_NAME_SIZE) Fail(Code::INVALID_ARGUMENT, "name: 1 to 64 bytes");
+        if (const auto why{bitassets::WhyNotDisplayName(c.name)}) Fail(Code::INVALID_ARGUMENT, "name: " + *why);
+        c.desc = req.GetString("description");
+        for (const unsigned char ch : c.desc) {
+            if ((ch < 0x20 && ch != '\n') || ch == 0x7f) Fail(Code::INVALID_ARGUMENT, "description: plain text (line breaks allowed, no other control character)");
+        }
+        size_t info{c.desc.size()};
+        c.links = UniValue{UniValue::VARR};
+        for (size_t i{0}; i < req.Count("links"); ++i) {
+            const std::string& link{req.StringAt("links", i)};
+            if (!SafeLink(link)) Fail(Code::INVALID_ARGUMENT, "links: https only, no user, no space, 512 bytes at most");
+            c.links.push_back(link);
+            info += link.size() + 1;
+        }
+        if (c.links.size() > 4) Fail(Code::INVALID_ARGUMENT, "links: at most 4");
+        if (info > bitassets::MAX_INFO_SIZE) Fail(Code::INVALID_ARGUMENT, strprintf("the description and the links take %u bytes: the chain keeps %u", info, bitassets::MAX_INFO_SIZE));
+        c.logo = ToLower(req.GetString("logo_sha256"));
+        if (!c.logo.empty() && (c.logo.size() != 64 || !IsHex(c.logo))) Fail(Code::INVALID_ARGUMENT, "logo_sha256: 64 hex digits");
+        return c;
+    }
+
+    /** Why the controller of an asset cannot put part of it on a curve now (nullopt: it can). */
+    static std::optional<std::string> WhyNoCurve(const bitassets::State& state, const AssetId& asset)
+    {
+        const auto record{state.GetAsset(asset)};
+        if (!record) return "no such asset";
+        if (state.GetLaunch(asset)) return "it was launched or put on a curve already";
+        if (!state.FirstTokenOf(asset, bitassets::Token::Kind::CONTROL)) return "it has no control coin (its supply is fixed): nobody can put it on a curve";
+        if (state.GetPool(bitassets::PoolId(bitassets::CHN, asset))) return "it has a pool with " + Coin() + " already: a curve would graduate into it";
+        return std::nullopt;
     }
 
     Message Build(const Message& req, const Tip& tip) const
@@ -1007,14 +1179,15 @@ private:
             const std::string ticker{ticker_of(token)};
             const uint64_t in{*ToIntegral<uint64_t>(q.GetString("amount_in_units"))}, floor{*ToIntegral<uint64_t>(q.GetString("min_out_units"))};
             if (floor == 0) Fail(Code::FAILED_PRECONDITION, "the trade gives too little");
-            const int din{buy ? 8 : bitassets::LAUNCH_DECIMALS}, dout{buy ? bitassets::LAUNCH_DECIMALS : 8};
+            const int dt{DecimalsOf(state, token)};
+            const int din{buy ? 8 : dt}, dout{buy ? dt : 8};
             uri = {{"launch", ticker}, {"asset", Hex(token)}, {buy ? "ecx" : "tokens", Decimal(in, din)}, {buy ? "min_tokens" : "min_ecx", Decimal(floor, dout)}, {"slippage_bps", util::ToString(slippage)}};
             payload["launch"] = UniValue{ticker};
             payload["asset"] = UniValue{Hex(token)};
             payload[buy ? "ecx" : "tokens"] = UniValue{Decimal(in, din)};
             payload[buy ? "min_tokens" : "min_ecx"] = UniValue{Decimal(floor, dout)};
-            summary = buy ? strprintf("Buy at least %s %s for %s ECX on its curve", Decimal(floor, dout), ticker, Decimal(in, din))
-                          : strprintf("Sell %s %s to its curve for at least %s ECX", Decimal(in, din), ticker, Decimal(floor, dout));
+            summary = buy ? strprintf("Buy at least %s %s for %s %s on its curve", Decimal(floor, dout), ticker, Decimal(in, din), CURRENCY_UNIT)
+                          : strprintf("Sell %s %s to its curve for at least %s %s", Decimal(in, din), ticker, Decimal(floor, dout), CURRENCY_UNIT);
             built.Mutable("launch_quote") = q;
             built.SetBool("app_ready", true);
         } else if (verb == "swap") {
@@ -1135,21 +1308,164 @@ private:
             for (const UniValue& link : links.getValues()) uri.emplace_back("link", link.get_str());
             if (!links.empty()) payload["links"] = links;
             summary = strprintf("Launch %s (%s)", ticker, name);
+            // Its parameters (launch_params_height): a supply and decimals, a fee, an allocation of its own.
+            int decimals{bitassets::LAUNCH_DECIMALS};
+            uint64_t supply{0};
+            uint32_t fee{0};
+            if (!req.GetString("supply").empty() || req.Has("decimals") || req.GetUInt("fee_bps") != 0) {
+                if (!Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1)) Fail(Code::FAILED_PRECONDITION, "launches with a supply or a fee of their own do not apply yet on this network");
+            }
+            if (req.Has("decimals")) {
+                decimals = static_cast<int>(req.GetUInt("decimals"));
+                if (decimals > bitassets::MAX_DECIMALS) Fail(Code::INVALID_ARGUMENT, "decimals: 0 to 12");
+                if (req.GetString("supply").empty()) Fail(Code::INVALID_ARGUMENT, "decimals go with a supply");
+            }
+            if (!req.GetString("supply").empty()) {
+                supply = WholeSupply(req.GetString("supply"), decimals);
+                if (!bitassets::IsLaunchSupply(supply)) {
+                    Fail(Code::INVALID_ARGUMENT, strprintf("supply: a multiple of 8 units, %s to %s at %d decimals", Decimal(bitassets::MIN_LAUNCH_SUPPLY, decimals, 12),
+                                                          Decimal(bitassets::MAX_LAUNCH_SUPPLY, decimals, 12), decimals));
+                }
+                uri.emplace_back("supply", req.GetString("supply"));
+                uri.emplace_back("decimals", util::ToString(decimals));
+                payload["supply"] = UniValue{req.GetString("supply")};
+                payload["decimals"] = UniValue{decimals};
+                summary += strprintf(", %s of %d decimals", req.GetString("supply"), decimals);
+            }
+            if (req.GetUInt("fee_bps") != 0) {
+                const uint32_t bps{static_cast<uint32_t>(req.GetUInt("fee_bps"))};
+                if (bps < bitassets::MIN_LAUNCH_FEE / 100 || bps > bitassets::MAX_LAUNCH_FEE / 100) Fail(Code::INVALID_ARGUMENT, "fee_bps: 30 to 500");
+                fee = bps * 100;
+                uri.emplace_back("fee_bps", util::ToString(bps));
+                payload["fee_bps"] = UniValue{static_cast<int>(bps)};
+                summary += strprintf(", a fee of %d.%02d %%", bps / 100, bps % 100);
+            }
+            if (req.GetUInt("allocation_bps") != 0) {
+                const uint32_t bps{static_cast<uint32_t>(req.GetUInt("allocation_bps"))};
+                if (bps > bitassets::MAX_LAUNCH_ALLOCATION) Fail(Code::INVALID_ARGUMENT, "allocation_bps: 0 to 500");
+                uri.emplace_back("allocation_bps", util::ToString(bps));
+                payload["allocation_bps"] = UniValue{static_cast<int>(bps)};
+            }
             if (!req.GetString("first_buy_ecx").empty()) {
                 const uint64_t ecx{FloorUnits(ParseAmount(req.GetString("first_buy_ecx"), 8, "first_buy_ecx"), 8)};
-                const auto [tokens, back]{FirstBuy(ecx)};
-                const uint64_t floor{Floor(tokens, slippage, bitassets::LAUNCH_DECIMALS)};
+                const auto [tokens, back]{FirstBuy(ecx, supply, fee)};
+                const uint64_t floor{Floor(tokens, slippage, decimals)};
                 uri.emplace_back("ecx", Decimal(ecx, 8));
-                uri.emplace_back("min_tokens", Decimal(floor, bitassets::LAUNCH_DECIMALS));
+                uri.emplace_back("min_tokens", Decimal(floor, decimals));
                 payload["ecx"] = UniValue{Decimal(ecx, 8)};
-                payload["min_tokens"] = UniValue{Decimal(floor, bitassets::LAUNCH_DECIMALS)};
-                summary += strprintf(", buying at least %s for %s ECX", Decimal(floor, bitassets::LAUNCH_DECIMALS), Decimal(ecx, 8));
+                payload["min_tokens"] = UniValue{Decimal(floor, decimals)};
+                summary += strprintf(", buying at least %s for %s %s", Decimal(floor, decimals), Decimal(ecx, 8), CURRENCY_UNIT);
                 (void)back;
             }
             uri.emplace_back("slippage_bps", util::ToString(slippage));
             built.SetBool("app_ready", true);
+        } else if (verb == "register") {
+            const std::string ticker{ToUpper(req.GetString("ticker"))};
+            if (!bitassets::IsTicker(ticker) || ticker == Coin()) Fail(Code::INVALID_ARGUMENT, "ticker: 2 to 12 capital letters and digits");
+            if (state.GetAsset(bitassets::HashName(ticker))) Fail(Code::ALREADY_EXISTS, "the ticker " + ticker + " is taken");
+            const auto [name, desc, links, logo]{CreatorFields(req)};
+            if (req.GetString("supply").empty() || !req.Has("decimals")) Fail(Code::INVALID_ARGUMENT, "register: supply and decimals");
+            const int decimals{static_cast<int>(req.GetUInt("decimals"))};
+            if (decimals > bitassets::MAX_DECIMALS) Fail(Code::INVALID_ARGUMENT, "decimals: 0 to 12");
+            WholeSupply(req.GetString("supply"), decimals);
+            uri = {{"ticker", ticker}, {"name", name}};
+            payload["ticker"] = UniValue{ticker};
+            payload["name"] = UniValue{name};
+            if (!logo.empty()) {
+                uri.emplace_back("logo", "sha256:" + logo);
+                payload["logo_sha256"] = UniValue{logo};
+            }
+            if (!desc.empty()) {
+                uri.emplace_back("desc", desc);
+                payload["desc"] = UniValue{desc};
+            }
+            for (const UniValue& link : links.getValues()) uri.emplace_back("link", link.get_str());
+            if (!links.empty()) payload["links"] = links;
+            uri.emplace_back("supply", req.GetString("supply"));
+            uri.emplace_back("decimals", util::ToString(decimals));
+            payload["supply"] = UniValue{req.GetString("supply")};
+            payload["decimals"] = UniValue{decimals};
+            summary = strprintf("Register %s (%s): %s of %d decimals, no market", ticker, name, req.GetString("supply"), decimals);
+            built.SetBool("app_ready", true);
+        } else if (verb == "curve") {
+            if (!Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1)) Fail(Code::FAILED_PRECONDITION, "existing assets go on curves from launch_params_height: not yet on this network");
+            const AssetId asset{ResolveRegistered(state, req.GetString("asset"))};
+            if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, "asset: not " + Coin());
+            if (const auto why{WhyNoCurve(state, asset)}) Fail(Code::FAILED_PRECONDITION, *why);
+            const int d{DecimalsOf(state, asset)};
+            const uint64_t amount{ParseAmount(req.GetString("amount"), d, "amount")};
+            if (!bitassets::IsLaunchSupply(amount)) Fail(Code::INVALID_ARGUMENT, strprintf("amount: a multiple of 8 units, %s to %s", Decimal(bitassets::MIN_LAUNCH_SUPPLY, d, 12), Decimal(bitassets::MAX_LAUNCH_SUPPLY, d, 12)));
+            const uint32_t bps{static_cast<uint32_t>(req.GetUInt("fee_bps") == 0 ? Params().GetConsensus().sidechain.launch_fee / 100 : req.GetUInt("fee_bps"))};
+            if (bps < bitassets::MIN_LAUNCH_FEE / 100 || bps > bitassets::MAX_LAUNCH_FEE / 100) Fail(Code::INVALID_ARGUMENT, "fee_bps: 30 to 500");
+            const std::string ticker{ticker_of(asset)};
+            uri = {{"asset", Hex(asset)}, {"ticker", ticker}, {"amount", Decimal(amount, d, 12)}, {"fee_bps", util::ToString(bps)}};
+            payload["asset"] = UniValue{Hex(asset)};
+            payload["ticker"] = UniValue{ticker};
+            payload["amount"] = UniValue{Decimal(amount, d, 12)};
+            payload["fee_bps"] = UniValue{static_cast<int>(bps)};
+            for (const char* key : {"min_buy", "max_buy"}) {
+                if (req.GetString(key).empty()) continue;
+                const uint64_t v{FloorUnits(ParseAmount(req.GetString(key), 8, key), 8)};
+                uri.emplace_back(key, Decimal(v, 8));
+                payload[key] = UniValue{Decimal(v, 8)};
+            }
+            summary = strprintf("Put %s %s on a bonding curve at %d.%02d %%", Decimal(amount, d, 12), ticker, bps / 100, bps % 100);
+            built.SetBool("app_ready", true);
+        } else if (verb == "pool") {
+            const AssetId a{ResolveRegistered(state, req.GetString("asset_a"))}, b{ResolveRegistered(state, req.GetString("asset_b"))};
+            if (a == b) Fail(Code::INVALID_ARGUMENT, "two different assets make a pool");
+            if (state.Launching(a) || state.Launching(b)) Fail(Code::FAILED_PRECONDITION, "an asset on its launch curve trades there alone until it graduates");
+            const std::string kind{req.GetString("kind").empty() ? "constant" : req.GetString("kind")};
+            if (kind != "constant" && kind != "stable" && kind != "weighted") Fail(Code::INVALID_ARGUMENT, "kind: constant, stable or weighted");
+            const uint32_t fee_ppm{static_cast<uint32_t>(req.GetUInt("fee_ppm") == 0 ? bitassets::LEGACY_FEE : req.GetUInt("fee_ppm"))};
+            if (std::find(bitassets::FEE_TIERS.begin(), bitassets::FEE_TIERS.end(), fee_ppm) == bitassets::FEE_TIERS.end()) Fail(Code::INVALID_ARGUMENT, "fee_ppm: 100, 500, 3000 or 10000");
+            if ((kind == "weighted") != (req.GetUInt("weight_a") != 0)) Fail(Code::INVALID_ARGUMENT, "weight_a goes with a weighted pool, which needs it");
+            if (req.GetUInt("amp") != 0 && kind != "stable") Fail(Code::INVALID_ARGUMENT, "amp goes with a stable pool");
+            const int da{DecimalsOf(state, a)}, db{DecimalsOf(state, b)};
+            const uint64_t ua{ParseAmount(req.GetString("amount_a"), da, "amount_a")}, ub{ParseAmount(req.GetString("amount_b"), db, "amount_b")};
+            const std::string ta{ticker_of(a)}, tb{ticker_of(b)};
+            uri = {{"asset_a", a.IsNull() ? Coin() : Hex(a)}, {"ticker_a", ta}, {"asset_b", b.IsNull() ? Coin() : Hex(b)}, {"ticker_b", tb}, {"kind", kind}, {"fee_ppm", util::ToString(fee_ppm)},
+                   {"amount_a", Decimal(ua, da, 12)}, {"amount_b", Decimal(ub, db, 12)}};
+            if (req.GetUInt("amp") != 0) uri.emplace_back("amp", util::ToString(req.GetUInt("amp")));
+            if (req.GetUInt("weight_a") != 0) uri.emplace_back("weight_a", util::ToString(req.GetUInt("weight_a")));
+            for (const auto& [k, v] : uri) payload[k] = UniValue{v};
+            summary = strprintf("Create a %s pool of %s %s and %s %s at %s %%", kind == "constant" ? "constant-product" : kind, Decimal(ua, da, 12), ta, Decimal(ub, db, 12), tb, Decimal(fee_ppm, 4));
+            built.SetBool("app_ready", true);
+        } else if (verb == "auction") {
+            const AssetId base{ResolveRegistered(state, req.GetString("base"))}, quote{req.GetString("quote").empty() ? AssetId{} : ResolveRegistered(state, req.GetString("quote"))};
+            if (base.IsNull() || base == quote) Fail(Code::INVALID_ARGUMENT, "base: an asset other than the quote");
+            const int db{DecimalsOf(state, base)}, dq{DecimalsOf(state, quote)};
+            const uint64_t amount{ParseAmount(req.GetString("amount"), db, "amount")};
+            const uint64_t start{ParseAmount(req.GetString("start_price"), dq, "start_price")}, end{ParseAmount(req.GetString("end_price"), dq, "end_price")};
+            if (end > start) Fail(Code::INVALID_ARGUMENT, "end_price is above start_price: a Dutch auction's price falls");
+            const uint32_t duration{static_cast<uint32_t>(req.GetUInt("duration"))};
+            if (duration == 0 || duration > static_cast<uint32_t>(bitassets::MAX_AUCTION_DURATION)) Fail(Code::INVALID_ARGUMENT, "duration: 1 to 1000000 blocks");
+            const uint32_t delay{static_cast<uint32_t>(req.GetUInt("delay"))};
+            if (delay > static_cast<uint32_t>(bitassets::MAX_AUCTION_DELAY)) Fail(Code::INVALID_ARGUMENT, "delay: at most 52560 blocks");
+            const std::string tb{ticker_of(base)}, tq{ticker_of(quote)};
+            uri = {{"base", Hex(base)}, {"base_ticker", tb}, {"amount", Decimal(amount, db, 12)}, {"quote", quote.IsNull() ? Coin() : Hex(quote)}, {"quote_ticker", tq},
+                   {"start_price", Decimal(start, dq, 12)}, {"end_price", Decimal(end, dq, 12)}, {"duration", util::ToString(duration)}};
+            if (delay != 0) uri.emplace_back("delay", util::ToString(delay));
+            for (const auto& [k, v] : uri) payload[k] = UniValue{v};
+            summary = strprintf("Auction %s %s, its price falling from %s to %s %s over %u blocks", Decimal(amount, db, 12), tb, Decimal(start, dq, 12), Decimal(end, dq, 12), tq, duration);
+            built.SetBool("app_ready", true);
+        } else if (verb == "order") {
+            const AssetId sell{ResolveRegistered(state, req.GetString("sell"))}, buy{ResolveRegistered(state, req.GetString("buy"))};
+            if (sell == buy) Fail(Code::INVALID_ARGUMENT, "two different assets make a book");
+            const int ds{DecimalsOf(state, sell)}, dbuy{DecimalsOf(state, buy)};
+            const uint64_t amount{ParseAmount(req.GetString("amount"), ds, "amount")};
+            const std::string price{req.GetString("price")};
+            ParseAmount(price, std::max(8, dbuy), "price");
+            const uint32_t blocks{static_cast<uint32_t>(req.GetUInt("expiry_blocks") == 0 ? 40320 : req.GetUInt("expiry_blocks"))};
+            if (blocks > 1'000'000) Fail(Code::INVALID_ARGUMENT, "expiry_blocks: 1 to 1000000");
+            const std::string ts{ticker_of(sell)}, tbuy{ticker_of(buy)};
+            uri = {{"sell", sell.IsNull() ? Coin() : Hex(sell)}, {"sell_ticker", ts}, {"buy", buy.IsNull() ? Coin() : Hex(buy)}, {"buy_ticker", tbuy}, {"amount", Decimal(amount, ds, 12)},
+                   {"price", price}, {"expiry_blocks", util::ToString(blocks)}};
+            for (const auto& [k, v] : uri) payload[k] = UniValue{v};
+            summary = strprintf("Sell %s %s for %s at %s each at least, for %u blocks", Decimal(amount, ds, 12), ts, tbuy, price, blocks);
+            built.SetBool("app_ready", true);
         } else {
-            Fail(Code::INVALID_ARGUMENT, "verb: buy, sell, swap, deposit, withdraw or launch");
+            Fail(Code::INVALID_ARGUMENT, "verb: buy, sell, swap, deposit, withdraw, launch, register, curve, pool, auction or order");
         }
         const std::string payload_text{CanonicalJson(payload)};
         const std::string hash{ActionHash(payload_text)};
@@ -1199,6 +1515,18 @@ private:
             s.SetUInt("indexer_lag", 0);
             s.SetUInt("updated", static_cast<uint32_t>(GetTime()));
             s.SetBool("market_index", bitassets::market::Enabled());
+            const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
+            Message& lp{s.Mutable("launch_params")};
+            lp.SetBool("active", rules.LaunchParamsActive(tip.height + 1));
+            lp.SetInt("height", rules.launch_params_height == std::numeric_limits<int>::max() ? -1 : rules.launch_params_height);
+            lp.SetUInt("fee_min_bps", bitassets::MIN_LAUNCH_FEE / 100);
+            lp.SetUInt("fee_max_bps", bitassets::MAX_LAUNCH_FEE / 100);
+            lp.SetUInt("fee_default_bps", rules.launch_fee / 100);
+            lp.SetString("supply_min_units", util::ToString(bitassets::MIN_LAUNCH_SUPPLY));
+            lp.SetString("supply_max_units", util::ToString(bitassets::MAX_LAUNCH_SUPPLY));
+            lp.SetUInt("supply_multiple_units", bitassets::LAUNCH_SUPPLY_MULTIPLE);
+            lp.SetUInt("decimals_max", bitassets::MAX_DECIMALS);
+            lp.SetUInt("decimals_default", bitassets::LAUNCH_DECIMALS);
             return s;
         });
 
@@ -1359,7 +1687,7 @@ private:
                 link.SetString("label", label);
                 link.SetString("url", url);
             }
-            d.Mutable("curve") = CurveOf(l.rec.graduation, l.rec.fee);
+            d.Mutable("curve") = CurveOfLaunch(l.rec, l.decimals);
             d.SetDouble("trade_fee_bps", l.rec.fee / 100.0);
             d.SetString("create_txid", l.rec.txid.GetHex());
             // The first buy: the launch's own order, the first trade of its curve.
@@ -1406,16 +1734,17 @@ private:
                 cursor = *bytes;
             }
             const auto record{state.GetAsset(token)};
-            const double supply{static_cast<double>(record ? record->supply : bitassets::LAUNCH_SUPPLY)};
+            const double supply{static_cast<double>(record ? record->supply : launch.Supply())};
+            const int decimals{record ? record->decimals : bitassets::LAUNCH_DECIMALS};
             Message page{New("HolderPage")};
             // What the curve, or the pool it graduated into, holds: no output carries it.
             if (cursor.empty()) {
                 if (const auto pool{state.GetPool(launch.pool)}) {
-                    const uint64_t held{launch.Graduated() ? pool->reserve1 : pool->reserve1 - std::min(pool->reserve1, bitassets::LAUNCH_CURVE_END)};
+                    const uint64_t held{launch.Graduated() ? pool->reserve1 : pool->reserve1 - std::min(pool->reserve1, launch.CurveEnd())};
                     if (held > 0) {
                         Message& h{page.Add("items")};
                         h.SetString("address", launch.Graduated() ? "pool:" + Hex(launch.pool) : "curve:" + Hex(launch.pool));
-                        h.SetDouble("amount", Whole(held, bitassets::LAUNCH_DECIMALS));
+                        h.SetDouble("amount", Whole(held, decimals));
                         h.SetDouble("share", supply > 0 ? held / supply : 0);
                         h.SetString("tag", launch.Graduated() ? "pool" : "curve");
                     }
@@ -1424,7 +1753,7 @@ private:
             for (const auto& holding : bitassets::market::Holders(*tip.view, token, bitassets::Token::Kind::ASSET, cursor, limit, next)) {
                 Message& h{page.Add("items")};
                 h.SetString("address", AddressOf(holding.script));
-                h.SetDouble("amount", Whole(holding.amount, bitassets::LAUNCH_DECIMALS));
+                h.SetDouble("amount", Whole(holding.amount, decimals));
                 h.SetDouble("share", supply > 0 ? holding.amount / supply : 0);
                 if (holding.script == launch.creator) h.SetString("tag", "creator");
             }
@@ -1535,7 +1864,7 @@ private:
                 params.push_back(req.GetString("q"));
                 UniValue filters(UniValue::VOBJ);
                 filters.pushKV("exclude_abandoned", !req.GetBool("include_abandoned"));
-                filters.pushKV("chn_only", req.GetBool("ecx_only"));
+                filters.pushKV(bitassets::CoinOnlyFilter(), req.GetBool("ecx_only"));
                 params.push_back(filters);
                 params.push_back(sorts.at(sort_in));
                 params.push_back(cursor);
@@ -1627,8 +1956,8 @@ private:
             m.SetBool("in_range", r["in_range"].get_bool());
             m.SetString("txid", r["txid"].get_str());
             m.SetUInt("height", r["height"].getInt<uint64_t>());
-            m.SetString("asset_a", r["asset0"].get_str() == "CHN" ? Coin() : r["asset0"].get_str());
-            m.SetString("asset_b", r["asset1"].get_str() == "CHN" ? Coin() : r["asset1"].get_str());
+            m.SetString("asset_a", r["asset0"].get_str() == Coin() ? Coin() : r["asset0"].get_str());
+            m.SetString("asset_b", r["asset1"].get_str() == Coin() ? Coin() : r["asset1"].get_str());
             (void)state;
             return m;
         });
@@ -1657,6 +1986,8 @@ private:
                     level.SetDouble("price", l["price"].get_real());
                     level.SetDouble("amount", l["amount"].get_real());
                     level.SetUInt("orders", l["orders"].getInt<uint64_t>());
+                    if (l.exists("price_exact")) level.SetString("price_exact", l["price_exact"].get_str());
+                    if (l.exists("amount_units")) level.SetString("amount_units", l["amount_units"].get_str());
                     total += l["amount"].get_real();
                     level.SetDouble("total", total);
                     orders += l["orders"].getInt<uint32_t>();
@@ -1666,7 +1997,128 @@ private:
             if (r.exists("best_ask")) b.SetDouble("best_ask", r["best_ask"].get_real());
             if (r.exists("best_bid")) b.SetDouble("best_bid", r["best_bid"].get_real());
             if (r.exists("best_ask") && r.exists("best_bid")) b.SetDouble("spread", r["best_ask"].get_real() - r["best_bid"].get_real());
+            if (r.exists("best_ask_exact")) b.SetString("best_ask_exact", r["best_ask_exact"].get_str());
+            if (r.exists("best_bid_exact")) b.SetString("best_bid_exact", r["best_bid_exact"].get_str());
             return b;
+        });
+
+        Serve(server, "ListAssets", read, [this](const Message& req, const Tip& tip) {
+            const bitassets::State state{tip.State()};
+            const uint32_t limit{req.GetUInt("limit") == 0 ? 50 : static_cast<uint32_t>(req.GetUInt("limit"))};
+            if (limit > 100) Fail(Code::INVALID_ARGUMENT, "limit: 1 to 100");
+            const std::string sort_in{req.GetString("sort").empty() ? "newest" : req.GetString("sort")};
+            static const std::map<std::string, std::string> SORTS{{"newest", "newest"}, {"oldest", "oldest"}, {"name", "name"}, {"supply", "supply"}, {"volume", "volume"}, {"activity", "activity"}, {"holders", "newest"}};
+            const auto sort{SORTS.find(sort_in)};
+            if (sort == SORTS.end()) Fail(Code::INVALID_ARGUMENT, "sort: newest, oldest, name, supply, volume, holders or activity");
+            const std::string market{req.GetString("market").empty() ? "all" : req.GetString("market")};
+            if (market != "all" && market != "none" && market != "curve" && market != "pool" && market != "book" && market != "auction") {
+                Fail(Code::INVALID_ARGUMENT, "market: all, none, curve, pool, book or auction");
+            }
+            const std::string cursor{req.GetString("cursor")};
+            if (!cursor.empty() && (cursor.size() > 512 || !IsHex(cursor))) Fail(Code::INVALID_ARGUMENT, "not a cursor of this list");
+            UniValue filters(UniValue::VOBJ);
+            const UniValue found{SearchAssets(req.GetString("q"), sort->second, cursor, limit, filters)};
+            Message page{New("AssetPage")};
+            std::vector<Message> items;
+            for (const UniValue& row : found["assets"].getValues()) {
+                if (!row.exists("asset") || (row.exists("retired") && row["retired"].get_bool())) continue;
+                Message m{New("AssetSummary")};
+                FillAsset(m, row, state, tip, false);
+                if (market != "all") {
+                    const Message* mk{m.Sub("market")};
+                    bool has{false};
+                    for (size_t i{0}; mk && i < mk->Count("kinds"); ++i) has |= mk->StringAt("kinds", i) == market;
+                    if (market == "none" ? (mk && mk->Count("kinds") > 0) : !has) continue;
+                }
+                items.push_back(std::move(m));
+            }
+            if (sort_in == "holders") std::stable_sort(items.begin(), items.end(), [](const Message& a, const Message& b) { return a.GetUInt("holders") > b.GetUInt("holders"); });
+            for (Message& m : items) page.Add("items") = std::move(m);
+            if (found["next_cursor"].isStr()) page.SetString("next_cursor", found["next_cursor"].get_str());
+            page.SetUInt("total", bitassets::index::GetInfo(*tip.view).assets);
+            return page;
+        });
+
+        Serve(server, "GetAsset", read, [this](const Message& req, const Tip& tip) {
+            const bitassets::State state{tip.State()};
+            const AssetId id{ResolveRegistered(state, req.GetString("id"))};
+            if (id.IsNull()) Fail(Code::INVALID_ARGUMENT, Coin() + " is the chain's coin, not an asset of the registry");
+            UniValue filters(UniValue::VOBJ);
+            UniValue only(UniValue::VARR);
+            only.push_back("0x" + id.GetHex());
+            filters.pushKV("assets", only);
+            filters.pushKV("exclude_retired", false);
+            const UniValue found{SearchAssets("", "newest", "", 1, filters)};
+            if (found["assets"].empty()) Fail(Code::NOT_FOUND, "no such asset");
+            Message d{New("AssetDetail")};
+            FillAsset(d, found["assets"][0], state, tip, true);
+            const auto record{state.GetAsset(id)};
+            const CreatorText text{SplitInfo(record && record->data.info ? *record->data.info : std::string{})};
+            for (const auto& [label, url] : text.links) {
+                Message& link{d.Add("links")};
+                link.SetString("label", label);
+                link.SetString("url", url);
+            }
+            if (state.GetLaunch(id)) {
+                const auto table{Launches(tip)};
+                if (const auto it{table->by_token.find(id)}; it != table->by_token.end()) FillLaunch(d.Mutable("launch"), table->launches[it->second], state);
+            }
+            // Its markets, bounded: at most 10 pools read whole (getpool), 10 books by id with their order counts (the state's
+            // counters, no walk of their sides), the auctions of AuctionsOf's first 20; more of them: GetPool, GetBook.
+            size_t pools{0}, books{0};
+            const Message* market{d.Sub("market")};
+            if (market && market->GetUInt("pools") + market->GetUInt("books") <= static_cast<uint64_t>(MAX_ASSET_POOLS_READ)) {
+                for (const auto& [pid, pool] : state.PoolsOf(id)) {
+                    const auto curve{state.GetPoolParams(pid).GetCurve()};
+                    if (curve == bitassets::Curve::LAUNCH) continue;
+                    if (curve == bitassets::Curve::BOOK) {
+                        if (pool.shares <= bitassets::MIN_LIQUIDITY || books >= 10) continue;
+                        ++books;
+                        const AssetId other{pool.asset0 == id ? pool.asset1 : pool.asset0};
+                        Message& b{d.Add("books")};
+                        b.SetString("id", Hex(pid));
+                        b.SetString("base", Hex(id));
+                        b.SetString("quote", other.IsNull() ? "" : Hex(other));
+                        b.SetString("base_ticker", Label(state, id));
+                        b.SetString("quote_ticker", Label(state, other));
+                        // Asks of the base: the side that sells asset0 when the base is asset0.
+                        uint32_t asks{state.BookCount(pid, true)}, bids{state.BookCount(pid, false)};
+                        if (pool.asset0 != id) std::swap(asks, bids);
+                        b.SetUInt("asks", asks);
+                        b.SetUInt("bids", bids);
+                        continue;
+                    }
+                    if (bitassets::amm::Abandoned(pool) || pools >= 10) continue;
+                    ++pools;
+                    UniValue params(UniValue::VARR);
+                    params.push_back(Hex(pid));
+                    d.Add("pools") = PoolFromJson(Rpc("getpool", params), tip);
+                }
+            }
+            for (const Txid& aid : state.AuctionsOf(id, 20)) {
+                const auto auction{state.GetAuction(aid)};
+                if (!auction || auction->base != id) continue;
+                Message& a{d.Add("auctions")};
+                const int dq{DecimalsOf(state, auction->quote)};
+                a.SetString("id", aid.GetHex());
+                a.SetDouble("base_amount", Whole(auction->base_amount, DecimalsOf(state, id)));
+                a.SetString("quote", auction->quote.IsNull() ? "" : Hex(auction->quote));
+                a.SetString("quote_ticker", Label(state, auction->quote));
+                const int64_t h{tip.height + 1};
+                const int64_t end{int64_t{auction->start_height} + auction->duration};
+                const int64_t at{std::clamp<int64_t>(h, auction->start_height, end)};
+                const double start_p{Whole(auction->start_price, dq)}, end_p{Whole(auction->end_price, dq)};
+                a.SetDouble("price", auction->duration > 0 ? start_p - (start_p - end_p) * static_cast<double>(at - auction->start_height) / auction->duration : end_p);
+                a.SetUInt("start_height", static_cast<uint32_t>(auction->start_height));
+                a.SetUInt("end_height", static_cast<uint32_t>(end));
+                a.SetString("status", auction->remaining == 0 ? "sold_out" : h < auction->start_height ? "upcoming" : h > end ? "ended" : "live");
+                a.SetDouble("remaining", Whole(auction->remaining, DecimalsOf(state, id)));
+            }
+            Message& can{d.Mutable("can_curve")};
+            const auto why{Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1) ? WhyNoCurve(state, id) : std::optional<std::string>{"existing assets go on curves from launch_params_height: not yet on this network"}};
+            can.SetBool("allowed", !why);
+            if (why) can.SetString("reason", *why);
+            return d;
         });
 
         Serve(server, "GetTicker", read, [this](const Message& req, const Tip& tip) {
@@ -1753,7 +2205,7 @@ private:
             Message out{New("Verifications")};
             for (size_t i{0}; i < assets; ++i) {
                 const AssetId asset{ResolveRegistered(state, req.StringAt("assets", i))};
-                if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, "ECX is the chain's coin: nothing to verify");
+                if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, CURRENCY_UNIT + " is the chain's coin: nothing to verify");
                 UniValue params(UniValue::VARR);
                 params.push_back(ArgOf(asset));
                 params.push_back(named);

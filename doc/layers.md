@@ -440,7 +440,9 @@ about 0.5 % more; quiet, it returns to its tier.
 
 ## Launches
 
-Bonding-curve token launches, with the pool kinds (same height, `dex_curves_height`; markers 22 and 23).
+Bonding-curve launches of assets, with the pool kinds (same height, `dex_curves_height`; markers 22 and 23); with their
+own supply, decimals and fee, and an existing asset on a curve, from `launch_params_height` (markers 36 and 28;
+doc/dex-math.md "Launch curve").
 `src/bitassets/curves.cpp` (`ClearLaunch`), `src/bitassets/state.cpp` (`PlanLaunch`, `Graduate`, `ClearOrders`).
 
 **A launch** (`LaunchToken`, kind 22) registers a token from a reservation of its ticker, exactly as

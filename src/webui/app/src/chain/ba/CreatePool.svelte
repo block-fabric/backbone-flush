@@ -28,6 +28,7 @@
   import { amountParam, assetArg, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, unitsAtMost, type Amount } from './model';
   import { swapFeeSplit } from './fees';
   import { assetById, ba, decimalsOf, labelOf, nameOf, poolsOf, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   const dex = $derived(ba.dex);
   const active = $derived(dex?.curves_active === true);
@@ -50,6 +51,14 @@
     const seen = new Set<string>();
     const all = [...ba.assets.map((x) => ({ id: x.asset, label: x.label, seq: x.seq })), ...(ba.mine?.assets ?? []).map((h) => ({ id: h.asset, label: h.label, seq: assetById(h.asset)?.seq ?? '' }))];
     return all.filter((c) => !seen.has(c.id) && (seen.add(c.id), true) && (c.id === a || c.id === b || !hiddenAsset(c.id, c.label)));
+  });
+  // Two assets asked for by another page (an asset's "Open a market", the create wizard).
+  $effect(() => {
+    if (!tradeIntent.createA) return;
+    a = tradeIntent.createA;
+    if (tradeIntent.createB) b = tradeIntent.createB;
+    tradeIntent.createA = '';
+    tradeIntent.createB = '';
   });
   $effect(() => {
     if (!a && choices.length) a = choices[0].id;
@@ -315,7 +324,7 @@
           {:else}
           <UnitsInput id="cp-amount-a" label="First amount" decimals={da} bind:units={aUnits} bind:text={aText} max={heldOf(a, da)} unit={labelOf(a)} />
           <UnitsInput id="cp-amount-b" label="Second amount" decimals={db} bind:units={bUnits} bind:text={bText} max={heldOf(b, db)} unit={labelOf(b)} />
-          <p class="ba-help">Both amounts go in whole and set the pool's price{#if curve === 'weighted'} with its weights{/if}. It keeps 1,000 shares for good, so that it is never emptied; a pool with ECX opens with at least 0.01 ECX.</p>
+          <p class="ba-help">Both amounts go in whole and set the pool's price{#if curve === 'weighted'} with its weights{/if}. It keeps 1,000 shares for good, so that it is never emptied; a pool with {TICKER} opens with at least 0.01 {TICKER}.</p>
           {#if previewError}<p class="ba-problems bad" role="status"><SafeText text={previewError} /></p>{/if}
           {#if preview?.too_small}<p class="ba-problems" role="status">Too little to open a pool: <SafeText text={preview.too_small} />.</p>{/if}
           {/if}

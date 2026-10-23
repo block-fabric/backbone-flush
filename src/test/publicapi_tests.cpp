@@ -755,6 +755,107 @@ BOOST_AUTO_TEST_CASE(server_slow_clients)
     strict.Stop();
 }
 
+BOOST_AUTO_TEST_CASE(server_slow_reader_bounded)
+{
+    // A client that takes a byte now and then (slow reads) used to keep its connection open with the server moving
+    // every reply into its unsent bytes, without bound. Now: backpressure (no more taken from the call above
+    // REPLY_HIGH_WATER waiting), the call ends at its own bound, and the client is closed for reading too little.
+    grpcsrv::Options options;
+    options.write_timeout_seconds = 1;
+    options.min_read_bytes_per_second = 64 << 10;
+    // A call's bound above what the loopback sockets hold, so that replies keep waiting on the server's side.
+    options.max_response_bytes = 16 << 20;
+    options.max_reply_buffer = 32 << 20;
+    options.idle_timeout_seconds = 30;
+    options.threads = 2;
+    grpcsrv::Server server{Pool(), options};
+    constexpr size_t MESSAGES{4096}, MESSAGE_BYTES{64 << 10};
+    std::atomic<bool> small{false};
+    std::atomic<size_t> written{0};
+    std::atomic<bool> refused{false};
+    // Either a stream that would write 256 MiB as fast as it can, or 100 small events, a few a second.
+    BOOST_REQUIRE(server.Register("grpc.health.v1.Health", "Watch", [&](const pb::Message&, const std::shared_ptr<grpcsrv::Writer>& w) {
+        const pb::Message msg{Big(small ? 40 : MESSAGE_BYTES)};
+        for (size_t i{0}; i < (small ? 100 : MESSAGES); ++i) {
+            if (!w->Write(msg)) {
+                refused = true;
+                break;
+            }
+            ++written;
+            if (small) std::this_thread::sleep_for(25ms);
+        }
+        w->Finish({});
+    }));
+    std::string error;
+    BOOST_REQUIRE_MESSAGE(server.Start({*Assert(Lookup("127.0.0.1", 0, /*fAllowLookup=*/false))}, {}, error), error);
+    const CService to{server.Bound().at(0)};
+    const std::string body{GrpcEnvelope("")};
+    const std::string ask{strprintf("POST /grpc.health.v1.Health/Watch HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/connect+proto\r\nContent-Length: %u\r\n\r\n", body.size()) + body};
+    {
+        RawClient c{to};
+        BOOST_REQUIRE(c.Send(ask));
+        const auto start{NodeClock::now()};
+        // One byte every 50 ms for 4 s: 20 bytes a second, far under 64 KiB.
+        while (!c.closed && NodeClock::now() - start < 4s) {
+            Sock::Event occurred{0};
+            if (!c.sock->Wait(50ms, Sock::RecvEvent, &occurred)) break;
+            if (occurred & Sock::RecvEvent) {
+                char b;
+                const ssize_t n{c.sock->Recv(&b, 1, 0)};
+                if (n <= 0) {
+                    c.closed = true;
+                    break;
+                }
+                c.in.push_back(b);
+            }
+            std::this_thread::sleep_for(50ms);
+        }
+        // What the server took from the call stayed bounded: the call ended at its own bound (max_response_bytes drops
+        // what it held), with what waits for the socket and what the sockets hold; not the 256 MiB the call would
+        // write. (What is left fits in the sockets: then nothing waits on the server's side, and the connection may
+        // stay open; with more waiting, min_read_bytes_per_second closes it: grpc_tests in Backbone.)
+        BOOST_CHECK(refused.load());
+        BOOST_CHECK_MESSAGE(written.load() * MESSAGE_BYTES < size_t{48} << 20, written.load() * MESSAGE_BYTES);
+    }
+    {
+        // A client that reads as the events come is not cut: all of them, then the end of the stream.
+        small = true;
+        written = 0;
+        refused = false;
+        RawClient c{to};
+        BOOST_REQUIRE(c.Send(ask));
+        const auto start{NodeClock::now()};
+        while (!c.closed && NodeClock::now() - start < 10s && c.in.find("0\r\n\r\n") == std::string::npos) c.ReadFor(100ms);
+        BOOST_CHECK(c.in.starts_with("HTTP/1.1 200"));
+        BOOST_CHECK(c.in.find("0\r\n\r\n") != std::string::npos);
+        BOOST_CHECK_EQUAL(written.load(), 100U);
+        BOOST_CHECK(!refused.load());
+    }
+    {
+        // HTTP/2: a client that opens no window and pings all the time, reading every PING ACK: the ACKs are no progress
+        // on its replies: the stream is reset, or the connection closed, within the windows of 1 s. (The small events:
+        // a stream that stays under its bound, so that its replies keep waiting.)
+        small = true;
+        RawClient c{to};
+        H2Bytes client{{{NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 0}}};
+        client.Request("/grpc.health.v1.Health/Watch", GrpcEnvelope(""));
+        BOOST_REQUIRE(c.Send(client.Out()));
+        const std::string ping{std::string{"\0\0\x08\x06\0\0\0\0\0", 9} + std::string(8, 'p')};
+        const auto start{NodeClock::now()};
+        bool reset{false};
+        while (!c.closed && !reset && NodeClock::now() - start < 6s) {
+            if (!c.Send(ping)) break;
+            c.ReadFor(20ms);
+            reset = Has(FrameTypes(c.in), NGHTTP2_RST_STREAM);
+        }
+        BOOST_CHECK(reset || c.closed);
+        const double took{Seconds(NodeClock::now() - start)};
+        BOOST_CHECK_MESSAGE(took < 4, "pinging zero-window client ended after " << took << " s");
+        BOOST_CHECK(Has(FrameTypes(c.in), NGHTTP2_PING));
+    }
+    server.Stop();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 #endif // ENABLE_PUBLICAPI

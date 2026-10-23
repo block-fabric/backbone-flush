@@ -17,6 +17,7 @@
   import HiddenToggle from './HiddenToggle.svelte';
   import { hiddenAsset } from './visible.svelte';
   import { ba, decimalsOf, morePools, showMorePools, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   let query = $state('');
   let showClosed = $state(false);
@@ -102,7 +103,7 @@
     </div>
     <div class="ba-chips" role="group" aria-label="Filter pools">
       <button type="button" class="ba-chip" aria-pressed={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
-      <button type="button" class="ba-chip" aria-pressed={filter === 'chn'} onclick={() => (filter = 'chn')}>With ECX</button>
+      <button type="button" class="ba-chip" aria-pressed={filter === 'chn'} onclick={() => (filter = 'chn')}>With {TICKER}</button>
       <button type="button" class="ba-chip" aria-pressed={filter === 'mine'} onclick={() => (filter = 'mine')}>Yours</button>
       {#if kinds}<button type="button" class="ba-chip" aria-pressed={filter === 'kinds'} onclick={() => (filter = 'kinds')}>Other kinds</button>{/if}
     </div>

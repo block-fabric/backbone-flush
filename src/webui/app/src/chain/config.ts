@@ -51,6 +51,9 @@ export interface ChainConfig {
 
 export const CHAIN: ChainConfig = raw as ChainConfig;
 
+/** The ticker of the chain's coin (chain.json: coin.ticker), the one name the pages, dialogs and messages give it. */
+export const TICKER = CHAIN.coin.ticker;
+
 /** The app of a sidechain: its peg and merged mining pages, its own home. */
 export const SIDECHAIN = CHAIN.role === 'sidechain';
 

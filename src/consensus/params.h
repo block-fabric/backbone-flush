@@ -136,6 +136,15 @@ struct SidechainParams {
     uint32_t launch_protocol_share{0};
     uint32_t launch_security_share{200'000};
     /**
+     * Launches with parameters (bitassets LaunchToken of the kind LAUNCH_WITH_PARAMS_KIND, CurveAsset; doc/dex-math.md
+     * "Launch curve"): from this block a launch chooses its supply, its decimals and its curve's fee (within
+     * bitassets::MIN_LAUNCH_FEE..MAX_LAUNCH_FEE; the parts as above), and the controller of an existing asset may put part
+     * of its supply on a curve. Before it, those markers are not valid, as they never were. Never unless a network sets
+     * it (regtest: 0, or -testactivationheight=launchparams@<height>).
+     */
+    int launch_params_height{std::numeric_limits<int>::max()};
+    bool LaunchParamsActive(int height) const { return DexCurvesActive(height) && height >= launch_params_height; }
+    /**
      * The parts of every DEX swap fee (all pool kinds and tiers; order books charge none), in millionths of the fee: the
      * chain's security (paid with the block's fees: the BMM bidder and the validators by the curve of the network fees,
      * when the fee is in the chain's coin; held by the treasury per asset otherwise) and the protocol's (to the

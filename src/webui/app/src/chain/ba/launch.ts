@@ -5,13 +5,15 @@
 // to (3/2·G, 3/8·S), G the graduation, S the supply), for its chart and the review of a launch; the queries of the
 // list; the options of launchtoken. Pure: no state, no calls (tested in chain/ba/launch.test.ts).
 import { approx, type Amount } from './model';
+import type { LaunchParamRules } from './create';
+import { TICKER } from '../config';
 
 /** A launch's token has 6 decimals and a billion units, fixed (bitassets::LAUNCH_DECIMALS, LAUNCH_SUPPLY). */
 export const LAUNCH_DECIMALS = 6;
 /** What getlaunchstats' rules say on every network today, for a node that did not answer yet. */
 export const DEFAULT_RULES: LaunchRules = { graduation: 500, fee: 1, creator_share: 30, supply: 1_000_000_000, curve_supply: 750_000_000, pool_supply: 250_000_000, max_allocation: 5, log_blocks: 10_080, active: false };
 
-export interface LaunchRules {
+export interface LaunchRules extends LaunchParamRules {
   /** CHN a curve raises before it graduates. */
   graduation: Amount;
   /** A trade's fee on a curve, in percent, and the creator's part of it, in percent of the fee. */
@@ -80,6 +82,22 @@ export interface Launch {
   volume: Amount;
   trades: number;
   graduated_height?: number;
+  /** From the launch parameters (newer nodes): its asset's decimals, what its curve sells and its pool gets (whole), and
+   *  whether an asset that existed was put on the curve (curveasset). A node from before: 6, 750M, 250M. */
+  decimals?: number;
+  curve_supply?: Amount;
+  pool_supply?: Amount;
+  from_asset?: boolean;
+}
+
+/** A launch's decimals (6 on a node from before the launch parameters). */
+export function launchDecimals(l: Pick<Launch, 'decimals'> | null | undefined): number {
+  return Number.isInteger(l?.decimals) ? Number(l?.decimals) : LAUNCH_DECIMALS;
+}
+
+/** The whole amount a launch's curve and pool started with (what its curve is worked out from); the rules' supply on a node from before. */
+export function launchSupply(l: Pick<Launch, 'curve_supply' | 'pool_supply'> | null | undefined, fallback: number): number {
+  return l && l.curve_supply !== undefined && l.pool_supply !== undefined ? approx(l.curve_supply) + approx(l.pool_supply) : fallback;
 }
 
 export interface LaunchPage {
@@ -171,7 +189,7 @@ export function curveShape(graduation: number, supply: number): CurveShape {
   return { graduation, supply, virtualCoin, virtualTokens, endTokens, k, curveSupply: virtualTokens - endTokens, poolSupply: supply / 4, startPrice, endPrice, startCap: startPrice * supply, endCap: endPrice * supply };
 }
 
-/** Where a curve is once it raised `raised` CHN: the tokens it sold, its price (x / y), the reserves. */
+/** Where a curve is once it raised `raised` CHN: the amount it sold, its price (x / y), the reserves. */
 export function curvePointAt(shape: CurveShape, raised: number): { sold: number; price: number; coin: number; tokens: number } {
   const r = Math.min(Math.max(0, raised), shape.graduation);
   const coin = shape.virtualCoin + r;
@@ -179,7 +197,7 @@ export function curvePointAt(shape: CurveShape, raised: number): { sold: number;
   return { sold: shape.virtualTokens - tokens, price: coin / tokens, coin, tokens };
 }
 
-/** The curve for its chart: its price (y) by the tokens it sold (x), from the start to the end. */
+/** The curve for its chart: its price (y) by the amount it sold (x), from the start to the end. */
 export function curveSeries(shape: CurveShape, n = 48): { x: number; y: number }[] {
   return Array.from({ length: n + 1 }, (_, i) => {
     const p = curvePointAt(shape, (shape.graduation * i) / n);
@@ -233,7 +251,7 @@ export function launchProblems(o: { allocation: number; maxAllocation: number; f
   const out: string[] = [];
   if (!(o.allocation >= 0 && o.allocation <= o.maxAllocation)) out.push(`The allocation is 0 to ${o.maxAllocation}%.`);
   if (o.infoBytes > o.maxInfo) out.push(`The description is at most ${o.maxInfo} bytes.`);
-  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push('The first buy pays 0.0005 ECX at least.');
+  if (o.firstBuy !== null && o.firstBuy > 0n && o.firstBuy < o.minChn) out.push(`The first buy pays 0.0005 ${TICKER} at least.`);
   if (o.minBuy !== null && o.maxBuy !== null && o.maxBuy > 0n && o.maxBuy < o.minBuy) out.push('The most a buy pays is less than the least.');
   if (o.firstBuy !== null && o.firstBuy > 0n && ((o.minBuy !== null && o.minBuy > 0n && o.firstBuy < o.minBuy) || (o.maxBuy !== null && o.maxBuy > 0n && o.firstBuy > o.maxBuy))) out.push('The first buy is outside the least and the most a buy pays: it would be refunded.');
   return out;

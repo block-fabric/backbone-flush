@@ -799,6 +799,11 @@ struct Connection::Impl {
     //! because of it), each counted once.
     uint64_t m_begun{0}, m_completed{0}, m_abandoned{0};
     std::string m_out;
+    //! Backpressure: nothing more is taken from the calls (Connection::Hold).
+    bool m_hold{false};
+    //! HTTP/2: bytes put in m_out, and of them the replies' DATA payload; the rest (PING and SETTINGS ACKs, frame
+    //! headers, resets) a client can ask for at will, which is no progress on its replies (Connection::ControlBytes).
+    uint64_t m_serialized{0}, m_payload{0};
     Server& m_server;
     CService m_peer;
 };
@@ -918,7 +923,7 @@ public:
     void Goodbye() override
     {
         nghttp2_session_terminate_session(m_session, NGHTTP2_NO_ERROR);
-        Flush();
+        Flush(/*force=*/true);
     }
     std::optional<NodeClock::time_point> OldestRequest() const override
     {
@@ -973,9 +978,11 @@ private:
         bool counted{false};
     };
 
-    bool Flush()
+    /** What nghttp2 has to send, into m_out: nothing while held (that would take from the calls, ReadData), and up to
+     * REPLY_HIGH_WATER at a time, unless `force` (the GOAWAY of a goodbye). */
+    bool Flush(bool force = false)
     {
-        for (;;) {
+        while (force || (!m_hold && m_out.size() < REPLY_HIGH_WATER)) {
             const uint8_t* data;
 #if NGHTTP2_VERSION_NUM >= 0x013d00
             const ngssize n{nghttp2_session_mem_send2(m_session, &data)};
@@ -985,6 +992,7 @@ private:
             if (n < 0) return false;
             if (n == 0) break;
             m_out.append(reinterpret_cast<const char*>(data), static_cast<size_t>(n));
+            m_serialized += static_cast<uint64_t>(n);
         }
         return nghttp2_session_want_read(m_session) || nghttp2_session_want_write(m_session) || !m_out.empty();
     }
@@ -1072,6 +1080,7 @@ private:
         Call& call{*stream.request.call};
         const std::string chunk{call.Take(length)};
         if (!chunk.empty()) {
+            self.m_payload += chunk.size();
             std::memcpy(buf, chunk.data(), chunk.size());
             return static_cast<ngssize>(chunk.size());
         }
@@ -1251,6 +1260,8 @@ public:
     bool Poll() override
     {
         if (!m_current) return m_open;
+        // Backpressure: the socket has not taken what is waiting; the call's writes wait in it (max_response_bytes).
+        if (m_hold) return true;
         Call& call{*m_current->call};
         const Call::State state{call.GetState()};
         if (Unary(call.GetProtocol())) {
@@ -1456,6 +1467,9 @@ bool Connection::Receiving() const { return m_impl->Receiving(); }
 void Connection::Goodbye() { m_impl->Goodbye(); }
 std::optional<NodeClock::time_point> Connection::OldestRequest() const { return m_impl->OldestRequest(); }
 size_t Connection::Undelivered() const { return m_impl->Undelivered(); }
+size_t Connection::Buffered() const { return m_impl->m_out.size() + m_impl->Undelivered(); }
+void Connection::Hold(bool hold) { m_impl->m_hold = hold; }
+uint64_t Connection::ControlBytes() const { return m_impl->m_serialized - m_impl->m_payload; }
 void Connection::Drain() { m_impl->Drain(); }
 Connection::Counts Connection::GetCounts() const { return {m_impl->m_begun, m_impl->m_completed, m_impl->m_abandoned}; }
 void Connection::CloseAll() { m_impl->CloseAll(); }
@@ -1639,7 +1653,10 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
     bool open{true};
     uint8_t buf[16384];
     auto last_activity{NodeClock::now()};
-    auto last_write{last_activity};
+    // Slow reads: from when replies wait for the client, what it took of them, timed over write_timeout_seconds.
+    auto window_start{last_activity};
+    size_t window_owed{0}, window_sent{0};
+    uint64_t window_control{0};
     Connection::Counts counts;
     std::optional<NodeClock::time_point> receiving_since;
     // Close, over HTTP/2 with a GOAWAY first (what it says sent if the client takes it at once).
@@ -1658,11 +1675,36 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
     while (open && !m_interrupt) {
         const auto now{NodeClock::now()};
         // A client that does not read what it asked for (slow reads): replies pile up in the socket, in the calls or
-        // behind HTTP/2 flow control; closed once the peer took no byte of them for a while.
-        if (pending.empty() && connection.Undelivered() == 0) last_write = now;
-        if (m_options.write_timeout_seconds > 0 && now - last_write > std::chrono::seconds{m_options.write_timeout_seconds}) {
-            LogDebug(BCLog::HTTP, "%s: %s reads nothing of its replies: closed\n", m_name, peer.ToStringAddrPort());
+        // behind HTTP/2 flow control. Every reply byte the connection holds counts against one bound
+        // (Options::max_reply_buffer); and over each window of write_timeout_seconds with replies waiting, the client
+        // must take at least min_read_bytes_per_second of them (or all that waited when the window began), else it is
+        // closed: a byte now and then does not keep it open.
+        const size_t owed{pending.size() + connection.Buffered()};
+        if (m_options.max_reply_buffer > 0 && owed > m_options.max_reply_buffer) {
+            LogDebug(BCLog::HTTP, "%s: %s leaves %u bytes of replies unread: closed\n", m_name, peer.ToStringAddrPort(), owed);
             break;
+        }
+        if (owed == 0) {
+            window_owed = 0;
+        } else if (window_owed == 0) {
+            window_start = now;
+            window_owed = owed;
+            window_sent = 0;
+            window_control = connection.ControlBytes();
+        } else if (m_options.write_timeout_seconds > 0 && now - window_start > std::chrono::seconds{m_options.write_timeout_seconds}) {
+            const size_t rate{m_options.min_read_bytes_per_second * static_cast<size_t>(m_options.write_timeout_seconds)};
+            // Progress on the replies: what the socket took, less the control frames made meanwhile (a client asking for
+            // PING ACKs and reading only those makes none).
+            const uint64_t control{connection.ControlBytes() - window_control};
+            const size_t progress{window_sent > control ? static_cast<size_t>(window_sent - control) : 0};
+            if (progress < std::max<size_t>(1, std::min(window_owed, rate))) {
+                LogDebug(BCLog::HTTP, "%s: %s reads too little of its replies (%u bytes in %d s): closed\n", m_name, peer.ToStringAddrPort(), progress, m_options.write_timeout_seconds);
+                break;
+            }
+            window_start = now;
+            window_owed = owed;
+            window_sent = 0;
+            window_control = connection.ControlBytes();
         }
         // A request that takes too long to come in, however slowly it keeps coming, ends the connection (HTTP/2: each
         // stream from its own first bytes). Calls running on a worker are never cut for it.
@@ -1706,6 +1748,7 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
         if (occurred & Sock::RecvEvent) {
             const ssize_t n{sock->Recv(buf, sizeof(buf), 0)};
             if (n > 0) {
+                connection.Hold(pending.size() >= REPLY_HIGH_WATER);
                 open = connection.Receive({buf, static_cast<size_t>(n)});
             } else if (n == 0) {
                 break;
@@ -1714,13 +1757,15 @@ void Server::ServeConnection(std::shared_ptr<Sock> sock, CService peer)
                 if (err != WSAEWOULDBLOCK && err != WSAEINTR && err != WSAEINPROGRESS) break;
             }
         }
+        // Backpressure: while the socket has not taken what waits, nothing more is taken from the calls.
+        connection.Hold(pending.size() >= REPLY_HIGH_WATER);
         if (open) open = connection.Poll();
-        pending += connection.TakeOutput();
+        if (pending.size() < REPLY_HIGH_WATER) pending += connection.TakeOutput();
         while (!pending.empty()) {
             const ssize_t n{sock->Send(pending.data(), pending.size(), MSG_NOSIGNAL)};
             if (n > 0) {
                 pending.erase(0, static_cast<size_t>(n));
-                last_write = NodeClock::now();
+                window_sent += static_cast<size_t>(n);
             } else {
                 const int err{WSAGetLastError()};
                 if (n < 0 && (err == WSAEWOULDBLOCK || err == WSAEINTR || err == WSAEINPROGRESS)) break;

@@ -6,6 +6,7 @@
   import SafeText from '../../components/SafeText.svelte';
   import { css } from '../../lib/actions';
   import { assetHue, initials, isChn } from './model';
+  import { TICKER } from '../config';
   import { isLogoUrl, logoHashOf, logoUrl } from './logos.svelte';
   import { displayNameOf } from './store.svelte';
 
@@ -42,7 +43,7 @@
   {#if url}
     <img class="mark logo" src={url} alt="" width="64" height="64" decoding="async" draggable="false" referrerpolicy="no-referrer" aria-hidden="true" />
   {:else}
-    <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? 'C' : initials(label)}</span></span>
+    <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? TICKER.charAt(0) : initials(label)}</span></span>
   {/if}
   {#if showLabel}
     <span class="words">

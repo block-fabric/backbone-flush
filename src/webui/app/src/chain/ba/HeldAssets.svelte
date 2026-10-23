@@ -16,6 +16,7 @@
   import { assetById, ba, chnPrice, displayNameOf, startBitAssets, unlockHoldings } from './store.svelte';
   import HiddenToggle from './HiddenToggle.svelte';
   import { withoutHidden } from './visible.svelte';
+  import { TICKER } from '../config';
 
   // home: titled "My assets" (on the Home this table is the My assets card: user feedback 2026-10-19, one card, not
   // two); "Your assets" on the Overview.
@@ -51,7 +52,7 @@
     <!-- One compact row per asset (user feedback 2026-10-19): its logo, the crown if the wallet controls it, its ticker
          with its number, its display name, its balance and its worth; narrow, the name goes first, then the worth. -->
     <table class="held-table" class:compact={simple} aria-labelledby="held-title">
-      <thead class:sr-only={simple}><tr><th scope="col" class="c-img"><span class="sr-only">Image</span></th><th scope="col" class="c-ticker">Ticker</th><th scope="col" class="c-name">Name</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">ECX worth</th></tr></thead>
+      <thead class:sr-only={simple}><tr><th scope="col" class="c-img"><span class="sr-only">Image</span></th><th scope="col" class="c-ticker">Ticker</th><th scope="col" class="c-name">Name</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">{TICKER} worth</th></tr></thead>
       <tbody>
         {#each shown as r (r.holding.asset)}
           {@const display = displayNameOf(r.holding.asset) ?? ''}
@@ -86,7 +87,7 @@
   {/if}
   {#if home && wallets.current !== null}
     <div class="actions">
-      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create a token' : 'Issue'}</button>
+      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create an asset' : 'Issue'}</button>
       <button type="button" class="btn ghost small" onclick={() => go('send')}>Send</button>
     </div>
   {/if}

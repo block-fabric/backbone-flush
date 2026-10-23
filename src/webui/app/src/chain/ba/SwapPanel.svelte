@@ -27,6 +27,7 @@
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
+  import { TICKER } from '../config';
 
   // Simple mode (lib/uimode.svelte.ts): the quote in plain words, the slippage under "More options", how a
   // swap works in place of the curve of the pool. The same call (swapasset) as Advanced.
@@ -187,8 +188,8 @@
       if (amount !== null && !quoting && (market || routes || !pool)) return simple ? 'No market trades these two yet.' : 'No pool or route trades these two yet: make a pool in Add liquidity or Create pool.';
       return '';
     }
-    if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return 'Too little: the least ECX a pool pays out is 0.0005 ECX.';
-    if (!plain && isChn(pay) && amount !== null && amount < MIN_CHN_PAYOUT) return 'Too little: an order through the pools pays in 0.0005 ECX at least.';
+    if (out !== null && isChn(get) && out < MIN_CHN_PAYOUT) return `Too little: the least ${TICKER} a pool pays out is 0.0005 ${TICKER}.`;
+    if (!plain && isChn(pay) && amount !== null && amount < MIN_CHN_PAYOUT) return `Too little: an order through the pools pays in 0.0005 ${TICKER} at least.`;
     if (impact > MAX_IMPACT) return 'Too large for this pool: you would pay more than 10% above its price. Trade less, or wait for more liquidity.';
     return '';
   });
@@ -260,8 +261,8 @@
       title: t('Swap'),
       message: t('Pay %1 %2 for about %3 %4?', formatUnits(sAmount, sPayDecimals), payLabel, formatUnits(sOut, sGetDecimals), getLabel),
       informative: sPlain
-        ? t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('ECX comes by the coinbase of the next block.') : '')
-        : t('At least %1 %2, should the pools move first (slippage %3%). Along: %4. The order clears at the end of its block; should it give less, what went in comes back. %5', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), along, isChn(sGet) ? t('ECX comes by the coinbase of the next block.') : ''),
+        ? t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('%1 comes by the coinbase of the next block.', TICKER) : '')
+        : t('At least %1 %2, should the pools move first (slippage %3%). Along: %4. The order clears at the end of its block; should it give less, what went in comes back. %5', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), along, isChn(sGet) ? t('%1 comes by the coinbase of the next block.', TICKER) : ''),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -370,8 +371,8 @@
   <section class="panel">
     <div class="panel-head"><h3>How a swap works</h3></div>
     <div class="panel-body how">
-      <p>Each token trades with ECX in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
-      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the token then shows in My assets.</p>
+      <p>Each asset trades with {TICKER} in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
+      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the asset then shows in My assets.</p>
       <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
     </div>
   </section>

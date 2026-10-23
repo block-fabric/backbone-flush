@@ -72,7 +72,7 @@ std::vector<dialog::Row> Head(const Request& request, Source source, const std::
 dialog::Row Warning()
 {
     return confirm::Note("Anyone can make a link like this, and any page can open one: it says nothing true of who made it. Accept only if you asked for "
-                         "this on flush.markets yourself just now, and the token, the pool and the amounts below are the ones you meant.");
+                         "this on flush.markets yourself just now, and the asset, the pool and the amounts below are the ones you meant.");
 }
 
 std::string Message(Source source)
@@ -102,10 +102,10 @@ uint64_t Floor(const std::string& text, int decimals)
 Reader::Asset Token(Reader& reader, const uint256& id, const std::string& ticker)
 {
     const auto asset{reader.AssetById(id)};
-    if (!asset) throw LinkError(strprintf("No token has the id %s on this chain: nothing was done", id.GetHex()));
+    if (!asset) throw LinkError(strprintf("No asset has the id %s on this chain: nothing was done", id.GetHex()));
     // Ticker and id together: a ticker retired and taken again names another token, and must not redirect a trade.
     if (asset->ticker != ticker) {
-        throw LinkError(strprintf("The link names %s, and the token of id %s is %s: refused (the ticker and the id must be of one token)", ticker, Short(id),
+        throw LinkError(strprintf("The link names %s, and the asset of id %s is %s: refused (the ticker and the id must be of one asset)", ticker, Short(id),
                                   asset->ticker.empty() ? std::string{"without a public name"} : asset->ticker));
     }
     return *asset;
@@ -121,6 +121,53 @@ Reader::Asset CoinAsset()
 }
 
 std::string Ref(const uint256& id) { return id.IsNull() ? bitassets::AssetLabel(bitassets::CHN, nullptr) : "0x" + id.GetHex(); }
+
+/** A side of a link (pool, auction, order): the coin, or the asset of the id, whose ticker must be the link's. */
+Reader::Asset Side(Reader& reader, const uint256& id, const std::string& ticker)
+{
+    if (id.IsNull()) return CoinAsset();
+    return Token(reader, id, ticker);
+}
+
+std::string SideName(const Reader::Asset& asset) { return asset.id.IsNull() ? std::string{COIN_TICKER} + " (the chain's coin)" : Named(asset); }
+
+/** A fee in basis points as the RPCs take it: a percent. */
+UniValue Percent(int bps)
+{
+    UniValue out;
+    out.setNumStr(strprintf("%d.%02d", bps / 100, bps % 100));
+    return out;
+}
+
+/** The info of an asset from a link: its description, then its links, a line each. */
+std::string InfoOf(const Request& r)
+{
+    std::string info{r.description};
+    for (const std::string& link : r.links) info += (info.empty() ? "" : "\n") + link;
+    return info;
+}
+
+/** A link's logo, checked against the hash it names (the host asked for the file); nullopt if none. */
+std::optional<local::Logo> CheckedLogo(const Request& r)
+{
+    if (!r.logo_sha256) return std::nullopt;
+    if (r.logo.empty()) throw LinkError("The logo the link names was not given");
+    unsigned char hash[CSHA256::OUTPUT_SIZE];
+    CSHA256().Write(r.logo.data(), r.logo.size()).Finalize(hash);
+    if (HexStr(hash) != *r.logo_sha256) throw LinkError("The logo given is not the one the link names (its SHA-256 differs): nothing was done");
+    std::string reason;
+    auto logo{local::ReadLogo(r.logo, reason)};
+    if (!logo) throw LinkError(strprintf("The rules refuse this logo (%s): a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata", reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+    return logo;
+}
+
+/** The units of a supply of whole units at `decimals`, refused past what an asset can have. */
+uint64_t SupplyUnits(const std::string& whole, int decimals)
+{
+    const auto units{Units(whole, decimals, Rounding::EXACT, bitassets::MAX_AMOUNT)};
+    if (!units || *units == 0) throw LinkError(strprintf("supply: %s at %d decimals is more than an asset can have", whole, decimals));
+    return *units;
+}
 
 void QuoteRows(std::vector<dialog::Row>& rows, const std::string& quote, const std::string& floor, const std::optional<int>& slippage)
 {
@@ -154,7 +201,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const bool buy{r.verb == Verb::BUY};
         const Reader::Asset token{Token(reader, r.asset, r.ticker)};
         const auto launch{reader.LaunchOf(r.asset)};
-        if (!launch) throw LinkError(strprintf("%s is not a launched token: it has no curve to trade with", r.ticker));
+        if (!launch) throw LinkError(strprintf("%s is not on a curve: it has none to trade with", r.ticker));
         if (launch->graduated) throw LinkError(strprintf("%s graduated: it trades in its pool now (ask the site for a swap)", r.ticker));
         const uint64_t amount{buy ? Exact(r.amount, bitassets::CHN_DECIMALS, "ecx") : Exact(r.amount, token.decimals, "tokens")};
         if (buy && amount < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("A buy pays %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
@@ -169,7 +216,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         }
         plan.summary = buy ? strprintf("Buy %s with %s", r.ticker, Coin(amount)) : strprintf("Sell %s", Of(amount, token));
         rows = Head(r, source, plan.summary, now);
-        rows.push_back(confirm::Text("Token", Named(token)));
+        rows.push_back(confirm::Text("Asset", Named(token)));
         QuoteRows(rows, quoted, floored, r.slippage_bps);
         plan.method = buy ? "buyfromlaunch" : "selltolaunch";
         plan.params.push_back(Ref(r.asset));
@@ -227,43 +274,156 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         if (reader.NameTaken(r.ticker)) throw LinkError(strprintf("%s is taken: an asset of this ticker is registered. Nothing was done.", r.ticker));
         UniValue options{UniValue::VOBJ};
         options.pushKV("display_name", r.name);
-        std::string info{r.description};
-        for (const std::string& link : r.links) info += (info.empty() ? "" : "\n") + link;
+        const std::string info{InfoOf(r)};
         if (!info.empty()) options.pushKV("info", info);
-        std::optional<local::Logo> logo;
-        if (r.logo_sha256) {
-            if (r.logo.empty()) throw LinkError("The logo the link names was not given");
-            unsigned char hash[CSHA256::OUTPUT_SIZE];
-            CSHA256().Write(r.logo.data(), r.logo.size()).Finalize(hash);
-            if (HexStr(hash) != *r.logo_sha256) throw LinkError("The logo given is not the one the link names (its SHA-256 differs): nothing was done");
-            std::string reason;
-            logo = local::ReadLogo(r.logo, reason);
-            if (!logo) throw LinkError(strprintf("The rules refuse this logo (%s): a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata", reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
-            options.pushKV("logo", EncodeBase64(r.logo));
+        const std::optional<local::Logo> logo{CheckedLogo(r)};
+        if (logo) options.pushKV("logo", EncodeBase64(r.logo));
+        // Its parameters (a launch with parameters only where they apply): the supply and decimals, the fee, the allocation.
+        const int decimals{r.decimals.value_or(bitassets::LAUNCH_DECIMALS)};
+        uint64_t supply{0};
+        const bool with_params{!r.supply.empty() || r.fee_bps};
+        if (with_params && !reader.LaunchParamsActive()) throw LinkError("This chain takes no launches with a supply or a fee of their own yet: nothing was done");
+        if (!r.supply.empty()) {
+            supply = SupplyUnits(r.supply, decimals);
+            if (!bitassets::IsLaunchSupply(supply)) {
+                throw LinkError(strprintf("A curve's supply is a multiple of 8 units, %s to %s at %d decimals: %s is not", Decimal(bitassets::MIN_LAUNCH_SUPPLY, decimals),
+                                          Decimal(bitassets::MAX_LAUNCH_SUPPLY, decimals), decimals, r.supply));
+            }
+            options.pushKV("supply", r.supply);
+            options.pushKV("decimals", decimals);
         }
+        const uint32_t fee{r.fee_bps ? static_cast<uint32_t>(*r.fee_bps) * 100 : 0};
+        if (r.fee_bps) options.pushKV("fee", Percent(*r.fee_bps));
+        if (r.allocation_bps && *r.allocation_bps > 0) options.pushKV("allocation", Percent(*r.allocation_bps));
         std::string quoted, floored;
         if (!r.amount.empty()) {
             const uint64_t ecx{Exact(r.amount, bitassets::CHN_DECIMALS, "ecx")};
             if (ecx < bitassets::MIN_CHN_PAYOUT) throw LinkError(strprintf("The first buy pays %s at least", Coin(bitassets::MIN_CHN_PAYOUT)));
-            const uint64_t floor{Floor(r.floor, bitassets::LAUNCH_DECIMALS)};
-            const uint64_t quote{reader.QuoteFirstBuy(ecx)};
-            quoted = Decimal(quote, bitassets::LAUNCH_DECIMALS) + " " + r.ticker;
-            floored = Decimal(floor, bitassets::LAUNCH_DECIMALS) + " " + r.ticker;
+            const uint64_t floor{Floor(r.floor, decimals)};
+            const uint64_t quote{reader.QuoteFirstBuy(ecx, supply, fee)};
+            quoted = Decimal(quote, decimals) + " " + r.ticker;
+            floored = Decimal(floor, decimals) + " " + r.ticker;
             if (quote < floor) throw LinkError(strprintf("The first buy of %s would get %s, less than the %s the link asks at least: refused (the site's quote is not the chain's)", Coin(ecx), quoted, floored));
             options.pushKV("first_buy", Decimal(ecx, bitassets::CHN_DECIMALS));
-            options.pushKV("first_min_out", Decimal(floor, bitassets::LAUNCH_DECIMALS));
+            options.pushKV("first_min_out", Decimal(floor, decimals));
             plan.summary = strprintf("Launch %s (%s) and buy with %s", r.ticker, r.name, Coin(ecx));
         } else {
             plan.summary = strprintf("Launch %s (%s)", r.ticker, r.name);
         }
         rows = Head(r, source, plan.summary, now);
         if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
+        if (!r.supply.empty()) rows.push_back(confirm::Text("Supply", strprintf("%s %s (%d decimals): 3/4 sold on the curve, 1/4 into the locked pool at graduation", r.supply, r.ticker, decimals)));
+        if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator, treasury and security parts as the network's)"));
         if (!quoted.empty()) QuoteRows(rows, quoted, floored, r.slippage_bps);
         plan.method = "reserveasset";
         plan.params.push_back(r.ticker);
         plan.then_method = "launchtoken";
         plan.then_params.push_back(r.ticker);
         plan.then_params.push_back(std::move(options));
+        break;
+    }
+    case Verb::REGISTER: {
+        if (reader.NameTaken(r.ticker)) throw LinkError(strprintf("%s is taken: an asset of this ticker is registered. Nothing was done.", r.ticker));
+        const int decimals{*r.decimals};
+        SupplyUnits(r.supply, decimals);
+        const std::optional<local::Logo> logo{CheckedLogo(r)};
+        plan.summary = strprintf("Register %s%s: %s of %d decimals to this wallet, no market", r.ticker, r.name.empty() ? "" : " (" + r.name + ")", r.supply, decimals);
+        rows = Head(r, source, plan.summary, now);
+        if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
+        rows.push_back(confirm::Text("Control", "this wallet gets the control coin: it mints more, changes the asset's data, opens markets"));
+        plan.method = "reserveasset";
+        plan.params.push_back(r.ticker);
+        plan.then_method = "registerasset";
+        plan.then_params.push_back(r.ticker);
+        plan.then_params.push_back(r.supply);
+        plan.then_params.push_back(decimals);
+        UniValue data{UniValue::VOBJ};
+        const std::string info{InfoOf(r)};
+        if (!info.empty()) data.pushKV("info", info);
+        plan.then_params.push_back(std::move(data));
+        plan.then_params.push_back(true);
+        plan.then_params.push_back(logo ? UniValue{EncodeBase64(r.logo)} : UniValue{});
+        plan.then_params.push_back(r.name.empty() ? UniValue{} : UniValue{r.name});
+        break;
+    }
+    case Verb::CURVE: {
+        if (!reader.LaunchParamsActive()) throw LinkError("This chain does not put existing assets on curves yet: nothing was done");
+        const Reader::Asset asset{Token(reader, r.asset, r.ticker)};
+        if (reader.LaunchOf(r.asset)) throw LinkError(strprintf("%s was launched or put on a curve already", r.ticker));
+        if (reader.PoolById(bitassets::PoolId(bitassets::CHN, r.asset))) throw LinkError(strprintf("%s has a pool with %s already: a curve would graduate into it", r.ticker, std::string{COIN_TICKER}));
+        const uint64_t amount{Exact(r.amount, asset.decimals, "amount")};
+        if (!bitassets::IsLaunchSupply(amount)) {
+            throw LinkError(strprintf("A curve takes a multiple of 8 units, %s to %s %s", Decimal(bitassets::MIN_LAUNCH_SUPPLY, asset.decimals), Decimal(bitassets::MAX_LAUNCH_SUPPLY, asset.decimals), r.ticker));
+        }
+        UniValue options{UniValue::VOBJ};
+        options.pushKV("fee", Percent(*r.fee_bps));
+        if (!r.min_buy.empty()) options.pushKV("min_buy", Decimal(Exact(r.min_buy, bitassets::CHN_DECIMALS, "min_buy"), bitassets::CHN_DECIMALS));
+        if (!r.max_buy.empty()) options.pushKV("max_buy", Decimal(Exact(r.max_buy, bitassets::CHN_DECIMALS, "max_buy"), bitassets::CHN_DECIMALS));
+        plan.summary = strprintf("Put %s on a bonding curve at %s", Of(amount, asset), Bps(*r.fee_bps));
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Asset", Named(asset)));
+        rows.push_back(confirm::Text("On the curve", strprintf("%s sold for %s, %s into the locked pool at graduation", Of(amount / 8 * 6, asset), std::string{COIN_TICKER}, Of(amount / 8 * 2, asset))));
+        plan.method = "curveasset";
+        plan.params.push_back(Ref(r.asset));
+        plan.params.push_back(Decimal(amount, asset.decimals));
+        plan.params.push_back(std::move(options));
+        break;
+    }
+    case Verb::POOL: {
+        const Reader::Asset a{Side(reader, r.asset_a, r.ticker_a)}, b{Side(reader, r.asset_b, r.ticker_b)};
+        const uint64_t amount_a{Exact(r.amount_a, a.decimals, "amount_a")}, amount_b{Exact(r.amount_b, b.decimals, "amount_b")};
+        UniValue kind{UniValue::VOBJ};
+        kind.pushKV("curve", r.kind == "constant" ? "constant_product" : r.kind);
+        UniValue fee;
+        fee.setNumStr(strprintf("%d.%04d", r.fee_ppm / 10000, r.fee_ppm % 10000));
+        kind.pushKV("fee", fee);
+        if (r.amp) kind.pushKV("amp", *r.amp);
+        if (r.weight_a) kind.pushKV("weight_a", *r.weight_a);
+        plan.summary = strprintf("Create a %s pool of %s and %s", r.kind == "constant" ? "constant-product" : r.kind, Of(amount_a, a), Of(amount_b, b));
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("First asset", SideName(a)));
+        rows.push_back(confirm::Text("Second asset", SideName(b)));
+        plan.method = "createpool";
+        plan.params.push_back(Ref(r.asset_a));
+        plan.params.push_back(Decimal(amount_a, a.decimals));
+        plan.params.push_back(Ref(r.asset_b));
+        plan.params.push_back(Decimal(amount_b, b.decimals));
+        plan.params.push_back(std::move(kind));
+        break;
+    }
+    case Verb::AUCTION: {
+        const Reader::Asset base{Side(reader, r.asset_a, r.ticker_a)}, quote{Side(reader, r.asset_b, r.ticker_b)};
+        const uint64_t amount{Exact(r.amount, base.decimals, "amount")};
+        const uint64_t start{Exact(r.start_price, quote.decimals, "start_price")}, end{Exact(r.end_price, quote.decimals, "end_price")};
+        if (end > start) throw LinkError("end_price is above start_price: a Dutch auction's price falls");
+        plan.summary = strprintf("Auction %s for %s falling to %s over %d blocks", Of(amount, base), Of(start, quote), Of(end, quote), r.blocks);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Sells", SideName(base)));
+        rows.push_back(confirm::Text("For", SideName(quote)));
+        plan.method = "createauction";
+        plan.params.push_back(Ref(r.asset_a));
+        plan.params.push_back(Decimal(amount, base.decimals));
+        plan.params.push_back(Ref(r.asset_b));
+        plan.params.push_back(Decimal(start, quote.decimals));
+        plan.params.push_back(Decimal(end, quote.decimals));
+        plan.params.push_back(r.blocks);
+        plan.params.push_back(r.delay.value_or(1));
+        break;
+    }
+    case Verb::ORDER: {
+        const Reader::Asset sell{Side(reader, r.asset_a, r.ticker_a)}, buy{Side(reader, r.asset_b, r.ticker_b)};
+        const uint64_t amount{Exact(r.amount, sell.decimals, "amount")};
+        Exact(r.price, std::max(buy.decimals, 8), "price");
+        plan.summary = strprintf("Sell %s for %s at %s %s each at least, for %d blocks", Of(amount, sell), buy.ticker, r.price, buy.ticker, r.blocks);
+        rows = Head(r, source, plan.summary, now);
+        rows.push_back(confirm::Text("Sells", SideName(sell)));
+        rows.push_back(confirm::Text("Buys", SideName(buy)));
+        plan.method = "placeorder";
+        plan.params.push_back(Ref(r.asset_a));
+        plan.params.push_back(Decimal(amount, sell.decimals));
+        plan.params.push_back(Ref(r.asset_b));
+        plan.params.push_back(r.price);
+        plan.params.push_back(r.blocks);
         break;
     }
     }
@@ -322,18 +482,21 @@ public:
         if (!launch || launch->Graduated()) return 0;
         const auto curve{m_chain.getBitAssetsPoolOfKind(launch->pool)};
         if (!curve) return 0;
-        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, bitassets::LAUNCH_CURVE_END, launch->max_buy, launch->min_buy},
+        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd(), launch->StartBound()},
                                                           curve->first.reserve0, curve->first.reserve1, {bitassets::dex::HopIn{buy, amount}}, {true})};
         return cleared ? cleared->outs[0] : 0;
     }
-    uint64_t QuoteFirstBuy(uint64_t ecx) override
+    uint64_t QuoteFirstBuy(uint64_t ecx, uint64_t supply, uint32_t fee) override
     {
         const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
         const uint64_t graduation{static_cast<uint64_t>(rules.launch_graduation)};
-        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{rules.launch_fee, bitassets::LAUNCH_CURVE_END, 0, 0}, graduation / 2,
-                                                          bitassets::LAUNCH_VIRTUAL_TOKENS, {bitassets::dex::HopIn{true, ecx}}, {true})};
+        const uint64_t s{supply == 0 ? bitassets::LAUNCH_SUPPLY : supply};
+        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee == 0 ? rules.launch_fee : fee, s / 8 * 3, 0, 0}, graduation / 2,
+                                                          s / 8 * 9, {bitassets::dex::HopIn{true, ecx}}, {true})};
         return cleared ? cleared->outs[0] : 0;
     }
+    bool LaunchParamsActive() override { return m_chain.getBitAssetsLaunchParamsActive(); }
+    uint32_t LaunchFee() override { return Params().GetConsensus().sidechain.launch_fee; }
     std::optional<Pool> PoolById(const uint256& id) override
     {
         const auto found{m_chain.getBitAssetsPoolOfKind(id)};
@@ -530,7 +693,7 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
     LogInfo("webui: a link (%s): %s", SourceText(source), VerbName(request.verb));
     if (request.verb == Verb::CONNECT) return Connect(request, source, wallet);
     // A logo the link names by its hash (it cannot carry 32 KB): chosen by the user, refused if it is not that one.
-    if (request.verb == Verb::LAUNCH && request.logo_sha256 && request.logo.empty()) {
+    if ((request.verb == Verb::LAUNCH || request.verb == Verb::REGISTER) && request.logo_sha256 && request.logo.empty()) {
         Window::FileDialog chooser;
         chooser.title = strprintf("The logo of %s (SHA-256 %s…)", request.ticker, request.logo_sha256->substr(0, 12));
         chooser.filters = {{"Logo (PNG, JPEG)", {"*.png", "*.jpg", "*.jpeg"}}};
@@ -586,7 +749,7 @@ void LinkHost::WaitAndLaunch(Plan plan, std::string wallet, std::string reserve_
         } catch (...) {
         }
         if (std::chrono::steady_clock::now() > deadline) {
-            if (m_deps.inform) m_deps.inform("Launch not sent", strprintf("The reservation of %s was not deep enough within the hour: launch it from the Launches page.", plan.request.ticker), true);
+            if (m_deps.inform) m_deps.inform(plan.then_method == "launchtoken" ? "Launch not sent" : "Registration not sent", strprintf("The reservation of %s was not deep enough within the hour: finish it from the Assets page.", plan.request.ticker), true);
             return;
         }
         std::unique_lock lock{m_mutex};
@@ -600,11 +763,12 @@ void LinkHost::WaitAndLaunch(Plan plan, std::string wallet, std::string reserve_
     try {
         confirm::Preface preface{plan.preface, plan.message, "link"};
         const UniValue result{m_deps.confirmed(call)};
-        LogInfo("webui: the launch of %s was sent: %s", plan.request.ticker, result.write());
-        if (m_deps.inform) m_deps.inform("Launched", strprintf("%s is launched: on its curve with the next block.", plan.request.ticker), false);
+        const bool launch{plan.then_method == "launchtoken"};
+        LogInfo("webui: the %s of %s was sent: %s", launch ? "launch" : "registration", plan.request.ticker, result.write());
+        if (m_deps.inform) m_deps.inform(launch ? "Launched" : "Registered", plan.request.ticker + (launch ? std::string{" is launched: on its curve with the next block."} : std::string{" is registered: in this wallet with the next block."}), false);
     } catch (const std::exception& e) {
-        LogInfo("webui: the launch of %s failed: %s", plan.request.ticker, e.what());
-        if (m_deps.inform) m_deps.inform("Launch not sent", strprintf("%s was reserved, and its launch failed: %s", plan.request.ticker, e.what()), true);
+        LogInfo("webui: the second step for %s failed: %s", plan.request.ticker, e.what());
+        if (m_deps.inform) m_deps.inform("Not sent", strprintf("%s was reserved, and its %s failed: %s", plan.request.ticker, plan.then_method == "launchtoken" ? "launch" : "registration", e.what()), true);
     }
 }
 

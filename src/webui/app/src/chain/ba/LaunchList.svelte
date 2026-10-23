@@ -18,6 +18,7 @@
   import { appendLaunches, launchQuery, type Launch, type LaunchFilter, type LaunchPage, type LaunchSort, type LaunchStats } from './launch';
   import { formatAmount, formatPercent, formatPrice } from './model';
   import { ba, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   const PAGE = 50;
   let filter = $state<LaunchFilter>('all');
@@ -109,9 +110,9 @@
   {#if stats}
     <section class="ba-figures">
       <div class="panel ba-figure"><span class="muted">Launches</span><strong>{formatCount(stats.launches)}</strong><span class="faint">{formatCount(stats.on_curve)} on their curves · {formatCount(stats.graduated)} graduated</span></div>
-      <div class="panel ba-figure"><span class="muted">Raised</span><strong>{formatAmount(stats.raised, 8, { max: 2 })}</strong><span class="faint">ECX, in curves and graduated</span></div>
-      <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatAmount(stats.volume, 8, { max: 2 })}</strong><span class="faint">ECX on the curves</span></div>
-      <div class="panel ba-figure"><span class="muted">Graduation</span><strong>{formatAmount(stats.rules.graduation, 8)}</strong><span class="faint">ECX raised, then a locked pool</span></div>
+      <div class="panel ba-figure"><span class="muted">Raised</span><strong>{formatAmount(stats.raised, 8, { max: 2 })}</strong><span class="faint">{TICKER}, in curves and graduated</span></div>
+      <div class="panel ba-figure"><span class="muted">Traded</span><strong>{formatAmount(stats.volume, 8, { max: 2 })}</strong><span class="faint">{TICKER} on the curves</span></div>
+      <div class="panel ba-figure"><span class="muted">Graduation</span><strong>{formatAmount(stats.rules.graduation, 8)}</strong><span class="faint">{TICKER} raised, then a locked pool</span></div>
     </section>
   {/if}
   <section class="panel">
@@ -134,15 +135,15 @@
         </select>
       </label>
       <span class="grow"></span>
-      <button type="button" class="btn small primary" onclick={() => (nav.tab = 'launch')}><Icon name="plus" size={14} /> Launch a token</button>
+      <button type="button" class="btn small primary" onclick={() => (nav.tab = 'launch')}><Icon name="plus" size={14} /> Launch an asset</button>
     </div>
     {#if error}<p class="ba-problems bad" role="alert"><SafeText text={error} /></p>{/if}
     {#if list.length === 0}
-      <p class="ba-empty">{loading ? t('Reading the launches…') : filter === 'all' ? t('No launch yet: launch the first token.') : t('No launch matches.')}</p>
+      <p class="ba-empty">{loading ? t('Reading the launches…') : filter === 'all' ? t('No launch yet: launch the first asset.') : t('No launch matches.')}</p>
     {:else}
       <div class="ba-wrap">
         <table class="ba-table" use:stacked aria-label="Launches">
-          <thead><tr><th>Token</th><th>To graduation</th><th class="end">Price</th><th class="end">Market value</th><th class="end">Volume</th><th>Status</th></tr></thead>
+          <thead><tr><th>Asset</th><th>To graduation</th><th class="end">Price</th><th class="end">Market value</th><th class="end">Volume</th><th>Status</th></tr></thead>
           <tbody>
             {#each list as l (l.token)}
               <tr class="pick" onclick={() => (open = l.token)} use:selectable={() => (open = l.token)}>

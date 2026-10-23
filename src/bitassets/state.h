@@ -636,14 +636,17 @@ struct SwapPools {
 };
 
 /**
- * Launch a token on a bonding curve (doc/layers.md "Launches"): register an asset (`reg`: the name revealed from
- * its reservation, as Register, its ticker, logo, display name and description; supply 0 and LAUNCH_DECIMALS:
- * the rules give it LAUNCH_SUPPLY, fixed, no control coin) whose supply sits on a launch curve priced in the chain's
- * coin. Buyers pay the coin into the curve and sellers get it back (orders of the block's batch through the curve's
- * pool, SwapPools); once the curve has raised SidechainParams::launch_graduation, its coin and the tokens left move
- * into the token's pool with the coin (the kind AddLiquidity makes), whose shares nobody holds: locked for good.
- * `creator` gets its part of the curve's fees (ClaimLaunch), and, if `allocation` (basis points of LAUNCH_SUPPLY, at
- * most MAX_LAUNCH_ALLOCATION) is not 0, that many more tokens once it graduated. `min_buy`, `max_buy` (the chain's
+ * Launch an asset on a bonding curve (doc/layers.md "Launches"): register an asset (`reg`: the name revealed from
+ * its reservation, as Register, its ticker, logo, display name and description) whose supply sits on a launch curve
+ * priced in the chain's coin, fixed, with no control coin. Of the kind KIND (`fee` 0): supply 0 and LAUNCH_DECIMALS
+ * in `reg`, the rules give it LAUNCH_SUPPLY and the curve the network's launch_fee. Of the kind
+ * LAUNCH_WITH_PARAMS_KIND (from SidechainParams::launch_params_height; `fee` not 0): its supply and decimals are
+ * `reg`'s (IsLaunchSupply), its curve's fee `fee` (millionths, MIN_LAUNCH_FEE..MAX_LAUNCH_FEE). Buyers pay the coin
+ * into the curve and sellers get it back (orders of the block's batch through the curve's pool, SwapPools); once the
+ * curve has raised SidechainParams::launch_graduation, its coin and the assets left move into the asset's pool with
+ * the coin (the kind AddLiquidity makes), whose shares nobody holds: locked for good.
+ * `creator` gets its part of the curve's fees (ClaimLaunch), and, if `allocation` (basis points of the supply, at
+ * most MAX_LAUNCH_ALLOCATION) is not 0, that many more units once it graduated. `min_buy`, `max_buy` (the chain's
  * coin, 0: none) bound each buy. `first_buy` (0: none): the launch's own buy, an order of its block (its result
  * output, at least `first_min_out`; CHN back to `chn_to`).
  */
@@ -657,12 +660,43 @@ struct LaunchToken {
     uint64_t first_buy{0};
     uint64_t first_min_out{0};
     CScript chn_to;
+    //! The curve's fee (millionths): 0 for a launch of the kind KIND (the network's), else of LAUNCH_WITH_PARAMS_KIND.
+    uint32_t fee{0};
     SERIALIZE_METHODS(LaunchToken, obj)
     {
         READWRITE(obj.reg, obj.reg.logo, obj.reg.display_name, obj.creator, obj.allocation, VARINT(obj.min_buy), VARINT(obj.max_buy), VARINT(obj.first_buy), VARINT(obj.first_min_out),
                   obj.chn_to);
     }
     friend bool operator==(const LaunchToken&, const LaunchToken&) = default;
+    bool WithParams() const { return fee != 0; }
+};
+/** The kind of the marker of a LaunchToken with its own parameters: its fields, then `fee` (VARINT). */
+inline constexpr uint8_t LAUNCH_WITH_PARAMS_KIND{36};
+
+/**
+ * Put part of an existing asset's supply on a bonding curve (from SidechainParams::launch_params_height), by whoever
+ * spends its control coin (which goes on, listed by the marker): `amount` units of it (IsLaunchSupply), taken in from
+ * the transaction's asset coins, priced in the chain's coin as a launch's (3/4 sold on the curve, 1/4 into the locked
+ * pool at graduation), at `fee` (millionths, MIN_LAUNCH_FEE..MAX_LAUNCH_FEE). The asset must never have been launched
+ * and have no pool of the kind AddLiquidity makes with the coin; until it graduates no new pool of it is made. The
+ * rest as LaunchToken: `creator`, `min_buy`, `max_buy`, `first_buy` and `first_min_out`, `chn_to`; no allocation.
+ */
+struct CurveAsset {
+    static constexpr uint8_t KIND{28};
+    AssetId asset;
+    uint64_t amount{0};
+    uint32_t fee{0};
+    CScript creator;
+    uint64_t min_buy{0};
+    uint64_t max_buy{0};
+    uint64_t first_buy{0};
+    uint64_t first_min_out{0};
+    CScript chn_to;
+    SERIALIZE_METHODS(CurveAsset, obj)
+    {
+        READWRITE(obj.asset, VARINT(obj.amount), VARINT(obj.fee), obj.creator, VARINT(obj.min_buy), VARINT(obj.max_buy), VARINT(obj.first_buy), VARINT(obj.first_min_out), obj.chn_to);
+    }
+    friend bool operator==(const CurveAsset&, const CurveAsset&) = default;
 };
 
 /**
@@ -757,7 +791,7 @@ struct SettleOrder {
 
 using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
                                Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract, SetLogo, SetDisplayName,
-                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition, PlaceOrder, SettleOrder>;
+                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition, PlaceOrder, SettleOrder, CurveAsset>;
 
 /** The registration an operation makes: a Register's, or a LaunchToken's (nullptr: none). */
 const Register* RegisterOf(const Operation& op);
@@ -771,6 +805,13 @@ bool IsCurveOperation(const Operation& op);
  * whose marker is of their kinds is not valid before (bad-ba-marker), as no such marker was.
  */
 [[nodiscard]] bool CheckCurvesActivation(const CTransaction& tx, bool active, std::string& reject_reason);
+/** Whether an operation is a launch with parameters (LaunchToken of LAUNCH_WITH_PARAMS_KIND, CurveAsset). */
+bool IsLaunchParamsOperation(const Operation& op);
+/**
+ * Whether a transaction may be in a block at a height where launches with parameters are `active` or not: one whose
+ * marker is of their kinds is not valid before (bad-ba-marker), as no such marker was.
+ */
+[[nodiscard]] bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
 /** Whether an operation sets a logo (SetLogo, or a Register with one): valid from SidechainParams::logo_height only. */
 bool IsLogoOperation(const Operation& op);
@@ -962,11 +1003,13 @@ struct AssetHistory {
 };
 
 /**
- * Launches (LaunchToken): every launched token has LAUNCH_SUPPLY units (a billion tokens of LAUNCH_DECIMALS), of
- * which LAUNCH_SUPPLY·3/4 are sold on its curve and LAUNCH_SUPPLY/4 go with the raised coin into its pool at
- * graduation. The curve is x·y = k on virtual reserves from (V, Tv) = (G/2, LAUNCH_SUPPLY·9/8) to its end
- * (V + G, yE) = (3G/2, LAUNCH_SUPPLY·3/8), G = SidechainParams::launch_graduation: selling the 3/4 raises exactly G,
- * and the pool at graduation, (G, LAUNCH_SUPPLY/4), has the curve's last price, (V + G)²/k = 4G/LAUNCH_SUPPLY.
+ * Launches (LaunchToken, CurveAsset; doc/dex-math.md "Launch curve"). A launch's supply S (units on the curve and in
+ * its pool: LAUNCH_SUPPLY, a billion of LAUNCH_DECIMALS, for a launch of the kind LaunchToken::KIND; its own from
+ * launch_params_height, IsLaunchSupply) splits into S·3/4 sold on its curve and S/4 that go with the raised coin into
+ * its pool at graduation. The curve is x·y = k on virtual reserves from (V, Tv) = (G/2, S·9/8) to its end
+ * (V + G, yE) = (3G/2, S·3/8), G = SidechainParams::launch_graduation: selling the 3/4 raises exactly G, and the pool
+ * at graduation, (G, S/4), has the curve's last price, (V + G)²/k = 4G/S. In coin, the curve is the same for any S:
+ * it starts at a value of 4G/9 for the whole supply and ends at 4G.
  */
 inline constexpr uint8_t LAUNCH_DECIMALS{6};
 inline constexpr uint64_t LAUNCH_SUPPLY{1'000'000'000'000'000};
@@ -975,7 +1018,17 @@ inline constexpr uint64_t LAUNCH_POOL_SUPPLY{LAUNCH_SUPPLY / 4};
 inline constexpr uint64_t LAUNCH_VIRTUAL_TOKENS{LAUNCH_SUPPLY / 8 * 9};
 inline constexpr uint64_t LAUNCH_CURVE_END{LAUNCH_SUPPLY / 8 * 3};
 static_assert(LAUNCH_VIRTUAL_TOKENS - LAUNCH_CURVE_END == LAUNCH_CURVE_SUPPLY && LAUNCH_CURVE_SUPPLY + LAUNCH_POOL_SUPPLY == LAUNCH_SUPPLY);
-/** Most a creator's allocation can be, in basis points of LAUNCH_SUPPLY, minted at graduation (shown as such). */
+/** A launch's supply with parameters: a multiple of LAUNCH_SUPPLY_MULTIPLE (its parts exact), at least MIN_LAUNCH_SUPPLY, at most MAX_LAUNCH_SUPPLY (the virtual Tv = S·9/8 within MAX_AMOUNT). */
+inline constexpr uint64_t LAUNCH_SUPPLY_MULTIPLE{8};
+inline constexpr uint64_t MIN_LAUNCH_SUPPLY{1'000'000};
+inline constexpr uint64_t MAX_LAUNCH_SUPPLY{MAX_AMOUNT / 9 * 8};
+static_assert(MAX_LAUNCH_SUPPLY % LAUNCH_SUPPLY_MULTIPLE == 0 && MAX_LAUNCH_SUPPLY / 8 * 9 <= MAX_AMOUNT && LAUNCH_SUPPLY % LAUNCH_SUPPLY_MULTIPLE == 0);
+/** Whether `supply` units can be a launch's (with parameters). */
+constexpr bool IsLaunchSupply(uint64_t supply) { return supply % LAUNCH_SUPPLY_MULTIPLE == 0 && supply >= MIN_LAUNCH_SUPPLY && supply <= MAX_LAUNCH_SUPPLY; }
+/** The fee of a launch's curve with parameters, in millionths: 0.3 % to 5 %. */
+inline constexpr uint32_t MIN_LAUNCH_FEE{3'000};
+inline constexpr uint32_t MAX_LAUNCH_FEE{50'000};
+/** Most a creator's allocation can be, in basis points of the supply, minted at graduation (shown as such). */
 inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{500};
 /** The blocks the launches' log keeps (State::GetLaunchLog): about a day and a half of 15-second blocks. */
 inline constexpr int32_t LAUNCH_LOG_BLOCKS{10'080};
@@ -1013,16 +1066,42 @@ struct LaunchRecord {
     //! The coin traded in and out on its curve, ever, and its rounds.
     uint64_t volume{0};
     uint32_t trades{0};
-    SERIALIZE_METHODS(LaunchRecord, obj)
+    //! Its supply S on the curve and in its pool (units): 0 for one of LAUNCH_SUPPLY (a launch of LaunchToken::KIND,
+    //! and every record written before launch_params_height, which ends before this field); and whether it put an
+    //! existing asset on a curve (CurveAsset).
+    uint64_t supply{0};
+    bool from_asset{false};
+    template <typename Stream>
+    void Serialize(Stream& s) const
     {
-        READWRITE(obj.txid, obj.height, obj.creator, obj.allocation, obj.min_buy, obj.max_buy, obj.fee, obj.creator_share, obj.graduation, obj.virtual_coin, obj.pool,
-                  obj.pool_fees, obj.creator_fees, obj.creator_paid, obj.graduated, obj.raised_at_graduation, obj.allocation_claimed, obj.volume, obj.trades,
-                  obj.protocol_share, obj.security_share, obj.protocol_fees, obj.security_fees);
+        s << txid << height << creator << allocation << min_buy << max_buy << fee << creator_share << graduation << virtual_coin << pool << pool_fees << creator_fees
+          << creator_paid << graduated << raised_at_graduation << allocation_claimed << volume << trades << protocol_share << security_share << protocol_fees << security_fees;
+        // A launch of before (supply 0, not from an asset) is written as it was.
+        if (supply != 0 || from_asset) s << VARINT(supply) << from_asset;
+    }
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        s >> txid >> height >> creator >> allocation >> min_buy >> max_buy >> fee >> creator_share >> graduation >> virtual_coin >> pool >> pool_fees >> creator_fees >>
+            creator_paid >> graduated >> raised_at_graduation >> allocation_claimed >> volume >> trades >> protocol_share >> security_share >> protocol_fees >> security_fees;
+        supply = 0;
+        from_asset = false;
+        if (!s.empty()) s >> VARINT(supply) >> from_asset;
     }
     friend bool operator==(const LaunchRecord&, const LaunchRecord&) = default;
     bool Graduated() const { return graduated >= 0; }
-    /** Its allocation in units. */
-    uint64_t AllocationUnits() const { return LAUNCH_SUPPLY / 10'000 * allocation; }
+    /** Its supply S (units), and its parts: on the curve (3S/4), into the pool at graduation (S/4); the curve's virtual units (9S/8) and end (3S/8). */
+    uint64_t Supply() const { return supply == 0 ? LAUNCH_SUPPLY : supply; }
+    /** Whether its curve ends only at its end exactly (curves::LaunchCurve::strict_end): those made from launch_params_height, which write their supply. */
+    bool StrictEnd() const { return supply != 0; }
+    /** The bound of its curve's units (curves::LaunchCurve::start): its virtual units, for those made from launch_params_height. */
+    uint64_t StartBound() const { return supply != 0 ? VirtualUnits() : 0; }
+    uint64_t CurveSupply() const { return Supply() / 8 * 6; }
+    uint64_t PoolSupply() const { return Supply() / 8 * 2; }
+    uint64_t VirtualUnits() const { return Supply() / 8 * 9; }
+    uint64_t CurveEnd() const { return Supply() / 8 * 3; }
+    /** Its allocation in units: ⌊S·allocation/10000⌋ (exact for LAUNCH_SUPPLY). */
+    uint64_t AllocationUnits() const { return static_cast<uint64_t>(static_cast<unsigned __int128>(Supply()) * allocation / 10'000); }
 };
 
 /** What a block did on a launch's curve (State::GetLaunchLog): the coin and tokens in and out, the fees, the price after, whether it graduated. */
@@ -1608,7 +1687,9 @@ private:
     /** Writes a pool's concentrated state, noting the price it had before its block (the price accumulators). */
     void SetClState(const uint256& pool, const ClState& state);
     /** Launches' part of MakePlan, after the registration's: the curve, its pool, the first buy. */
-    bool PlanLaunch(const CTransaction& tx, const LaunchToken& launch, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take, std::string& reject_reason) const;
+    //! `supply`: the launch's units (0: LAUNCH_SUPPLY); `from_asset`: an existing asset put on a curve (CurveAsset, as a launch of its fields).
+    bool PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64_t supply, bool from_asset, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
+                    std::string& reject_reason) const;
     /** A launch graduates (FinishBlock): its curve's coin and the tokens left into the token's pool with the coin, locked. */
     void Graduate(const AssetId& token, int height);
     /** The DEX's pool kinds' part of MakePlan: CreatePool, PoolDeposit, PoolWithdraw. */

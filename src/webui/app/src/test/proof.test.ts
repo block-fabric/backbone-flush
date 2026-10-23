@@ -9,6 +9,7 @@ import { app, prefs, wallets } from '../lib/state.svelte';
 import { checkProofCoins, formatProof, parseProof, PROOF_BEGIN, PROOF_END, PROOF_SIGNATURES, proofMessage } from '../lib/tools';
 import { resetWalletData } from '../lib/walletdata.svelte';
 import { regtestP2tr, regtestP2wpkh } from './bech32';
+import { TICKER } from '../chain/config';
 
 // Proof of funds with a choice of what to prove (user decision, 2026-10-15): by address, or by coin (the
 // coins listed in the proof and signed with the statement); proofs of chains-qt unchanged.
@@ -220,7 +221,7 @@ describe('the Proof of funds page', () => {
       if (!v || !v.textContent!.includes('Coins listed')) throw new Error('not yet');
       return v;
     });
-    expect(verdict.textContent).toContain('Coins listed in the proof: 3. Unspent now, on addresses that signed: 1, holding 1.00000000 CHN.');
+    expect(verdict.textContent).toContain(`Coins listed in the proof: 3. Unspent now, on addresses that signed: 1, holding 1.00000000 ${TICKER}.`);
     expect(verdict.textContent).toContain(`SPENT or not on the chain: ${'bb'.repeat(32)}:1`);
     expect(verdict.textContent).toContain(`NOT ON A SIGNED ADDRESS: ${'cc'.repeat(32)}:0`);
     expect(verdict.classList.contains('partly')).toBe(true);

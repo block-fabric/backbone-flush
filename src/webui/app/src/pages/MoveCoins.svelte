@@ -20,6 +20,7 @@
   import { formatAmount, satsToCoins } from '../lib/units';
   import { setUiMode } from '../lib/uimode.svelte';
   import { depositFeeEstimate } from '../lib/wallet';
+  import { TICKER } from '../chain/config';
 
   let { dc, refresh }: { dc: DrivechainState | null; refresh: () => void } = $props();
 
@@ -140,7 +141,7 @@
 
 <div class="move">
   <section class="panel wizard" aria-labelledby="move-title">
-    <div class="panel-head"><h2 id="move-title">Move CHN to a sidechain</h2></div>
+    <div class="panel-head"><h2 id="move-title">Move {TICKER} to a sidechain</h2></div>
     <div class="panel-body">
       {#if done}
         <div class="done" role="status">
@@ -180,7 +181,7 @@
             </div>
           {/if}
         {:else if step === 1 && chosen}
-          <p class="lead">How much CHN should go to <SafeText text={chosen.title} />?</p>
+          <p class="lead">How much {TICKER} should go to <SafeText text={chosen.title} />?</p>
           {#key amountKey}<AmountInput id="move-amount" bind:value={amount} label="Amount" max={available ?? undefined} />{/key}
           {#if available !== null}<p class="muted small">You have <Amount sats={available} /> available.</p>{/if}
           <div class="nav">

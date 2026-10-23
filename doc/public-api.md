@@ -77,7 +77,7 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 
 | GET | Method | Returns |
 |---|---|---|
-| `status` | GetStatus | network, Flush tip, eCash tip, slot, escrow, launches today, `market_index` |
+| `status` | GetStatus | network, Flush tip, eCash tip, slot, escrow, launches today, `market_index`, `launch_params` (active, height, fee bounds and default in bps, supply bounds and multiple in units, decimals) |
 | `stats` | GetStats | launch counts, 24 h and total volume, fees (trade bps, split), the curve's parameters, pools, liquidity |
 | `fees` | GetFees | fee tiers, kinds, the launch fee and its parts, the swap fee's parts (liquidity providers, security, treasury), the mempool's relay fee |
 | `treasury` | GetTreasury | `gettreasury`: balances by asset (held by the chain, no key, no spending rule yet), inflows by block (the market index), the security parts paid |
@@ -89,20 +89,22 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 | `launches/{id}/candles?interval=5m\|1h\|4h\|1d&from=&to=` | GetLaunchCandles | `{ items: Candle[] }`, oldest first, ≤ 500 |
 | `launches/{id}/holders?cursor=&limit≤100` | ListLaunchHolders | `Page<Holder>`: the curve's (or pool's) tokens first, tagged, then addresses largest first |
 | `launches/{id}/quote?side=buy\|sell&amount=&slippage_bps=` | QuoteLaunch | `quotelaunch` + exact units and the floor |
+| `assets?q=&sort=newest\|oldest\|name\|supply\|volume\|holders\|activity&market=all\|none\|curve\|pool\|book\|auction&cursor=&limit≤100` | ListAssets | the registry: `Page<AssetSummary>`, every asset (searchassets' index) with its markets: `market.status` the first of curve (with `progress`, 0–1), pool, book, auction, none; `kinds`, counts, price in ECX, 24 h volume; supply (and `_units`), decimals, holders, logo, `fixed_supply`, controller. The market filter is of the page (go on with `next_cursor`) |
+| `assets/{id}` | GetAsset | `AssetDetail`: the summary, its whole description and safe links, its launch, its pools (at most 10, read whole), books (at most 10, by id with their order counts), auctions not collected (at most 20), `can_curve` {allowed, reason}: more of them through `pools/…`, `books/…` |
 | `launches/{id}/logo`, `assets/{id}/logo` | GetLaunchLogo, GetAssetLogo | the image (PNG/JPEG after its magic bytes; `nosniff`) |
 | `pools?sort=liquidity\|volume\|change\|newest&q=&kind=&fee_ppm=&ecx_only=&include_abandoned=&cursor=&limit≤200` | ListPools | the market index (`searchpools`) with the pool's kind and 24 h measures |
 | `pools/{id}`, `pools/{asset}/{asset}` | GetPool | `getpool` + launch, locked, 24 h |
 | `pools/{id}/trades`, `pools/{id}/candles` | ListPoolTrades, GetPoolCandles | as for launches |
 | `pools/{id}/ticks?limit≤500` | ListPoolTicks | a concentrated pool's liquidity by tick (`getpoolticks`) |
 | `positions/{id}` | GetPosition | a position (`getposition`) |
-| `books/{base}[/{quote}]?depth≤100` | GetBook | the ladder (`getbook`), totals, spread |
+| `books/{base}[/{quote}]?depth≤100` | GetBook | the ladder (`getbook`), totals, spread; each level's `price_exact` (the orders' limit, 18 significant digits) and `amount_units`; `best_ask_exact`, `best_bid_exact`. A book's candles: `pools/{book}/candles` |
 | `tickers/{ticker}` | GetTicker | `{ ticker, available, reason }` (reservations are hidden: available can still lose a race) |
 | `addresses/{address}/holdings` | GetHoldings | assets (value in ECX), LP shares, positions, orders of an address |
 | `verifications?assets=A,B&curators=<id>,…` | GetVerifications | per **the client's own** curator list (1–20), 1–50 assets (`getverifications`) |
 | `quote/swap?from=&to=&amount=&slippage_bps=&max_hops=` | QuoteSwap | every pool of the pair (books included: `getswapquote`) and routes (`quoteroute`), best first, the floor |
 | `quote/deposit?pool=&amount_a=&amount_b=`, `quote/withdraw?pool=&shares=&only=a\|b` | QuoteLiquidity | `quotepoolliquidity`, floors |
 | `quote/position?pool=&price_lower=&price_upper=&amount_a=&amount_b=` | QuotePosition | `previewposition` |
-| `build/{buy\|sell\|swap\|deposit\|withdraw\|launch}?…` | BuildAction | the action, unsigned (below) |
+| `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order}?…` | BuildAction | the action, unsigned (below) |
 | POST `broadcast` `{"hex": "…"}` | Broadcast | `{ txid }` |
 
 **One implementation of quotes.** Every quote is the node's own RPC method, called in process: `quotelaunch`,
@@ -133,8 +135,11 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
   network, `exp` (ten minutes, an hour for a launch), each verb's parameters and no other, amounts as decimals of at
   most 8 places in the asset's own places (the token's 6), the floors rounded down by the API (the app rounds them
   up: the same number), assets by id with their tickers. The webui test `publicapi_links_tests` reads the API's
-  links with the app's own parser. Verbs the app takes today: `buy`, `sell`, `swap` (one pool), `launch`
-  (`app_ready: true`). Built for wallet extensions and later apps, refused by today's app (it fails closed):
+  links with the app's own parser. Verbs the app takes today: `buy`, `sell`, `swap` (one pool), `launch` (with `supply`,
+  `decimals`, `fee_bps`, `allocation_bps` from the launch parameters), `register` (ticker, name, description, links,
+  logo_sha256, supply, decimals), `curve` (asset, amount, fee_bps, min_buy, max_buy), `pool` (asset_a, asset_b, kind,
+  fee_ppm, amount_a, amount_b, amp, weight_a), `auction` (base, amount, quote, start_price, end_price, duration, delay),
+  `order` (sell, buy, amount, price, expiry_blocks) (`app_ready: true`; the builds resolve the tickers from the ids). Built for wallet extensions and later apps, refused by today's app (it fails closed):
   `route` (several pools: `pools=<id>,<id>`), `deposit` (`pool`, `asset_a`, `asset_b`, `amount_a`, `amount_b`,
   `min_shares`), `withdraw` (`pool`, `asset_a`, `asset_b`, `shares`, `min_a`, `min_b`, `only`).
 - **The payload** is the same action as canonical JSON: keys sorted, no spaces, every amount a decimal string,
@@ -160,7 +165,7 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
 | 7 | Injection into JSON consumers | replies | JSON written by UniValue (escaped); creators' text plain, control characters dropped; links only after the safe-link rule; logos served only as PNG/JPEG after their magic bytes, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` on every reply |
 | 8 | Broadcast abuse | broadcast | 6 a minute per client and 120 in all (429, Retry-After); ≤ 100,000 bytes; standard size; burns only in asset markers; the node's mempool policy and maximum fee rate; can be turned off |
 | 9 | Request floods, oversized requests and replies | server | Per-client token buckets (`-publicapirate`, `-publicapiburst`; 429 with Retry-After); requests ≤ 256 KiB; HTTP/2: 32 streams a connection, 1 MiB buffered a connection, 64 MiB in all; replies ≤ 4 MiB (else RESOURCE_EXHAUSTED, nothing sent) |
-| 10 | Slow clients (slowloris, slow reads, Rapid Reset, MadeYouReset) | server | A request must be all in within 15 s of its first byte however slowly it trickles (HTTP/2: each stream from its own HEADERS); a connection with no running call that begins or completes no request for 30 s is closed with a GOAWAY (bytes alone, PINGs, are not activity); a client that takes no byte of its replies for 30 s is closed (in the socket, the calls or behind HTTP/2 flow control; a stream whose window stays closed 30 s is reset); past 100 streams reset before their call was over, by the client or by the server because of it (each counted once), closed with a GOAWAY (nghttp2's own reset rate limit too; an nghttp2 before 1.66, without its MadeYouReset fix, is warned about); past 10,000 requests no new one (GOAWAY), closed once its calls are over; 16 connections per address (IPv6 per /64, `-publicapiipv6prefix`; the named proxies excepted), 256 in all |
+| 10 | Slow clients (slowloris, slow reads, Rapid Reset, MadeYouReset) | server | A request must be all in within 15 s of its first byte however slowly it trickles (HTTP/2: each stream from its own HEADERS); a connection with no running call that begins or completes no request for 30 s is closed with a GOAWAY (bytes alone, PINGs, are not activity); a client whose replies wait must take at least 4 KiB a second of them (or all that waited) over each 30 s, else it is closed, a byte now and then does not keep it open (in the socket, the calls or behind HTTP/2 flow control; a stream whose window stays closed 30 s is reset); above 1 MiB waiting for the socket nothing more is taken from the calls (backpressure), and a connection holding more than 32 MiB of replies in all is closed; past 100 streams reset before their call was over, by the client or by the server because of it (each counted once), closed with a GOAWAY (nghttp2's own reset rate limit too; an nghttp2 before 1.66, without its MadeYouReset fix, is warned about); past 10,000 requests no new one (GOAWAY), closed once its calls are over; 16 connections per address (IPv6 per /64, `-publicapiipv6prefix`; the named proxies excepted), 256 in all |
 | 11 | Spoofed client address (rate-limit bypass) | server | The client is the socket's peer unless the operator names both the proxy (`-publicapiproxy`) and its header (`-publicapiproxyheader`); X-Forwarded-For: the right-most entry only. The proxy must set the header itself (nginx below) |
 | 12 | Rate-limit bypass through a client stream | server | Each message of a client-streaming call (reflection) is charged by the guard again, at most 32 a stream; reflection off by default |
 | 13 | Reorgs serving stale or wrong market data | market index | Written in the block's journaled overlay: undone exactly with the block (tested byte for byte); the per-tip cache is keyed by the tip's hash |

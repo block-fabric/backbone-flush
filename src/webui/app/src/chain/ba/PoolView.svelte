@@ -26,6 +26,7 @@
   import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
   import { swapFeeSplit } from './fees';
   import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
+  import { TICKER } from '../config';
 
   let { pool, back }: { pool: Pool; back: () => void } = $props();
 
@@ -240,7 +241,7 @@
     const r = await ask({
       title: t('Take liquidity out'),
       message: t('Take %1% of your shares of this pool out?', String(sPercent)),
-      informative: t('%1, at least %2% less should the pool move first. ECX comes by the coinbase of the next block; assets as coins of the transaction.', quote, String(sSlippage)),
+      informative: t('%1, at least %2% less should the pool move first. %3 comes by the coinbase of the next block; assets as coins of the transaction.', quote, String(sSlippage), TICKER),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -386,7 +387,7 @@
   {:else if book}
     <p class="ba-help">An order book: limit orders to buy or sell at a price, which trade at the end of each block in one batch. <button type="button" class="btn small" onclick={openBook}><Icon name="book" size={14} /> Its order book</button></p>
   {:else if kind.curve === 'launch'}
-    <p class="ba-help">A launch's curve: buy and sell the token on its page (Launches), until it graduates into its pool with ECX. <button type="button" class="btn small" onclick={() => { tradeIntent.launch = pool.asset_a_id; nav.tab = 'launches'; }}>Its launch</button></p>
+    <p class="ba-help">A launch's curve: buy and sell the asset on its page (Launches), until it graduates into its pool with {TICKER}. <button type="button" class="btn small" onclick={() => { tradeIntent.launch = pool.asset_a_id; nav.tab = 'launches'; }}>Its launch</button></p>
   {:else if !kind.default_kind || (ba.dex && ba.dex.curves_height >= 0)}
     <p class="ba-help">Liquidity by a pool's id (one asset alone, pools of other kinds) comes with the pool kinds{#if ba.dex && ba.dex.curves_height >= 0}, from block {formatCount(ba.dex.curves_height)}{/if}.</p>
   {/if}

@@ -6,6 +6,7 @@
 
 #include <netaddress.h>
 #include <netbase.h>
+#include <policy/feerate.h>
 #include <pubkey.h>
 #include <rpc/protocol.h>
 #include <tinyformat.h>
@@ -187,9 +188,13 @@ AssetId ParseAssetArg(const UniValue& value, const std::function<std::optional<A
     return HashName(text);
 }
 
+std::string CoinOnlyFilter() { return ToLower(CURRENCY_UNIT) + "_only"; }
+
+std::string AssetArgHelp() { return "The asset: \"" + CURRENCY_UNIT + "\", its name, \"0x\" and its hash, or its number"; }
+
 std::string AssetLabel(const AssetId& asset, const AssetRecord* record)
 {
-    if (asset.IsNull()) return "ECX";
+    if (asset.IsNull()) return CURRENCY_UNIT;
     if (record && !record->text.empty()) return record->text;
     return "0x" + asset.GetHex();
 }
@@ -240,7 +245,7 @@ std::vector<RPCArg> SearchAssetsArgs()
                 {{"asset", RPCArg::Type::STR, RPCArg::Optional::OMITTED, ""}}},
         }},
         {"sort", RPCArg::Type::STR, RPCArg::Default{"relevance"}, "relevance (a text: the whole name, then its start, then a word's start; no text: as activity), "
-            "name, newest, oldest, supply, activity (last touched first), volume (traded in the window; those not traded are left out), pool_depth (those with a pool with ECX only)"},
+            "name, newest, oldest, supply, activity (last touched first), volume (traded in the window; those not traded are left out), pool_depth (those with a pool with " + CURRENCY_UNIT + " only)"},
         {"cursor", RPCArg::Type::STR_HEX, RPCArg::Default{""}, "\"next_cursor\" of the page before, with the same query, filters and sort"},
         {"limit", RPCArg::Type::NUM, RPCArg::Default{50}, "How many at most, from 1 to 200"},
     };
@@ -265,8 +270,8 @@ RPCResult SearchAssetsResult()
             {RPCResult::Type::BOOL, "has_logo", ""},
             {RPCResult::Type::BOOL, "has_pool", "Whether it has a pool someone provides liquidity to"},
             {RPCResult::Type::NUM, "pools", "How many"},
-            {RPCResult::Type::NUM, "pool_depth", "The ECX in its pool with ECX (0 if none)"},
-            {RPCResult::Type::NUM, "volume", "ECX traded in its pools with ECX and its auctions for ECX over the volume window"},
+            {RPCResult::Type::NUM, "pool_depth", "The " + CURRENCY_UNIT + " in its pool with " + CURRENCY_UNIT + " (0 if none)"},
+            {RPCResult::Type::NUM, "volume", CURRENCY_UNIT + " traded in its pools with " + CURRENCY_UNIT + " and its auctions for " + CURRENCY_UNIT + " over the volume window"},
             {RPCResult::Type::NUM, "created", "The height of the block that registered it"},
             {RPCResult::Type::NUM, "registered", "The same"},
             {RPCResult::Type::NUM, "last_activity", "The height of the last block that touched it"},

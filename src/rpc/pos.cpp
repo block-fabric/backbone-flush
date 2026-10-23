@@ -11,6 +11,7 @@
 #include <kernel/coinstats.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <policy/feerate.h>
 #include <pos/evidence.h>
 #include <pos/feesplit.h>
 #include <pos/finality.h>
@@ -1110,7 +1111,7 @@ std::vector<RPCResult> PegBalanceFields()
             {RPCResult::Type::STR_AMOUNT, "reserve", "Penalties not paid out yet (with the pot, at anchors)"},
             {RPCResult::Type::STR_AMOUNT, "rewards", "Rewards for proofs, owed to the blocks that carried them"},
             {RPCResult::Type::STR_AMOUNT, "payouts", "Payouts owed and not paid yet (deposits, refunds, the pot, unbonds, rewards, what pools and auctions pay)"},
-            {RPCResult::Type::STR_AMOUNT, "assets", "Flush: ECX the pools and the auctions not collected hold"},
+            {RPCResult::Type::STR_AMOUNT, "assets", "Flush: " + CURRENCY_UNIT + " the pools and the auctions not collected hold"},
             {RPCResult::Type::STR_AMOUNT, "total", "Their sum: the escrow after the block mainheight, less fees left unclaimed and coins burned"},
         }},
     };

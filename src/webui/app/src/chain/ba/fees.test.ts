@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { launchFeeParts, launchFeeSplit, formatShare, providersRate, swapFeeParts, swapFeeSplit, treasuryRows } from './fees';
 import { CHN_ID } from './model';
+import { TICKER } from '../config';
 
 describe('the parts of the fees', () => {
   it('says where a swap fee goes, the treasury only when it has a part', () => {
@@ -31,14 +32,14 @@ describe('the parts of the fees', () => {
 });
 
 describe('the treasury', () => {
-  it('puts CHN first, then what holds most, the empty last', () => {
+  it('puts the chain\'s coin first, by its ticker, then what holds most, the empty last', () => {
     const rows = treasuryRows([
       { asset: 'GOLD', asset_id: 'a'.repeat(64), balance: 1.5, from_swaps: 1.5, from_launches: 0, security_held: 0.2 },
       { asset: 'ZINC', asset_id: 'c'.repeat(64), balance: 0, from_swaps: 0, from_launches: 0, security_held: 0 },
       { asset: 'USDX', asset_id: 'b'.repeat(64), balance: '20.00', from_swaps: '20.00', from_launches: 0, security_held: 0 },
       { asset: 'whatever', asset_id: CHN_ID, balance: '0.5', from_swaps: '0.1', from_launches: '0.4', security_held: 0 },
     ]);
-    expect(rows.map((r) => r.label)).toEqual(['CHN', 'USDX', 'GOLD', 'ZINC']);
+    expect(rows.map((r) => r.label)).toEqual([TICKER, 'USDX', 'GOLD', 'ZINC']);
     expect(rows[0]).toMatchObject({ id: CHN_ID, balance: '0.5', fromSwaps: '0.1', fromLaunches: '0.4', empty: false });
     expect(rows.at(-1)!.empty).toBe(true);
     expect(treasuryRows(null)).toEqual([]);
