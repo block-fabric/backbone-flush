@@ -43,3 +43,6 @@ webui_local_e2e(ba_tickers 49760 --app-arg=-testactivationheight=ticker@0)
 # refusals (another network, expired, used twice, a ticker not the token's, a floor the curve cannot meet, an unknown
 # parameter, a callback elsewhere, another logo). Pictures in Launchpad.
 webui_local_e2e(links 49820 --app-arg=-testactivationheight=dex@0 --app-arg=-testactivationheight=dexcurves@0 --app-arg=-testactivationheight=ticker@0)
+# ba_liquidity.js: Add liquidity for a pair whose only pool is concentrated (a new pool, both amounts), into that pool at
+# its price, and reopened once abandoned (betanet slot 99, 2026-10-23: "Nobody provides liquidity to this pool any more").
+webui_local_e2e(ba_liquidity 49840 --app-arg=-testactivationheight=dex@0 --app-arg=-testactivationheight=dexcurves@0)
