@@ -81,7 +81,8 @@ export function depthOf(book: { asks?: unknown; bids?: unknown; mid_exact?: unkn
     lo = Math.max(lo, mid * (1 - spread));
     hi = Math.min(hi, mid * (1 + spread));
     // Room on both sides of the middle, the same each way.
-    const half = Math.max(mid - lo, hi - mid, mid * 0.02);
+    // Room beyond the outermost levels (a half again): a side of one level shows as an area, not an edge.
+    const half = Math.max(mid - lo, hi - mid, mid * 0.02) * 1.5;
     lo = Math.max(0, mid - half);
     hi = mid + half;
   }
