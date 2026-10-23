@@ -561,15 +561,30 @@ class PublicApiTest(LayersTest):
         n0.changeposition(pos["position"], {"remove": 25, "collect": True, "slippage": 0.5})
         n0.settleorder(order["order"], True)
         held_shares = n0.listmyassets()["pools"] if "pools" in n0.listmyassets() else []
-        added = n0.addpoolliquidity(cp["pool"], {"0x" + x: 10, "ECX": Decimal("0.005")}, 1.0)
+        quoted = n0.quotepoolliquidity(cp["pool"], {"0x" + x: 10, "ECX": Decimal("0.005")})["shares"]
+        # The link's floor binds: refused above what the pool gives now, taken at it.
+        assert_raises_rpc_error(-8, "fewer than the", n0.addpoolliquidity, cp["pool"], {"0x" + x: 10, "ECX": Decimal("0.005")}, 1.0, quoted + 1)
+        added = n0.addpoolliquidity(cp["pool"], {"0x" + x: 10, "ECX": Decimal("0.005")}, 1.0, quoted)
         self.bmm()
         part = added["shares"] // 2
-        taken = n0.removepoolliquidity(cp["pool"], 100, None, 2.0, part)
+        out = n0.quotepoolliquidity(cp["pool"], None, part)["amounts"]
+        too_much = {k: v * 2 + 1 for k, v in out.items()}
+        assert_raises_rpc_error(-8, "less than the least", n0.removepoolliquidity, cp["pool"], 100, None, 2.0, part, too_much)
+        taken = n0.removepoolliquidity(cp["pool"], 100, None, 2.0, part, out)
         assert_equal(taken["shares"], part)
         assert_raises_rpc_error(-8, "fewer than", n0.removepoolliquidity, cp["pool"], 100, None, 1, 10**15)
         n0.collectauction(auction["txid"])
         self.bmm()
         assert added["txid"] and held_shares is not None
+        # Left at the address for the website's test: a position, an open order and an open auction.
+        n0.setlinkdestination(mine)
+        n0.openposition(clpool, Decimal("0.99"), Decimal("1.01"), {"0x" + x: 500, "0x" + y: 500})
+        n0.placeorder("USDX", 10, "USDY", 3)
+        n0.createauction("USDY", 50, "ECX", 5, 1, 1000)
+        n0.setlinkdestination()
+        self.bmm()
+        folio = api.rest(f"addresses/{mine}/portfolio")
+        assert folio["positions"] and folio["orders"] and folio["auctions"]
         # A route through two pools: the link verb route, which the app now takes.
         routed = api.rest("build/swap", {"from": "ECX", "to": "USDY", "amount": "0.01", "slippage_bps": "100", "max_hops": "3"})
         assert routed["app_ready"]

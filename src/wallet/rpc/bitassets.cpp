@@ -18,6 +18,7 @@
 #include <hash.h>
 #include <key_io.h>
 #include <policy/feerate.h>
+#include <rpc/request.h>
 #include <rpc/util.h>
 #include <util/moneystr.h>
 #include <util/strencodings.h>
@@ -64,18 +65,24 @@ std::optional<std::string> LabelOf(const CWallet& wallet, const CTxDestination& 
 }
 
 /**
- * Where what an action brings in goes while a link of flush.markets runs it (setlinkdestination, by the app's link host,
- * for the call alone): the wallet's flush.markets address, the one its connect shares, so that the site sees it. By
- * wallet; none: the wallet's own new addresses, as always.
+ * Where what an action brings in goes while the app's link host runs a link of flush.markets the user accepted: the
+ * wallet's flush.markets address (ScopedLinkDestination, on that call's thread alone), which must be the wallet's own;
+ * none: the wallet's new addresses, as always. On regtest only, a test may also set one for a wallet (setlinkdestination).
  */
-Mutex g_link_destinations_mutex;
-std::map<std::string, CTxDestination> g_link_destinations GUARDED_BY(g_link_destinations_mutex);
+Mutex g_test_link_destinations_mutex;
+std::map<std::string, CTxDestination> g_test_link_destinations GUARDED_BY(g_test_link_destinations_mutex);
 
 std::optional<CTxDestination> LinkDestination(const CWallet& wallet)
 {
-    LOCK(g_link_destinations_mutex);
-    const auto it{g_link_destinations.find(wallet.GetName())};
-    if (it == g_link_destinations.end()) return std::nullopt;
+    if (const std::string& address{LinkDestinationOfThisThread()}; !address.empty()) {
+        const CTxDestination dest{DecodeDestination(address)};
+        if (!IsValidDestination(dest) || !wallet.IsMine(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "The link's address is not an address of this wallet: nothing was done");
+        return dest;
+    }
+    if (Params().GetChainType() != ChainType::REGTEST) return std::nullopt;
+    LOCK(g_test_link_destinations_mutex);
+    const auto it{g_test_link_destinations.find(wallet.GetName())};
+    if (it == g_test_link_destinations.end()) return std::nullopt;
     return it->second;
 }
 
@@ -1964,6 +1971,7 @@ RPCMethod addpoolliquidity()
                 {"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "How much of it (the key: " + bitassets::AssetArgHelp() + ")"},
             }},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How many fewer shares than quoted, in percent, it may give if the pool moves first"},
+            {"min_shares", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The least shares, as the caller showed them: refused rather than signed for fewer (and never fewer on chain)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -2009,7 +2017,15 @@ RPCMethod addpoolliquidity()
     if (amount0 > 0) PayIn(*pwallet, info0, amount0, inputs, outs, chn_in);
     if (amount1 > 0) PayIn(*pwallet, info1, amount1, inputs, outs, chn_in);
     outs.push_back({ChangeDestination(*pwallet), std::nullopt});
-    const CTransactionRef tx{Send(*pwallet, bitassets::PoolDeposit{id, amount0, amount1, std::max<uint64_t>(1, LessSlippage(shares, slippage))}, outs, inputs, chn_in)};
+    uint64_t least_shares{std::max<uint64_t>(1, LessSlippage(shares, slippage))};
+    if (!request.params[3].isNull()) {
+        // The caller's floor binds: refused if the pool moved below it, and the transaction's own floor never under it.
+        const auto shown{ToIntegral<uint64_t>(request.params[3].getValStr())};
+        if (!shown) throw JSONRPCError(RPC_INVALID_PARAMETER, "min_shares: a whole number of shares");
+        if (shares < *shown) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The pool moved: these amounts now get %u shares, fewer than the %u asked for (min_shares). Quote it again", shares, *shown));
+        least_shares = std::max(least_shares, *shown);
+    }
+    const CTransactionRef tx{Send(*pwallet, bitassets::PoolDeposit{id, amount0, amount1, least_shares}, outs, inputs, chn_in)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("shares", shares);
@@ -2022,8 +2038,9 @@ RPCMethod setlinkdestination()
 {
     return RPCMethod{
         "setlinkdestination",
-        "The app's link host: until called again without an address, what this wallet's actions bring in (tokens, the coin paid "
-        "out, a launch's creator) goes to this address of its own (its flush.markets address, while a link of the site runs).",
+        "Regtest only, for tests: until called again without an address, what this wallet's actions bring in (tokens, the coin "
+        "paid out, a launch's creator) goes to this address of its own, as while the app runs a link of the site (which sets it "
+        "for its one call only, in the process, never by RPC).",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "An address of this wallet; left out: none (new addresses, as always)"},
         },
@@ -2033,15 +2050,16 @@ RPCMethod setlinkdestination()
 {
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
-    LOCK(g_link_destinations_mutex);
+    if (Params().GetChainType() != ChainType::REGTEST) throw JSONRPCError(RPC_METHOD_NOT_FOUND, "setlinkdestination is for the tests of regtest only");
+    LOCK(g_test_link_destinations_mutex);
     if (request.params[0].isNull()) {
-        g_link_destinations.erase(pwallet->GetName());
+        g_test_link_destinations.erase(pwallet->GetName());
         return UniValue::VNULL;
     }
     const CTxDestination dest{DecodeDestination(request.params[0].get_str())};
     if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not an address of this chain");
     if (!pwallet->IsMine(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not an address of this wallet");
-    g_link_destinations[pwallet->GetName()] = dest;
+    g_test_link_destinations[pwallet->GetName()] = dest;
     return UniValue::VNULL;
 },
     };
@@ -2059,6 +2077,10 @@ RPCMethod removepoolliquidity()
             {"only", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "One of the pool's assets: that asset alone comes out. " + bitassets::AssetArgHelp()},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than quoted, in percent, it may give if the pool moves first"},
             {"shares", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Exactly so many shares instead of a percent of those held (a link of the site names them)"},
+            {"min_amounts", RPCArg::Type::OBJ_USER_KEYS, RPCArg::Optional::OMITTED, "The least of each asset, as the caller showed them: refused rather than signed for less (and never less on chain)",
+            {
+                {"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least of it (the key: " + bitassets::AssetArgHelp() + ")"},
+            }},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -2112,7 +2134,21 @@ RPCMethod removepoolliquidity()
     if (out1 > 0) results.push_back(pool.asset1);
     ResultOuts(*pwallet, results, outs);
     const auto least{[&](uint64_t out) { return out == 0 ? uint64_t{0} : std::max<uint64_t>(1, LessSlippage(out, slippage)); }};
-    const CTransactionRef tx{Send(*pwallet, bitassets::PoolWithdraw{id, shares, only, least(out0), least(out1), ChnTo(*pwallet, results)}, outs, inputs)};
+    uint64_t least0{least(out0)}, least1{least(out1)};
+    if (!request.params[5].isNull()) {
+        // The caller's floors bind: refused if the pool moved below one, and the transaction's own floors never under them.
+        uint64_t shown0{0}, shown1{0};
+        for (const std::string& key : request.params[5].get_obj().getKeys()) {
+            const AssetInfo asset{ParseAsset(*pwallet, UniValue{key})};
+            if (asset.id != pool.asset0 && asset.id != pool.asset1) throw JSONRPCError(RPC_INVALID_PARAMETER, "min_amounts: an asset that is not of this pool");
+            const uint64_t v{bitassets::ParseUnits(request.params[5][key], asset.decimals, /*allow_zero=*/true)};
+            (asset.id == pool.asset0 ? shown0 : shown1) = v;
+        }
+        if (out0 < shown0 || out1 < shown1) throw JSONRPCError(RPC_INVALID_PARAMETER, "The pool moved: these shares now take out less than the least asked for (min_amounts). Quote it again");
+        least0 = std::max(least0, shown0);
+        least1 = std::max(least1, shown1);
+    }
+    const CTransactionRef tx{Send(*pwallet, bitassets::PoolWithdraw{id, shares, only, least0, least1, ChnTo(*pwallet, results)}, outs, inputs)};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("shares", shares);

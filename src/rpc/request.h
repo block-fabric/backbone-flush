@@ -68,4 +68,25 @@ public:
     [[nodiscard]] bool IsNotification() const { return !id.has_value() && m_json_version == JSONRPCVersion::V2; };
 };
 
+/**
+ * Where what a wallet's action brings in goes, for the calls made on this thread while it is in scope: the app's link
+ * host sets it around the one call of a link of flush.markets the user accepted (to the wallet's flush.markets address,
+ * which the site knows), so that the site sees what that action brought in. Thread-local: no other call, on another
+ * thread, ever reads it; never set from a request of the network (no RPC sets it). The wallet uses it only if the
+ * address is its own (else it refuses the call). Empty: none.
+ */
+class ScopedLinkDestination
+{
+public:
+    explicit ScopedLinkDestination(std::string address);
+    ~ScopedLinkDestination();
+    ScopedLinkDestination(const ScopedLinkDestination&) = delete;
+    ScopedLinkDestination& operator=(const ScopedLinkDestination&) = delete;
+
+private:
+    std::string m_previous;
+};
+/** The address of ScopedLinkDestination on this thread now (empty: none). */
+const std::string& LinkDestinationOfThisThread();
+
 #endif // BITCOIN_RPC_REQUEST_H

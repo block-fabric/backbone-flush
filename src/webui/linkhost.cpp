@@ -15,6 +15,7 @@
 #include <interfaces/node.h>
 #include <logging.h>
 #include <node/context.h>
+#include <rpc/request.h>
 #include <tinyformat.h>
 #include <util/fs.h>
 #include <util/strencodings.h>
@@ -581,6 +582,10 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
             plan.params.push_back(r.pool.GetHex());
             plan.params.push_back(args[1]);
             plan.params.push_back(SlippageFor(shares, shares_link));
+            // The floor itself too: the wallet refuses below it at signing, and the transaction's own floor is never under it.
+            UniValue floor;
+            floor.setNumStr(r.shares);
+            plan.params.push_back(std::move(floor));
         } else {
             const uint64_t out_a{UnitsOf(ByAsset(q.find_value("amounts"), a), a.decimals)}, out_b{UnitsOf(ByAsset(q.find_value("amounts"), b), b.decimals)};
             const uint64_t min_a{r.min_a == "0" ? 0 : Floor(r.min_a, a.decimals)}, min_b{r.min_b == "0" ? 0 : Floor(r.min_b, b.decimals)};
@@ -600,6 +605,11 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
             UniValue shares;
             shares.setNumStr(r.shares);
             plan.params.push_back(std::move(shares));
+            // The floors themselves too (as for a deposit): refused below them at signing, never under them on chain.
+            UniValue floors{UniValue::VOBJ};
+            floors.pushKV(Ref(a.id), Decimal(min_a, a.decimals));
+            floors.pushKV(Ref(b.id), Decimal(min_b, b.decimals));
+            plan.params.push_back(std::move(floors));
         }
         break;
     }
@@ -985,37 +995,18 @@ std::string ConnectAddress(interfaces::Node& node, const std::string& wallet)
     return {};
 }
 
-/** For the time of a link's call: what it brings in goes to the wallet's flush.markets address (setlinkdestination). */
+/**
+ * For the link's one call, on this thread alone (ScopedLinkDestination, read by the wallet when the call runs, after the
+ * user accepted it): what it brings in goes to the wallet's flush.markets address, the one the site knows. None if the
+ * wallet has no such address yet (its new addresses, as always).
+ */
 class LinkDestination
 {
 public:
-    LinkDestination(interfaces::Node& node, std::string wallet) : m_node{node}, m_wallet{std::move(wallet)}
-    {
-        const std::string address{ConnectAddress(m_node, m_wallet)};
-        if (address.empty()) return;
-        UniValue args{UniValue::VARR};
-        args.push_back(address);
-        try {
-            m_node.executeRpc("setlinkdestination", args, WalletUri(m_wallet));
-            m_set = true;
-        } catch (...) {
-        }
-    }
-    ~LinkDestination()
-    {
-        if (!m_set) return;
-        try {
-            m_node.executeRpc("setlinkdestination", UniValue{UniValue::VARR}, WalletUri(m_wallet));
-        } catch (...) {
-        }
-    }
-    LinkDestination(const LinkDestination&) = delete;
-    LinkDestination& operator=(const LinkDestination&) = delete;
+    LinkDestination(interfaces::Node& node, const std::string& wallet) : m_scope{ConnectAddress(node, wallet)} {}
 
 private:
-    interfaces::Node& m_node;
-    std::string m_wallet;
-    bool m_set{false};
+    ScopedLinkDestination m_scope;
 };
 } // namespace
 
