@@ -20,7 +20,8 @@
  * `flush:` URI or a launch file, which the app reads here, in the host, never in a page.
  *
  *   flush:<address>?amount=...                 a payment (BIP 21): the page's, as before (lib/uri.ts)
- *   flush:<verb>?v=1&network=<net>&exp=<t>&... an action: connect, launch, buy, sell, swap
+ *   flush:<verb>?v=1&network=<net>&exp=<t>&... an action: connect, launch, buy, sell, swap, register, curve, pool,
+ *                                              auction, order
  *
  * The parser is strict: one version, the network of the app only, an expiry within a day, each parameter of the verb
  * once (a link of a launch up to MAX_LINKS times), no other parameter, values percent-encoded from a small alphabet,
@@ -35,7 +36,7 @@ struct LinkError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-enum class Verb { CONNECT, LAUNCH, BUY, SELL, SWAP };
+enum class Verb { CONNECT, LAUNCH, BUY, SELL, SWAP, REGISTER, CURVE, POOL, AUCTION, ORDER };
 std::string_view VerbName(Verb verb);
 
 //! The version of the links (v=1) and of the launch files ("version": 1).
@@ -99,7 +100,42 @@ struct Request {
     std::string floor;
     //! What the site showed as its slippage (display only).
     std::optional<int> slippage_bps;
+    //! launch (optional: the network's defaults), register: the supply in whole units (digits), its decimals.
+    std::string supply;
+    std::optional<int> decimals;
+    //! launch, curve: the curve's fee in basis points (MIN_FEE_BPS..MAX_FEE_BPS); launch: the creator's allocation (basis points).
+    std::optional<int> fee_bps;
+    std::optional<int> allocation_bps;
+    //! curve: the bounds of a buy on the curve, in the coin (empty: none).
+    std::string min_buy;
+    std::string max_buy;
+    //! pool (asset_a, asset_b), auction (the base sold, the quote it sells for), order (sold, bought): the assets by id (null:
+    //! the coin, written COIN_TICKER) and the tickers the link names for them, checked against the ids.
+    uint256 asset_a;
+    uint256 asset_b;
+    std::string ticker_a;
+    std::string ticker_b;
+    //! pool: its curve (constant, stable, weighted), fee tier (millionths), amounts, and the stable amplification or the first weight.
+    std::string kind;
+    int fee_ppm{0};
+    std::string amount_a;
+    std::string amount_b;
+    std::optional<int> amp;
+    std::optional<int> weight_a;
+    //! auction: the price of all of it at the start and at the end (in the quote); order: its limit (bought per whole unit sold).
+    std::string start_price;
+    std::string end_price;
+    std::string price;
+    //! auction: blocks it takes bids, and how many until it starts; order: blocks it trades.
+    int blocks{0};
+    std::optional<int> delay;
 };
+
+//! The bounds of a curve's fee a link takes (basis points; the chain's in millionths: bitassets::MIN_LAUNCH_FEE..MAX_LAUNCH_FEE).
+inline constexpr int MIN_FEE_BPS{30};
+inline constexpr int MAX_FEE_BPS{500};
+//! The longest supply a link writes: whole units, digits only (MAX_LAUNCH_SUPPLY and any registration's fit).
+inline constexpr size_t MAX_SUPPLY_DIGITS{19};
 
 /**
  * Read an action link: refused (LinkError) unless it is exactly one of the verbs with exactly their parameters, for

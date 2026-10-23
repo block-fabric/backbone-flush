@@ -54,6 +54,24 @@ message ChainStatus {
   uint32 updated = 9;
   // Whether this node keeps the DEX's market index (-dexindex): trades, candles, holders.
   bool market_index = 10;
+  // The rules of launches with parameters (a supply, decimals and fee of their own; an existing asset on a curve).
+  LaunchParams launch_params = 11;
+}
+
+message LaunchParams {
+  // Whether the next block takes them, and their first block (-1: never on this network).
+  bool active = 1;
+  int32 height = 2;
+  uint32 fee_min_bps = 3;
+  uint32 fee_max_bps = 4;
+  // The network's fee (a launch without parameters).
+  uint32 fee_default_bps = 5;
+  string supply_min_units = 6;
+  string supply_max_units = 7;
+  // A curve's supply in units is a multiple of this.
+  uint32 supply_multiple_units = 8;
+  uint32 decimals_max = 9;
+  uint32 decimals_default = 10;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -222,6 +240,13 @@ message LaunchSummary {
   string pool_id = 20;
   double volume_total = 21;
   uint32 trades_total = 22;
+  // Its asset's decimals, its supply on the curve and in its pool (whole units), whether an existing asset was put on
+  // the curve (rather than launched), its curve's fee.
+  uint32 decimals = 23;
+  double curve_supply = 24;
+  double pool_supply = 25;
+  bool from_asset = 26;
+  double fee_bps = 27;
 }
 
 message LaunchDetail {
@@ -247,6 +272,13 @@ message LaunchDetail {
   string pool_id = 20;
   double volume_total = 21;
   uint32 trades_total = 22;
+  // Its asset's decimals, its supply on the curve and in its pool (whole units), whether an existing asset was put on
+  // the curve (rather than launched), its curve's fee.
+  uint32 decimals = 23;
+  double curve_supply = 24;
+  double pool_supply = 25;
+  bool from_asset = 26;
+  double fee_bps = 27;
 
   string description = 30;
   repeated LaunchLink links = 31;
@@ -609,6 +641,9 @@ message BookLevel {
   double amount = 2;
   uint32 orders = 3;
   double total = 4;
+  // The price exactly (the orders' limit, 18 significant digits), the amount in units of the base.
+  string price_exact = 5;
+  string amount_units = 6;
 }
 
 message Book {
@@ -622,6 +657,136 @@ message Book {
   optional double spread = 8;
   uint32 ask_orders = 9;
   uint32 bid_orders = 10;
+  optional string best_ask_exact = 11;
+  optional string best_bid_exact = 12;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The asset registry: every asset, with its markets
+
+message AssetMarket {
+  // none, curve (on its launch curve), pool, book, auction: the first of these it has.
+  string status = 1;
+  // Every kind of market it has.
+  repeated string kinds = 2;
+  // On a curve: the part of the graduation amount raised, 0 to 1.
+  optional double progress = 3;
+  uint32 pools = 4;
+  uint32 books = 5;
+  uint32 auctions = 6;
+  // ECX for a whole unit: its curve's, else its pool with ECX's.
+  optional double price_ecx = 7;
+  // ECX traded in its pools and auctions with ECX over the volume window (about a day).
+  double volume_24h_ecx = 8;
+}
+
+// AssetSummary and AssetDetail share their field numbers (a detail is a summary and more).
+message AssetSummary {
+  string id = 1;
+  string ticker = 2;
+  optional string display_name = 3;
+  // Its description (plain text; the first 280 characters in a list).
+  string info = 4;
+  uint32 decimals = 5;
+  double supply = 6;
+  string supply_units = 7;
+  uint32 holders = 8;
+  optional string logo = 9;
+  // No control coin: nobody mints more (a launch's, or one fixed).
+  bool fixed_supply = 10;
+  uint32 registered_height = 11;
+  string registration_txid = 12;
+  // Launched, or put on a curve.
+  bool launched = 13;
+  AssetMarket market = 14;
+  // The address that holds its control coin, if any.
+  optional string controller = 15;
+  uint32 seq = 16;
+}
+
+message AssetBook {
+  string id = 1;
+  string base = 2;
+  string quote = 3;
+  string base_ticker = 4;
+  string quote_ticker = 5;
+  uint32 bids = 6;
+  uint32 asks = 7;
+  optional double best_bid = 8;
+  optional double best_ask = 9;
+}
+
+message AssetAuction {
+  string id = 1;
+  double base_amount = 2;
+  string quote = 3;
+  string quote_ticker = 4;
+  // The price of all of it now, in the quote.
+  double price = 5;
+  uint32 start_height = 6;
+  uint32 end_height = 7;
+  // upcoming, live, ended, sold_out.
+  string status = 8;
+  double remaining = 9;
+}
+
+message CanCurve {
+  bool allowed = 1;
+  optional string reason = 2;
+}
+
+message AssetDetail {
+  string id = 1;
+  string ticker = 2;
+  optional string display_name = 3;
+  // Its whole description.
+  string info = 4;
+  uint32 decimals = 5;
+  double supply = 6;
+  string supply_units = 7;
+  uint32 holders = 8;
+  optional string logo = 9;
+  bool fixed_supply = 10;
+  uint32 registered_height = 11;
+  string registration_txid = 12;
+  bool launched = 13;
+  AssetMarket market = 14;
+  optional string controller = 15;
+  uint32 seq = 16;
+
+  // Its creator's links (safe links only).
+  repeated LaunchLink links = 31;
+  // Its launch (or curve), if any.
+  LaunchSummary launch = 32;
+  // Its pools (every kind but books and curves; at most 50), books (at most 10) and auctions not collected (at most 20).
+  repeated Pool pools = 33;
+  repeated AssetBook books = 34;
+  repeated AssetAuction auctions = 35;
+  // Whether its controller may put part of it on a curve now (curveasset), and why not.
+  CanCurve can_curve = 36;
+}
+
+message ListAssetsRequest {
+  // Text in the ticker or the display name, a number, or an id.
+  string q = 1;
+  // newest (default), oldest, name, supply, volume, holders (within the page), activity.
+  string sort = 2;
+  // all (default), none, curve, pool, book, auction: of the assets of the page (a page may hold fewer: go on with next_cursor).
+  string market = 3;
+  string cursor = 4;
+  // 1 to 100 (default 50).
+  uint32 limit = 5;
+}
+
+message AssetPage {
+  repeated AssetSummary items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+}
+
+message GetAssetRequest {
+  // Its ticker (any case), number or id.
+  string id = 1;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -824,6 +989,37 @@ message BuildActionRequest {
   repeated string links = 17;
   string logo_sha256 = 18;
   string first_buy_ecx = 19;
+  // launch (optional), register: the supply in whole units and its decimals; launch, curve: the curve's fee (basis points,
+  // 30 to 500); launch: the creator's allocation (basis points, 0 to 500).
+  string supply = 20;
+  optional uint32 decimals = 21;
+  uint32 fee_bps = 22;
+  uint32 allocation_bps = 23;
+  // curve: the asset and the amount (amount); the bounds of a buy (ECX).
+  string asset = 24;
+  string min_buy = 25;
+  string max_buy = 26;
+  // pool: its two assets (ids, tickers or ECX), kind (constant, stable, weighted), fee tier (millionths), amp, weight_a
+  // (amount_a, amount_b above).
+  string asset_a = 27;
+  string asset_b = 28;
+  string kind = 29;
+  uint32 fee_ppm = 30;
+  uint32 amp = 31;
+  uint32 weight_a = 32;
+  // auction: what it sells (base, amount), for what (quote), the price of all of it at the start and the end, its blocks,
+  // and the blocks until it starts.
+  string base = 33;
+  string quote = 34;
+  string start_price = 35;
+  string end_price = 36;
+  uint32 duration = 37;
+  uint32 delay = 38;
+  // order: what it sells (sell, amount) for what (buy), its limit (buy per whole sell), its blocks.
+  string sell = 39;
+  string buy = 40;
+  string price = 41;
+  uint32 expiry_blocks = 42;
 }
 
 message BuiltAction {
@@ -889,6 +1085,8 @@ service DexService {
   rpc GetHoldings(GetHoldingsRequest) returns (Holdings) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc GetVerifications(GetVerificationsRequest) returns (Verifications) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc GetAssetLogo(GetLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListAssets(ListAssetsRequest) returns (AssetPage) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetAsset(GetAssetRequest) returns (AssetDetail) { option idempotency_level = NO_SIDE_EFFECTS; }
 
   rpc QuoteSwap(QuoteSwapRequest) returns (SwapQuote) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc QuoteLiquidity(QuoteLiquidityRequest) returns (LiquidityQuote) { option idempotency_level = NO_SIDE_EFFECTS; }

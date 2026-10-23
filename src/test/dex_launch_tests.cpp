@@ -25,6 +25,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -823,6 +824,27 @@ BOOST_AUTO_TEST_CASE(an_oversized_sale_holds_no_other_back)
     BOOST_CHECK_GT(mixed->outs[0], 0U);
     BOOST_CHECK_GT(mixed->outs[1], 0U);
     BOOST_CHECK_LE(mixed->reserve1, curve.start);
+}
+
+BOOST_AUTO_TEST_CASE(many_sales_clear_in_linear_time)
+{
+    // 20 000 sales in one round (far beyond a block's work budget of 200 orders), the first oversized: one pass and one
+    // clearing (the room in closed form), well under a second.
+    const uint64_t S{LAUNCH_SUPPLY};
+    LaunchCurve curve{CurveOf(S, 11'500)};
+    curve.start = S / 8 * 9;
+    const auto bought{ClearLaunch(curve, V, curve.start, {{true, 100 * COIN_UNITS}}, {true})};
+    BOOST_REQUIRE(bought);
+    std::vector<dex::HopIn> orders{{false, S / 2}};
+    for (int i{0}; i < 20'000; ++i) orders.push_back({false, bought->outs[0] / 40'000});
+    const auto start{std::chrono::steady_clock::now()};
+    const auto round{ClearLaunch(curve, bought->reserve0, bought->reserve1, orders, std::vector<bool>(orders.size(), true))};
+    const auto took{std::chrono::steady_clock::now() - start};
+    BOOST_REQUIRE(round);
+    BOOST_CHECK_EQUAL(round->outs[0], 0U);
+    BOOST_CHECK_GT(round->outs.back(), 0U);
+    BOOST_CHECK_LE(round->reserve1, curve.start);
+    BOOST_CHECK_LT(std::chrono::duration_cast<std::chrono::milliseconds>(took).count(), 1000);
 }
 
 BOOST_AUTO_TEST_CASE(outside_sales_never_drain_a_curve)

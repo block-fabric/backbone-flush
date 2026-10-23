@@ -500,26 +500,38 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
     auto cleared{ClearConstantProduct(/*fee=*/0, x, y, net)};
     if (!cleared) return std::nullopt;
     if (curve.start != 0 && cleared->reserve1 > curve.start) {
-        // More units back than it sold: the buys clear with the sales that fit, taken in the round's order (each in if the
-        // round with it stays within the bound); the others miss (their units back). One oversized sale holds no other back.
-        std::vector<bool> admitted(orders.size(), false);
+        // More units back than it sold: the buys clear with the sales that fit, taken in the round's order (each in while the
+        // sales in stay within the round's room), the others miss (their units back): one oversized sale holds no other back.
+        // The room, in closed form (O(n)): with A the buys' fee-free coin, B the sales' units and P = (y + B)/(x + A), the
+        // curve ends with y + B - sum floor(a_i P) <= (y + B) x/(x + A) + (the buys' count), so B is in if
+        // (y + B) x <= (Tv - buys) (x + A).
+        unsigned __int128 coin{0};
+        uint64_t buys{0};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!in_play[i] || !orders[i].zero_in) continue;
+            coin += orders[i].amount - fee_of(orders[i].amount);
+            ++buys;
+        }
+        const auto big{[](unsigned __int128 v) { return (arith_uint256{static_cast<uint64_t>(v >> 64)} << 64) + arith_uint256{static_cast<uint64_t>(v)}; }};
+        const arith_uint256 bound{curve.start > buys ? arith_uint256{curve.start - buys} * (arith_uint256{x} + big(coin)) : arith_uint256{0}};
+        unsigned __int128 sales{0};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!in_play[i] || orders[i].zero_in) continue;
+            const unsigned __int128 with{sales + orders[i].amount};
+            if ((arith_uint256{y} + big(with)) * arith_uint256{x} <= bound) {
+                sales = with;
+            } else {
+                in_play[i] = false;
+            }
+        }
         const auto net_of{[&] {
             std::vector<dex::HopIn> out;
             for (size_t i{0}; i < orders.size(); ++i) {
-                if (!in_play[i] || (!orders[i].zero_in && !admitted[i])) continue;
+                if (!in_play[i]) continue;
                 out.push_back({orders[i].zero_in, orders[i].zero_in ? orders[i].amount - fee_of(orders[i].amount) : orders[i].amount});
             }
             return out;
         }};
-        for (size_t i{0}; i < orders.size(); ++i) {
-            if (!in_play[i] || orders[i].zero_in) continue;
-            admitted[i] = true;
-            const auto trial{ClearConstantProduct(/*fee=*/0, x, y, net_of())};
-            if (!trial || trial->reserve1 > curve.start) admitted[i] = false;
-        }
-        for (size_t i{0}; i < orders.size(); ++i) {
-            if (in_play[i] && !orders[i].zero_in && !admitted[i]) in_play[i] = false;
-        }
         net = net_of();
         if (net.empty()) return clearing;
         cleared = ClearConstantProduct(/*fee=*/0, x, y, net);

@@ -43,6 +43,9 @@ class Bridge;
  *    floor the link's (refused at once when the fresh quote cannot meet it; the node refuses again when it signs);
  *  - launch: reserveasset then launchtoken, in one question (confirm::Reveal), the launch sent by the app once the
  *    reservation is deep enough; a logo named by its SHA-256 is asked for (a file chooser) and refused if it differs;
+ *  - register: reserveasset then registerasset, the same way (its supply to this wallet, no market);
+ *  - curve, pool, auction, order: one call of curveasset, createpool, createauction, placeorder, every asset by id with
+ *    the ticker the link names checked against it, the amounts exactly in their asset's places;
  *  - connect: the address to share and the site, in a question; on a yes, the browser opens the one allowed callback
  *    with it and the site's nonce (the system's own call to open a URI, never a shell).
  *
@@ -88,8 +91,12 @@ public:
     virtual std::optional<Launch> LaunchOf(const uint256& token) = 0;
     //! What a trade alone on a launch's curve gives now: tokens for ECX (buy), ECX for tokens; 0 if nothing.
     virtual uint64_t QuoteLaunch(const uint256& token, bool buy, uint64_t amount) = 0;
-    //! What a launch's first buy of `ecx` gives alone, on a new curve.
-    virtual uint64_t QuoteFirstBuy(uint64_t ecx) = 0;
+    //! What a launch's first buy of `ecx` gives alone, on a new curve of `supply` units (0: the network's) at `fee` (millionths; 0: the network's).
+    virtual uint64_t QuoteFirstBuy(uint64_t ecx, uint64_t supply = 0, uint32_t fee = 0) = 0;
+    //! Whether the next block takes launches with parameters (a supply, decimals, a fee; an existing asset on a curve).
+    virtual bool LaunchParamsActive() = 0;
+    //! The network's fee of a launch's curve (millionths).
+    virtual uint32_t LaunchFee() = 0;
     virtual std::optional<Pool> PoolById(const uint256& id) = 0;
     //! What `amount` of `asset_in` gives alone in a pool now; 0 if nothing.
     virtual uint64_t QuotePool(const uint256& asset_in, const uint256& pool, uint64_t amount) = 0;
@@ -110,7 +117,7 @@ struct Plan {
     std::string message;
     std::string method;
     UniValue params{UniValue::VARR};
-    //! launch: launchtoken, after reserveasset (method).
+    //! launch, register: launchtoken or registerasset, after reserveasset (method).
     std::string then_method;
     UniValue then_params{UniValue::VARR};
     //! What it asks, in a few words ("Buy TIDE with 5 ECX").

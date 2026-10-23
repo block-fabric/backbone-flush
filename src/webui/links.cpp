@@ -28,17 +28,27 @@ std::string_view VerbName(Verb verb)
     case Verb::BUY: return "buy";
     case Verb::SELL: return "sell";
     case Verb::SWAP: return "swap";
+    case Verb::REGISTER: return "register";
+    case Verb::CURVE: return "curve";
+    case Verb::POOL: return "pool";
+    case Verb::AUCTION: return "auction";
+    case Verb::ORDER: return "order";
     }
     return "?";
 }
 
 namespace {
-constexpr std::array<std::pair<std::string_view, Verb>, 5> VERBS{{
+constexpr std::array<std::pair<std::string_view, Verb>, 10> VERBS{{
     {"connect", Verb::CONNECT},
     {"launch", Verb::LAUNCH},
     {"buy", Verb::BUY},
     {"sell", Verb::SELL},
     {"swap", Verb::SWAP},
+    {"register", Verb::REGISTER},
+    {"curve", Verb::CURVE},
+    {"pool", Verb::POOL},
+    {"auction", Verb::AUCTION},
+    {"order", Verb::ORDER},
 }};
 
 bool Lower(char c) { return c >= 'a' && c <= 'z'; }
@@ -170,6 +180,41 @@ std::string Ticker(const std::string& text, const char* key, bool coin_allowed)
     return text;
 }
 
+/** A whole number of a link, `min` to `max`: digits without a leading zero. */
+int Int(const std::string& text, const char* key, int min, int max)
+{
+    int value{-1};
+    const auto [end, ec]{std::from_chars(text.data(), text.data() + text.size(), value)};
+    if (ec != std::errc{} || end != text.data() + text.size() || text.empty() || (text.size() > 1 && text[0] == '0') || value < min || value > max) {
+        throw LinkError(strprintf("%s: a whole number, %d to %d", key, min, max));
+    }
+    return value;
+}
+
+/** A supply of a link: whole units, digits only, not 0. */
+std::string Supply(const std::string& text)
+{
+    if (text.empty() || text.size() > MAX_SUPPLY_DIGITS || !std::all_of(text.begin(), text.end(), Digit) || text[0] == '0') {
+        throw LinkError(strprintf("supply: whole units, 1 to %u digits", MAX_SUPPLY_DIGITS));
+    }
+    return text;
+}
+
+/** An asset of a link by id, or the coin by its ticker. */
+uint256 AssetRef(const std::string& text, const char* key)
+{
+    if (text == COIN_TICKER) return uint256{};
+    return Id(text, key);
+}
+
+/** A ticker of a side: the coin's for the coin (and only for it). */
+std::string SideTicker(const std::string& text, const uint256& asset, const char* key)
+{
+    const std::string ticker{Ticker(text, key, true)};
+    if ((ticker == COIN_TICKER) != asset.IsNull()) throw LinkError(strprintf("%s: %s names the coin exactly when its asset is %s", key, std::string{COIN_TICKER}, std::string{COIN_TICKER}));
+    return ticker;
+}
+
 int Slippage(const std::string& text)
 {
     int bps{-1};
@@ -255,6 +300,7 @@ void CheckLaunch(const Request& r)
     if (info > bitassets::MAX_INFO_SIZE) throw LinkError(strprintf("The description and the links take %u bytes: the chain keeps %u", info, bitassets::MAX_INFO_SIZE));
     if (r.amount.empty() != r.floor.empty()) throw LinkError("A first buy has both ecx and min_tokens, or neither");
     if (r.amount.empty() && r.slippage_bps) throw LinkError("slippage_bps goes with a first buy");
+    if (r.verb == Verb::LAUNCH && r.decimals && r.supply.empty()) throw LinkError("decimals go with a supply");
 }
 } // namespace
 
@@ -275,7 +321,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     const size_t q{rest.find('?')};
     const std::string verb_text{rest.substr(0, q)};
     const auto verb{std::find_if(VERBS.begin(), VERBS.end(), [&](const auto& v) { return v.first == verb_text; })};
-    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (connect, launch, buy, sell, swap)", verb_text.substr(0, 20)));
+    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (connect, launch, buy, sell, swap, register, curve, pool, auction, order)", verb_text.substr(0, 20)));
 
     // The parameters, each once (link: up to MAX_LINKS times).
     std::map<std::string, std::string> params;
@@ -332,7 +378,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     if (now > r.expires + CLOCK_SKEW) throw LinkError("This link has expired: ask the site for a fresh one (a link is good for a few minutes, so that an old one cannot be used again)");
     if (r.expires > now + MAX_LIFETIME + CLOCK_SKEW) throw LinkError("This link would be good for more than a day: refused (check the computer's clock)");
 
-    if (!links.empty() && r.verb != Verb::LAUNCH) throw LinkError("link is a parameter of launch only");
+    if (!links.empty() && r.verb != Verb::LAUNCH && r.verb != Verb::REGISTER) throw LinkError("link is a parameter of launch and register only");
     switch (r.verb) {
     case Verb::CONNECT:
         r.origin = need("origin");
@@ -354,9 +400,74 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         if (auto ecx{take("ecx")}) r.amount = Amount(*ecx, "ecx");
         if (auto floor{take("min_tokens")}) r.floor = Amount(*floor, "min_tokens");
         if (auto s{take("slippage_bps")}) r.slippage_bps = Slippage(*s);
+        if (auto supply{take("supply")}) r.supply = Supply(*supply);
+        if (auto d{take("decimals")}) r.decimals = Int(*d, "decimals", 0, bitassets::MAX_DECIMALS);
+        if (auto fee{take("fee_bps")}) r.fee_bps = Int(*fee, "fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
+        if (auto a{take("allocation_bps")}) r.allocation_bps = Int(*a, "allocation_bps", 0, bitassets::MAX_LAUNCH_ALLOCATION);
         CheckLaunch(r);
         break;
     }
+    case Verb::REGISTER: {
+        r.ticker = Ticker(need("ticker"), "ticker", false);
+        if (auto name{take("name")}) r.name = Name(*name);
+        if (auto logo{take("logo")}) r.logo_sha256 = LogoHash(*logo);
+        if (auto desc{take("desc")}) r.description = Description(*desc);
+        for (const std::string& link : links) r.links.push_back(WebLink(link));
+        r.supply = Supply(need("supply"));
+        r.decimals = Int(need("decimals"), "decimals", 0, bitassets::MAX_DECIMALS);
+        CheckLaunch(r);
+        break;
+    }
+    case Verb::CURVE:
+        r.asset = Id(need("asset"), "asset");
+        r.ticker = Ticker(need("ticker"), "ticker", false);
+        r.amount = Amount(need("amount"), "amount");
+        r.fee_bps = Int(need("fee_bps"), "fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
+        if (auto v{take("min_buy")}) r.min_buy = Amount(*v, "min_buy");
+        if (auto v{take("max_buy")}) r.max_buy = Amount(*v, "max_buy");
+        break;
+    case Verb::POOL: {
+        r.asset_a = AssetRef(need("asset_a"), "asset_a");
+        r.ticker_a = SideTicker(need("ticker_a"), r.asset_a, "ticker_a");
+        r.asset_b = AssetRef(need("asset_b"), "asset_b");
+        r.ticker_b = SideTicker(need("ticker_b"), r.asset_b, "ticker_b");
+        if (r.asset_a == r.asset_b) throw LinkError("asset_a and asset_b are the same");
+        r.kind = need("kind");
+        if (r.kind != "constant" && r.kind != "stable" && r.kind != "weighted") throw LinkError("kind: constant, stable or weighted");
+        r.fee_ppm = Int(need("fee_ppm"), "fee_ppm", 1, 1'000'000);
+        if (std::find(std::begin(bitassets::FEE_TIERS), std::end(bitassets::FEE_TIERS), static_cast<uint32_t>(r.fee_ppm)) == std::end(bitassets::FEE_TIERS)) {
+            throw LinkError("fee_ppm: one of the fee tiers (100, 500, 3000, 10000)");
+        }
+        r.amount_a = Amount(need("amount_a"), "amount_a");
+        r.amount_b = Amount(need("amount_b"), "amount_b");
+        if (auto v{take("amp")}) r.amp = Int(*v, "amp", 1, 10'000);
+        if (auto v{take("weight_a")}) r.weight_a = Int(*v, "weight_a", 2, 98);
+        if (r.amp && r.kind != "stable") throw LinkError("amp goes with a stable pool");
+        if (r.weight_a.has_value() != (r.kind == "weighted")) throw LinkError("weight_a goes with a weighted pool, which needs it");
+        break;
+    }
+    case Verb::AUCTION:
+        r.asset_a = Id(need("base"), "base");
+        r.ticker_a = SideTicker(need("base_ticker"), r.asset_a, "base_ticker");
+        r.amount = Amount(need("amount"), "amount");
+        r.asset_b = AssetRef(need("quote"), "quote");
+        r.ticker_b = SideTicker(need("quote_ticker"), r.asset_b, "quote_ticker");
+        if (r.asset_a == r.asset_b) throw LinkError("base and quote are the same");
+        r.start_price = Amount(need("start_price"), "start_price");
+        r.end_price = Amount(need("end_price"), "end_price");
+        r.blocks = Int(need("duration"), "duration", 1, bitassets::MAX_AUCTION_DURATION);
+        if (auto v{take("delay")}) r.delay = Int(*v, "delay", 1, bitassets::MAX_AUCTION_DELAY);
+        break;
+    case Verb::ORDER:
+        r.asset_a = AssetRef(need("sell"), "sell");
+        r.ticker_a = SideTicker(need("sell_ticker"), r.asset_a, "sell_ticker");
+        r.asset_b = AssetRef(need("buy"), "buy");
+        r.ticker_b = SideTicker(need("buy_ticker"), r.asset_b, "buy_ticker");
+        if (r.asset_a == r.asset_b) throw LinkError("sell and buy are the same");
+        r.amount = Amount(need("amount"), "amount");
+        r.price = Amount(need("price"), "price");
+        r.blocks = Int(need("expiry_blocks"), "expiry_blocks", 1, 1'000'000);
+        break;
     case Verb::BUY:
     case Verb::SELL:
         r.ticker = Ticker(need("launch"), "launch", false);
@@ -392,7 +503,7 @@ Request ParseLaunchFile(std::string_view json, std::string_view network)
             if (!allowed.contains(key)) throw LinkError(strprintf("%s: %s is not a field of a launch file of version 1", what, key.substr(0, 40)));
         }
     }};
-    keys_only(doc, {"format", "version", "network", "ticker", "name", "description", "links", "logo", "first_buy"}, "The launch file");
+    keys_only(doc, {"format", "version", "network", "ticker", "name", "description", "links", "logo", "first_buy", "supply", "decimals", "fee_bps", "allocation_bps"}, "The launch file");
     const auto str{[](const UniValue& obj, const char* key, bool required) -> std::string {
         const UniValue& v{obj.find_value(key)};
         if (v.isNull() && !required) return {};
@@ -444,6 +555,17 @@ Request ParseLaunchFile(std::string_view json, std::string_view network)
             r.slippage_bps = Slippage(s.getValStr());
         }
     }
+    // The launch's parameters (optional): the supply as text, the others whole numbers.
+    if (const UniValue& v{doc.find_value("supply")}; !v.isNull()) r.supply = Supply(str(doc, "supply", true));
+    const auto whole{[&](const char* key, int min, int max) -> std::optional<int> {
+        const UniValue& v{doc.find_value(key)};
+        if (v.isNull()) return std::nullopt;
+        if (!v.isNum()) throw LinkError(strprintf("The launch file: %s is a whole number", key));
+        return Int(v.getValStr(), key, min, max);
+    }};
+    r.decimals = whole("decimals", 0, bitassets::MAX_DECIMALS);
+    r.fee_bps = whole("fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
+    r.allocation_bps = whole("allocation_bps", 0, bitassets::MAX_LAUNCH_ALLOCATION);
     CheckLaunch(r);
     return r;
 }

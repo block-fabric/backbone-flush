@@ -4,11 +4,13 @@
 //
 // Inspired by BitAssets by LayerTwo Labs (plain-bitassets).
 
+#include <arith_uint256.h>
 #include <bitassets/clmath.h>
 #include <bitassets/curves.h>
 #include <bitassets/dex.h>
 #include <bitassets/index.h>
 #include <bitassets/logo.h>
+#include <bitassets/market.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <coins.h>
@@ -2151,7 +2153,7 @@ std::optional<RoundResult> RoundOf(const bitassets::State& state, const uint256&
     } else if (kind.GetCurve() == bitassets::Curve::LAUNCH) {
         const auto launch{state.GetLaunch(pool.asset1)};
         if (!launch) return std::nullopt;
-        cleared = bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd()}, pool.reserve0, pool.reserve1, orders,
+        cleared = bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch->fee, launch->CurveEnd(), launch->max_buy, launch->min_buy, launch->StrictEnd(), launch->StartBound()}, pool.reserve0, pool.reserve1, orders,
                                                  std::vector<bool>(orders.size(), true));
     } else {
         cleared = bitassets::curves::ClearPoolOf(kind, fee, pool.reserve0, pool.reserve1, orders);
@@ -3078,7 +3080,7 @@ RPCMethod quotelaunch()
         if (!pool) throw JSONRPCError(RPC_MISC_ERROR, "The launch has no curve");
         const uint8_t decimals{LaunchDecimals(state, launch_token)};
         const uint64_t amount{bitassets::ParseUnits(request.params[1], buy ? bitassets::CHN_DECIMALS : decimals)};
-        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, launch.CurveEnd(), launch.max_buy, launch.min_buy, launch.StrictEnd()}, pool->reserve0, pool->reserve1,
+        const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{launch.fee, launch.CurveEnd(), launch.max_buy, launch.min_buy, launch.StrictEnd(), launch.StartBound()}, pool->reserve0, pool->reserve1,
                                                           {bitassets::dex::HopIn{buy, amount}}, {true})};
         if (!cleared) throw JSONRPCError(RPC_INVALID_PARAMETER, "The curve cannot take this trade");
         const double whole{std::pow(10.0, decimals)};
@@ -3630,6 +3632,93 @@ RPCMethod getorder()
     };
 }
 
+RPCMethod getpoolcandles()
+{
+    return RPCMethod{
+        "getpoolcandles",
+        "The candles (OHLCV) of a pool, a book or a launch's curve, from the market index (-dexindex): the price of asset_b in asset_a in whole "
+        "units (" + CURRENCY_UNIT + " per unit for one with " + CURRENCY_UNIT + "), the volume in asset_a, oldest first, at most 500.",
+        {
+            {"id", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The pool's id (a book's: getbook's book; a launch's curve: getlaunch's pool)"},
+            {"interval", RPCArg::Type::STR, RPCArg::Default{"1h"}, "5m, 1h, 4h or 1d"},
+            {"from", RPCArg::Type::NUM, RPCArg::Default{0}, "The first time (Unix seconds)"},
+            {"to", RPCArg::Type::NUM, RPCArg::DefaultHint{"now"}, "The last time"},
+        },
+        RPCResult{RPCResult::Type::ARR, "", "", {{RPCResult::Type::OBJ, "", "", {
+            {RPCResult::Type::NUM, "t", "Its start"}, {RPCResult::Type::NUM, "o", ""}, {RPCResult::Type::NUM, "h", ""}, {RPCResult::Type::NUM, "l", ""},
+            {RPCResult::Type::NUM, "c", ""}, {RPCResult::Type::NUM, "v", "Volume"}, {RPCResult::Type::NUM, "n", "Trades"}}}}},
+        RPCExamples{HelpExampleCli("getpoolcandles", "\"<pool id>\" 1h")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    if (!bitassets::market::Enabled()) throw JSONRPCError(RPC_MISC_ERROR, "This node keeps no market index (-dexindex)");
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const uint256 id{ParseHashV(request.params[0], "id")};
+    const std::string text{request.params[1].isNull() ? "1h" : request.params[1].get_str()};
+    const auto interval{bitassets::market::ParseInterval(text)};
+    if (!interval) throw JSONRPCError(RPC_INVALID_PARAMETER, "interval: 5m, 1h, 4h or 1d");
+    const uint32_t from{request.params[2].isNull() ? 0 : request.params[2].getInt<uint32_t>()};
+    const uint32_t to{request.params[3].isNull() ? static_cast<uint32_t>(GetTime()) : request.params[3].getInt<uint32_t>()};
+    std::shared_ptr<const sidechain::StoreView> view;
+    {
+        LOCK(::cs_main);
+        view = chainman.ActiveChainstate().SideCache().SharedSnapshot();
+        if (!view) throw JSONRPCError(RPC_IN_WARMUP, "No snapshot of the state yet: try again");
+    }
+    UniValue out(UniValue::VARR);
+    for (const auto& c : bitassets::market::Candles(*view, bitassets::market::Market{false, id}, *interval, from, to, 500)) {
+        UniValue row(UniValue::VOBJ);
+        row.pushKV("t", c.t);
+        row.pushKV("o", c.o);
+        row.pushKV("h", c.h);
+        row.pushKV("l", c.l);
+        row.pushKV("c", c.c);
+        row.pushKV("v", c.v);
+        row.pushKV("n", c.n);
+        out.push_back(std::move(row));
+    }
+    return out;
+},
+    };
+}
+
+/** 10^n as a 256-bit integer. */
+arith_uint256 Pow10(int n)
+{
+    arith_uint256 out{1};
+    for (int i{0}; i < n; ++i) out *= 10;
+    return out;
+}
+
+double RatioToDouble(const arith_uint256& n, const arith_uint256& d) { return n.getdouble() / d.getdouble(); }
+
+/** n/d as a decimal of `significant` digits (rounded down; trailing zeros dropped): exact text of a rational price. */
+std::string ExactDecimal(arith_uint256 n, const arith_uint256& d, int significant)
+{
+    if (d == 0) return "0";
+    const arith_uint256 whole{n / d};
+    std::string out{whole == 0 ? std::string{"0"} : [&] {
+        std::string digits;
+        arith_uint256 w{whole};
+        while (w > 0) {
+            digits.insert(digits.begin(), static_cast<char>('0' + (w - (w / 10) * 10).GetLow64()));
+            w /= 10;
+        }
+        return digits;
+    }()};
+    int used{whole == 0 ? 0 : static_cast<int>(out.size())};
+    arith_uint256 rest{n - whole * d};
+    std::string frac;
+    while (rest > 0 && used < significant && frac.size() < 60) {
+        rest *= 10;
+        const arith_uint256 digit{rest / d};
+        rest -= digit * d;
+        frac.push_back(static_cast<char>('0' + digit.GetLow64()));
+        if (used > 0 || digit > 0) ++used;
+    }
+    while (!frac.empty() && frac.back() == '0') frac.pop_back();
+    return frac.empty() ? out : out + "." + frac;
+}
+
 RPCMethod getbook()
 {
     return RPCMethod{
@@ -3649,8 +3738,12 @@ RPCMethod getbook()
             {RPCResult::Type::NUM, "open_orders", "Open orders, both sides"},
             {RPCResult::Type::NUM, "best_ask", /*optional=*/true, "The lowest price asset_a is sold at"},
             {RPCResult::Type::NUM, "best_bid", /*optional=*/true, "The highest price asset_a is bought at"},
-            {RPCResult::Type::ARR, "asks", "Sellers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a for sale at it"}, {RPCResult::Type::NUM, "orders", ""}}}}},
-            {RPCResult::Type::ARR, "bids", "Buyers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a wanted at it (what their asset_b buys)"}, {RPCResult::Type::NUM, "orders", ""}}}}},
+            {RPCResult::Type::STR, "best_ask_exact", /*optional=*/true, "The same, exact (18 significant digits)"},
+            {RPCResult::Type::STR, "best_bid_exact", /*optional=*/true, "The same, exact (18 significant digits)"},
+            {RPCResult::Type::ARR, "asks", "Sellers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a for sale at it"}, {RPCResult::Type::NUM, "orders", ""},
+                {RPCResult::Type::STR, "price_exact", "The price, exactly the orders' limit (a decimal of 18 significant digits, rounded down)"}, {RPCResult::Type::STR, "amount_units", "The amount in units of asset_a"}}}}},
+            {RPCResult::Type::ARR, "bids", "Buyers of asset_a, best first", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "price", ""}, {RPCResult::Type::NUM, "amount", "asset_a wanted at it (what their asset_b buys)"}, {RPCResult::Type::NUM, "orders", ""},
+                {RPCResult::Type::STR, "price_exact", "The price, exactly"}, {RPCResult::Type::STR, "amount_units", "The amount in units of asset_a (rounded down)"}}}}},
         }},
         RPCExamples{HelpExampleCli("getbook", "\"GOLD\" \"" + CURRENCY_UNIT + "\"")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -3670,26 +3763,36 @@ RPCMethod getbook()
         result.pushKV("asset_a", LabelOf(state, a));
         result.pushKV("asset_b", LabelOf(state, b));
         result.pushKV("open_orders", book ? book->shares - std::min<uint64_t>(book->shares, bitassets::MIN_LIQUIDITY) : 0);
-        // The side that sells a: the asks of a.
+        // The side that sells a: the asks of a. Each level at the exact price of its orders' limits (a rational of a whole a in
+        // b), its amount exact in units of a (a bid's what its b buys at its limit, rounded down); price_exact a decimal of 18
+        // significant digits of it, amount_units the units.
+        const arith_uint256 scale_a{Pow10(da > db ? da - db : 0)}, scale_b{Pow10(db > da ? db - da : 0)};
+        struct Rat {
+            arith_uint256 n, d;
+        };
+        const auto less{[](const Rat& x, const Rat& y) { return x.n * y.d < y.n * x.d; }};
         const auto ladder{[&](bool sells_a) {
             UniValue arr(UniValue::VARR);
-            std::map<double, std::pair<double, int>, std::function<bool(double, double)>> levels_map{sells_a ? std::function<bool(double, double)>{std::less<double>{}} : std::function<bool(double, double)>{std::greater<double>{}}};
+            std::map<Rat, std::pair<uint64_t, int>, std::function<bool(const Rat&, const Rat&)>> levels_map{sells_a ? std::function<bool(const Rat&, const Rat&)>{less}
+                                                                                                               : std::function<bool(const Rat&, const Rat&)>{[&](const Rat& x, const Rat& y) { return less(y, x); }}};
             for (const auto& [oid, o] : state.BookSide(id, sells_a == a_is_0, bitassets::MAX_BOOK_SIDE, next_height)) {
                 if (o.remaining == 0) continue;
-                // Its limit as a price of a whole a in b.
-                const double lim{static_cast<double>(o.price_num) / o.price_den};
-                const double price{sells_a ? lim * std::pow(10.0, int{da} - int{db}) : (1.0 / lim) * std::pow(10.0, int{da} - int{db})};
-                const double amount_a{sells_a ? o.remaining / std::pow(10.0, da) : (o.remaining / std::pow(10.0, db)) / price};
+                // Its limit: b units per a unit (an ask), a units per b unit (a bid); as a price of a whole a in b.
+                const Rat price{sells_a ? Rat{arith_uint256{o.price_num} * scale_a, arith_uint256{o.price_den} * scale_b}
+                                        : Rat{arith_uint256{o.price_den} * scale_a, arith_uint256{o.price_num} * scale_b}};
+                const uint64_t units_a{sells_a ? o.remaining : (arith_uint256{o.remaining} * o.price_num / o.price_den).GetLow64()};
                 auto& level{levels_map[price]};
-                level.first += amount_a;
+                level.first = units_a > std::numeric_limits<uint64_t>::max() - level.first ? std::numeric_limits<uint64_t>::max() : level.first + units_a;
                 ++level.second;
             }
             for (const auto& [price, level] : levels_map) {
                 if (arr.size() >= static_cast<size_t>(levels)) break;
                 UniValue l(UniValue::VOBJ);
-                l.pushKV("price", DecimalToJSON(price));
-                l.pushKV("amount", DecimalToJSON(level.first));
+                l.pushKV("price", DecimalToJSON(RatioToDouble(price.n, price.d)));
+                l.pushKV("amount", DecimalToJSON(level.first / std::pow(10.0, da)));
                 l.pushKV("orders", level.second);
+                l.pushKV("price_exact", ExactDecimal(price.n, price.d, 18));
+                l.pushKV("amount_units", strprintf("%u", level.first));
                 arr.push_back(std::move(l));
             }
             return arr;
@@ -3697,6 +3800,8 @@ RPCMethod getbook()
         UniValue asks{ladder(true)}, bids{ladder(false)};
         if (!asks.empty()) result.pushKV("best_ask", asks[0]["price"]);
         if (!bids.empty()) result.pushKV("best_bid", bids[0]["price"]);
+        if (!asks.empty()) result.pushKV("best_ask_exact", asks[0]["price_exact"]);
+        if (!bids.empty()) result.pushKV("best_bid_exact", bids[0]["price_exact"]);
         result.pushKV("asks", std::move(asks));
         result.pushKV("bids", std::move(bids));
         return result;
@@ -3716,6 +3821,7 @@ void RegisterBitAssetsRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"bitassets", &getasset},
+        {"bitassets", &getpoolcandles},
         {"bitassets", &listassets},
         {"bitassets", &getassethistory},
         {"bitassets", &getassetlogo},

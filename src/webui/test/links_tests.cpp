@@ -303,7 +303,17 @@ struct FakeReader : Reader {
         return std::nullopt;
     }
     uint64_t QuoteLaunch(const uint256&, bool buy, uint64_t) override { return buy ? launch_quote : 2'000'000; }
-    uint64_t QuoteFirstBuy(uint64_t) override { return 5'000'000'000; }
+    uint64_t QuoteFirstBuy(uint64_t, uint64_t supply = 0, uint32_t fee = 0) override
+    {
+        first_buy_supply = supply;
+        first_buy_fee = fee;
+        return 5'000'000'000;
+    }
+    uint64_t first_buy_supply{0};
+    uint32_t first_buy_fee{0};
+    bool params_active{true};
+    bool LaunchParamsActive() override { return params_active; }
+    uint32_t LaunchFee() override { return 11'500; }
     std::optional<Pool> PoolById(const uint256& id) override
     {
         if (id.GetHex() == POOL_ID) return Pool{uint256::ZERO, *uint256::FromHex(GOLD_ID), false};
@@ -339,7 +349,7 @@ BOOST_AUTO_TEST_CASE(buy_sell_swap_resolve_by_id_with_a_fresh_quote)
     BOOST_CHECK_EQUAL(buy.params.write(), R"(["0x)" + TOKEN_ID + R"(","5",10.00,"900"])");
     BOOST_CHECK(HasRow(buy.preface, "From a link", "opened in your browser"));
     BOOST_CHECK(HasRow(buy.preface, "It asks", "Buy TIDE with 5 ECX"));
-    BOOST_CHECK(HasRow(buy.preface, "Token", "TIDE — Tide Pool (0x1111aaaa…"));
+    BOOST_CHECK(HasRow(buy.preface, "Asset", "TIDE — Tide Pool (0x1111aaaa…"));
     BOOST_CHECK(HasRow(buy.preface, "Quote now", "1000 TIDE"));
     BOOST_CHECK(HasRow(buy.preface, "Least it gives", "900 TIDE"));
     BOOST_CHECK(HasRow(buy.preface, "Slippage the site showed", "1.00 %"));
@@ -352,10 +362,10 @@ BOOST_AUTO_TEST_CASE(buy_sell_swap_resolve_by_id_with_a_fresh_quote)
     // A ticker that is not the token's (a ticker taken again), an id nobody has, a graduated launch.
     std::string other{Buy()};
     other.replace(other.find("launch=TIDE"), 11, "launch=TIDX");
-    BOOST_CHECK_NE(ResolveRefused(other, reader).find("must be of one token"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused(other, reader).find("must be of one asset"), std::string::npos);
     std::string nobody{Buy()};
     nobody.replace(nobody.find(TOKEN_ID), 64, std::string(64, 'e'));
-    BOOST_CHECK_NE(ResolveRefused(nobody, reader).find("No token has the id"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused(nobody, reader).find("No asset has the id"), std::string::npos);
     std::string graduated{"flush:buy?v=1&network=regtest&exp=" + Exp() + "&launch=GRAD&asset=" + std::string(64, 'd') + "&ecx=5&min_tokens=1"};
     BOOST_CHECK_NE(ResolveRefused(graduated, reader).find("graduated"), std::string::npos);
     // A buy of more places than ECX has is refused; a floor of more places than the token has goes up, never down.
@@ -420,6 +430,68 @@ BOOST_AUTO_TEST_CASE(launch_resolves_to_reserve_then_launch)
     const Plan done{Resolve(with_logo, Source::BROWSER, reader, NOW)};
     BOOST_CHECK_EQUAL(done.then_params[1].find_value("logo").get_str(), EncodeBase64(logo));
     BOOST_CHECK(HasRow(done.preface, "Logo", hash.substr(0, 16)));
+}
+
+BOOST_AUTO_TEST_CASE(launch_with_parameters_and_the_new_verbs)
+{
+    FakeReader reader;
+    const std::string head{"v=1&network=regtest&exp=" + Exp()};
+    // A launch with its own supply, decimals, fee and allocation: launchtoken's options, the first buy quoted on its curve.
+    const Plan launch{Resolve(Parse("flush:launch?" + head + "&ticker=WIDE&name=Wide&supply=21000000&decimals=8&fee_bps=200&allocation_bps=100&ecx=1&min_tokens=1", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(launch.then_params.write(), R"(["WIDE",{"display_name":"Wide","supply":"21000000","decimals":8,"fee":2.00,"allocation":1.00,"first_buy":"1","first_min_out":"1"}])");
+    BOOST_CHECK_EQUAL(reader.first_buy_supply, 2'100'000'000'000'000ULL);
+    BOOST_CHECK_EQUAL(reader.first_buy_fee, 20'000U);
+    BOOST_CHECK(HasRow(launch.preface, "Curve's fee", "2.00 %"));
+    // Refused: a fee out of the bounds, a supply that is not a curve's, decimals without a supply, before the rules apply.
+    BOOST_CHECK_NE(Refused("flush:launch?" + head + "&ticker=WIDE&name=Wide&fee_bps=501").find("fee_bps"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:launch?" + head + "&ticker=WIDE&name=Wide&decimals=2").find("decimals go with a supply"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:launch?" + head + "&ticker=WIDE&name=Wide&supply=3&decimals=0", reader).find("multiple of 8"), std::string::npos);
+    reader.params_active = false;
+    BOOST_CHECK_NE(ResolveRefused("flush:launch?" + head + "&ticker=WIDE&name=Wide&fee_bps=200", reader).find("no launches with a supply"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:curve?" + head + "&asset=" + GOLD_ID + "&ticker=GOLD&amount=80000&fee_bps=100", reader).find("does not put"), std::string::npos);
+    reader.params_active = true;
+
+    // register: reserveasset then registerasset, the supply to the wallet.
+    const Plan reg{Resolve(Parse("flush:register?" + head + "&ticker=BROSE&name=Bro%20Se&desc=Hi&supply=21000000&decimals=8", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(reg.method, "reserveasset");
+    BOOST_CHECK_EQUAL(reg.then_method, "registerasset");
+    BOOST_CHECK_EQUAL(reg.then_params.write(), R"(["BROSE","21000000",8,{"info":"Hi"},true,null,"Bro Se"])");
+    BOOST_CHECK_NE(Refused("flush:register?" + head + "&ticker=BROSE&supply=21000000").find("decimals is missing"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:register?" + head + "&ticker=BROSE&supply=021&decimals=2").find("supply"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:register?" + head + "&ticker=GOLD&supply=1&decimals=0", reader).find("taken"), std::string::npos);
+
+    // curve: the asset by id and ticker, the amount exactly in its places, a curve's supply.
+    const Plan curve{Resolve(Parse("flush:curve?" + head + "&asset=" + GOLD_ID + "&ticker=GOLD&amount=80000&fee_bps=100&max_buy=10", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(curve.method, "curveasset");
+    BOOST_CHECK_EQUAL(curve.params.write(), R"(["0x)" + GOLD_ID + R"(","80000",{"fee":1.00,"max_buy":"10"}])");
+    BOOST_CHECK_NE(ResolveRefused("flush:curve?" + head + "&asset=" + GOLD_ID + "&ticker=TIDE&amount=80000&fee_bps=100", reader).find("one asset"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:curve?" + head + "&asset=" + TOKEN_ID + "&ticker=TIDE&amount=8000000&fee_bps=100", reader).find("already"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:curve?" + head + "&asset=" + GOLD_ID + "&ticker=GOLD&amount=80000.001&fee_bps=100", reader).find("places"), std::string::npos);
+
+    // pool: both sides by id (ECX by its ticker), a fee tier, the kind's own parameter.
+    const Plan pool{Resolve(Parse("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=weighted&fee_ppm=3000&amount_a=1&amount_b=100&weight_a=80", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(pool.method, "createpool");
+    BOOST_CHECK_EQUAL(pool.params.write(), R"(["ECX","1","0x)" + GOLD_ID + R"(","100",{"curve":"weighted","fee":0.3000,"weight_a":80}])");
+    BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=constant&fee_ppm=2000&amount_a=1&amount_b=100").find("fee tiers"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=GOLD&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=constant&fee_ppm=3000&amount_a=1&amount_b=100").find("names the coin"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=weighted&fee_ppm=3000&amount_a=1&amount_b=100").find("weight_a"), std::string::npos);
+
+    // auction and order.
+    const Plan auction{Resolve(Parse("flush:auction?" + head + "&base=" + GOLD_ID + "&base_ticker=GOLD&amount=10&quote=ECX&quote_ticker=ECX&start_price=5&end_price=1&duration=100", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(auction.method, "createauction");
+    BOOST_CHECK_EQUAL(auction.params.write(), R"(["0x)" + GOLD_ID + R"(","10","ECX","5","1",100,1])");
+    BOOST_CHECK_NE(ResolveRefused("flush:auction?" + head + "&base=" + GOLD_ID + "&base_ticker=GOLD&amount=10&quote=ECX&quote_ticker=ECX&start_price=1&end_price=5&duration=100", reader).find("falls"), std::string::npos);
+    const Plan order{Resolve(Parse("flush:order?" + head + "&sell=" + GOLD_ID + "&sell_ticker=GOLD&buy=ECX&buy_ticker=ECX&amount=5&price=0.25&expiry_blocks=1000", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(order.method, "placeorder");
+    BOOST_CHECK_EQUAL(order.params.write(), R"(["0x)" + GOLD_ID + R"(","5","ECX","0.25",1000])");
+    BOOST_CHECK_NE(Refused("flush:order?" + head + "&sell=ECX&sell_ticker=ECX&buy=ECX&buy_ticker=ECX&amount=5&price=1&expiry_blocks=10").find("the same"), std::string::npos);
+    // A parameter of another verb is refused, as ever.
+    BOOST_CHECK_NE(Refused("flush:order?" + head + "&sell=ECX&sell_ticker=ECX&buy=" + GOLD_ID + "&buy_ticker=GOLD&amount=5&price=1&expiry_blocks=10&fee_bps=100").find("not a parameter"), std::string::npos);
+    // A launch file with the launch's parameters.
+    const Request file{ParseLaunchFile(R"({"format":"flush-launch","version":1,"network":"regtest","ticker":"LUMEN","name":"Lumen","description":"","links":[],"logo":null,"first_buy":null,"supply":"21000000","decimals":8,"fee_bps":115,"allocation_bps":0})", NET)};
+    BOOST_CHECK_EQUAL(file.supply, "21000000");
+    BOOST_CHECK_EQUAL(*file.decimals, 8);
+    BOOST_CHECK_EQUAL(*file.fee_bps, 115);
 }
 
 namespace {

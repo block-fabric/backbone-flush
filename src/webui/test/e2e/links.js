@@ -271,7 +271,7 @@
     await refused('used twice', fromBrowser(buy), 'This link was used already');
     // The same connect, as another link (a later expiry): its nonce was answered.
     await refused('connect answered', fromBrowser(link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://flush.markets/connect'], ['nonce', nonce]], { exp: now() + 900 })), 'This connect was answered already');
-    await refused('ticker of another token', fromBrowser(link('buy', [['launch', 'GRAD'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1']])), 'the ticker and the id must be of one token', true);
+    await refused('ticker of another token', fromBrowser(link('buy', [['launch', 'GRAD'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1']])), 'the ticker and the id must be of one asset', true);
     await refused('floor the curve cannot meet', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '999999999']])), 'The curve moved', true);
     await refused('unknown parameter', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1'], ['referrer', 'x']])), 'referrer is not a parameter of buy');
     await refused('callback elsewhere', fromBrowser(link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://evil.example/connect'], ['nonce', 'e2e0123456789abcdef09999']])), 'the app sends it to https://flush.markets/connect only', true);
