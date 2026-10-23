@@ -12,7 +12,10 @@
     pool with CHN, whose shares nobody holds; trading goes on there;
   - a reorganisation across the graduation takes it back (the curve again), and forward again;
   - claimlaunch by anyone pays the creator its part of the fees and its allocation;
-  - getlaunchlog, listlaunches, getlaunchstats; the peg balance throughout.
+  - getlaunchlog, listlaunches, getlaunchstats; the peg balance throughout;
+  - launches with parameters (launchparams): a supply, decimals and fee of its own, to graduation (its pool a quarter of
+    its supply); an existing asset put on a curve by its controller (curveasset: the control coin goes, the supply fixed),
+    its issuer's retained units refused by the curve beyond what it sold, to graduation.
 """
 
 from decimal import Decimal
@@ -49,7 +52,7 @@ class LayersLaunchTest(LayersTest):
         self.mine_main(300)
         main.createsidechainproposal(SLOT, "Layers", "Assets on a fast chain", "11" * 32, "22" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
-        main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 900)
+        main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 2500)
         main.createsidechaindeposit(SLOT, n1.getdepositaddress()["depositaddress"], 50)
         main.createsidechaindeposit(SLOT, n2.getdepositaddress()["depositaddress"], 50)
         self.mine_main()
@@ -159,6 +162,62 @@ class LayersLaunchTest(LayersTest):
         assert_raises_rpc_error(-8, "Nothing is owed", n2.claimlaunch, "0x" + made["token"])
         stats = n1.getlaunchstats()
         assert_equal((stats["launches"], stats["graduated"]), (1, 1))
+        assert_peg_balance(main, self.nodes)
+
+        self.log.info("A launch with parameters: 21 million of 8 decimals at 2 %, to graduation")
+        rules = n0.getlaunchstats()["rules"]
+        assert rules["params_active"]
+        assert_equal((rules["fee_min"], rules["fee_max"], rules["supply_multiple_units"]), (Decimal("0.3"), Decimal("5"), 8))
+        assert_raises_rpc_error(-8, "0.3 to 5 percent", n0.launchtoken, "WIDE", {"supply": 21000000, "decimals": 8, "fee": 6})
+        n0.reserveasset("WIDE")
+        self.bmm_to(n0.getblockcount() + 3)
+        assert_raises_rpc_error(-8, "multiple of 8 units", n0.launchtoken, "WIDE", {"supply": 1000003, "decimals": 0})
+        wide = n0.launchtoken("WIDE", {"supply": 21000000, "decimals": 8, "fee": 2, "first_buy": 1})
+        assert_equal((wide["supply"], wide["decimals"], wide["fee"]), (Decimal("21000000"), 8, Decimal("2")))
+        self.bmm()
+        launch = n1.getlaunch("WIDE")
+        assert_equal((launch["supply"], launch["decimals"], launch["fee"]), (Decimal("21000000"), 8, Decimal("2")))
+        assert_equal((launch["curve_supply"], launch["pool_supply"], launch["from_asset"]), (Decimal("15750000"), Decimal("5250000"), False))
+        assert_equal(n1.decodeassettx(wide["txid"])["operation"]["fee_ppm"], 20000)
+        quote = n1.quotelaunch("WIDE", 2)
+        n1.buyfromlaunch("WIDE", 2)
+        self.bmm()
+        assert_equal(self.holding(n1, "WIDE"), quote["amount_out"])
+        n0.buyfromlaunch("WIDE", 600)
+        self.bmm()
+        assert_equal(n1.getlaunch("WIDE")["status"], "graduated")
+        assert_equal(n1.getpool("WIDE", "CHN")["reserve_a"], Decimal("5250000"))
+        assert_peg_balance(main, self.nodes)
+
+        self.log.info("An existing asset on a curve: its controller's, the control coin gone, retained units refused beyond what it sold")
+        n2.reserveasset("GOLD")
+        self.bmm_to(n0.getblockcount() + 3)
+        n2.registerasset("GOLD", 1000000, 6)
+        self.bmm()
+        assert_raises_rpc_error(-8, "multiple of 8 units", n2.curveasset, "GOLD", "0.000001")
+        put = n2.curveasset("GOLD", 800000, {"fee": 1})
+        assert_equal((put["curve_supply"], put["pool_supply"]), (Decimal("600000"), Decimal("200000")))
+        self.bmm()
+        gold = n1.getasset("GOLD")
+        assert gold["fixed"]
+        assert "control" not in gold
+        curve = n1.getlaunch("GOLD")
+        assert curve["from_asset"]
+        assert_equal(curve["supply"], Decimal("1000000"))
+        assert_raises_rpc_error(-8, "launched or put on a curve already", n2.curveasset, "GOLD", 8)
+        # The issuer's 200 000 retained: nothing sold yet, so the curve takes none back.
+        assert_raises_rpc_error(-8, "Too little", n2.selltolaunch, "GOLD", 1000)
+        n1.buyfromlaunch("GOLD", 10)
+        self.bmm()
+        bought = self.holding(n1, "GOLD")
+        assert_raises_rpc_error(-8, "Too little", n2.selltolaunch, "GOLD", bought * 2)
+        back = n2.selltolaunch("GOLD", (bought / 2).quantize(Decimal("0.000001")))
+        block = self.bmm()
+        assert self.paid_in(n2, block, back["quote"])
+        n0.buyfromlaunch("GOLD", 600)
+        self.bmm()
+        assert_equal(n1.getlaunch("GOLD")["status"], "graduated")
+        assert_equal(n1.getpool("GOLD", "CHN")["reserve_a"], Decimal("200000"))
         assert_peg_balance(main, self.nodes)
 
 

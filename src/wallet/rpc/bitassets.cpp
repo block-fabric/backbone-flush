@@ -2182,7 +2182,7 @@ uint32_t LaunchFeeArg(const UniValue& value)
     const double fee{value.isNum() ? value.get_real() : std::stod(value.get_str())};
     const long long ppm{std::llround(fee * 10000)};
     if (!(fee > 0) || ppm < bitassets::MIN_LAUNCH_FEE || ppm > bitassets::MAX_LAUNCH_FEE) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The curve's fee is %s to %s percent", FormatMoney(bitassets::MIN_LAUNCH_FEE * 100), FormatMoney(bitassets::MAX_LAUNCH_FEE * 100)));
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The curve's fee is %g to %g percent", bitassets::MIN_LAUNCH_FEE / 10000.0, bitassets::MAX_LAUNCH_FEE / 10000.0));
     }
     return static_cast<uint32_t>(ppm);
 }

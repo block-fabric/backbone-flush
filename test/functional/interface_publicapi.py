@@ -406,6 +406,50 @@ class PublicApiTest(LayersTest):
         assert_equal([l["price"] for l in book["asks"]], [float(l["price"]) for l in rbook["asks"]])
         assert_equal([l["amount"] for l in book["bids"]], [float(l["amount"]) for l in rbook["bids"]])
         assert_equal(api.get("books/USDX/USDY", {"depth": 101}).status, 400)
+        # Exact prices: the orders' limits as text, the amounts in units.
+        assert_equal([l["price_exact"] for l in book["asks"]], [l["price_exact"] for l in rbook["asks"]])
+        assert_equal([l["amount_units"] for l in book["bids"]], [l["amount_units"] for l in rbook["bids"]])
+        assert_equal(book.get("best_ask_exact"), rbook.get("best_ask_exact"))
+        assert_equal(book.get("best_bid_exact"), rbook.get("best_bid_exact"))
+        assert_equal(n0.getpoolcandles(rbook["book"], "1h"), n0.getpoolcandles(rbook["book"]))
+
+        self.log.info("The asset registry: every asset with its markets; builds of the new verbs")
+        status = api.rest("status")
+        assert status["launch_params"]["active"]
+        assert_equal((status["launch_params"]["fee_min_bps"], status["launch_params"]["fee_max_bps"]), (30, 500))
+        listed = api.rest("assets", {"limit": 100})
+        by_ticker = {a["ticker"]: a for a in listed["items"]}
+        assert {"MOON", "SUN", "USDX", "USDY"} <= set(by_ticker)
+        assert_equal(by_ticker["SUN"]["market"]["status"], "curve")
+        assert_greater_than(by_ticker["SUN"]["market"]["progress"], 0)
+        assert_equal(by_ticker["MOON"]["market"]["status"], "pool")
+        assert "book" in by_ticker["USDX"]["market"]["kinds"]
+        assert_equal(by_ticker["USDX"]["supply_units"], str(int(n0.getasset("USDX")["supply"] * 100)))
+        curves = api.rest("assets", {"market": "curve", "limit": 100})
+        assert all(a["market"]["status"] == "curve" for a in curves["items"]) and curves["items"]
+        detail = api.rest("assets/USDX")
+        assert_equal(detail["id"], x)
+        assert detail["books"] and detail["pools"]
+        assert_equal(detail["books"][0]["id"], rbook["book"])
+        assert not detail["launch"]
+        assert detail["can_curve"]["allowed"] is False  # it has a pool with ECX
+        assert_equal(api.get("assets/NOPE99").status, 404)
+        assert_equal(api.get("assets", {"market": "elsewhere"}).status, 400)
+        for verb, query in [
+            ("register", {"ticker": "REG1", "name": "Reg One", "supply": "21000000", "decimals": "8"}),
+            ("launch", {"ticker": "WIDE1", "name": "Wide", "supply": "21000000", "decimals": "8", "fee_bps": "200", "allocation_bps": "100", "first_buy_ecx": "1"}),
+            ("pool", {"asset_a": "USDY", "asset_b": "ECX", "kind": "stable", "fee_ppm": "500", "amount_a": "10", "amount_b": "1", "amp": "100"}),
+            ("auction", {"base": "USDY", "amount": "10", "quote": "ECX", "start_price": "5", "end_price": "1", "duration": "100"}),
+            ("order", {"sell": "USDY", "buy": "ECX", "amount": "5", "price": "0.25", "expiry_blocks": "1000"}),
+        ]:
+            built = api.rest(f"build/{verb}", query)
+            got, params, _ = parse_uri(built["uri"])
+            assert_equal(got, verb)
+            assert set(params) - {"network", "exp"} <= URI_PARAMS[verb], (verb, params)
+            assert built["app_ready"]
+            assert_equal(built["payload_hash"], action_hash(built["payload"]))
+        assert_equal(api.get("build/launch", {"ticker": "WIDE2", "name": "Wide", "fee_bps": "600"}).status, 400)
+        assert_equal(api.get("build/curve", {"asset": "USDX", "amount": "8", "fee_bps": "100"}).status, 400)
 
         self.log.info("Verified issuers: per curator list given by the client")
         curator = n0.registeroracle("curator")["oracle"]

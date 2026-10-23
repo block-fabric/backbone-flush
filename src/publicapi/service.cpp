@@ -204,8 +204,8 @@ CreatorText SplitInfo(const std::string& info)
 double CostOf(const std::string& method_path)
 {
     const std::string method{method_path.substr(method_path.rfind('/') + 1)};
-    if (method.starts_with("Quote") || method == "BuildAction") return 4;
-    if (method == "ListLaunches" || method == "ListPools" || method == "ListAssets" || method == "GetAsset" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
+    if (method.starts_with("Quote") || method == "BuildAction" || method == "GetAsset" || method == "ListAssets") return 4;
+    if (method == "ListLaunches" || method == "ListPools" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
     if (method == "ServerReflectionInfo") return 2;
     return 1;
 }
@@ -1003,6 +1003,9 @@ private:
     // -----------------------------------------------------------------------------------------------------
     // The asset registry
 
+    //! The most pools of an asset a row of the registry reads from the state (more: the index's count alone).
+    static constexpr int64_t MAX_ASSET_POOLS_READ{32};
+
     /** An asset of the registry from its row of searchassets and the state: its markets of every kind. */
     void FillAsset(Message& m, const UniValue& row, const bitassets::State& state, const Tip& tip, bool whole_info) const
     {
@@ -1031,16 +1034,24 @@ private:
         }
         const auto launch{state.GetLaunch(id)};
         m.SetBool("launched", launch.has_value());
+        const auto launch_of_row{[&](const AssetId&) { return launch.has_value(); }};
         // Its markets: a curve not graduated, then pools, books, auctions.
         Message& market{m.Mutable("market")};
+        // Its pools by kind, from the state for an asset of a few pools (MAX_ASSET_POOLS_READ), else the index's count (books
+        // then not told apart): the work of a row bounded, whatever an asset has.
         uint32_t pools{0}, books{0};
-        for (const auto& [pid, pool] : state.PoolsOf(id)) {
-            const auto curve{state.GetPoolParams(pid).GetCurve()};
-            if (curve == bitassets::Curve::LAUNCH) continue;
-            if (curve == bitassets::Curve::BOOK) {
-                if (pool.shares > bitassets::MIN_LIQUIDITY) ++books;
-            } else if (!bitassets::amm::Abandoned(pool)) {
-                ++pools;
+        const int64_t indexed{row.exists("pools") ? row["pools"].getInt<int64_t>() : 0};
+        if (indexed > MAX_ASSET_POOLS_READ) {
+            pools = static_cast<uint32_t>(indexed);
+        } else if (indexed > 0 || launch_of_row(id)) {
+            for (const auto& [pid, pool] : state.PoolsOf(id)) {
+                const auto curve{state.GetPoolParams(pid).GetCurve()};
+                if (curve == bitassets::Curve::LAUNCH) continue;
+                if (curve == bitassets::Curve::BOOK) {
+                    if (pool.shares > bitassets::MIN_LIQUIDITY) ++books;
+                } else if (!bitassets::amm::Abandoned(pool)) {
+                    ++pools;
+                }
             }
         }
         const uint32_t auctions{static_cast<uint32_t>(state.AuctionsOf(id, 20).size())};
@@ -2052,41 +2063,37 @@ private:
                 const auto table{Launches(tip)};
                 if (const auto it{table->by_token.find(id)}; it != table->by_token.end()) FillLaunch(d.Mutable("launch"), table->launches[it->second], state);
             }
+            // Its markets, bounded: at most 10 pools read whole (getpool), 10 books by id with their order counts (the state's
+            // counters, no walk of their sides), the auctions of AuctionsOf's first 20; more of them: GetPool, GetBook.
             size_t pools{0}, books{0};
-            for (const auto& [pid, pool] : state.PoolsOf(id)) {
-                const auto curve{state.GetPoolParams(pid).GetCurve()};
-                if (curve == bitassets::Curve::LAUNCH) continue;
-                if (curve == bitassets::Curve::BOOK) {
-                    if (pool.shares <= bitassets::MIN_LIQUIDITY || books >= 10) continue;
-                    ++books;
-                    const AssetId other{pool.asset0 == id ? pool.asset1 : pool.asset0};
+            const Message* market{d.Sub("market")};
+            if (market && market->GetUInt("pools") + market->GetUInt("books") <= static_cast<uint64_t>(MAX_ASSET_POOLS_READ)) {
+                for (const auto& [pid, pool] : state.PoolsOf(id)) {
+                    const auto curve{state.GetPoolParams(pid).GetCurve()};
+                    if (curve == bitassets::Curve::LAUNCH) continue;
+                    if (curve == bitassets::Curve::BOOK) {
+                        if (pool.shares <= bitassets::MIN_LIQUIDITY || books >= 10) continue;
+                        ++books;
+                        const AssetId other{pool.asset0 == id ? pool.asset1 : pool.asset0};
+                        Message& b{d.Add("books")};
+                        b.SetString("id", Hex(pid));
+                        b.SetString("base", Hex(id));
+                        b.SetString("quote", other.IsNull() ? "" : Hex(other));
+                        b.SetString("base_ticker", Label(state, id));
+                        b.SetString("quote_ticker", Label(state, other));
+                        // Asks of the base: the side that sells asset0 when the base is asset0.
+                        uint32_t asks{state.BookCount(pid, true)}, bids{state.BookCount(pid, false)};
+                        if (pool.asset0 != id) std::swap(asks, bids);
+                        b.SetUInt("asks", asks);
+                        b.SetUInt("bids", bids);
+                        continue;
+                    }
+                    if (bitassets::amm::Abandoned(pool) || pools >= 10) continue;
+                    ++pools;
                     UniValue params(UniValue::VARR);
-                    params.push_back(ArgOf(id));
-                    params.push_back(ArgOf(other));
-                    params.push_back(1);
-                    const UniValue r{Rpc("getbook", params)};
-                    Message& b{d.Add("books")};
-                    b.SetString("id", Hex(pid));
-                    b.SetString("base", Hex(id));
-                    b.SetString("quote", other.IsNull() ? "" : Hex(other));
-                    b.SetString("base_ticker", Label(state, id));
-                    b.SetString("quote_ticker", Label(state, other));
-                    uint32_t asks{0}, bids{0};
-                    for (const auto& [oid, o] : state.BookSide(pid, true, bitassets::MAX_BOOK_SIDE, tip.height + 1)) asks += o.remaining > 0;
-                    for (const auto& [oid, o] : state.BookSide(pid, false, bitassets::MAX_BOOK_SIDE, tip.height + 1)) bids += o.remaining > 0;
-                    // Asks of the base: the side that sells asset0 when the base is asset0.
-                    if (pool.asset0 != id) std::swap(asks, bids);
-                    b.SetUInt("asks", asks);
-                    b.SetUInt("bids", bids);
-                    if (r.exists("best_ask")) b.SetDouble("best_ask", r["best_ask"].get_real());
-                    if (r.exists("best_bid")) b.SetDouble("best_bid", r["best_bid"].get_real());
-                    continue;
+                    params.push_back(Hex(pid));
+                    d.Add("pools") = PoolFromJson(Rpc("getpool", params), tip);
                 }
-                if (bitassets::amm::Abandoned(pool) || pools >= 50) continue;
-                ++pools;
-                UniValue params(UniValue::VARR);
-                params.push_back(Hex(pid));
-                d.Add("pools") = PoolFromJson(Rpc("getpool", params), tip);
             }
             for (const Txid& aid : state.AuctionsOf(id, 20)) {
                 const auto auction{state.GetAuction(aid)};
