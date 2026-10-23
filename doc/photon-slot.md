@@ -51,3 +51,18 @@ It shows in `getblockchaininfo`/`getnetworkinfo` "warnings", and in the app as a
 
 The deployment files are in `contrib/photon-slot/`: the validator unit, the SSH tunnel unit for a machine without
 a betanet node, and `make-conf.sh`.
+
+## Upgrade v2
+
+Branch `photon-v2` (photon-slot, the unified assets of `assets-unified`, the anchor bids of `anchor-bid`, and the
+liveness fix of `jail-fix`): from block `SLOT99_V2_HEIGHT` (src/kernel/chainparams.cpp, in the slot 99 branch of
+the betanet params) both:
+
+- `launch_params_height`: launches with parameters (supply, decimals, the curve's fee) and an existing asset put
+  on a curve;
+- `jail_fix_height`: the first block of stake charges no slot before it (at the chain's start it charged every
+  genesis validator an epoch of misses, and all three were jailed), and a peg step gives no liveness jails that
+  would leave fewer than `min_active_validators`.
+
+The height is in the sidechain parameters' fingerprint: on its first start, a node of v2 rebuilds its sidechain
+state from its blocks once. Every node is to run v2 before that block; one that does not forks off at it.

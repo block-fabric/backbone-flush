@@ -276,8 +276,16 @@ def start(args):
         argv = common + [f"-datadir={nd}", f"-port={p[f'p2p{i}']}", f"-rpcport={p[f'rpc{i}']}", "-wallet=w",
                          f"-validatorkeyfile={nd / 'validator.key'}"]
         argv += [f"-addnode=127.0.0.1:{p[f'p2p{j}']}" for j in range(3) if j != i]
+        # An upgrade rehearsal: FLUSH_PLAYGROUND_ARGS (e.g. "-testactivationheight=jailfix@200") to every node but one
+        # run by FLUSH_PLAYGROUND_OLD_FLUSHD (an older flushd, as validator 2, which does not know them).
+        old = os.environ.get("FLUSH_PLAYGROUND_OLD_FLUSHD") if i == 2 else None
+        if not old:
+            argv += os.environ.get("FLUSH_PLAYGROUND_ARGS", "").split()
+            argv += os.environ.get(f"FLUSH_PLAYGROUND_ARGS{i}", "").split()  # one node's own (e.g. -publicapi=...)
         state[f"argv{i}"] = argv
-        if i == 0 and use_app:
+        if old:
+            spawn(d, f"flushd{i}", [old] + argv)
+        elif i == 0 and use_app:
             env = dict(os.environ)
             env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")  # WSLg
             spawn(d, "flush-app", [str(flush_app)] + argv + [f"-webuiconfig={nd / 'flush-app.json'}"], env=env)

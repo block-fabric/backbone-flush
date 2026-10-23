@@ -914,6 +914,12 @@ public:
                 };
                 consensus.pos.min_active_validators = 3;
                 consensus.pos.min_stake = COIN / 10;
+                // Upgrade v2 (doc/photon-slot.md, "Upgrade v2"), from block SLOT99_V2_HEIGHT: launches with parameters and an
+                // existing asset on a curve (the unified assets), and the liveness fix (which jailed all three genesis
+                // validators at the chain's start). A height in the fingerprint: each node rebuilds its sidechain state once.
+                static constexpr int SLOT99_V2_HEIGHT{3300};
+                consensus.sidechain.launch_params_height = SLOT99_V2_HEIGHT;
+                consensus.pos.jail_fix_height = SLOT99_V2_HEIGHT;
                 m_temporary_notice = "Temporary: Flush on betanet slot 99 (Photon). A test chain in the slot voted in for Photon; it will be "
                                      "dropped when Flush gets its own slot (46). Do not keep value here.";
                 break;
