@@ -552,7 +552,7 @@ private:
         (void)state;
     }
 
-    /** The most a launch's allocation is in the next block, in basis points (SidechainParams::allocation25_height). */
+    /** The most a launch's allocation is in the next block, in basis points (SidechainParams::allocation10_height). */
     uint16_t MaxAllocationNow() const
     {
         int height;
@@ -560,7 +560,7 @@ private:
             LOCK(::cs_main);
             height = m_node.chainman->ActiveChain().Height() + 1;
         }
-        return bitassets::MaxLaunchAllocation(Params().GetConsensus().sidechain.Allocation25Active(height));
+        return bitassets::MaxLaunchAllocation(Params().GetConsensus().sidechain.Allocation10Active(height));
     }
 
     /** A launch's own curve: its supply and decimals, its virtual reserves. */
@@ -1538,9 +1538,9 @@ private:
             lp.SetUInt("supply_multiple_units", bitassets::LAUNCH_SUPPLY_MULTIPLE);
             lp.SetUInt("decimals_max", bitassets::MAX_DECIMALS);
             lp.SetUInt("decimals_default", bitassets::LAUNCH_DECIMALS);
-            // The most a launch's allocation is in the next block (25 % from allocation25_height, 5 % before), and that height.
-            lp.SetUInt("allocation_max_bps", bitassets::MaxLaunchAllocation(rules.Allocation25Active(tip.height + 1)));
-            lp.SetInt("allocation25_height", rules.allocation25_height == std::numeric_limits<int>::max() ? -1 : rules.allocation25_height);
+            // The most a launch's allocation is in the next block (10 % from allocation10_height, 5 % before), and that height.
+            lp.SetUInt("allocation_max_bps", bitassets::MaxLaunchAllocation(rules.Allocation10Active(tip.height + 1)));
+            lp.SetInt("allocation10_height", rules.allocation10_height == std::numeric_limits<int>::max() ? -1 : rules.allocation10_height);
             return s;
         });
 

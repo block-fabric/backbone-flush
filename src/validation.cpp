@@ -831,7 +831,7 @@ bool MemPoolAccept::DrivechainChecks(Workspace& ws)
             !bitassets::CheckTickerActivation(tx, side_params.TickerActive(height), reject_reason) ||
             !bitassets::CheckCurvesActivation(tx, side_params.DexCurvesActive(height), reject_reason) ||
             !bitassets::CheckLaunchParamsActivation(tx, side_params.LaunchParamsActive(height), reject_reason) ||
-            !bitassets::CheckAllocationActivation(tx, side_params.Allocation25Active(height), reject_reason) ||
+            !bitassets::CheckAllocationActivation(tx, side_params.Allocation10Active(height), reject_reason) ||
             !side.BitAssets().CheckTx(tx, height, reject_reason, nullptr, side_params.bitassets_reveal_depth, &payouts, side_params.DexActive(height))) {
             return ws.m_state.Invalid(TxValidationResult::TX_CONSENSUS, reject_reason);
         }
@@ -5962,7 +5962,7 @@ void Chainstate::RemoveStaleDrivechainTxs()
                 !bitassets::CheckTickerActivation(*tx, side_params.TickerActive(tip->nHeight + 1), reject_reason) ||
                 !bitassets::CheckCurvesActivation(*tx, curves, reject_reason) ||
                 !bitassets::CheckLaunchParamsActivation(*tx, side_params.LaunchParamsActive(tip->nHeight + 1), reject_reason) ||
-                !bitassets::CheckAllocationActivation(*tx, side_params.Allocation25Active(tip->nHeight + 1), reject_reason) ||
+                !bitassets::CheckAllocationActivation(*tx, side_params.Allocation10Active(tip->nHeight + 1), reject_reason) ||
                 !bitassets::State{reads}.CheckTx(*tx, tip->nHeight + 1, reject_reason, nullptr, side_params.bitassets_reveal_depth, nullptr, dex) ||
                 (dex && !bitassets::State{reads}.OrderFillsAlone(*tx, reject_reason))) {
                 stale.push_back(tx);

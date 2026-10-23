@@ -68,8 +68,8 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     }
     // Launches with parameters, the same way: their height once set, nothing while it is never.
     if (sidechain.launch_params_height != std::numeric_limits<int>::max()) hasher << std::string{"launchparams"} << sidechain.launch_params_height;
-    // Allocations of up to 25 %, the same way.
-    if (sidechain.allocation25_height != std::numeric_limits<int>::max()) hasher << std::string{"allocation25"} << sidechain.allocation25_height;
+    // Allocations of up to 10 %, the same way.
+    if (sidechain.allocation10_height != std::numeric_limits<int>::max()) hasher << std::string{"allocation10"} << sidechain.allocation10_height;
     return hasher.GetHash();
 }
 

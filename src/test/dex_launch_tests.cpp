@@ -490,33 +490,35 @@ BOOST_AUTO_TEST_CASE(curve_constants_any_supply)
         BOOST_CHECK(k == static_cast<unsigned __int128>(V + G) * record.CurveEnd());
         // The graduation pool (G, S/4) has the curve's last marginal price (V + G)²/k.
         BOOST_CHECK(static_cast<unsigned __int128>(V + G) * (V + G) * record.PoolSupply() == k * G);
-        // The allocation: the floor of its share. At 5 % (the most before allocation25_height) every supply can have
-        // it, within what an amount can be; at 25 % only those whose supply with it is (IsLaunchAllocation).
-        record.allocation = MAX_LAUNCH_ALLOCATION_BEFORE_25;
+        // The allocation: the floor of its share. At 5 % (the most before allocation10_height) every supply can have
+        // it, within what an amount can be; at 10 % too (IsLaunchAllocation), and past it only those whose supply with it is.
+        record.allocation = MAX_LAUNCH_ALLOCATION_BEFORE_10;
         BOOST_CHECK(IsLaunchAllocation(S, record.allocation));
         BOOST_CHECK(static_cast<unsigned __int128>(S) + record.AllocationUnits() <= MAX_AMOUNT);
-        for (const uint16_t allocation : {uint16_t{1'000}, MAX_LAUNCH_ALLOCATION}) {
+        BOOST_CHECK(IsLaunchAllocation(S, MAX_LAUNCH_ALLOCATION));
+        for (const uint16_t allocation : {uint16_t{100}, MAX_LAUNCH_ALLOCATION}) {
             record.allocation = allocation;
             BOOST_CHECK_EQUAL(record.AllocationUnits(), LaunchAllocationUnits(S, allocation));
             BOOST_CHECK_EQUAL(IsLaunchAllocation(S, allocation), static_cast<unsigned __int128>(S) + record.AllocationUnits() <= MAX_AMOUNT);
         }
         BOOST_CHECK(!IsLaunchAllocation(S, MAX_LAUNCH_ALLOCATION + 1));
+        BOOST_CHECK(static_cast<unsigned __int128>(S) + LaunchAllocationUnits(S, MAX_LAUNCH_ALLOCATION) <= MAX_AMOUNT);
     }
-    // At 25 %: the most a supply can be (a multiple of 8) is about 4/5 of MAX_AMOUNT; LAUNCH_SUPPLY far within it.
+    // At 10 %: every launch supply, the most (MAX_LAUNCH_SUPPLY) too, has it within an amount. Past it (25 %, were it ever
+    // the most) the bound would refuse the largest supplies: about 4/5 of MAX_AMOUNT at most.
     {
-        const uint64_t most{MAX_AMOUNT / 10'000 * 8'000 / 8 * 8};
-        uint64_t s{most};
-        while (IsLaunchAllocation(s + 8, MAX_LAUNCH_ALLOCATION)) s += 8;
-        while (!IsLaunchAllocation(s, MAX_LAUNCH_ALLOCATION)) s -= 8;
-        BOOST_CHECK(IsLaunchSupply(s));
-        BOOST_CHECK(static_cast<unsigned __int128>(s) + LaunchAllocationUnits(s, MAX_LAUNCH_ALLOCATION) <= MAX_AMOUNT);
-        BOOST_CHECK(static_cast<unsigned __int128>(s + 8) + LaunchAllocationUnits(s + 8, MAX_LAUNCH_ALLOCATION) > MAX_AMOUNT);
-        BOOST_CHECK(!IsLaunchAllocation(MAX_LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION));
-        BOOST_CHECK(IsLaunchAllocation(LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION));
-        BOOST_CHECK_EQUAL(LaunchAllocationUnits(LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION), LAUNCH_SUPPLY / 4);
+        BOOST_CHECK(IsLaunchAllocation(MAX_LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION));
+        BOOST_CHECK(static_cast<unsigned __int128>(MAX_LAUNCH_SUPPLY) + LaunchAllocationUnits(MAX_LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION) <= MAX_AMOUNT);
+        BOOST_CHECK_EQUAL(LaunchAllocationUnits(LAUNCH_SUPPLY, MAX_LAUNCH_ALLOCATION), LAUNCH_SUPPLY / 10);
+        const uint16_t quarter{2'500};
+        uint64_t s{MAX_AMOUNT / 10'000 * 8'000 / 8 * 8};
+        while (static_cast<unsigned __int128>(s + 8) + LaunchAllocationUnits(s + 8, quarter) <= MAX_AMOUNT) s += 8;
+        while (static_cast<unsigned __int128>(s) + LaunchAllocationUnits(s, quarter) > MAX_AMOUNT) s -= 8;
+        BOOST_CHECK(s < MAX_LAUNCH_SUPPLY);
+        BOOST_CHECK(!IsLaunchAllocation(MAX_LAUNCH_SUPPLY, quarter));
     }
     BOOST_CHECK_EQUAL(MaxLaunchAllocation(false), 500);
-    BOOST_CHECK_EQUAL(MaxLaunchAllocation(true), 2'500);
+    BOOST_CHECK_EQUAL(MaxLaunchAllocation(true), 1'000);
     // A launch of before: LAUNCH_SUPPLY, and its allocation as it was.
     LaunchRecord before;
     before.allocation = 200;
@@ -746,22 +748,22 @@ BOOST_AUTO_TEST_CASE(launch_parameters_refused)
     BOOST_CHECK(chain.Assets().GetLaunch(HashName("PLAIN")));
 }
 
-BOOST_AUTO_TEST_CASE(allocation_up_to_25_percent)
+BOOST_AUTO_TEST_CASE(allocation_up_to_10_percent)
 {
     Chain chain;
-    // Before allocation25_height: 5 % at most (bad-ba-launch past it, as an old node refuses it), 5 % itself valid.
-    chain.params.allocation25_height = chain.height + 2;
-    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("EARLY", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION_BEFORE_25 + 1, 0, false)), "bad-ba-launch");
-    chain.LaunchWith("FIVE", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION_BEFORE_25);
+    // Before allocation10_height: 5 % at most (bad-ba-launch past it, as an old node refuses it), 5 % itself valid.
+    chain.params.allocation10_height = chain.height + 2;
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("EARLY", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION_BEFORE_10 + 1, 0, false)), "bad-ba-launch");
+    chain.LaunchWith("FIVE", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION_BEFORE_10);
     BOOST_CHECK(chain.Assets().GetLaunch(HashName("FIVE")));
     chain.EndBlock();
     BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("STILL", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION, 0, false)), "bad-ba-launch");
     chain.EndBlock();
-    // From it: 25 % (launches with and without parameters), never more; a supply with its allocation past an amount never.
-    BOOST_REQUIRE(chain.params.Allocation25Active(chain.height));
+    // From it: 10 % (launches with and without parameters, the largest supply too), never more.
+    BOOST_REQUIRE(chain.params.Allocation10Active(chain.height));
     BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("OVER", 8'000'000, 2, 11'500, MAX_LAUNCH_ALLOCATION + 1, 0, false)), "bad-ba-launch");
-    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("HUGE", MAX_LAUNCH_SUPPLY, 2, 11'500, MAX_LAUNCH_ALLOCATION, 0, false)), "bad-ba-launch");
-    chain.LaunchWith("HUGEFIVE", MAX_LAUNCH_SUPPLY, 2, 11'500, MAX_LAUNCH_ALLOCATION_BEFORE_25);
+    BOOST_CHECK_EQUAL(chain.Refused(chain.LaunchWith("QUARTER", 8'000'000, 2, 11'500, 2'500, 0, false)), "bad-ba-launch");
+    chain.LaunchWith("HUGE", MAX_LAUNCH_SUPPLY, 2, 11'500, MAX_LAUNCH_ALLOCATION);
     const AssetId BIG{HashName("BIG")};
     const CTransaction launched{chain.Launch("BIG", MAX_LAUNCH_ALLOCATION, /*first_buy=*/COIN_UNITS)};
     const auto record{chain.Assets().GetLaunch(BIG)};
@@ -783,14 +785,14 @@ BOOST_AUTO_TEST_CASE(allocation_up_to_25_percent)
     BOOST_CHECK_EQUAL(bought + pool->reserve1, LAUNCH_SUPPLY);
     BOOST_CHECK_EQUAL(chain.Assets().GetAsset(BIG)->supply, LAUNCH_SUPPLY);
     BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
-    // The claim: the creator's fees and its allocation, a quarter of the supply minted on top of it, to its script.
+    // The claim: the creator's fees and its allocation, a tenth of the supply minted on top of it, to its script.
     const uint64_t minted_before{chain.Assets().GetAsset(BIG)->minted};
     const CTransaction claim{MakeTx({}, ClaimLaunch{BIG}, {std::nullopt}, 0, {CREATOR})};
     chain.Require(claim);
-    BOOST_CHECK(chain.TokenAt(COutPoint{claim.GetHash(), 0}) == (Token{Token::Kind::ASSET, BIG, LAUNCH_SUPPLY / 4}));
+    BOOST_CHECK(chain.TokenAt(COutPoint{claim.GetHash(), 0}) == (Token{Token::Kind::ASSET, BIG, LAUNCH_SUPPLY / 10}));
     chain.EndBlock();
-    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(BIG)->supply, LAUNCH_SUPPLY + LAUNCH_SUPPLY / 4);
-    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(BIG)->minted, minted_before + LAUNCH_SUPPLY / 4);
+    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(BIG)->supply, LAUNCH_SUPPLY + LAUNCH_SUPPLY / 10);
+    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(BIG)->minted, minted_before + LAUNCH_SUPPLY / 10);
     BOOST_CHECK(chain.Assets().GetLaunch(BIG)->allocation_claimed);
     BOOST_CHECK_EQUAL(chain.Refused(MakeTx({}, ClaimLaunch{BIG}, {std::nullopt}, 0, {CREATOR})), "bad-ba-launch-nothing-owed");
     BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
