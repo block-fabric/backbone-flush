@@ -813,9 +813,9 @@ bool IsLaunchParamsOperation(const Operation& op);
  */
 [[nodiscard]] bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 /**
- * Whether a transaction may be in a block at a height where allocations of up to 25 % are `active`
- * (SidechainParams::allocation25_height) or not: before it, a launch whose allocation is more than
- * MAX_LAUNCH_ALLOCATION_BEFORE_25 is not valid (bad-ba-launch), as it never was.
+ * Whether a transaction may be in a block at a height where allocations of up to 10 % are `active`
+ * (SidechainParams::allocation10_height) or not: before it, a launch whose allocation is more than
+ * MAX_LAUNCH_ALLOCATION_BEFORE_10 is not valid (bad-ba-launch), as it never was.
  */
 [[nodiscard]] bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
@@ -1035,16 +1035,16 @@ constexpr bool IsLaunchSupply(uint64_t supply) { return supply % LAUNCH_SUPPLY_M
 inline constexpr uint32_t MIN_LAUNCH_FEE{3'000};
 inline constexpr uint32_t MAX_LAUNCH_FEE{50'000};
 /**
- * Most a creator's allocation can be, in basis points of the supply, minted at graduation (shown as such): 25 % from
- * SidechainParams::allocation25_height, 5 % (MAX_LAUNCH_ALLOCATION_BEFORE_25) before it. A launch's supply and its
- * allocation together are within MAX_AMOUNT (IsLaunchAllocation): at 25 % that bounds the most a supply can be below
- * MAX_LAUNCH_SUPPLY. TODO(rug protection): the allocation is the creator's at graduation in one claim; a vesting or
+ * Most a creator's allocation can be, in basis points of the supply, minted at graduation (shown as such): 10 % from
+ * SidechainParams::allocation10_height, 5 % (MAX_LAUNCH_ALLOCATION_BEFORE_10) before it. A launch's supply and its
+ * allocation together are within MAX_AMOUNT (IsLaunchAllocation; at 10 % every launch supply is, MAX_LAUNCH_SUPPLY too:
+ * a bound kept should the most ever be raised). TODO(rug protection): the allocation is the creator's at graduation in one claim; a vesting or
  * lock of it is to come.
  */
-inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{2'500};
-inline constexpr uint16_t MAX_LAUNCH_ALLOCATION_BEFORE_25{500};
-/** The most a launch's allocation can be at a height where SidechainParams::Allocation25Active is `active` or not. */
-constexpr uint16_t MaxLaunchAllocation(bool allocation25_active) { return allocation25_active ? MAX_LAUNCH_ALLOCATION : MAX_LAUNCH_ALLOCATION_BEFORE_25; }
+inline constexpr uint16_t MAX_LAUNCH_ALLOCATION{1'000};
+inline constexpr uint16_t MAX_LAUNCH_ALLOCATION_BEFORE_10{500};
+/** The most a launch's allocation can be at a height where SidechainParams::Allocation10Active is `active` or not. */
+constexpr uint16_t MaxLaunchAllocation(bool allocation10_active) { return allocation10_active ? MAX_LAUNCH_ALLOCATION : MAX_LAUNCH_ALLOCATION_BEFORE_10; }
 /** The units an allocation of `allocation` basis points of `supply` mints: the floor of its share. */
 constexpr uint64_t LaunchAllocationUnits(uint64_t supply, uint16_t allocation) { return static_cast<uint64_t>(static_cast<unsigned __int128>(supply) * allocation / 10'000); }
 /** Whether a launch of `supply` units can have an allocation of `allocation` basis points: at most MAX_LAUNCH_ALLOCATION, the two within MAX_AMOUNT. */

@@ -447,8 +447,8 @@ class PublicApiTest(LayersTest):
         status = api.rest("status")
         assert status["launch_params"]["active"]
         assert_equal((status["launch_params"]["fee_min_bps"], status["launch_params"]["fee_max_bps"]), (30, 500))
-        # Allocations of up to 25 % (regtest: from the first block).
-        assert_equal((status["launch_params"]["allocation_max_bps"], status["launch_params"]["allocation25_height"]), (2500, 0))
+        # Allocations of up to 10 % (regtest: from the first block).
+        assert_equal((status["launch_params"]["allocation_max_bps"], status["launch_params"]["allocation10_height"]), (1000, 0))
         listed = api.rest("assets", {"limit": 100})
         by_ticker = {a["ticker"]: a for a in listed["items"]}
         assert {"MOON", "SUN", "USDX", "USDY"} <= set(by_ticker)

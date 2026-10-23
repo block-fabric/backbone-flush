@@ -2243,7 +2243,7 @@ RPCMethod launchtoken()
         "with parameters apply (getlaunchstats' rules.params_active), the supply, decimals and fee chosen. Buyers pay " + CURRENCY_UNIT + " into its curve and sellers get "
         "" + CURRENCY_UNIT + " back from it, in the block's batch; 3/4 of the supply is sold on the curve, and when it has raised what it graduates at (getlaunchstats), its "
         "" + CURRENCY_UNIT + " and the units left go with the last 1/4 into the asset's pool with " + CURRENCY_UNIT + ", whose shares nobody holds (locked for good). The creator gets its "
-        "part of the curve's fees (claimlaunch) and, if asked for, an allocation minted at graduation (at most getlaunchstats' rules.max_allocation: 25 % where allocations of up to 25 % apply, 5 % before; shown to everyone)." + HELP_REQUIRING_PASSPHRASE,
+        "part of the curve's fees (claimlaunch) and, if asked for, an allocation minted at graduation (at most getlaunchstats' rules.max_allocation: 10 % where allocations of up to 10 % apply, 5 % before; shown to everyone)." + HELP_REQUIRING_PASSPHRASE,
         {
             {"ticker", RPCArg::Type::STR, RPCArg::Optional::NO, "The ticker reserved"},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
@@ -2254,7 +2254,7 @@ RPCMethod launchtoken()
                 {"supply", RPCArg::Type::AMOUNT, RPCArg::Default{"1000000000"}, "Its supply, in whole units of its decimals (a launch with parameters: a multiple of 8 units, getlaunchstats' rules)"},
                 {"decimals", RPCArg::Type::NUM, RPCArg::Default{6}, "Its decimals, 0 to 12 (a launch with parameters)"},
                 {"fee", RPCArg::Type::NUM, RPCArg::DefaultHint{"the network's, getlaunchstats' rules.fee_default"}, "The fee of a trade on its curve, in percent: 0.3 to 5 (a launch with parameters); the parts as the network's"},
-                {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to getlaunchstats' rules.max_allocation: 25, or 5 before rules.allocation25_height)"},
+                {"allocation", RPCArg::Type::NUM, RPCArg::Default{0}, "The creator's allocation, in percent of the supply, minted at graduation (0 to getlaunchstats' rules.max_allocation: 10, or 5 before rules.allocation10_height)"},
                 {"first_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, CURRENCY_UNIT + " the launch buys of its asset in its own block, at the block's price"},
                 {"first_min_out", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least the first buy gets (0: any): the rules refuse its order below it, its " + CURRENCY_UNIT + " back; refused here if its quote alone is less"},
                 {"min_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least " + CURRENCY_UNIT + " a buy on the curve pays (0: any)"},

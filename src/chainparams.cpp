@@ -55,8 +55,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.ticker_height = *height;
         } else if (deployment_name == "launchparams") {
             options.launch_params_height = *height;
-        } else if (deployment_name == "allocation25") {
-            options.allocation25_height = *height;
+        } else if (deployment_name == "allocation10") {
+            options.allocation10_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {
             options.activation_heights[*buried_deployment] = *height;
         } else {
