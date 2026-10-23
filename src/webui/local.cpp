@@ -955,9 +955,11 @@ void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm, confirm
         const auto anchoring{hooks ? hooks->ValidatorAnchoring() : std::nullopt};
         out.pushKV("on", anchoring.has_value());
         if (anchoring) {
-            out.pushKV("bid", FormatMoney(anchoring->second));
+            out.pushKV("bid", FormatMoney(anchoring->floor));
+            out.pushKV("mode", anchoring->fees ? "fees" : "standard");
+            if (anchoring->cap) out.pushKV("max", FormatMoney(*anchoring->cap));
             CTxDestination dest;
-            out.pushKV("payee", ExtractDestination(anchoring->first, dest) ? EncodeDestination(dest) : HexStr(anchoring->first));
+            out.pushKV("payee", ExtractDestination(anchoring->payee, dest) ? EncodeDestination(dest) : HexStr(anchoring->payee));
         }
         node::NodeContext* context{n.context()};
         const ArgsManager* args{context ? context->args : nullptr};

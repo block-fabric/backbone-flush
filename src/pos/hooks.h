@@ -388,8 +388,23 @@ public:
      * Called with cs_main held.
      */
     sidechain::PegStep AckPegStep(const AnchorAck& ack, const CBlockIndex& anchored, const CBlockIndex& prev) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    /** A validator's own anchorer (-validatoranchorbid): where the pot it wins goes, and its bid; none if off. */
-    std::optional<std::pair<CScript, CAmount>> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /** A validator's own anchorer (-validatoranchorbid): where the pot it wins goes, and how it bids. */
+    struct ValidatorBid {
+        //! The producer's payout: the pot each anchor pays.
+        CScript payee;
+        //! -validatoranchorbid: the least it bids (0 allowed: a request that pays no fee, for a miner that takes it).
+        CAmount floor{0};
+        //! -validatoranchorbidmode=fees: the bid is the pot the anchor will pay (the bidder's share of the fees of
+        //! the blocks it anchors, BidderShare, and the fees of their peg transactions), whole; at least `floor`,
+        //! at most `cap`. Else (the default) the pot less the operator's hundredth (Follower::Offer), at least `floor`.
+        bool fees{false};
+        //! -validatoranchorbidmax: the most it bids in fees mode, if given (`floor` wins over it).
+        std::optional<CAmount> cap;
+        /** The bid for an anchor whose pot is `pot`. */
+        CAmount For(CAmount pot) const;
+    };
+    /** A validator's own anchorer (-validatoranchorbid): none if off. */
+    std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /**
      * Whether a BMM block built now would be in stall mode (and may take transactions): no active
      * validator set (`pos_active` false), or no block of stake for stall_seconds by `main_time`.
@@ -569,12 +584,11 @@ private:
         bool made{false};
     };
     mutable Bid m_bid GUARDED_BY(m_anchor_mutex);
-    //! A validator's own anchorer (-validatoranchorbid): the payee (the producer's payout) and the bid.
-    mutable std::optional<CScript> m_validator_payee GUARDED_BY(m_anchor_mutex);
-    mutable CAmount m_validator_bid GUARDED_BY(m_anchor_mutex){0};
+    //! A validator's own anchorer (-validatoranchorbid), if on.
+    mutable std::optional<ValidatorBid> m_validator GUARDED_BY(m_anchor_mutex);
 };
 
-/** What a validator's anchorer bids for a commitment by default, in satoshis of the mainchain (not on regtest: 0, off). */
+/** What a validator's anchorer bids for a commitment by default, in satoshis of the mainchain (not on regtest: off). */
 inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{1000};
 
 /** The FastBlocks hooks installed, if they are. */
