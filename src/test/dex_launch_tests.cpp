@@ -800,6 +800,31 @@ BOOST_AUTO_TEST_CASE(existing_asset_on_a_curve)
     BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), chain.burned - chain.paid_out);
 }
 
+BOOST_AUTO_TEST_CASE(an_oversized_sale_holds_no_other_back)
+{
+    // A curve that sold some units; in one round an attacker sells far more than it sold (units held outside), then honest
+    // sellers sell what they bought: the attacker's sale misses, the honest ones clear.
+    const uint64_t S{LAUNCH_SUPPLY};
+    LaunchCurve curve{CurveOf(S, 11'500)};
+    curve.start = S / 8 * 9;
+    const auto bought{ClearLaunch(curve, V, curve.start, {{true, 50 * COIN_UNITS}}, {true})};
+    BOOST_REQUIRE(bought);
+    const uint64_t units{bought->outs[0]};
+    const auto round{ClearLaunch(curve, bought->reserve0, bought->reserve1, {{false, S / 2}, {false, units / 3}, {false, units / 3}}, {true, true, true})};
+    BOOST_REQUIRE(round);
+    BOOST_CHECK_EQUAL(round->outs[0], 0U);
+    BOOST_CHECK_GT(round->outs[1], 0U);
+    BOOST_CHECK_GT(round->outs[2], 0U);
+    BOOST_CHECK_LE(round->reserve1, curve.start);
+    BOOST_CHECK_GE(round->reserve0, V);
+    // And with a buy in the round, a sale up to what the buy takes out fits as well.
+    const auto mixed{ClearLaunch(curve, V, curve.start, {{false, units / 2}, {true, 50 * COIN_UNITS}}, {true, true})};
+    BOOST_REQUIRE(mixed);
+    BOOST_CHECK_GT(mixed->outs[0], 0U);
+    BOOST_CHECK_GT(mixed->outs[1], 0U);
+    BOOST_CHECK_LE(mixed->reserve1, curve.start);
+}
+
 BOOST_AUTO_TEST_CASE(outside_sales_never_drain_a_curve)
 {
     // Property: whatever is sold into a bounded curve (units from anywhere, any amounts, mixed with buys), its coin never

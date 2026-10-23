@@ -101,8 +101,9 @@ Parameters, for a launch of supply S units (on the curve and in its pool), G = g
 - **Fee.** f ∈ [3000, 50000] millionths (0.3 % to 5 %), `MIN_LAUNCH_FEE`..`MAX_LAUNCH_FEE`; its parts as the network's
   (Flush: creator 50 %, treasury 30 %, security 20 %; the roundings' remainder into the pool at graduation).
 - **Never below the virtual coin** (`LaunchCurve::start` = Tv, launches from `launch_params_height`): the curve takes back no
-  more units than it sold. A round that would leave y > Tv (so x < V: coin it never took in) clears without its sales, which
-  miss (0 out, their units back from the batch); a round past the end that would do it does not clear. Since k never falls,
+  more units than it sold. A round that would leave y > Tv (so x < V: coin it never took in) clears its buys with the sales
+  that fit, taken in the round's order (each admitted if the round with it stays within y ≤ Tv), the others missing (0 out,
+  their units back from the batch): one oversized sale holds no honest seller back; a round past the end that would do it does not clear. Since k never falls,
   y ≤ Tv gives x ≥ k/y ≥ V: the curve can only ever pay out coin buyers paid in. Units held outside the curve (an existing
   asset's other units) are alike to it, and bounded the same.
 - **An existing asset on a curve** (`CurveAsset`): S is the amount its controller puts in (taken from its coins); the same

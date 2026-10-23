@@ -500,19 +500,30 @@ std::optional<dex::Clearing> ClearLaunch(const LaunchCurve& curve, uint64_t x, u
     auto cleared{ClearConstantProduct(/*fee=*/0, x, y, net)};
     if (!cleared) return std::nullopt;
     if (curve.start != 0 && cleared->reserve1 > curve.start) {
-        // More units back than it sold: the sales miss (their units back), the buys clear alone.
-        net.clear();
-        for (size_t i{0}; i < orders.size(); ++i) {
-            if (!in_play[i]) continue;
-            if (!orders[i].zero_in) {
-                in_play[i] = false;
-                continue;
+        // More units back than it sold: the buys clear with the sales that fit, taken in the round's order (each in if the
+        // round with it stays within the bound); the others miss (their units back). One oversized sale holds no other back.
+        std::vector<bool> admitted(orders.size(), false);
+        const auto net_of{[&] {
+            std::vector<dex::HopIn> out;
+            for (size_t i{0}; i < orders.size(); ++i) {
+                if (!in_play[i] || (!orders[i].zero_in && !admitted[i])) continue;
+                out.push_back({orders[i].zero_in, orders[i].zero_in ? orders[i].amount - fee_of(orders[i].amount) : orders[i].amount});
             }
-            net.push_back({true, orders[i].amount - fee_of(orders[i].amount)});
+            return out;
+        }};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!in_play[i] || orders[i].zero_in) continue;
+            admitted[i] = true;
+            const auto trial{ClearConstantProduct(/*fee=*/0, x, y, net_of())};
+            if (!trial || trial->reserve1 > curve.start) admitted[i] = false;
         }
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (in_play[i] && !orders[i].zero_in && !admitted[i]) in_play[i] = false;
+        }
+        net = net_of();
         if (net.empty()) return clearing;
         cleared = ClearConstantProduct(/*fee=*/0, x, y, net);
-        if (!cleared) return std::nullopt;
+        if (!cleared || cleared->reserve1 > curve.start) return std::nullopt;
     }
     uint64_t fees{0};
     if (cleared->reserve1 >= curve.end) {
