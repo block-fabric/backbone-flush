@@ -21,7 +21,8 @@
  *
  *   flush:<address>?amount=...                 a payment (BIP 21): the page's, as before (lib/uri.ts)
  *   flush:<verb>?v=1&network=<net>&exp=<t>&... an action: connect, launch, buy, sell, swap, register, curve, pool,
- *                                              auction, order
+ *                                              auction, order, route, deposit, withdraw, position, reposition,
+ *                                              settle, bid, collect, claim, pegin, pegout
  *
  * The parser is strict: one version, the network of the app only, an expiry within a day, each parameter of the verb
  * once (a link of a launch up to MAX_LINKS times), no other parameter, values percent-encoded from a small alphabet,
@@ -36,7 +37,11 @@ struct LinkError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-enum class Verb { CONNECT, LAUNCH, BUY, SELL, SWAP, REGISTER, CURVE, POOL, AUCTION, ORDER };
+enum class Verb { CONNECT, LAUNCH, BUY, SELL, SWAP, REGISTER, CURVE, POOL, AUCTION, ORDER,
+                  // The DEX from the site (doc/flush-links.md): a swap through several pools, liquidity in and out of a pool, a
+                  // position of concentrated liquidity opened and changed, an order settled or cancelled, a bid on an auction
+                  // and its collection, a launch's creator paid, and the peg: a deposit from eCash, a withdrawal to it.
+                  ROUTE, DEPOSIT, WITHDRAW, POSITION, REPOSITION, SETTLE, BID, COLLECT, CLAIM, PEGIN, PEGOUT };
 std::string_view VerbName(Verb verb);
 
 //! The version of the links (v=1) and of the launch files ("version": 1).
@@ -57,6 +62,8 @@ inline constexpr size_t MIN_NONCE{16};
 inline constexpr size_t MAX_NONCE{64};
 //! The slippage a link may show, in basis points (display only: the floor binds).
 inline constexpr int MAX_SLIPPAGE_BPS{5000};
+//! The most slippage a link may give a call where it binds (position, reposition: no floor of the link's own), basis points.
+inline constexpr int MAX_BINDING_SLIPPAGE_BPS{1000};
 //! How far ahead an expiry may be (a link that lives for ever is refused), and the clock difference forgiven.
 inline constexpr int64_t MAX_LIFETIME{24 * 60 * 60};
 inline constexpr int64_t CLOCK_SKEW{120};
@@ -129,7 +136,34 @@ struct Request {
     //! auction: blocks it takes bids, and how many until it starts; order: blocks it trades.
     int blocks{0};
     std::optional<int> delay;
+    //! route: its pools in order (2 to MAX_ROUTE_POOLS), from `from` to `to`.
+    std::vector<uint256> pools;
+    //! deposit: the least shares it gets (units); withdraw: the shares given back (units), the least of each asset, and
+    //! the one asset alone ("a", "b"; empty: both).
+    std::string shares;
+    std::string min_a;
+    std::string min_b;
+    std::string only;
+    //! position: its price range (asset_b per asset_a of the pool's order).
+    std::string price_lower;
+    std::string price_upper;
+    //! reposition: the position; settle: the order; bid, collect: the auction (the transaction that made it).
+    uint256 target;
+    //! reposition: collect (its fees), remove (percent of its liquidity, with its fees) or close.
+    std::string action;
+    int percent{0};
+    //! settle: cancel (what is left back too: the order is gone) or collect what it got; bid: pay what buys all that is left.
+    bool cancel{false};
+    bool buy_all{false};
+    //! pegout: the eCash address paid, and the fee offered to eCash's miners.
+    std::string address;
+    std::string fee;
 };
+
+//! The most pools of a route a link names (the node's routes are at most 4 hops).
+inline constexpr size_t MAX_ROUTE_POOLS{4};
+//! The longest eCash address a withdrawal link names.
+inline constexpr size_t MAX_MAIN_ADDRESS{128};
 
 //! The bounds of a curve's fee a link takes (basis points; the chain's in millionths: bitassets::MIN_LAUNCH_FEE..MAX_LAUNCH_FEE).
 inline constexpr int MIN_FEE_BPS{30};

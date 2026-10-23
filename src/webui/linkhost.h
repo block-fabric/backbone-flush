@@ -46,6 +46,14 @@ class Bridge;
  *  - register: reserveasset then registerasset, the same way (its supply to this wallet, no market);
  *  - curve, pool, auction, order: one call of curveasset, createpool, createauction, placeorder, every asset by id with
  *    the ticker the link names checked against it, the amounts exactly in their asset's places;
+ *  - route, deposit, withdraw, position, reposition, settle, bid, collect, claim: one call of swaproute,
+ *    addpoolliquidity, removepoolliquidity, openposition, changeposition, settleorder, bidauction, collectauction,
+ *    claimlaunch, each pool, order, auction or position by id with what the link says of it checked against it, the
+ *    floors checked against the node's quote of now and given to the call so that it never accepts less;
+ *  - pegin: a deposit from the wallet of the eCash node to this wallet's flush.markets address (the link's question,
+ *    then the deposit's own); pegout: createwithdrawal to an eCash address, with what a withdrawal takes said first;
+ *  - what an action of a link brings in goes to the wallet's flush.markets address (the one connect shares), so that
+ *    the site, which knows that address only, sees it (setlinkdestination, for the call alone);
  *  - connect: the address to share and the site, in a question; on a yes, the browser opens the one allowed callback
  *    with it and the site's nonce (the system's own call to open a URI, never a shell).
  *
@@ -104,6 +112,9 @@ public:
     virtual bool LaunchesActive() = 0;
     //! Blocks until a reservation made by `txid` is deep enough to reveal (0: now); none while it is in no block.
     virtual std::optional<int> RevealWait(const uint256& txid) = 0;
+    //! A read of the node (no wallet's): getorder, getauction, getposition, getlaunch, quotepoolliquidity,
+    //! previewposition. Its error as a LinkError with the node's words.
+    virtual UniValue Read(const std::string& method, const UniValue& params) = 0;
 };
 
 /** The reader of the node (its chain's state, as the wallet's RPCs read it). */
@@ -122,6 +133,8 @@ struct Plan {
     UniValue then_params{UniValue::VARR};
     //! What it asks, in a few words ("Buy TIDE with 5 ECX").
     std::string summary;
+    //! pegin: the amount deposited (no RPC of this wallet: the host's peg.deposit).
+    uint64_t amount_units{0};
 };
 
 /** The words for where a link comes from. */
@@ -161,6 +174,8 @@ public:
         std::function<std::unique_ptr<Reader>(interfaces::Node&)> reader{NodeReader};
         //! How often a launch looks whether its reservation is deep enough.
         std::chrono::milliseconds poll{2000};
+        //! A deposit from the wallet of the mainchain node to a deposit address (SidechainApi's peg.deposit, which asks again).
+        std::function<UniValue(const std::string& deposit_address, const std::string& amount)> deposit;
     };
     explicit LinkHost(Deps deps);
     ~LinkHost();
@@ -184,6 +199,7 @@ public:
 private:
     UniValue Run(Request request, Source source, const std::string& uri);
     UniValue Connect(const Request& request, Source source, const std::string& wallet);
+    UniValue Deposit(const Plan& plan, const std::string& wallet);
     std::string Wallet(interfaces::Node& node);
     void Worker();
     void WaitAndLaunch(Plan plan, std::string wallet, std::string reserve_txid);

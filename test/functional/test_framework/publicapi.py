@@ -123,6 +123,17 @@ URI_PARAMS = {
     "pool": {"asset_a", "ticker_a", "asset_b", "ticker_b", "kind", "fee_ppm", "amount_a", "amount_b", "amp", "weight_a"},
     "auction": {"base", "base_ticker", "amount", "quote", "quote_ticker", "start_price", "end_price", "duration", "delay"},
     "order": {"sell", "sell_ticker", "buy", "buy_ticker", "amount", "price", "expiry_blocks"},
+    "route": {"pools", "from", "to", "amount", "min_out", "slippage_bps"},
+    "deposit": {"pool", "asset_a", "asset_b", "amount_a", "amount_b", "min_shares", "slippage_bps"},
+    "withdraw": {"pool", "asset_a", "asset_b", "shares", "min_a", "min_b", "only", "slippage_bps"},
+    "position": {"pool", "asset_a", "asset_b", "price_lower", "price_upper", "amount_a", "amount_b", "slippage_bps"},
+    "reposition": {"position", "action", "percent", "slippage_bps"},
+    "settle": {"order", "cancel"},
+    "bid": {"auction", "amount", "buy_all"},
+    "collect": {"auction"},
+    "claim": {"launch", "asset"},
+    "pegin": {"amount"},
+    "pegout": {"address", "amount", "fee"},
 }
 UNRESERVED = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%")
 

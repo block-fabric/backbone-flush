@@ -19,12 +19,14 @@ own dialog. The format is the site's `docs/uri.md` (repository flush-web); this 
 
 ```
 flush:<address>?amount=…                         a payment (BIP 21): the page's, as before
-flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: connect, launch, buy, sell, swap, register, curve, pool, auction, order
+flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: connect, launch, buy, sell, swap, register, curve, pool, auction, order,
+                                                 route, deposit, withdraw, position, reposition, settle, bid, collect, claim,
+                                                 pegin, pegout
 ```
 
 What the parser takes (anything else is refused with what is wrong, before anything is resolved or shown):
 
-- the scheme in any case, then a verb of lowercase letters and `?`; one of the ten verbs;
+- the scheme in any case, then a verb of lowercase letters and `?`; one of the twenty-one verbs;
 - `v=1`, `network` equal to the app's own network (`ecash`, `ecashbeta`, `ecashtest`; `regtest` for the tests), and
   `exp`, a Unix time not past (two minutes of clock difference forgiven) and at most a day ahead;
 - each parameter of the verb once (`link` up to 4 times), **no other parameter** (`req-…` included);
@@ -46,7 +48,15 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   `amount_a`, `amount_b`, `amp`? (stable only), `weight_a` (weighted only, required); `auction`: `base` (id),
   `base_ticker`, `amount`, `quote`, `quote_ticker`, `start_price`, `end_price` (of all of it, falling), `duration`
   (blocks), `delay`?; `order`: `sell`, `sell_ticker`, `buy`, `buy_ticker`, `amount`, `price` (bought per whole unit sold),
-  `expiry_blocks`.
+  `expiry_blocks`;
+- the site's DEX: `route`: `pools` (2 to 4 ids, comma-separated, none twice), `from`, `to`, `amount`, `min_out`,
+  `slippage_bps`?; `deposit`: `pool`, `asset_a`, `asset_b` (the pool's two tickers, either order), `amount_a`, `amount_b`,
+  `min_shares` (units); `withdraw`: `pool`, `asset_a`, `asset_b`, `shares` (units), `min_a`, `min_b` (0 allowed), `only`?
+  (`a` or `b`); `position`: `pool`, `asset_a`, `asset_b` (the pool's order), `price_lower`, `price_upper`, `amount_a`,
+  `amount_b` (one may be 0), `slippage_bps` (binds: at most 1000); `reposition`: `position`, `action` (`collect`,
+  `remove`, `close`), `percent` (1–100, remove), `slippage_bps` (binds: at most 1000); `settle`: `order`, `cancel` (0 or 1);
+  `bid`: `auction`, `amount`, `buy_all`? (0 or 1); `collect`: `auction`; `claim`: `launch` (ticker), `asset` (id);
+  `pegin`: `amount`; `pegout`: `address` (an eCash address: letters, digits and its prefix, at most 128), `amount`, `fee`.
 
 A launch file (`*.flushlaunch.json`, at most 64 KB) is read as strictly: exactly the keys of version 1 (`supply`, `decimals`, `fee_bps`,
 `allocation_bps` optional), `network` required, amounts as text, its logo's bytes with the SHA-256 it says.
@@ -71,12 +81,27 @@ any page can open one*. Nothing runs unless the user accepts there.
 | `pool` | Both sides by id with their tickers (ECX only as itself); the amounts exactly in their places. | `createpool [a, amount_a, b, amount_b, {curve, fee, amp, weight_a}]` |
 | `auction` | Both sides by id with their tickers; amounts and prices exactly in their places; the price falls. | `createauction [base, amount, quote, start_price, end_price, duration, delay]` |
 | `order` | Both sides by id with their tickers; the amount exactly in its places. | `placeorder [sell, amount, buy, price, expiry_blocks]` |
+| `route` | Each pool by id, not abandoned; the path from `from` through each pool to its other side must end in `to`; the amount exactly in its places; the quote hop by hop (each pool alone) must meet the floor. | `swaproute [[from, …, to], amount, slippage, floor, [pools]]` |
+| `deposit` | The pool by id, its two tickers the link's (either order); the amounts exactly in their places; the shares the node quotes now (`quotepoolliquidity`) must meet `min_shares`. | `addpoolliquidity [pool, {a: amount_a, b: amount_b}, null, slippage]` (the slippage that makes its floor the link's) |
+| `withdraw` | The same; what exactly `shares` take out now must meet both floors. | `removepoolliquidity [pool, 100, only, slippage, shares]` (`shares`: exactly the link's, of those the wallet holds) |
+| `position` | The pool by id, its tickers in its own order; previewed by the node (`previewposition`): in range or not said. | `openposition [pool, lower, upper, amounts, null, slippage]` |
+| `reposition` | The position read whole (`getposition`): its pool, its fees owed. | `changeposition [position, {collect} \| {remove, collect, slippage} \| {close, slippage}]` |
+| `settle` | The order read whole (`getorder`). | `settleorder [order, cancel]` |
+| `bid`, `collect` | The auction read whole (`getauction`): what it sells, for what, its price. | `bidauction [auction, amount, buy_all]`, `collectauction [auction]` |
+| `claim` | The token by id with its ticker; a launch; what is owed read (`getlaunch`): fees, allocation. | `claimlaunch ["0x<id>"]` |
+| `pegin` | The amount exactly in 8 places; the deposit address of the wallet's `flush.markets` address (`getdepositaddress`: never the link's). | The link's question (where from, the amount, the address credited, the deposit address), then the deposit's own question (`peg.deposit`: the eCash node's wallet pays `createsidechaindeposit`). |
+| `pegout` | The address as text (the eCash node reads it), the amount and fee in 8 places; a warning that it takes long and that a payment on eCash cannot be undone. | `createwithdrawal [address, amount, fee]` |
 | `connect` | The wallet's address of the label `flush.markets` (made once). | A question: the site, the address shared (whole), the wallet, where the answer goes. On **Share**: the system's browser opens `https://flush.markets/connect#address=…&nonce=…&network=…`. |
 
 The floor binds: `slippage_bps` is shown only. The host gives the node the slippage that makes the order's own
 minimum exactly the floor (`floor(quote × (10000 − s) / 10000) ≥ floor`), so the transaction never accepts less than
 the link's floor, and the node refuses at signing time if the pool or curve moved below it. A launch's first buy has
 its floor on chain (`first_min_out`; the rules refuse the order below it, its ECX back).
+
+What an action of a link brings in (its tokens, the coin paid out by the coinbase, a launch's creator address) goes to
+the wallet's `flush.markets` address, the one connect shares, for the time of the call (`setlinkdestination`, a hidden
+wallet method the pages cannot call; the address must be the wallet's own): the site, which knows that address only,
+shows it in its portfolio. Without such an address (no connect yet), the wallet's own new addresses, as before.
 
 The wallet: the one the app shows (its preferences' `lastWallet`) if it is open, else the only open wallet; with none,
 or several and none chosen, the link is refused ("choose one in the app first").
@@ -120,6 +145,11 @@ or several and none chosen, the link is refused ("choose one in the app first").
 | 8 | **A logo other than the one shown on the site** (a launch link names the logo by hash). | The file the user picks must have that SHA-256, and the chain's logo rules (PNG/JPEG, 256×256, at most 32 KB, no metadata); the dialog shows the picture itself (`dialog::Row::Kind::IMAGE`). |
 | 9 | **The page as a relay**: a page script calls `links.open` itself. | It gets the same question as the browser's link (the preface says *pasted or dropped into the app*): no way around the host's dialog, the same checks. |
 | 10 | **The wrong wallet**. | The question names the wallet (and the address shared, whole); with several open and none chosen, the link is refused. |
+| 11 | **A hostile route or pool** (a link through pools of other assets, a pool that is not the one shown, a lookalike ticker). | Pools by id only; the route's path is the app's own walk from the link's `from` through each pool's other side, which must end at its `to`; liquidity links name the pool's two tickers, checked against its assets; floors checked against the node's quote and given to the call. |
+| 12 | **Slippage as a weapon** where no floor binds (positions). | `position`, `reposition`: at most 10 % (`MAX_BINDING_SLIPPAGE_BPS`), shown as binding. |
+| 13 | **A withdrawal to someone else's address** (a phishing link with the attacker's eCash address). | The address is shown whole as the destination, with a warning that a payment on eCash cannot be undone; the describer of `createwithdrawal` shows it again; the usual arming delay and blocking after declines. A withdrawal stays refundable until it is in a bundle. |
+| 14 | **A deposit credited elsewhere**. | The credited address is never the link's: the wallet's own `flush.markets` address, its deposit address made by the node; two questions (the link's, then the deposit's own with the paying eCash wallet). |
+| 15 | **Results sent to the shared address while another action runs** (`setlinkdestination` is per wallet). | Set for the link's call alone and cleared after it, even on an error (RAII); an action of the app's pages in the same wallet during that call would also land there (the same wallet; the site then sees it): links run one at a time, while their dialog is open. |
 
 ## Tests
 

@@ -70,4 +70,27 @@ BOOST_AUTO_TEST_CASE(built_links_are_read_by_the_app)
     BOOST_CHECK_THROW(Parse(ActionUri("route", NET, NOW + 600, {{"pools", POOL + "c"}}), NET, NOW), LinkError);
 }
 
+BOOST_AUTO_TEST_CASE(the_dex_links_the_api_builds)
+{
+    using publicapi::ActionUri;
+    using publicapi::Decimal;
+    const std::string P1(64, 'b'), P2(64, 'e'), ID(64, 'c');
+    // Exactly the parameters BuildAction writes for each verb of the site's DEX (publicapi/service.cpp Build).
+    const Request route{Parse(ActionUri("route", NET, NOW + 600, {{"pools", P1 + "," + P2}, {"from", "ECX"}, {"to", "TIDE"}, {"amount", "1"}, {"min_out", Decimal(4000, 6)}, {"slippage_bps", "50"}}), NET, NOW)};
+    BOOST_CHECK(route.verb == Verb::ROUTE && route.pools.size() == 2);
+    const Request deposit{Parse(ActionUri("deposit", NET, NOW + 600, {{"pool", P1}, {"asset_a", "GOLD"}, {"asset_b", "ECX"}, {"amount_a", "20"}, {"amount_b", "1"}, {"min_shares", "990"}, {"slippage_bps", "100"}}), NET, NOW)};
+    BOOST_CHECK(deposit.verb == Verb::DEPOSIT && deposit.shares == "990");
+    const Request withdraw{Parse(ActionUri("withdraw", NET, NOW + 600, {{"pool", P1}, {"asset_a", "GOLD"}, {"asset_b", "ECX"}, {"shares", "500"}, {"min_a", "12"}, {"min_b", Decimal(0, 8)}, {"only", "a"}, {"slippage_bps", "100"}}), NET, NOW)};
+    BOOST_CHECK(withdraw.verb == Verb::WITHDRAW && withdraw.min_b == "0" && withdraw.only == "a");
+    const Request position{Parse(ActionUri("position", NET, NOW + 600, {{"pool", P1}, {"asset_a", "ECX"}, {"asset_b", "GOLD"}, {"price_lower", "10"}, {"price_upper", "30"}, {"amount_a", "1"}, {"amount_b", Decimal(0, 2, 2)}, {"slippage_bps", "100"}}), NET, NOW)};
+    BOOST_CHECK(position.verb == Verb::POSITION && position.amount_b == "0");
+    BOOST_CHECK(Parse(ActionUri("reposition", NET, NOW + 600, {{"position", ID}, {"action", "remove"}, {"percent", "25"}, {"slippage_bps", "100"}}), NET, NOW).percent == 25);
+    BOOST_CHECK(Parse(ActionUri("settle", NET, NOW + 600, {{"order", ID}, {"cancel", "0"}}), NET, NOW).verb == Verb::SETTLE);
+    BOOST_CHECK(Parse(ActionUri("bid", NET, NOW + 600, {{"auction", ID}, {"amount", "2.5"}, {"buy_all", "1"}}), NET, NOW).buy_all);
+    BOOST_CHECK(Parse(ActionUri("collect", NET, NOW + 600, {{"auction", ID}}), NET, NOW).verb == Verb::COLLECT);
+    BOOST_CHECK(Parse(ActionUri("claim", NET, NOW + 600, {{"launch", "TIDE"}, {"asset", TOKEN}}), NET, NOW).verb == Verb::CLAIM);
+    BOOST_CHECK(Parse(ActionUri("pegin", NET, NOW + 600, {{"amount", Decimal(150'000'000, 8, 8)}}), NET, NOW).amount == "1.5");
+    BOOST_CHECK(Parse(ActionUri("pegout", NET, NOW + 600, {{"address", "ecash:qz2708636snqhsxu8wnlka78h6fdp77ar59jrf5035"}, {"amount", "2"}, {"fee", Decimal(10000, 8, 8)}}), NET, NOW).fee == "0.0001");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -63,8 +63,28 @@ std::optional<std::string> LabelOf(const CWallet& wallet, const CTxDestination& 
     return *entry->label;
 }
 
+/**
+ * Where what an action brings in goes while a link of flush.markets runs it (setlinkdestination, by the app's link host,
+ * for the call alone): the wallet's flush.markets address, the one its connect shares, so that the site sees it. By
+ * wallet; none: the wallet's own new addresses, as always.
+ */
+Mutex g_link_destinations_mutex;
+std::map<std::string, CTxDestination> g_link_destinations GUARDED_BY(g_link_destinations_mutex);
+
+std::optional<CTxDestination> LinkDestination(const CWallet& wallet)
+{
+    LOCK(g_link_destinations_mutex);
+    const auto it{g_link_destinations.find(wallet.GetName())};
+    if (it == g_link_destinations.end()) return std::nullopt;
+    return it->second;
+}
+
 CTxDestination NewDestination(CWallet& wallet, const std::string& label = "")
 {
+    // What an action brings in (its creator's address, the coin paid out), during a link's call: the link's address.
+    if (label == "launch creator" || label == "bitassets payout") {
+        if (auto dest{LinkDestination(wallet)}) return *dest;
+    }
     const auto dest{wallet.GetNewDestination(OutputType::BECH32, label)};
     if (!dest) throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(dest).original);
     return *dest;
@@ -73,6 +93,7 @@ CTxDestination NewDestination(CWallet& wallet, const std::string& label = "")
 /** Where tokens the wallet keeps go: an address of its own, not shown as one to be paid at. */
 CTxDestination ChangeDestination(CWallet& wallet)
 {
+    if (auto dest{LinkDestination(wallet)}) return *dest;
     const auto dest{wallet.GetNewChangeDestination(OutputType::BECH32)};
     if (!dest) throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(dest).original);
     return *dest;
@@ -1997,6 +2018,35 @@ RPCMethod addpoolliquidity()
     };
 }
 
+RPCMethod setlinkdestination()
+{
+    return RPCMethod{
+        "setlinkdestination",
+        "The app's link host: until called again without an address, what this wallet's actions bring in (tokens, the coin paid "
+        "out, a launch's creator) goes to this address of its own (its flush.markets address, while a link of the site runs).",
+        {
+            {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "An address of this wallet; left out: none (new addresses, as always)"},
+        },
+        RPCResult{RPCResult::Type::NONE, "", ""},
+        RPCExamples{""},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
+    if (!pwallet) return UniValue::VNULL;
+    LOCK(g_link_destinations_mutex);
+    if (request.params[0].isNull()) {
+        g_link_destinations.erase(pwallet->GetName());
+        return UniValue::VNULL;
+    }
+    const CTxDestination dest{DecodeDestination(request.params[0].get_str())};
+    if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not an address of this chain");
+    if (!pwallet->IsMine(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Not an address of this wallet");
+    g_link_destinations[pwallet->GetName()] = dest;
+    return UniValue::VNULL;
+},
+    };
+}
+
 RPCMethod removepoolliquidity()
 {
     return RPCMethod{
@@ -2008,6 +2058,7 @@ RPCMethod removepoolliquidity()
             {"percent", RPCArg::Type::NUM, RPCArg::Default{100}, "How much of the shares held, in percent"},
             {"only", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "One of the pool's assets: that asset alone comes out. " + bitassets::AssetArgHelp()},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "How much less than quoted, in percent, it may give if the pool moves first"},
+            {"shares", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Exactly so many shares instead of a percent of those held (a link of the site names them)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -2036,7 +2087,13 @@ RPCMethod removepoolliquidity()
     const uint64_t slippage{Slippage(request.params[3], 1)};
     const uint64_t held{SharesHeld(*pwallet, id)};
     if (held == 0) NotHeld(*pwallet, Token::Kind::LP, id, "shares of this pool");
-    const uint64_t shares{percent >= 100 ? held : static_cast<uint64_t>(static_cast<long double>(held) * percent / 100)};
+    uint64_t shares{percent >= 100 ? held : static_cast<uint64_t>(static_cast<long double>(held) * percent / 100)};
+    if (!request.params[4].isNull()) {
+        const auto exact{ToIntegral<uint64_t>(request.params[4].getValStr())};
+        if (!exact || *exact == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "shares: a whole number of shares, more than 0");
+        if (*exact > held) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("This wallet holds %u shares of this pool, fewer than %u", held, *exact));
+        shares = *exact;
+    }
     if (shares == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "That is no share at all");
     if (shares > pool.shares - std::min(pool.shares, bitassets::MIN_LIQUIDITY)) throw JSONRPCError(RPC_INVALID_PARAMETER, "More shares than the pool can give back");
     auto [out0, out1]{bitassets::curves::WithdrawOf(kind, pwallet->chain().getBitAssetsPoolFee(id), pool, shares, only)};

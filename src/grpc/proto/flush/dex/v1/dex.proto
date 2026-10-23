@@ -826,6 +826,88 @@ message Holdings {
   string address = 2;
 }
 
+// What an address holds and made (GET addresses/{address}/portfolio): the site's portfolio after Connect.
+message GetPortfolioRequest {
+  string address = 1;
+}
+
+message AssetRef {
+  // 64 hex digits; empty for ECX.
+  string id = 1;
+  string ticker = 2;
+}
+
+message PortfolioAsset {
+  string asset_id = 1;
+  string ticker = 2;
+  uint32 decimals = 3;
+  double amount = 4;
+  string amount_units = 5;
+  double value_ecx = 6;
+}
+
+message PortfolioLiquidity {
+  string pool = 1;
+  string shares_units = 2;
+  // Of the pool's shares (0 to 1), and what that is of each asset now.
+  double share = 3;
+  AssetRef asset_a = 4;
+  AssetRef asset_b = 5;
+  double amount_a = 6;
+  double amount_b = 7;
+  Pool pool_info = 8;
+}
+
+message PortfolioOrder {
+  string order = 1;
+  string book = 2;
+  AssetRef sell = 3;
+  AssetRef buy = 4;
+  double price = 5;
+  double amount = 6;
+  double remaining = 7;
+  double to_collect = 8;
+  uint32 expiry = 9;
+  // open, filled, expired or evicted.
+  string status = 10;
+}
+
+message PortfolioAuction {
+  string auction = 1;
+  AssetRef base = 2;
+  AssetRef quote = 3;
+  double amount = 4;
+  double remaining = 5;
+  double proceeds = 6;
+  double price = 7;
+  string status = 8;
+  uint32 end_height = 9;
+}
+
+message PortfolioLaunch {
+  string id = 1;
+  string ticker = 2;
+  // curve or graduated.
+  string state = 3;
+  double progress = 4;
+  double allocation_percent = 5;
+  bool allocation_claimed = 6;
+  double creator_fees_owed_ecx = 7;
+  bool claimable_fees = 8;
+  bool claimable_allocation = 9;
+}
+
+message Portfolio {
+  string address = 1;
+  uint32 height = 2;
+  repeated PortfolioAsset assets = 3;
+  repeated PortfolioLiquidity liquidity = 4;
+  repeated Position positions = 5;
+  repeated PortfolioOrder orders = 6;
+  repeated PortfolioAuction auctions = 7;
+  repeated PortfolioLaunch launches = 8;
+}
+
 message GetVerificationsRequest {
   // Assets (tickers or ids, 1 to 50) and the curators the client trusts (oracle ids or keys, 1 to 20): verification
   // is per curator list, the API keeps none of its own.
@@ -1024,6 +1106,28 @@ message BuildActionRequest {
   string buy = 40;
   string price = 41;
   uint32 expiry_blocks = 42;
+  // position: its range (asset_b per asset_a, the pool's order; amount_a, amount_b the most of each).
+  string price_lower = 43;
+  string price_upper = 44;
+  // reposition: the position, and collect, remove (percent) or close.
+  string position = 45;
+  string action = 46;
+  uint32 percent = 47;
+  // settle: the order, and whether to cancel it (else collect what it got).
+  string order = 48;
+  bool cancel = 49;
+  // bid, collect: the auction; bid: amount in its quote, buy_all.
+  string auction = 50;
+  bool buy_all = 51;
+  // pegin: the Flush address credited (optional: then the deposit address for any eCash wallet); pegout: the eCash
+  // address paid, and the fee to eCash's miners (ECX).
+  string address = 52;
+  string fee = 53;
+}
+
+message Fact {
+  string label = 1;
+  string value = 2;
 }
 
 message BuiltAction {
@@ -1045,9 +1149,12 @@ message BuiltAction {
   LaunchQuote launch_quote = 10;
   SwapQuote swap_quote = 11;
   LiquidityQuote liquidity_quote = 12;
-  // Whether the Flush app's links take this verb today (buy, sell, swap through one pool, launch); the others (route,
-  // deposit, withdraw) are built for wallet extensions and later apps, which the current app refuses (it fails closed).
+  // Whether the Flush app's links take this verb (every verb built now: an older app refuses the newer ones, it fails closed).
   bool app_ready = 13;
+  // What the page shows beside the summary (an order's, an auction's, a position's, a launch's state).
+  repeated Fact facts = 14;
+  // pegin with an address: the eCash deposit address that credits it (any eCash wallet pays it).
+  string deposit_address = 15;
 }
 
 message BroadcastRequest {
@@ -1087,6 +1194,7 @@ service DexService {
 
   rpc GetTicker(GetTickerRequest) returns (TickerAvailability) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc GetHoldings(GetHoldingsRequest) returns (Holdings) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc GetPortfolio(GetPortfolioRequest) returns (Portfolio) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc GetVerifications(GetVerificationsRequest) returns (Verifications) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc GetAssetLogo(GetLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
   rpc ListAssets(ListAssetsRequest) returns (AssetPage) { option idempotency_level = NO_SIDE_EFFECTS; }

@@ -1716,6 +1716,14 @@ void App::RegisterHostMethods()
         };
         deps.network = [] { return ChainTypeToString(Params().GetChainType()); };
         deps.now = [] { return GetTime(); };
+        // A deposit of a link: the peg's own (the wallet of the mainchain node pays, on the user's word in its own question).
+        deps.deposit = [this](const std::string& deposit_address, const std::string& amount) {
+            if (!m_sidechain_api) throw HostError("This app is not linked to a mainchain node: deposit with a wallet of the mainchain");
+            UniValue params{UniValue::VOBJ};
+            params.pushKV("destination", deposit_address);
+            params.pushKV("amount", amount);
+            return m_sidechain_api->Call("peg.deposit", params);
+        };
         m_links = std::make_unique<links::LinkHost>(std::move(deps));
         m_links->Register(b);
     }

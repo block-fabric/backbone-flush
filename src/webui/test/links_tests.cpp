@@ -44,6 +44,7 @@ const std::string TOKEN{"10ab000000000000000000000000000000000000000000000000000
 const std::string TOKEN_ID{std::string(4, '1') + std::string(60, 'a')};
 const std::string POOL_ID{std::string(64, 'b')};
 const std::string GOLD_ID{std::string(64, 'c')};
+const std::string POOL2_ID{std::string(64, 'e')};
 
 std::string Exp(int64_t t = NOW + 600) { return strprintf("%d", t); }
 std::string Buy(const std::string& extra = "", const std::string& network = NET)
@@ -317,7 +318,29 @@ struct FakeReader : Reader {
     std::optional<Pool> PoolById(const uint256& id) override
     {
         if (id.GetHex() == POOL_ID) return Pool{uint256::ZERO, *uint256::FromHex(GOLD_ID), false};
+        // A second pool, of GOLD and TIDE (a route ECX → GOLD → TIDE).
+        if (id.GetHex() == POOL2_ID) return Pool{*uint256::FromHex(TOKEN_ID), *uint256::FromHex(GOLD_ID), false};
         return std::nullopt;
+    }
+    std::vector<std::string> reads;
+    UniValue Read(const std::string& method, const UniValue& params) override
+    {
+        reads.push_back(method + params.write());
+        UniValue r{UniValue::VOBJ};
+        if (method == "quotepoolliquidity") {
+            r.read(params.size() > 2 ? R"({"shares":500,"amounts":{"ECX":0.5,"GOLD":12.34}})" : R"({"shares":1000,"amounts":{"ECX":1,"GOLD":20}})");
+        } else if (method == "previewposition") {
+            r.read(R"({"in_range":true,"liquidity":"12345"})");
+        } else if (method == "getposition") {
+            r.read(R"({"pool":")" + POOL_ID + R"(","asset0":"ECX","asset1":"GOLD","fees0":0.1,"fees1":2.5})");
+        } else if (method == "getorder") {
+            r.read(R"({"sells":"GOLD","buys":"ECX","remaining":5,"to_collect":0.2})");
+        } else if (method == "getauction") {
+            r.read(R"({"base":"GOLD","quote":"ECX","price":0.5,"remaining":100,"status":"open"})");
+        } else if (method == "getlaunch") {
+            r.read(R"({"creator_fees_owed":0.25,"allocation":5,"allocation_claimed":false,"status":"graduated"})");
+        }
+        return r;
     }
     uint64_t QuotePool(const uint256&, const uint256&, uint64_t) override { return pool_quote; }
     bool LaunchesActive() override { return true; }
@@ -676,6 +699,84 @@ BOOST_FIXTURE_TEST_CASE(a_flood_of_links_is_bounded, LinkHostSetup)
 }
 
 #ifndef WIN32
+BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
+{
+    FakeReader reader;
+    const std::string head{"v=1&network=regtest&exp=" + Exp()};
+    const auto plan{[&](const std::string& uri) { return Resolve(Parse(uri, NET, NOW), Source::BROWSER, reader, NOW); }};
+
+    // route: the pools follow one another from `from` to `to`; the quote hop by hop meets the floor; the path and pools to swaproute.
+    reader.pool_quote = 5'000;
+    const Plan route{plan("flush:route?" + head + "&pools=" + POOL_ID + "%2C" + POOL2_ID + "&from=ECX&to=TIDE&amount=1&min_out=0.004&slippage_bps=50")};
+    BOOST_CHECK_EQUAL(route.method, "swaproute");
+    BOOST_CHECK_EQUAL(route.params[0].write(), R"(["ECX","0x)" + GOLD_ID + R"(","0x)" + TOKEN_ID + R"("])");
+    BOOST_CHECK_EQUAL(route.params[4].write(), R"([")" + POOL_ID + R"(",")" + POOL2_ID + R"("])");
+    BOOST_CHECK(HasRow(route.preface, "Route", "ECX → GOLD → TIDE"));
+    BOOST_CHECK_NE(ResolveRefused("flush:route?" + head + "&pools=" + POOL_ID + "%2C" + POOL2_ID + "&from=ECX&to=GOLD&amount=1&min_out=0.004", reader).find("ends in TIDE"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:route?" + head + "&pools=" + POOL2_ID + "%2C" + POOL_ID + "&from=ECX&to=TIDE&amount=1&min_out=0.004", reader).find("not one of them"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:route?" + head + "&pools=" + POOL_ID + "%2C" + POOL2_ID + "&from=ECX&to=TIDE&amount=1&min_out=1", reader).find("moved"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:route?" + head + "&pools=" + POOL_ID + "&from=ECX&to=GOLD&amount=1&min_out=1").find("2 pools at least"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:route?" + head + "&pools=" + POOL_ID + "%2C" + POOL_ID + "&from=ECX&to=GOLD&amount=1&min_out=1").find("twice"), std::string::npos);
+
+    // deposit: the pool's assets named in either order, the shares quoted against the floor, the amounts by asset.
+    const Plan deposit{plan("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20&amount_b=1&min_shares=990&slippage_bps=100")};
+    BOOST_CHECK_EQUAL(deposit.method, "addpoolliquidity");
+    BOOST_CHECK_EQUAL(deposit.params.write(), R"([")" + POOL_ID + R"(",{"0x)" + GOLD_ID + R"(":"20","ECX":"1"},1.00])");
+    BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20&amount_b=1&min_shares=1001", reader).find("1000 shares"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=TIDE&asset_b=ECX&amount_a=20&amount_b=1&min_shares=1", reader).find("binds its assets"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:deposit?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&amount_a=20.001&amount_b=1&min_shares=1", reader).find("places"), std::string::npos);
+    // withdraw: exactly the link's shares, the floors of both checked, the slippage that keeps the tighter one.
+    const Plan withdraw{plan("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=500&min_a=12&min_b=0.49")};
+    BOOST_CHECK_EQUAL(withdraw.method, "removepoolliquidity");
+    BOOST_CHECK_EQUAL(withdraw.params.write(), R"([")" + POOL_ID + R"(",100,null,2.00,500])");
+    BOOST_CHECK_NE(ResolveRefused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=500&min_a=13&min_b=0", reader).find("moved"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=05&min_a=1&min_b=0").find("shares"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=5&min_a=1&min_b=0&only=c").find("only"), std::string::npos);
+
+    // position: in the pool's own order only; previewed first; its slippage binds.
+    const Plan position{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=10&price_upper=30&amount_a=1&amount_b=0&slippage_bps=100")};
+    BOOST_CHECK_EQUAL(position.method, "openposition");
+    BOOST_CHECK_EQUAL(position.params.write(), R"([")" + POOL_ID + R"(","10","30",{"ECX":"1"},1.00])");
+    BOOST_CHECK(HasRow(position.preface, "Now", "in this range"));
+    BOOST_CHECK_NE(ResolveRefused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&price_lower=10&price_upper=30&amount_a=1&amount_b=0&slippage_bps=100", reader).find("in that order"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=10&price_upper=30&amount_a=0&amount_b=0&slippage_bps=100").find("something to put in"), std::string::npos);
+    // reposition: collect, remove (with its fees), close.
+    BOOST_CHECK_EQUAL(plan("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=collect&slippage_bps=100").params.write(), R"([")" + GOLD_ID + R"(",{"collect":true}])");
+    BOOST_CHECK_EQUAL(plan("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=remove&percent=25&slippage_bps=50").params.write(), R"([")" + GOLD_ID + R"(",{"remove":25,"collect":true,"slippage":0.50}])");
+    BOOST_CHECK_EQUAL(plan("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=close&slippage_bps=50").params.write(), R"([")" + GOLD_ID + R"(",{"close":true,"slippage":0.50}])");
+    BOOST_CHECK_NE(Refused("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=remove&percent=101&slippage_bps=50").find("percent"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=burn&slippage_bps=50").find("action"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:reposition?" + head + "&position=" + GOLD_ID + "&action=close&slippage_bps=1001").find("it binds"), std::string::npos);
+
+    // settle, bid, collect, claim: by id, read whole for the question.
+    const Plan settle{plan("flush:settle?" + head + "&order=" + GOLD_ID + "&cancel=1")};
+    BOOST_CHECK_EQUAL(settle.method, "settleorder");
+    BOOST_CHECK_EQUAL(settle.params.write(), R"([")" + GOLD_ID + R"(",true])");
+    BOOST_CHECK_NE(Refused("flush:settle?" + head + "&order=" + GOLD_ID + "&cancel=yes").find("0 or 1"), std::string::npos);
+    BOOST_CHECK_EQUAL(plan("flush:bid?" + head + "&auction=" + GOLD_ID + "&amount=2.5&buy_all=1").params.write(), R"([")" + GOLD_ID + R"(","2.5",true])");
+    BOOST_CHECK_EQUAL(plan("flush:collect?" + head + "&auction=" + GOLD_ID).method, "collectauction");
+    const Plan claim{plan("flush:claim?" + head + "&launch=TIDE&asset=" + TOKEN_ID)};
+    BOOST_CHECK_EQUAL(claim.method, "claimlaunch");
+    BOOST_CHECK_EQUAL(claim.params.write(), R"(["0x)" + TOKEN_ID + R"("])");
+    BOOST_CHECK(HasRow(claim.preface, "Allocation", "minted now"));
+    BOOST_CHECK_NE(ResolveRefused("flush:claim?" + head + "&launch=GOLD&asset=" + GOLD_ID, reader).find("not launched"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:claim?" + head + "&launch=GRAD&asset=" + TOKEN_ID, reader).find("one asset"), std::string::npos);
+
+    // The peg: a deposit (no call of this wallet: the host's), a withdrawal to an eCash address said for what it is.
+    const Plan pegin{plan("flush:pegin?" + head + "&amount=1.5")};
+    BOOST_CHECK(pegin.method.empty());
+    BOOST_CHECK_EQUAL(pegin.amount_units, 150'000'000U);
+    const Plan pegout{plan("flush:pegout?" + head + "&address=ecash%3Aqz2708636snqhsxu8wnlka78h6fdp77ar59jrf5035&amount=2&fee=0.0001")};
+    BOOST_CHECK_EQUAL(pegout.method, "createwithdrawal");
+    BOOST_CHECK_EQUAL(pegout.params.write(), R"(["ecash:qz2708636snqhsxu8wnlka78h6fdp77ar59jrf5035","2","0.0001"])");
+    BOOST_CHECK(HasRow(pegout.preface, "eCash address paid", "ecash:qz27"));
+    BOOST_CHECK_NE(Refused("flush:pegout?" + head + "&address=ecash%3A%3Aq&amount=2&fee=0.0001").find("address"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:pegout?" + head + "&address=" + std::string(129, 'q') + "&amount=2&fee=0.0001").find("address"), std::string::npos);
+    BOOST_CHECK_NE(Refused("flush:pegout?" + head + "&address=q&amount=2").find("fee is missing"), std::string::npos);
+    // An unknown parameter of a new verb is refused as for the others.
+    BOOST_CHECK_NE(Refused("flush:collect?" + head + "&auction=" + GOLD_ID + "&to=x").find("not a parameter"), std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(the_desktop_handler_of_the_links)
 {
     const fs::path root{m_args.GetDataDirBase() / "xdg"};
