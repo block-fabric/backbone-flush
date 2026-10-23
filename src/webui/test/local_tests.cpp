@@ -142,11 +142,15 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // searches, searchmyassets), two of which sign with the wallet's keys, and the 7 of the DEX (its info, routes, TWAP,
     // the pool kinds' quotes, simulation, preview, depth); the 23 that pay or sign (setassetlogo and setassetdisplayname,
     // routes and the pool kinds' among them) are confirmed by the host; no bond among any of them.
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U);
+    // And getpoolcandles (the order book's price chart).
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U + 1U);
+    BOOST_CHECK(methods.contains("getpoolcandles"));
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
-    BOOST_CHECK_EQUAL(confirmed.size(), 31U);
+    // curveasset among them (an existing asset on a curve).
+    BOOST_CHECK_EQUAL(confirmed.size(), 32U);
+    BOOST_CHECK(confirmed.contains("curveasset"));
     for (const char* m : {"getposinfo", "getstakinginfo", "listbonds", "createbond", "createunbond", "setstaking", "signbondpop"}) {
         BOOST_CHECK_MESSAGE(!keyed.contains(m), m);
         BOOST_CHECK_MESSAGE(!confirmed.contains(m), m);
