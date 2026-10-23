@@ -1005,8 +1005,8 @@ PoolPage SearchPools(const sidechain::StoreView& view, const PoolRequest& reques
         if (request.exclude_abandoned && row.abandoned) return false;
         if (request.chn_only && !row.asset0.IsNull()) return false;
         if (request.min_depth > 0 && row.Depth() < request.min_depth) return false;
-        // The orders of depth and volume hold only the pools with some.
-        if (request.sort == PoolSort::DEPTH && row.Depth() == 0) return false;
+        // The order of volume holds only the pools traded in the window. That of depth every pool: those with some CHN
+        // by it, then the others (a pair without CHN, or one nobody provides to), newest first (the tail below).
         if (request.sort == PoolSort::VOLUME && row.volume == 0) return false;
         return true;
     }};
@@ -1037,25 +1037,37 @@ PoolPage SearchPools(const sidechain::StoreView& view, const PoolRequest& reques
         if (more) page.next = EncodeCursor({'P', MODE_CANDIDATES, static_cast<uint8_t>(request.sort), 0, next_key});
         return page;
     }
-    const Bytes any_key{PoolOrderKey(request.sort, PoolRow{})};
-    const Bytes prefix{any_key.begin(), any_key.begin() + 2};
-    Bytes at{cursor ? (cursor->phase & AT_KEY ? cursor->key : After(cursor->key)) : prefix};
-    while (const auto entry{view.Next(at, prefix)}) {
-        const Bytes& key{entry->first};
-        if (page.scanned >= SCAN_BUDGET) {
-            page.partial = true;
-            page.next = EncodeCursor({'P', MODE_SCAN, static_cast<uint8_t>(request.sort), AT_KEY, key});
-            return page;
+    // Phase 0: the order of the sort. Phase TAIL (sort depth only): the pools the order of depth does not hold (no CHN
+    // in them), by the order of the newest, after those it holds.
+    constexpr uint8_t TAIL{1};
+    uint8_t phase{cursor ? static_cast<uint8_t>(cursor->phase & ~AT_KEY) : uint8_t{0}};
+    if (phase != 0 && !(phase == TAIL && request.sort == PoolSort::DEPTH)) throw std::invalid_argument("The cursor is not one of this search (same query, filters and sort)");
+    Bytes at{cursor ? (cursor->phase & AT_KEY ? cursor->key : After(cursor->key)) : Bytes{}};
+    for (; phase <= TAIL; ++phase) {
+        if (phase == TAIL && request.sort != PoolSort::DEPTH) break;
+        const Bytes any_key{PoolOrderKey(phase == TAIL ? PoolSort::NEWEST : request.sort, PoolRow{})};
+        const Bytes prefix{any_key.begin(), any_key.begin() + 2};
+        if (at.empty()) at = prefix;
+        while (const auto entry{view.Next(at, prefix)}) {
+            const Bytes& key{entry->first};
+            if (page.scanned >= SCAN_BUDGET) {
+                page.partial = true;
+                page.next = EncodeCursor({'P', MODE_SCAN, static_cast<uint8_t>(request.sort), static_cast<uint8_t>(phase | AT_KEY), key});
+                return page;
+            }
+            at = After(key);
+            ++page.scanned;
+            const auto row{GetPoolRow(view, GetHash(std::span{key}.subspan(key.size() - 32)))};
+            if (!row || !pass(*row)) continue;
+            // In the tail, those the order of depth held already are left out.
+            if (phase == TAIL && row->Depth() > 0) continue;
+            page.pools.push_back(*row);
+            if (page.pools.size() >= limit) {
+                page.next = EncodeCursor({'P', MODE_SCAN, static_cast<uint8_t>(request.sort), phase, key});
+                return page;
+            }
         }
-        at = After(key);
-        ++page.scanned;
-        const auto row{GetPoolRow(view, GetHash(std::span{key}.subspan(key.size() - 32)))};
-        if (!row || !pass(*row)) continue;
-        page.pools.push_back(*row);
-        if (page.pools.size() >= limit) {
-            page.next = EncodeCursor({'P', MODE_SCAN, static_cast<uint8_t>(request.sort), 0, key});
-            return page;
-        }
+        at.clear();
     }
     return page;
 }

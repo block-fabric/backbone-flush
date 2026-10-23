@@ -1844,7 +1844,8 @@ private:
         });
 
         Serve(server, "ListPools", read, [this](const Message& req, const Tip& tip) {
-            // By liquidity: the pools with ECX (their depth in ECX); with a kind or a fee asked, newest first (all pools).
+            // By liquidity: the pools with ECX by their depth in ECX, then the others newest first (searchpools' depth: every
+            // pool); with a kind or a fee asked, newest first. Every kind but the launch curves (kind=launch: those only).
             const std::string sort_in{!req.GetString("sort").empty() ? req.GetString("sort") : (req.GetString("kind").empty() && req.GetUInt("fee_ppm") == 0) ? "liquidity" : "newest"};
             const std::map<std::string, std::string> sorts{{"liquidity", "depth"}, {"volume", "volume"}, {"change", "price_change"}, {"newest", "newest"}};
             if (!sorts.contains(sort_in)) Fail(Code::INVALID_ARGUMENT, "sort: liquidity, volume, change or newest");

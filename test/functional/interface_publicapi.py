@@ -397,6 +397,24 @@ class PublicApiTest(LayersTest):
         assert_equal([p["pool"] for p in kinds["items"]], [clpool])
         assert_equal(kinds["items"][0]["concentrated"]["tick_spacing"], 10)
         assert_equal(api.rest("pools", {"fee_ppm": 500})["items"][0]["pool"], clpool)
+        # Every kind by default (betanet, 2026-10-23: `searchpools {}` answered none): the pools with ECX by depth, then
+        # the others (this concentrated pool of two assets), newest first; '{...}' first is the filters, not a text.
+        listed = [p["pool"] for p in n0.searchpools()["pools"]]
+        assert clpool in listed and cp["pool"] in listed
+        assert_greater_than(listed.index(clpool), listed.index(cp["pool"]))
+        assert_equal([p["pool"] for p in n0.searchpools("{}")["pools"]], listed)
+        assert_equal([p["pool"] for p in n0.searchpools('{"exclude_abandoned": true}')["pools"]], listed)
+        assert_equal([p["pool"] for p in n0.searchpools("", {}, "depth", "", 1)["pools"]], listed[:1])
+        paged, cursor = [], ""
+        while True:
+            page = n0.searchpools("", {}, "depth", cursor, 1)
+            paged += [p["pool"] for p in page["pools"]]
+            cursor = page["next_cursor"]
+            if not cursor:
+                break
+        assert_equal(paged, listed)
+        assert_equal([p["pool"] for p in api.rest("pools")["items"]], [p for p in listed if p in {q["pool"] for q in api.rest("pools", {"sort": "newest"})["items"]}])
+        assert clpool in [p["pool"] for p in api.rest("pools")["items"]]
         n0.placeorder("USDX", 1000, "USDY", 2)
         n0.placeorder("USDY", 3000, "USDX", Decimal("0.4"))
         self.bmm()

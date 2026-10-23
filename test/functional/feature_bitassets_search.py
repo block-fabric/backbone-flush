@@ -369,6 +369,9 @@ class BitAssetsSearchTest(BitAssetsTest):
         self.log.info("Pools and auctions")
         pools = side.searchpools()
         assert_equal(len(pools["pools"]), 5)
+        # The filters given first (`searchpools '{}'`): no text, not the text "{}".
+        assert_equal(side.searchpools("{}")["pools"], pools["pools"])
+        assert_equal(side.searchpools('{"exclude_abandoned": true}')["pools"], pools["pools"])
         depths = [p["depth"] for p in pools["pools"]]
         assert_equal(depths, sorted(depths, reverse=True))
         by_volume = side.searchpools("", {}, "volume")["pools"]
