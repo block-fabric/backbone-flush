@@ -77,7 +77,7 @@ class SidechainTest(BitcoinTestFramework):
         self.main_args = [
             binary, "-regtest", f"-datadir={datadir}", f"-rpcport={self.main_rpc_port}", f"-port={p2p_port(self.num_nodes)}",
             "-rpcuser=main", "-rpcpassword=secret", "-fallbackfee=0.0002", "-listen=0", "-server", "-printtoconsole=0",
-        ]
+        ] + getattr(self, "main_extra_args", [])
         self.main_process = subprocess.Popen(self.main_args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         # Whatever happens to the test, the mainchain node must not outlive it.
         atexit.register(self.kill_mainchain, self.main_process)

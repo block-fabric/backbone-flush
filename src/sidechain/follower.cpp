@@ -1106,6 +1106,9 @@ void Follower::Mine(const Mining& mining, uint64_t settings)
     if (candidate) {
         // The first output of the coinbase is the fees of the block; the others pay deposits and the like.
         fees = candidate->block->vtx[0]->vout[0].nValue;
+        if (mining.always && mining.pass_fees) {
+            offer = std::max(mining.amount, mining.max_amount ? std::min(fees, *mining.max_amount) : fees);
+        }
         if (!mining.always) {
             offer = Offer(fees);
             if (offer < MIN_OFFER) {

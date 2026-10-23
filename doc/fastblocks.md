@@ -1253,8 +1253,9 @@ whole UTXO set and the mainchain's escrow changes.)
 - The anchorer: with `setbmm`, the node's merged miner; else, on a validator (a
   node with `-validatorkeyfile`), its own anchorer, on by default
   (`-validatoranchorbid=<amount>`, in coins of the mainchain: 0.00001 by default,
-  1000 satoshis, about five times the relay fee of a request; 0 turns it off; off
-  on regtest unless given), which pays the pot it wins to the producer's payout
+  1000 satoshis, about five times the relay fee of a request; `off` or
+  `-novalidatoranchorbid` turns it off; off on regtest unless given; 0 is a bid
+  of 0, see "Bids of 0 and fees passed into the bid" below), which pays the pot it wins to the producer's payout
   (`-validatorpayout`). It comes from the options, so a restart keeps it, with no
   `setbmm` to call again. While PoS blocks come, it makes a ticket for every
   mainchain block, as soon as it sees the block, and bids for its commitment
@@ -1276,6 +1277,31 @@ whole UTXO set and the mainchain's escrow changes.)
   blocks, it merged mines BMM blocks as the template does; a validator's own
   anchorer too, for its bid whatever the fees (a BMM block starts blocks of
   stake again).
+- Bids of 0 and fees passed into the bid (`-validatoranchorbidmode=fees`). The bid
+  is the fee of the mainchain's BMM request (M8): BIP301, the enforcer and
+  Backbone's consensus set no minimum, and the enforcer's templates take
+  requests by fee rate down to 0 (the highest of a slot wins). What stops a
+  request of 0 is policy: the relay minimum of the mainchain's nodes (0.1
+  sat/vB, about 20 satoshis for a request) and Backbone's RPC (amount
+  positive). `-validatoranchorbid=0` asks for requests of 0, which anchor only
+  with a miner that takes them (Backbone with `-bmmzerofee`, eCash's node with
+  `-minrelaytxfee=0`, peered with the requester's node). The enforcer's own
+  wallet cannot make a request of 0 (it builds one with no input, which nodes
+  refuse: "TX decode failed"): through it, bid at least 1 satoshi; below the
+  relay minimum, only a miner whose node has `-minrelaytxfee=0` takes it. In fees mode the
+  anchorer bids the pot the anchor will pay, whole: the bidder's share of the
+  ordinary fees of the blocks it anchors (`BidderShare`) and their peg fees, at
+  least `-validatoranchorbid` (0 allowed) and at most `-validatoranchorbidmax`
+  if given; in the stall it bids the first output of its BMM block's coinbase
+  (the bidder's share and the pot) the same way. The standard mode (the
+  default) bids the pot less 1 %, at least `-validatoranchorbid`. The
+  accounting: the pot is still paid on this chain to the ticket's payee
+  (`-validatorpayout`), as consensus has it; the bid is paid on the mainchain,
+  from the mainchain wallet that makes the request, to the miner who includes
+  it. Passing the fees into the bid means the bidder pays the mainchain's
+  miners, in coins of the mainchain, as much as it receives on this chain for
+  the anchor: its net is 0 (less what the floor adds when the pot is smaller),
+  counted once on each chain, and nothing on this chain changes.
 - A leader acknowledges the first committed ticket that its block can carry in
   time (`bad-pos-unanchored`), and puts in the proofs it knows the chain has
   not punished. If the signed block does not pass validation, the slot is lost:
@@ -1381,6 +1407,7 @@ after every step:
 | `feature_fastblocks_p2p.py` | Peers of the test framework that misbehave: forged signatures sent first to a node catching up, then the honest nodes (it reaches their tip; the honest blocks are not fetched again and again meanwhile); 5000 unsigned siblings of its newest header, and a message padded with more (the peer's budget taken, no more); about 70 unsigned acknowledging headers from deep in the chain, on a validator that knows the sets (`bad-pos-sig`) and on one restarted whose state pruned them (`bad-pos-fork-too-deep`: no new tip, no reorg); 5000 siblings of a deep block; tickets 8 a peer per mainchain block; `fbgettickets` of 17 entries (misbehaving); one proof sent 200 times (kept once, the peer kept) |
 | `feature_fastblocks_fork.py` | A fork whose overtaking block a node has the header of with a forged signature, and cannot check before it connects the fork: it syncs, the leader's signature replacing the forged one |
 | `feature_fastblocks_idle.py` | Validators only, no fees, no `setbmm`, 15-second slots (the networks') on mock time: an hour and more of blocks of stake and anchors; mainchain blocks in pairs, a commitment in at least 90 % of them, each acknowledged; staking off everywhere, the validators merge mine; restarted, they bid again |
+| `feature_fastblocks_anchorbid.py` | Against Backbone with `-bmmzerofee` (MAINCHAIN_BIN_DIR, a build of its bmm-zero branch; skipped without): `-validatoranchorbid=0` anchors with requests of 0; fees mode, the requests bid the bidder's share of a transaction's fee (BidderShare), once, and the anchor pays it to the payee; with `-validatoranchorbidmax` the request pays the cap and the payee the whole pot |
 | `feature_fastblocks_restart.py` | A validator restarted refuses a BMM block 30 minutes ahead as the others do; every validator restarted while a committed ticket waits asks for it and acknowledges it; a validator whose data directory is wiped does not sign a slot it signed again; one killed between signing and relaying (`-posfaultaftersign`) does not sign that slot again |
 | `feature_fastblocks_soak.py` (extended) | 15-second slots (`-posslotseconds=15`, the networks'), `--duration` minutes of rounds: restarts and kills, partitions, mainchain reorgs, bonds, unbonds, payments, withdrawals; after each, one tip, `pegbalance`, no node down, few failed slots |
 | `feature_fastblocks_slashing.py` | Bonded validators; a leader signs twice; the proof in a block: 10 % gone, banned, the rest unbonded; the banned validator leads no more from the next block; a proof of another of its offences takes nothing; a leader that carries the proof against itself gets no reward; a BMM block carries a proof (all validators stopped), its payee rewarded; the reward paid at the next peg step to the block that carried it; a forged proof refused; the offender out of the sets |
