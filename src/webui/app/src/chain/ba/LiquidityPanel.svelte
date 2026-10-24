@@ -220,7 +220,7 @@
       <ul class="how">
         <li>A pool trades two assets at the price their amounts in it set: what one of them holds times what the other holds never falls (a constant product).</li>
         <li>Every trade leaves 0.3% in the pool, for those who provide its liquidity, in proportion to their shares.</li>
-        <li>Your shares are tokens like any other: take them out in My assets, for your part of what the pool holds then.</li>
+        <li>Your shares are tokens like any other: take them out in Portfolio, for your part of what the pool holds then.</li>
         <li>The price moves as people trade: what you take out may be more of one asset and less of the other than what you put in.</li>
       </ul>
     </div>

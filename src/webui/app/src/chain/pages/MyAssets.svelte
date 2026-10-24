@@ -23,7 +23,6 @@
   import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
   import MyLaunches from '../ba/MyLaunches.svelte';
-  import Issue from './Issue.svelte';
   import HiddenToggle from '../ba/HiddenToggle.svelte';
   import { withoutHidden } from '../ba/visible.svelte';
   import { chainTxHidden } from '../txinfo.svelte';
@@ -52,17 +51,18 @@
     minChnText,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, fundingOf, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
+  import FundCard from '../ba/FundCard.svelte';
   import { TICKER } from '../config';
 
   $effect(() => startBitAssets());
 
-  type Tab = 'holdings' | 'register' | 'issuing' | 'liquidity' | 'auctions' | 'activity';
-  // Register new asset is a tab here (user feedback 2026-10-19; go('issue') leads to it, chain/local.ts tabOf).
+  type Tab = 'holdings' | 'issuing' | 'liquidity' | 'auctions' | 'activity';
+  // Portfolio (once My assets; user decision, 2026-10-23). Register new asset is in Launch now (go('issue') leads
+  // there, chain/local.ts tabOf); what is being created stays here.
   const TABS: { id: Tab; label: string }[] = [
     { id: 'holdings', label: 'Holdings' },
-    { id: 'register', label: 'Register new asset' },
     { id: 'issuing', label: 'Being issued' },
     { id: 'liquidity', label: 'Pool shares' },
     { id: 'auctions', label: 'My auctions' },
@@ -75,7 +75,7 @@
   const simple = $derived(simpleMode());
   const tabs = $derived(
     simple
-      ? TABS.filter((x) => x.id === 'holdings' || x.id === 'register' || x.id === 'issuing' || x.id === 'activity' || x.id === tab).map((x) => (x.id === 'issuing' ? { ...x, label: 'Being created' } : x.id === 'register' ? { ...x, label: 'Create an asset' } : x))
+      ? TABS.filter((x) => x.id === 'holdings' || x.id === 'issuing' || x.id === 'activity' || x.id === tab).map((x) => (x.id === 'issuing' ? { ...x, label: 'Being created' } : x))
       : TABS,
   );
 
@@ -107,6 +107,8 @@
   /** The reservations the app does not know the supply of (made with the console, or the journal lost). */
   const strays = $derived((mine?.reservations ?? []).filter((r) => !pending.some((p) => p.name === r.name)));
   const issuingCount = $derived(pending.length + strays.length);
+  /** The pools this wallet is making and funding (Launch's straight into a pool, Pools' New pool). */
+  const funds = $derived(fundingOf(wallets.current));
 
   function stageOf(p: PendingIssue): ReturnType<typeof issueStage> {
     const r = mine?.reservations.find((x) => x.name === p.name);
@@ -189,7 +191,7 @@
   }
   function openPool(pos: Position) {
     tradeIntent.pool = pos.pool;
-    go('trade', 'pools');
+    go('pools', 'pools');
   }
   function preview(pos: Position): { a: bigint; b: bigint } | null {
     const pool = poolOfPosition(pos);
@@ -290,7 +292,7 @@
 {:else}
   <div class="page ba-page my-assets">
     <header class="page-head">
-      <h1>My assets</h1>
+      <h1>Portfolio</h1>
       <div class="row">
         <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create an asset' : 'Register new asset'}</button>
         {#if simple}<button type="button" class="btn small" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>{/if}
@@ -319,17 +321,15 @@
       {/if}
     </section>
 
-    <TabRow label="My assets" {tabs} current={tab} select={(id) => (nav.tab = id)} />
+    <TabRow label="Portfolio" {tabs} current={tab} select={(id) => (nav.tab = id)} />
 
-    {#if tab === 'register'}
-      <Issue embedded />
-    {:else if tab === 'holdings'}
+    {#if tab === 'holdings'}
       <MyLaunches />
       <HiddenToggle count={visible.hidden} bind:show={showHidden} />
       {#if holdings.length === 0}
         <div class="panel ba-empty">
-          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap {TICKER} for an asset, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Trade, or have one sent to an address of this wallet.{/if}
-          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>{simple ? 'Create an asset' : 'Register new asset'}</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>{simple ? 'Swap' : 'Trade'}</button></div>
+          {#if ba.mineState === 'loading'}Loading…{:else if simple}Nothing yet: swap {TICKER} for an asset, create one of your own, or have one sent to an address of this wallet.{:else}Nothing yet: register a new asset, buy one in Swap, or have one sent to an address of this wallet.{/if}
+          <div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>{simple ? 'Create an asset' : 'Register new asset'}</button><button type="button" class="btn" onclick={() => go('trade', 'swap')}>Swap</button></div>
         </div>
       {:else}
         <div class="ba-split">
@@ -362,7 +362,10 @@
         </div>
       {/if}
     {:else if tab === 'issuing'}
-      {#if issuingCount === 0}
+      {#if funds.length}
+        <div class="ba-cols funds">{#each funds as f (`${f.asset}|${f.quote}|${f.time}`)}<FundCard fund={f} />{/each}</div>
+      {/if}
+      {#if issuingCount === 0 && funds.length === 0}
         <div class="panel ba-empty">No asset is being registered.<div class="row center"><button type="button" class="btn primary" onclick={() => go('issue')}>Register new asset</button></div></div>
       {:else}
         <div class="ba-cols">
@@ -417,7 +420,7 @@
       {/if}
     {:else if tab === 'liquidity'}
       {#if (mine?.liquidity.length ?? 0) === 0}
-        <div class="panel ba-empty">No pool shares. Put two assets in their pool to earn 0.3% of every trade.<div class="row center"><button type="button" class="btn primary" onclick={() => go('trade', 'liquidity')}>Add liquidity</button></div></div>
+        <div class="panel ba-empty">No pool shares. Put two assets in a pool, over the full range, for a share of its fees.<div class="row center"><button type="button" class="btn primary" onclick={() => go('pools', 'pools')}>Pools</button></div></div>
       {:else}
         <div class="ba-cols">
           {#each mine?.liquidity ?? [] as pos (pos.pool)}

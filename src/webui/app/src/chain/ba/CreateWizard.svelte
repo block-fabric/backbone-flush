@@ -2,12 +2,15 @@
   // Create an asset: the one wizard behind "Register an asset" (My assets) and "Launch an asset" (Trade), the same steps
   // as flush.markets' (scratch contract "The ONE create wizard"): what it is (its ticker, checked as the chain checks it
   // and asked of the node: is it free?; a display name, a description, a logo, the issuer's data), its supply and
-  // decimals, its market (none; a bonding curve with its trade fee, the creator's allocation and the bounds of a buy; a
-  // pool; a Dutch auction), then a review and the two steps on the way: a reservation that hides the name, then, once it
+  // decimals, its market (none; a bonding curve with its trade fee, the creator's allocation and the bounds of a buy;
+  // straight into a pool: a concentrated pool with ECX at the creator's price, funded by the creator over the full
+  // range), then a review and the two steps on the way: a reservation that hides the name, then, once it
   // is deep enough, the registration (registerasset) or the launch (launchtoken), which this app sends by itself
-  // (ba/store.svelte.ts: one question of the host for both, RegisterAfterReserve / LaunchAfterReserve). A pool or an
-  // auction is opened once the asset exists (Create pool, Sell by auction: offered then). A reservation of this wallet
-  // that no registration uses can be launched from here too.
+  // (ba/store.svelte.ts: one question of the host for both, RegisterAfterReserve / LaunchAfterReserve). Straight into a
+  // pool: once the asset exists, its pool (createpool, concentrated, at the price of the two amounts, nothing put in),
+  // then once the pool is in a block, the creator's position over the full range (openposition, prices of 0), each
+  // confirmed by the wallet on the user's word (ba/store.svelte.ts PendingFund, ba/FundCard.svelte). A reservation of
+  // this wallet that no registration uses can be launched from here too.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import NoWallet from '../../components/NoWallet.svelte';
@@ -23,12 +26,14 @@
   import AssetBadge from './AssetBadge.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import LogoPicker, { type PickedLogo } from './LogoPicker.svelte';
+  import FundCard from './FundCard.svelte';
+  import { FEE_TIERS } from './kinds';
   import { compactNumber } from './axis';
   import { bpsOf, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { curveShape, DEFAULT_RULES, launchProblems, rulesOf, type LaunchStats } from './launch';
-  import { amountParam, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
-  import { ba, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
+  import { amountParam, CHN_ID, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
+  import { ba, fundingOf, noteFunding, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
@@ -206,12 +211,37 @@
   const feeParts = $derived({ ...launchFeeParts(stats?.rules ?? DEFAULT_RULES), fee: feePercent });
   const chnText = (units: bigint | null, text: string) => (text.trim() && units !== null ? amountParam(units, 8) : '');
 
+  // --- Straight into a pool: the tokens and the ECX that go in (their ratio its price), its fee tier ---
+  const pooled = $derived(market === 'pool');
+  /** Whether concentrated pools apply (getdexinfo curves_active): else this way is off. */
+  const poolsOpen = $derived(ba.dex?.curves_active === true);
+  const tiers = $derived(ba.dex?.fee_tiers?.length ? ba.dex.fee_tiers.map(Number) : FEE_TIERS);
+  let poolFee = $state(0.3);
+  let poolTokens = $state<bigint | null>(null);
+  let poolTokensText = $state('');
+  let poolChn = $state<bigint | null>(null);
+  let poolChnText = $state('');
+  const chnHeld = $derived(wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null);
+  /** The pool's price: 1 of the asset in ECX. */
+  const poolPrice = $derived(poolTokens && poolChn ? Number(poolChn) / 1e8 / (Number(poolTokens) / 10 ** decimals) : undefined);
+  const poolProblem = $derived.by(() => {
+    if (!pooled) return '';
+    if (!poolsOpen) return t('Concentrated pools do not apply on this network yet.');
+    if (poolTokens === null || poolChn === null) return '';
+    if (poolTokens <= 0n || poolChn <= 0n) return t('Give an amount of each: they set the price, and both go in.');
+    if (supplyValue !== null && poolTokens > supplyValue) return t('More than the supply: at most all of it goes in.');
+    if (poolChn < minChnPayout()) return t('Too little: put in at least %1 %2.', minChnText(), TICKER);
+    if (chnHeld !== null && poolChn > chnHeld) return t('More %1 than this wallet holds.', TICKER);
+    return '';
+  });
+
   const depth = $derived(ba.info?.reveal_depth ?? 1);
   const spacing = $derived(blockSeconds(node.recent, app.info?.blockSpacing ?? 600));
 
   const canNext = $derived.by(() => {
     if (step === 'identity') return !!name && !problem && (availability === 'free' || !!reservation) && !displayProblem && Object.keys(dataIssues).length === 0;
     if (step === 'supply') return supplyValue !== null && Number.isInteger(decimals) && decimals >= 0 && decimals <= MAX_DECIMALS && !curveProblem;
+    if (step === 'market' && pooled) return poolsOpen && tiers.includes(poolFee) && poolTokens !== null && poolChn !== null && !poolProblem;
     if (step === 'market') return !curve || (launchesOpen && !curveProblem && launchIssues.length === 0 && (!firstBuyText.trim() || firstBuy !== null) && (!minBuyText.trim() || minBuy !== null) && (!maxBuyText.trim() || maxBuy !== null));
     return true;
   });
@@ -282,7 +312,7 @@
           toast('success', t('Launching'), t('%1 is on its curve with the next block.', name));
           void refreshBitAssets();
           tradeIntent.launch = done.token;
-          go('trade', 'launches');
+          go('launch', 'launches');
           return;
         }
         await notePending({ wallet, name, asset: previewId, supply: unitsText(supplyValue, decimals), decimals, data: {}, public: true, time: Math.floor(Date.now() / 1000), reservation: reservation.txid, launch: options });
@@ -304,16 +334,18 @@
         reservation: '',
         ...(logo && logosSoon ? { logo: logo.base64 } : {}),
         ...(curve ? { launch: launchOptionsNow() } : {}),
-        ...(market === 'pool' || market === 'auction' ? { follow: market } : {}),
+        ...(market === 'auction' ? { follow: market } : {}),
       };
+      // Straight into a pool: what goes in, taken now (what the review showed).
+      const fund = pooled && poolTokens !== null && poolChn !== null ? { amount: amountParam(poolTokens, decimals), quoteAmount: amountParam(poolChn, 8), fee: poolFee } : null;
       // Both steps in one question of the host: the reservation now, and the registration (or the launch) exactly as
       // shown, which the app then sends by itself without asking again (confirm.h, Reveal).
       const second = curve ? { method: 'launchtoken', params: [name, issue.launch] } : { method: 'registerasset', params: registerParams(issue) };
       const done = await walletRpcTwoSteps<{ txid: string; asset: string }>(wallet, 'reserveasset', [name], second);
       if (!done) return;
-      const saved = await notePending({ ...issue, asset: done.asset, reservation: done.txid });
+      const saved = (await notePending({ ...issue, asset: done.asset, reservation: done.txid })) && (!fund || (await noteFunding({ wallet, name, asset: done.asset, quote: CHN_ID, ...fund, slippage: 1, time: Math.floor(Date.now() / 1000) })));
       if (!saved) {
-        await inform(t('The journal of the assets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in My assets, with its supply and data.', name), 'warning');
+        await inform(t('The journal of the assets could not be saved'), t('%1 is reserved. If this app restarts before it is registered, register it in Portfolio, with its supply and data.', name), 'warning');
       }
       created = name;
       createdFollow = market;
@@ -334,6 +366,8 @@
     const d = recentlyRegistered(wallets.current).find((x) => x.name === created);
     return d ? { key: d.name, what: t('Asset'), name: d.name, wallet: d.wallet, stage: 'done' as const, depth: null, needed: 0, ended: d.ended } : null;
   });
+  /** Its pool being made and funded (straight into a pool). */
+  const createdFund = $derived(created && createdFollow === 'pool' ? fundingOf(wallets.current).find((f) => f.name === created) : undefined);
   /** The asset made, once it is on the chain: its market can be opened. */
   const createdAsset = $derived(created ? ba.assets.find((a) => a.label === created) : undefined);
 
@@ -350,6 +384,7 @@
     created = '';
     allocation = 0;
     firstBuyText = minBuyText = maxBuyText = '';
+    poolTokensText = poolChnText = '';
     market = initialMarket;
     step = 'identity';
   }
@@ -387,7 +422,7 @@
               {:else if availability === 'checking'}<span class="hint">Checking…</span>
               {:else if availability === 'free'}<span class="hint ba-good"><Icon name="check" size={14} /> <SafeText text={name} /> is free</span>
               {:else if availability === 'taken'}<span class="error"><SafeText text={name} /> is taken</span>
-              {:else if availability === 'mine'}<span class="error">This wallet is creating <SafeText text={name} /> already: see My assets.</span>
+              {:else if availability === 'mine'}<span class="error">This wallet is creating <SafeText text={name} /> already: see Portfolio.</span>
               {:else if tickers}<span class="hint" id="issue-name-hint"><span translate="no">{MIN_TICKER}–{MAX_TICKER}</span> letters A–Z and digits 0–9, such as GOLD or BTC2; unique, first come first served.</span>
               {:else}<span class="hint" id="issue-name-hint">1 to 64 plain characters (ASCII), no space at either end; not {TICKER}, not "0x…", not like a number such as 1739-0029.</span>{/if}
             </div>
@@ -472,10 +507,10 @@
           <form class="ba-form" onsubmit={(e) => { e.preventDefault(); next(); }}>
             <div class="markets" role="radiogroup" aria-label="Market">
               {#each MARKET_KINDS as k (k.id)}
-                {@const off = k.id === 'curve' && !launchesOpen}
+                {@const off = (k.id === 'curve' && !launchesOpen) || (k.id === 'pool' && !poolsOpen)}
                 <button type="button" role="radio" class="panel market" aria-checked={market === k.id} disabled={off} onclick={() => pickMarket(k.id)}>
                   <strong>{t(k.label)}</strong>
-                  <span class="faint small">{off ? t('Launches do not apply on this network yet.') : t(k.summary)}</span>
+                  <span class="faint small">{off ? (k.id === 'pool' ? t('Concentrated pools do not apply on this network yet.') : t('Launches do not apply on this network yet.')) : t(k.summary)}</span>
                 </button>
               {/each}
             </div>
@@ -504,7 +539,16 @@
               <UnitsInput id="launch-max" label="Most a buy pays (optional)" decimals={8} bind:units={maxBuy} bind:text={maxBuyText} unit={TICKER} allowZero hint="A larger buy is refunded: no one buys the curve in one go" />
               {#each launchIssues as p (p)}<p class="ba-problems" role="status">{t(p)}</p>{/each}
             {:else if market === 'pool'}
-              <p class="ba-help">First the asset is registered, with its supply to your wallet. Once it is in your assets, this app offers to create its pool: with {TICKER} or another asset, of any kind and fee tier, at the price your first deposit sets.</p>
+              <UnitsInput id="fund-tokens" label="Into the pool: the asset" {decimals} bind:units={poolTokens} bind:text={poolTokensText} max={supplyValue} unit={name} hint="Of your supply; the rest stays in your wallet" />
+              <UnitsInput id="fund-chn" label={t('Into the pool: %1', TICKER)} decimals={8} bind:units={poolChn} bind:text={poolChnText} max={chnHeld} unit={TICKER} hint="Your own coins, beside the asset" />
+              <div class="field">
+                <span class="label">Fee tier</span>
+                <div class="ba-chips" role="group" aria-label="Fee tier">
+                  {#each tiers as x (x)}<button type="button" class="ba-chip" aria-pressed={poolFee === x} onclick={() => (poolFee = x)}>{x}%</button>{/each}
+                </div>
+              </div>
+              {#if poolPrice !== undefined}<p class="ba-help" data-testid="fund-price">Its price: 1 <SafeText text={name} /> = {formatPrice(poolPrice)} {TICKER}, the ratio of the two. Both go in over the full range: your liquidity at every price.</p>{/if}
+              {#if poolProblem}<p class="ba-problems" role="status">{poolProblem}</p>{/if}
             {:else if market === 'auction'}
               <p class="ba-help">First the asset is registered, with its supply to your wallet. Once it is in your assets, this app offers to sell some of it by Dutch auction: a price that falls block by block from where you start it.</p>
             {:else}
@@ -534,6 +578,10 @@
                 <dt>Initial supply</dt><dd>{formatUnits(supplyValue ?? 0n, decimals)}</dd>
                 <dt>Decimals</dt><dd>{decimals}</dd>
                 <dt>Market</dt><dd>{t(MARKET_KINDS.find((k) => k.id === market)?.label ?? '')}</dd>
+                {#if pooled && poolTokens !== null && poolChn !== null}
+                  <dt>Into the pool</dt><dd data-testid="fund-review">{formatUnits(poolTokens, decimals)} <SafeText text={name} /> and {formatUnits(poolChn, 8)} {TICKER}, over the full range</dd>
+                  <dt>Its price</dt><dd>1 <SafeText text={name} /> = {formatPrice(poolPrice)} {TICKER} · fee {poolFee}%</dd>
+                {/if}
                 {#if !tickers}<dt>The name</dt><dd>{published ? 'Published' : 'Private: only its hash'}</dd>{/if}
               {/if}
               {#if logo && logosSoon}<dt>Logo</dt><dd class="logo-line"><img class="logo-review" src={logo.url} alt="" width="64" height="64" /> {logo.kind}, {(logo.size / 1024).toFixed(1)} KB</dd>{/if}
@@ -546,9 +594,17 @@
               {#if !reservation}<li><strong>Now: the reservation.</strong> It hides the name, so that nobody can see it coming and take it first.</li>{/if}
               <li><strong>{tn('%n block(s) later (about %1): the registration.', depth, niceTimeOffset(depth * spacing))}</strong> {curve ? 'The launch puts it on its curve, with your first buy if any.' : 'Not sooner, so that whoever makes a block cannot take the name first.'} This app sends it by itself while it runs.</li>
               {#if curve}<li><strong>Then: on its curve</strong>, until it raises {rules.graduation} {TICKER}; then its locked pool.</li>
-              {:else}<li><strong>The block after: in your assets</strong>, with its supply and its control coin{#if market === 'pool'}; then create its pool{:else if market === 'auction'}; then start its auction{/if}.</li>{/if}
+              {:else}<li><strong>The block after: in your assets</strong>, with its supply and its control coin{#if market === 'auction'}; then start its auction{/if}.</li>{/if}
+              {#if pooled}
+                <li><strong>Then: its pool</strong>, at your price, nothing in it yet. Your wallet confirms it, from its card or its notice.</li>
+                <li><strong>The block after: your liquidity</strong>, the asset and {TICKER}, over the full range. Your wallet confirms it too.</li>
+              {/if}
             </ol>
-            <p class="ba-help">Two small transactions, each with the fee of the wallet, confirmed together once. A reservation can be released while it is not used.</p>
+            {#if pooled}
+              <p class="ba-help" data-testid="fund-story">Four small transactions, each with the fee of the wallet: the reservation and the registration confirmed together now; the pool and your liquidity each confirmed when it can go, one block apart. A reservation can be released while it is not used.</p>
+            {:else}
+              <p class="ba-help">Two small transactions, each with the fee of the wallet, confirmed together once. A reservation can be released while it is not used.</p>
+            {/if}
             <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="button" class="btn primary" disabled={busy || (curve && !launchesOpen)} aria-busy={busy} onclick={create}><Icon name="issue" size={15} /> {busy ? 'Waiting for your confirmation…' : t(actionLabel)}</button></div>
             {#if busy}<p class="ba-help" role="status">Confirm both steps in the window of the app; the reservation is sent once you accept.</p>{/if}
           </div>
@@ -558,11 +614,12 @@
             <h2><SafeText text={created} /> is reserved</h2>
             <p class="ba-help">{createdFollow === 'curve' ? tn('It is launched by itself once the reservation is %n block(s) deep. Keep the app running meanwhile, or come back to it.', depth) : tn('It is registered by itself once the reservation is %n block(s) deep, then it is in your assets after the block after. Keep the app running meanwhile, or come back to it.', depth)}</p>
             {#if createdOp}<PendingCard op={createdOp} />{/if}
+            {#if createdFund}<FundCard fund={createdFund} />{/if}
             <div class="row">
-              {#if (createdFollow === 'pool' || createdFollow === 'auction') && createdAsset}
-                <button type="button" class="btn primary" onclick={() => openMarketFor(createdAsset.asset, createdFollow === 'pool' ? 'pool' : 'auction')}>{createdFollow === 'pool' ? 'Create its pool' : 'Start its auction'}</button>
+              {#if createdFollow === 'auction' && createdAsset}
+                <button type="button" class="btn primary" onclick={() => openMarketFor(createdAsset.asset, 'auction')}>Start its auction</button>
               {/if}
-              <button type="button" class="btn" class:primary={!createdAsset || createdFollow === 'none'} onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Create another</button>
+              <button type="button" class="btn" class:primary={!createdAsset || createdFollow !== 'auction'} onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Create another</button>
             </div>
           </div>
         {/if}

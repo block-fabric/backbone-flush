@@ -420,24 +420,25 @@
   container-type: inline-size;
 }
 /* A panel too narrow for the columns (Trade → Pools is about 60 rem wide): each row a card, every cell under
-   the words of its column (use:stacked), nothing behind a sideways scroll (audit port-2 #13). */
+   the words of its column (use:stacked), nothing behind a sideways scroll (audit port-2 #13). A table of a few narrow
+   columns that fits as it is says so (ba-nostack): never cells without their words. */
 @container (max-width: 56rem) {
-  .ba-table,
-  .ba-table tbody,
-  .ba-table tr {
+  .ba-table:not(.ba-nostack),
+  .ba-table:not(.ba-nostack) tbody,
+  .ba-table:not(.ba-nostack) tr {
     display: block;
   }
-  .ba-table thead {
+  .ba-table:not(.ba-nostack) thead {
     display: none;
   }
-  .ba-table tr {
+  .ba-table:not(.ba-nostack) tr {
     padding: 0.4rem 0;
     border-bottom: 1px solid var(--line);
   }
-  .ba-table tr:last-child {
+  .ba-table:not(.ba-nostack) tr:last-child {
     border-bottom: 0;
   }
-  .ba-table td {
+  .ba-table:not(.ba-nostack) td {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
@@ -448,7 +449,7 @@
     min-width: 0;
     overflow-wrap: anywhere;
   }
-  .ba-table td[data-label]::before {
+  .ba-table:not(.ba-nostack) td[data-label]::before {
     content: attr(data-label);
     flex: none;
     color: var(--text-muted);

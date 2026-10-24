@@ -43,7 +43,7 @@
   {#if wallets.current === null}
     <p class="muted">Open a wallet: the asset filters are its own.</p>
   {:else}
-    <p class="ba-help">What wallet <SafeText text={walletDisplayName(wallets.current)} /> hides of the assets: in Browse assets, Send, Trade, Auctions, My assets, the home, the transactions and the notices. Each list can show what it hides. The coins stay in the wallet; {TICKER} is never hidden.</p>
+    <p class="ba-help">What wallet <SafeText text={walletDisplayName(wallets.current)} /> hides of the assets: in Browse assets, Send, Swap, Pools, Auctions, Portfolio, the home, the transactions and the notices. Each list can show what it hides. The coins stay in the wallet; {TICKER} is never hidden.</p>
 
     <h3>Filters</h3>
     <label class="check"><input type="checkbox" checked={f.hideDead} onchange={(e) => setFilters({ hideDead: e.currentTarget.checked })} /> Hide dead assets (nothing done with them for a while: no move, trade, mint or burn)</label>

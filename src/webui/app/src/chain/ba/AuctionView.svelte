@@ -201,7 +201,7 @@
   {:else if auction.status === 'upcoming'}
     <p class="ba-help">It takes bids from block {formatCount(auction.start_height)}.</p>
   {:else if mine}
-    <div class="row"><button type="button" class="btn primary" onclick={() => go('my-assets', 'auctions')}><Icon name="holdings" size={15} /> Collect it in My assets</button></div>
+    <div class="row"><button type="button" class="btn primary" onclick={() => go('my-assets', 'auctions')}><Icon name="holdings" size={15} /> Collect it in Portfolio</button></div>
   {/if}
 </div>
 

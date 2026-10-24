@@ -5,7 +5,8 @@
 // And a journal of what the chain does not keep, in a file of the data directory of the network (host methods
 // bitassets.store.*, src/webui/local.cpp): the assets being created (the name, supply, decimals and data to
 // register once the reservation is deep enough, as chains-qt kept them in QSettings; registered by themselves,
-// as chains-qt did), and the prices of the pools as the app saw them (the charts).
+// as chains-qt did), the pools it is making and funding over the full range (Pools' New pool, Launch's "straight into
+// a pool": PendingFund), and the prices of the pools as the app saw them (the charts).
 import { BridgeError, request, setExactMethods } from '../../lib/bridge';
 import { errorText, walletRpc, walletRpcIfAuthorized, withKeys } from '../../lib/dialogs.svelte';
 import { go } from '../../lib/nav.svelte';
@@ -17,8 +18,9 @@ import { node, toast, wallets } from '../../lib/state.svelte';
 import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
-import type { DexInfo } from './kinds';
-import { EXACT_METHODS, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import type { DexInfo, PoolPreview } from './kinds';
+import { flipped, turn } from './cl';
+import { assetArg, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -78,8 +80,46 @@ export interface PriceSeries {
   points: PricePoint[];
 }
 
+/**
+ * A concentrated pool this app is making at the user's price and funding over the full range, in steps the chain
+ * needs apart (user decision, 2026-10-23): the asset registered (Launch's "straight into a pool"; one that exists
+ * already, for Pools' New pool), then its pool (createpool, of the curve concentrated, at the price the two amounts
+ * name, nothing put in), then, once the pool is in a block, a position over the full range with both amounts
+ * (openposition with prices of 0: no bound). Each step a transaction the wallet confirms: the user's word, on its card
+ * (ba/FundCard.svelte) or its notice, never a dialog by itself.
+ */
+export interface PendingFund {
+  wallet: string;
+  /** The asset's name or label, for the card: text of the user or of the chain. */
+  name: string;
+  /** The asset (its id: the hash of its name while it is being created) and what it pairs with (ECX: CHN_ID). */
+  asset: string;
+  quote: string;
+  /** What goes in of each, as exact text the node takes (their ratio, quoteAmount / amount, is the pool's price). */
+  amount: string;
+  quoteAmount: string;
+  /** The fee tier, in percent (getdexinfo's fee_tiers). */
+  fee: number;
+  slippage: number;
+  time: number;
+  /** The pool, once made (or found made by someone else), its transaction, and the position's. */
+  pool?: string;
+  poolTx?: string;
+  positionTx?: string;
+  /** When the position was sent (ms): the card says so for a while, then the journal forgets it. */
+  doneAt?: number;
+  /** Why the last step failed (an error of the node, shown as it is). */
+  error?: string;
+  /** The last step the user was told is ready (told once). Not kept in the journal. */
+  told?: FundStage;
+}
+
+/** Where a pool being funded is: waiting for its asset, for the user's word on its pool, its pool in a block, the user's word on the position, done. */
+export type FundStage = 'asset' | 'pool' | 'pool-sent' | 'position' | 'done';
+
 export interface Journal {
   pending: PendingIssue[];
+  funding: PendingFund[];
   prices: Record<string, PriceSeries>;
 }
 
@@ -90,7 +130,7 @@ const MAX_POINTS = 120;
 const MAX_PRICED_POOLS = 60;
 
 export function emptyJournal(): Journal {
-  return { pending: [], prices: {} };
+  return { pending: [], funding: [], prices: {} };
 }
 
 export type MineState = 'none' | 'loading' | 'ok' | 'locked' | 'error';
@@ -265,6 +305,13 @@ export function sanitizeJournal(raw: unknown): Journal {
       .map((p) => ({ ...p, display_name: str(p.display_name) && p.display_name.length > 0 && p.display_name.length <= 64 ? p.display_name : undefined, logo: str(p.logo) && p.logo.length <= MAX_LOGO_BASE64 && /^[A-Za-z0-9+/]+={0,2}$/.test(p.logo) ? p.logo : undefined, data: p.data && typeof p.data === 'object' ? p.data : {}, public: p.public !== false, reservation: str(p.reservation) ? p.reservation : '', time: typeof p.time === 'number' ? p.time : 0, registration: str(p.registration) ? p.registration : undefined, registeredAt: typeof p.registeredAt === 'number' ? p.registeredAt : undefined, launch: launchOf(p.launch), follow: p.follow === 'pool' || p.follow === 'auction' ? p.follow : undefined, needsConfirm: undefined }))
       .slice(-MAX_PENDING);
   }
+  if (Array.isArray(r.funding)) {
+    const day = Date.now() - 86_400_000;
+    j.funding = r.funding
+      .filter((f) => f && str(f.wallet) && str(f.name) && str(f.asset) && str(f.quote) && str(f.amount) && str(f.quoteAmount) && typeof f.fee === 'number' && Number.isFinite(f.fee) && !(typeof f.doneAt === 'number' && f.doneAt < day))
+      .map((f) => ({ wallet: f.wallet, name: f.name, asset: f.asset, quote: f.quote, amount: f.amount, quoteAmount: f.quoteAmount, fee: f.fee, slippage: typeof f.slippage === 'number' && Number.isFinite(f.slippage) ? f.slippage : 1, time: typeof f.time === 'number' ? f.time : 0, pool: str(f.pool) ? f.pool : undefined, poolTx: str(f.poolTx) ? f.poolTx : undefined, positionTx: str(f.positionTx) ? f.positionTx : undefined, doneAt: typeof f.doneAt === 'number' ? f.doneAt : undefined, error: str(f.error) ? f.error : undefined }))
+      .slice(-MAX_PENDING);
+  }
   if (r.prices && typeof r.prices === 'object') {
     for (const [k, v] of Object.entries(r.prices)) {
       if (v && str(v.a) && Array.isArray(v.points)) j.prices[k] = { a: v.a, points: v.points.filter((p) => p && typeof p.h === 'number' && typeof p.p === 'number').slice(-MAX_POINTS) };
@@ -291,6 +338,7 @@ export async function writeJournal(): Promise<boolean> {
     const value = $state.snapshot(ba.journal);
     // What the host would ask about now is not kept: after a restart it is known again.
     value.pending = value.pending.map(({ needsConfirm: _, ...p }) => p);
+    value.funding = value.funding.map(({ told: _, ...f }) => f);
     await request('host', 'bitassets.store.save', { value });
     journalWarned = false;
     return true;
@@ -460,8 +508,10 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       // In a block: in the assets of the wallet from now on.
       ba.journal.pending = ba.journal.pending.filter((x) => x !== p);
       recentDone.push({ wallet, name: p.name, asset: p.asset, ended: Date.now() });
-      if (p.launch) {
-        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', p.name), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('trade', 'launches'); } }]);
+      if (ba.journal.funding.some((f) => f.wallet === wallet && f.asset === p.asset && !f.pool)) {
+        // Straight into a pool: its own notice, once the pool can be made (fundReady).
+      } else if (p.launch) {
+        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', p.name), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('launch', 'launches'); } }]);
       } else if (p.follow) {
         const follow = p.follow;
         toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', p.name) : t('%1 is in your assets: now start its auction.', p.name), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);
@@ -494,7 +544,7 @@ async function registerReadyOnce(wallet: string): Promise<void> {
         // The host would ask: the user confirms it on its card, told once.
         p.needsConfirm = done.needed;
         changed = true;
-        toast('info', t('%1 is ready to register', p.name), t('Confirm its registration on its card in My assets.'), 12000, [{ label: t('Confirm'), run: () => void registerByUser(p) }]);
+        toast('info', t('%1 is ready to register', p.name), t('Confirm its registration on its card in Portfolio.'), 12000, [{ label: t('Confirm'), run: () => void registerByUser(p) }]);
         continue;
       }
       p.registration = done.result.txid;
@@ -669,8 +719,11 @@ export async function refreshBitAssets(options: { node?: boolean } = {}): Promis
   } finally {
     running = false;
   }
-  // The registrations ready, after the refresh: it never waits for them.
-  if (ba.wallet !== null && ba.wallet === wallets.current && ba.mineState === 'ok') void registerReady(ba.wallet);
+  // The registrations ready, after the refresh: it never waits for them; then the pools being funded.
+  if (ba.wallet !== null && ba.wallet === wallets.current && ba.mineState === 'ok') {
+    const wallet = ba.wallet;
+    void registerReady(wallet).then(() => fundReady(wallet));
+  }
 }
 
 /** The auctions of the wallet's receipts not in the page of auctions read (audit 7 E-BA3: the list is paged). */
@@ -747,6 +800,8 @@ export function resetBitAssets(): void {
   running = false;
   again = false;
   registering = false;
+  funding = false;
+  livePools.clear();
   recentDone.splice(0);
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = null;
@@ -754,6 +809,165 @@ export function resetBitAssets(): void {
   sendIntent.asset = '';
   Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '', pool: '', launch: '' });
   sellIntent.asset = '';
+}
+
+// --- Pools being made and funded over the full range (PendingFund) ---
+
+/** The pools being funded known to be in a block (getpool by id answered them). */
+const livePools = new Set<string>();
+let funding = false;
+
+/** The pools this wallet is funding, the newest last (those done a while ago left out). */
+export function fundingOf(wallet: string | null): PendingFund[] {
+  const now = Date.now();
+  return wallet === null ? [] : ba.journal.funding.filter((f) => f.wallet === wallet && (!f.doneAt || now - f.doneAt < KEEP_DONE_MS));
+}
+
+/** The kind of the pool of a PendingFund, as createpool and previewpool take it. */
+export function fundKind(f: Pick<PendingFund, 'fee'>): { curve: 'concentrated'; fee: number } {
+  return { curve: 'concentrated', fee: f.fee };
+}
+
+/** createpool's (and previewpool's) parameters for a pool being funded: at the price its amounts name, nothing put in. */
+export function fundPoolParams(f: PendingFund): unknown[] {
+  return [assetArg(f.asset), f.amount, assetArg(f.quote), f.quoteAmount, fundKind(f)];
+}
+
+/** The most a pool being funded may have moved from the creator's price before the position goes in, in percent. */
+export const FUND_PRICE_TOLERANCE = 1;
+
+/** The creator's price of a pool being funded, as a pool of the lists gives it (1 of asset_a in asset_b). */
+export function fundPriceOf(f: Pick<PendingFund, 'asset' | 'amount' | 'quoteAmount'>, pool: Pick<Pool, 'asset_a_id'>): number {
+  const own = Number(f.quoteAmount) / Number(f.amount);
+  return pool.asset_a_id === f.asset ? own : 1 / own;
+}
+
+/**
+ * openposition's parameters for a pool being funded: the full range (prices of 0: no bound), both amounts, and the
+ * creator's price as the price the wallet expects (expected_price: the node's order, asset0 in asset1), so that it
+ * refuses at signing a pool moved further than the slippage from it (security review 2026-10-23: a pool opened or moved
+ * by someone else first).
+ */
+export function fundPositionParams(f: PendingFund, pool: Pick<Pool, 'asset_a_id' | 'asset_b_id'>): unknown[] {
+  const expected = Number(turn(fundPriceOf(f, pool), flipped(pool)).toPrecision(12));
+  return [f.pool ?? '', 0, 0, { [assetArg(f.asset)]: f.amount, [assetArg(f.quote)]: f.quoteAmount }, f.slippage, expected];
+}
+
+/** Where a pool being funded is. */
+export function fundStageOf(f: PendingFund): FundStage {
+  if (f.positionTx) return 'done';
+  if (!f.pool) {
+    const known = ba.assets.some((a) => a.asset === f.asset) || (ba.mine?.assets ?? []).some((h) => h.asset === f.asset) || !!assetById(f.asset);
+    return known ? 'pool' : 'asset';
+  }
+  return livePools.has(f.pool) || ba.pools.some((p) => p.pool === f.pool) ? 'position' : 'pool-sent';
+}
+
+/** A pool to make and fund, journaled at once (the user's word on each step comes after). */
+export async function noteFunding(f: PendingFund): Promise<boolean> {
+  ba.journal.funding = [...ba.journal.funding.filter((x) => !(x.wallet === f.wallet && x.asset === f.asset && x.quote === f.quote && !x.positionTx)), f].slice(-MAX_PENDING);
+  return writeJournal();
+}
+
+/** Forget a pool being funded (the user gave up on it, or it is done). */
+export function dropFunding(f: PendingFund): void {
+  ba.journal.funding = ba.journal.funding.filter((x) => x !== f && !(x.wallet === f.wallet && x.asset === f.asset && x.quote === f.quote && x.time === f.time));
+  saveJournal();
+}
+
+/** The journaled entry itself (the pages hold snapshots of it at times). */
+function fundEntry(f: PendingFund): PendingFund | undefined {
+  return ba.journal.funding.find((x) => x === f || (x.wallet === f.wallet && x.asset === f.asset && x.quote === f.quote && x.time === f.time));
+}
+
+/**
+ * Make the pool of a PendingFund (the user's word: the wallet confirms createpool): at the price its amounts name, of
+ * the curve concentrated, nothing put in. Only the pool this step makes is funded: one of the pair at that tier made by
+ * someone else first is never used (its price is theirs: security review 2026-10-23); the user is told, and stops.
+ */
+export async function makeFundedPool(given: PendingFund): Promise<boolean> {
+  const f = fundEntry(given) ?? given;
+  const params = fundPoolParams(f);
+  try {
+    const preview = await rpc.raw<PoolPreview>('previewpool', params).catch(() => null);
+    if (preview?.exists) {
+      f.error = t('Someone opened a concentrated pool of %1 at this fee first, at a price of their own: this app does not put your liquidity in it. Look at its price on its page and open a position there if you want, or forget this one.', f.name);
+      saveJournal();
+      return false;
+    }
+    const done = await walletRpc<{ txid: string; pool: string }>(f.wallet, 'createpool', [...params, f.slippage]);
+    if (!done) return false;
+    f.pool = done.pool;
+    f.poolTx = done.txid;
+    f.error = undefined;
+    saveJournal();
+    toast('success', t('Making its pool'), t('The pool of %1 is made with the next block; then put your liquidity in it.', f.name));
+    void refreshBitAssets();
+    return true;
+  } catch (e) {
+    f.error = errorText(e);
+    saveJournal();
+    return false;
+  }
+}
+
+/** Put the liquidity of a PendingFund in its pool, over the full range (the user's word: the wallet confirms openposition). */
+export async function fundPosition(given: PendingFund): Promise<boolean> {
+  const f = fundEntry(given) ?? given;
+  if (!f.pool || !f.poolTx) return false;
+  try {
+    // The pool as it is now: refused if its price moved from the creator's by more than the tolerance (someone traded
+    // it, or it is not the pool that was made).
+    const pool = await rpc.raw<Pool>('getpool', [f.pool]);
+    const want = fundPriceOf(f, pool);
+    const now = Number(pool.price);
+    if (!(want > 0) || !(now > 0) || Math.abs(now / want - 1) * 100 > FUND_PRICE_TOLERANCE) {
+      f.error = t('The pool\'s price is %1, not %2, the price you set: it moved before your liquidity went in. Nothing was sent; look at the pool before putting liquidity in it.', formatPrice(now), formatPrice(want));
+      saveJournal();
+      return false;
+    }
+    const done = await walletRpc<{ txid: string; position: string }>(f.wallet, 'openposition', fundPositionParams(f, pool));
+    if (!done) return false;
+    f.positionTx = done.txid;
+    f.doneAt = Date.now();
+    f.error = undefined;
+    saveJournal();
+    toast('success', t('Funding its pool'), t('Your liquidity is in the pool of %1 with the next block, over the full range: see it in Positions.', f.name));
+    void refreshBitAssets();
+    return true;
+  } catch (e) {
+    f.error = errorText(e);
+    saveJournal();
+    return false;
+  }
+}
+
+/** The pools being funded: which are in a block now; the user told once when a step needs their word. */
+async function fundReady(wallet: string): Promise<void> {
+  if (funding) return;
+  funding = true;
+  try {
+    for (const f of ba.journal.funding.filter((x) => x.wallet === wallet && !x.positionTx)) {
+      if (f.pool && !livePools.has(f.pool)) {
+        if (ba.pools.some((p) => p.pool === f.pool)) livePools.add(f.pool);
+        else {
+          try {
+            const p = await rpc.raw<Pool>('getpool', [f.pool]);
+            if (p && typeof p === 'object') livePools.add(f.pool);
+          } catch {
+            // Not in a block yet.
+          }
+        }
+      }
+      const stage = fundStageOf(f);
+      if (stage === f.told) continue;
+      f.told = stage;
+      if (stage === 'pool') toast('info', t('%1 is registered', f.name), t('Now make its pool, at your price: your wallet confirms it.'), 15000, [{ label: t('Make its pool'), run: () => void makeFundedPool(f) }]);
+      else if (stage === 'position') toast('info', t('The pool of %1 is open', f.name), t('Now put your liquidity in it, over the full range: your wallet confirms it.'), 15000, [{ label: t('Put it in'), run: () => void fundPosition(f) }]);
+    }
+  } finally {
+    funding = false;
+  }
 }
 
 // --- Lookups ---
