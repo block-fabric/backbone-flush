@@ -243,6 +243,8 @@ export function tradeOptions(args: {
   routes?: RouteQuote | null;
   /** The kind of a pool by id, its asset `from` first, where the node's answer did not say it (a route's hop: its curve and fee only). */
   kindById?: (pool: string, from: string) => PoolKind | undefined;
+  /** The two assets of a pool by id (ids), where it is known: getswapquote's best route names its assets by label only. */
+  assetsOf?: (pool: string) => readonly [string, string] | undefined;
 }): TradeOption[] {
   const { pay, get, getDecimals } = args;
   const out: TradeOption[] = [];
@@ -272,6 +274,21 @@ export function tradeOptions(args: {
       return { pool, from: r.path_ids[i], to: r.path_ids[i + 1], kind, out: hop?.amount_out };
     });
     add({ key: r.pools.join(','), pools: [...r.pools], path: [...r.path_ids], out: unitsOf(r.amount_out, getDecimals), defaultPools: r.default_pools, hops });
+  }
+  // getswapquote's best route over all venues, where quoteroute gave none: its assets followed through its pools.
+  const best = args.market?.route;
+  if (best && best.pools.length > 1 && !(args.routes?.routes.length) && args.assetsOf) {
+    const path = [pay];
+    for (const id of best.pools) {
+      const both = args.assetsOf(id);
+      const from = path[path.length - 1];
+      if (!both || (both[0] !== from && both[1] !== from)) break;
+      path.push(both[0] === from ? both[1] : both[0]);
+    }
+    if (path.length === best.pools.length + 1 && path[path.length - 1] === get) {
+      const hops = best.pools.map((pool, i) => ({ pool, from: path[i], to: path[i + 1], kind: args.kindById?.(pool, path[i]) ?? kindOf({}) }));
+      add({ key: best.pools.join(','), pools: [...best.pools], path, out: unitsOf(best.amount_out, getDecimals), defaultPools: best.default_pools, hops });
+    }
   }
   return out.sort((x, y) => (x.out === y.out ? Number(y.defaultPools) - Number(x.defaultPools) || x.pools.length - y.pools.length : x.out > y.out ? -1 : 1));
 }

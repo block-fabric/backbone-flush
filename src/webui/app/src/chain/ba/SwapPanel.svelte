@@ -4,8 +4,10 @@
   // (asked about above 2%, refused above 10%, as the wallet refuses it), the pool's fee; the curve of the pool,
   // and where the trade moves it. The Swap card of the Trade tab of the Qt window of BitAssets.
   //
-  // Layers' DEX: a pair may have pools of several kinds, and a trade may go through several pools. Every pool of the pair
-  // is quoted (getswapquote) and the best routes (quoteroute); the best is chosen, or the one the user picks. One hop in
+  // Layers' DEX: a pair may have pools of several kinds, and a trade may go through several pools. Every venue of the pair
+  // is quoted (getswapquote: its pools of every kind, constant product, stable, weighted, concentrated, its order book and
+  // its launch's curve, and the best route over all of them) and the best routes (quoteroute); the best of all is the
+  // default way (user decision, 2026-10-23), or the one the user picks. One hop in
   // the pool of the default kind goes as before (swapasset); one pool of another kind by swappools; a route by swaproute,
   // its pools named (ba/kinds.ts executionOf).
   import SafeText from '../../components/SafeText.svelte';
@@ -131,11 +133,11 @@
             }),
         );
       }
-      // Every pool of the pair, of every kind (no route: quoteroute's say their hops).
-      if (withKinds) {
+      // Every venue of the pair, of every kind, and (without quoteroute's routes) the best route over all of them.
+      if (withKinds || withRoutes) {
         calls.push(
           rpc
-            .raw<MarketQuote>('getswapquote', [assetArg(p), amountText, assetArg(g), { max_hops: 0 }])
+            .raw<MarketQuote>('getswapquote', [assetArg(p), amountText, assetArg(g), { max_hops: withRoutes ? 0 : ba.dex?.max_route_hops ?? 4 }])
             .then((q) => {
               if (mine === generation) market = q && Array.isArray(q.pools) ? q : null;
             })
@@ -174,6 +176,10 @@
       market,
       routes,
       kindById: kindFrom,
+      assetsOf: (id) => {
+        const p = poolById(id);
+        return p ? [p.asset_a_id, p.asset_b_id] : undefined;
+      },
     }),
   );
   const chosen = $derived<TradeOption | null>(chooseOption(options, picked));
@@ -187,10 +193,10 @@
   const problem = $derived.by(() => {
     if (!get || pay === get) return 'Pick two different assets.';
     if (!chosen) {
-      if (!pool && pairPools.length === 0 && !routable) return simple ? 'No market trades these two yet.' : 'No pool trades these two yet: make one in Liquidity.';
+      if (!pool && pairPools.length === 0 && !routable) return simple ? 'No market trades these two yet.' : 'No pool trades these two yet: make one in Pools.';
       if (pool?.abandoned && pairPools.length === 0 && !routable) return 'This pool is closed: nobody provides liquidity to it any more. It holds only the minimum every pool keeps for good; adding liquidity reopens it.';
       if (quoteError) return quoteError;
-      if (amount !== null && !quoting && (market || routes || !pool)) return simple ? 'No market trades these two yet.' : 'No pool or route trades these two yet: make a pool in Add liquidity or Create pool.';
+      if (amount !== null && !quoting && (market || routes || !pool)) return simple ? 'No market trades these two yet.' : 'No pool or route trades these two yet: make a pool in Pools.';
       return '';
     }
     if (out !== null && isChn(get) && out < minChnPayout()) return `Too little: the least ${TICKER} a pool pays out is ${minChnText()} ${TICKER}.`;
@@ -367,7 +373,7 @@
             </li>
           {/each}
         </ul>
-        <span class="hint">Each pool of the pair, and routes through others: the best is used unless you pick another.</span>
+        <span class="hint">Each pool, book and curve of the pair, and routes through others: the best is used unless you pick another.</span>
       </div>
     {/if}
 
@@ -379,7 +385,7 @@
     <div class="panel-head"><h3>How a swap works</h3></div>
     <div class="panel-body how">
       <p>Each asset trades with {TICKER} in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
-      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the asset then shows in My assets.</p>
+      <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the asset then shows in Portfolio.</p>
       <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
     </div>
   </section>
