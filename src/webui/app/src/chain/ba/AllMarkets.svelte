@@ -24,6 +24,8 @@
   import { changeDirection, formatChange, isBook, type Market } from './markets';
   import { approx, CHN_ID, formatAmount, formatPercent, formatPrice, isChn, type Pool } from './model';
   import { searchPools } from './search';
+  import { launchRoute, parseDexRoute, poolRoute } from './assetactions';
+  import { nav } from '../../lib/nav.svelte';
   import { assetById, ba, displayNameOf, holdingOf, tradeIntent } from './store.svelte';
   import { hiddenAsset } from './visible.svelte';
   import { TICKER } from '../config';
@@ -64,18 +66,47 @@
   let launches = $state<Launch[]>([]);
   let moreLaunches = $state(0);
   let error = $state('');
-  let openPool = $state<string | null>(null);
-  let openLaunch = $state<string | null>(null);
+  // The pool or the launch opened, in the route (ba/assetactions.ts: "pools/<pool>", "launches/<token>/buy|sell"), so
+  // that back, forward and a reload keep it; the list's own route to go back to.
+  const route = $derived(parseDexRoute(nav.tab));
+  const openPool = $derived(route.pool ?? null);
+  const openLaunch = $derived(route.launch?.token ?? null);
+  // Opened from the list: back to it; from a link (an asset's action, a reload): to the list of its kind.
+  let backTo = '';
+  function show(tab: string) {
+    const head = nav.tab.split('/')[0];
+    if (!parseDexRoute(nav.tab).pool && !parseDexRoute(nav.tab).launch) backTo = head === 'launches' ? 'launches' : 'pools';
+    nav.tab = tab;
+  }
+  function back() {
+    nav.tab = backTo || nav.tab.split('/')[0];
+    backTo = '';
+  }
+  // A pool opened that is not among those read (a launch's pool, a page not read): asked of the node by its id.
+  let fetched = $state<Pool | null>(null);
+  $effect(() => {
+    const id = openPool;
+    void ba.version;
+    if (!id || source.some((p) => p.pool === id) || ba.pools.some((p) => p.pool === id)) return;
+    rpc
+      .raw<Pool>('getpool', [id])
+      .then((p) => {
+        if (openPool === id && p && typeof p === 'object') fetched = p;
+      })
+      .catch(() => undefined);
+  });
 
   // A pool or a launch asked for by another page (a route's hop, the wizard once launched, an asset): opened.
   $effect(() => {
     if (tradeIntent.pool) {
-      openPool = tradeIntent.pool;
+      const id = tradeIntent.pool;
       tradeIntent.pool = '';
+      untrack(() => show(poolRoute(id)));
     }
     if (tradeIntent.launch) {
-      openLaunch = tradeIntent.launch;
+      const token = tradeIntent.launch;
       tradeIntent.launch = '';
+      untrack(() => show(launchRoute(token)));
     }
   });
 
@@ -178,11 +209,11 @@
     return (showHidden ? matching : matching.filter((r) => !isHidden(r))).sort((x, y) => (by(y) ?? -Infinity) - (by(x) ?? -Infinity));
   });
 
-  const pool = $derived(openPool ? (ba.pools.find((p) => p.pool === openPool) ?? source.find((p) => p.pool === openPool) ?? null) : null);
+  const pool = $derived(openPool ? (ba.pools.find((p) => p.pool === openPool) ?? source.find((p) => p.pool === openPool) ?? (fetched?.pool === openPool ? fetched : null)) : null);
 
   function open(r: Row) {
-    if (r.launch) openLaunch = r.launch.token;
-    else if (r.pool) openPool = r.pool.pool;
+    if (r.launch) show(launchRoute(r.launch.token));
+    else if (r.pool) show(poolRoute(r.pool.pool));
   }
 
   const KINDS: { id: Kind; label: string }[] = [
@@ -194,9 +225,11 @@
 </script>
 
 {#if openLaunch}
-  <LaunchView token={openLaunch} back={() => (openLaunch = null)} />
+  <LaunchView token={openLaunch} side={route.launch?.side ?? 'buy'} {back} />
 {:else if pool}
-  <PoolView {pool} back={() => (openPool = null)} />
+  <PoolView {pool} {back} />
+{:else if openPool}
+  <p class="ba-empty" role="status">Loading…</p>
 {:else}
   <section class="panel all-markets" data-testid="all-markets">
     <div class="panel-head">

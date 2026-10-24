@@ -6,7 +6,6 @@
   // the fees owed). A launch without an allocation is
   // listed when the creator is owed fees. Read again with each block.
   // TODO(rug protection): the allocation is the creator's whole at graduation; a vesting or lock of it is to come.
-  import Icon from '../../components/Icon.svelte';
   import SafeText from '../../components/SafeText.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
@@ -14,6 +13,7 @@
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
+  import AssetActions from './AssetActions.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import { compactNumber } from './axis';
   import { claimable, creatorAllocation, launchCurveFacts, type Launch, type LaunchPage } from './launch';
@@ -131,9 +131,8 @@
             {:else}<span class="faint">–</span>{/if}
           </span>
           <span class="c-action">
-            {#if owed.allocation || owed.fees}
-              <button type="button" class="btn small primary" disabled={busy !== ''} onclick={() => claim(l)}><Icon name="receive" size={14} /> {busy === l.token ? 'Claiming…' : 'Claim'}</button>
-            {/if}
+            <!-- Its actions (ba/AssetActions.svelte): Claim first when something is owed, then Buy, Sell, View market… -->
+            <AssetActions id={l.token} label={l.ticker} launch={l} claimable={owed.allocation || owed.fees} claim={() => claim(l)} busy={busy !== ''} />
           </span>
         </li>
       {/each}
@@ -149,7 +148,7 @@
   /* The columns of the rows and of their words above them (the holdings' row: .ba-row, ba.css). */
   .ml-grid {
     display: grid;
-    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1.4fr) 6.5rem;
+    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1.4fr) 10rem;
     align-items: center;
     gap: 0.75rem;
     padding: 0.7rem 1rem;
@@ -172,6 +171,7 @@
   }
   .c-asset {
     display: flex;
+    overflow: hidden;
   }
   .asset {
     display: inline-flex;
@@ -240,7 +240,7 @@
     font-variant-numeric: tabular-nums;
   }
   /* Narrow: each row stacks, the asset and Claim on top, each value beside its word (as the stacked tables: ba.css). */
-  @container launches (max-width: 40rem) {
+  @container launches (max-width: 50rem) {
     .ml-head {
       display: none;
     }
@@ -280,8 +280,12 @@
     .c-curve {
       align-items: center;
     }
+    .curve-cell {
+      flex: 0 1 13rem;
+      align-items: flex-end;
+    }
     .curve {
-      flex: 0 1 12rem;
+      width: 100%;
       justify-content: flex-end;
     }
   }

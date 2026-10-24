@@ -21,6 +21,7 @@
   import AssetBadge from '../ba/AssetBadge.svelte';
   import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetName from '../ba/AssetName.svelte';
+  import AssetActions from '../ba/AssetActions.svelte';
   import LocalTxCell from '../LocalTxCell.svelte';
   import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
@@ -340,7 +341,7 @@
             <ul class="ba-list" aria-label="Holdings">
               {#each holdings as h (h.asset)}
                 {@const price = chnPrice(h.asset)}
-                <li>
+                <li class="held-item">
                   <button type="button" class="ba-row" aria-current={picked === h.asset} onclick={() => (picked = h.asset)}>
                     <AssetBadge id={h.asset} label={h.label} showLabel={false} />
                     <span class="main">
@@ -355,6 +356,7 @@
                       {#if approx(h.pending) > 0}<span class="ba-warn small">+{formatAmount(h.pending, h.decimals, { max: 6 })} waiting</span>{:else if price !== undefined}<span class="faint small">≈ {formatPrice(price * approx(h.balance))} {TICKER}</span>{/if}
                     </span>
                   </button>
+                  <AssetActions id={h.asset} label={h.label} />
                 </li>
               {/each}
             </ul>
@@ -587,5 +589,25 @@
     align-items: center;
     gap: 0.4rem;
     min-width: 0;
+  }
+  /* A holding's row, its actions beside it (ba/AssetActions.svelte); narrow, under it. */
+  .held-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 0.25rem;
+  }
+  .held-item > :global(.ba-row) {
+    flex: 1 1 15rem;
+    min-width: 0;
+  }
+  .held-item > :global(.asset-actions) {
+    margin-inline: auto 0.75rem;
+    padding-block-end: 0.4rem;
+  }
+  @media (min-width: 30rem) {
+    .held-item > :global(.asset-actions) {
+      padding-block-end: 0;
+    }
   }
 </style>

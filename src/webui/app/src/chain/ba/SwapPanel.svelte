@@ -10,6 +10,7 @@
   // default way (user decision, 2026-10-23), or the one the user picks. One hop in
   // the pool of the default kind goes as before (swapasset); one pool of another kind by swappools; a route by swaproute,
   // its pools named (ba/kinds.ts executionOf).
+  import { untrack } from 'svelte';
   import SafeText from '../../components/SafeText.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import Icon from '../../components/Icon.svelte';
@@ -26,6 +27,7 @@
   import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import { liquidityState } from './liquidity';
   import { nav } from '../../lib/nav.svelte';
+  import { parseDexRoute } from './assetactions';
   import PoolKind from './PoolKind.svelte';
   import { chooseOption, CURVE_NAMES, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, venueOf, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
   import Term from '../../components/Term.svelte';
@@ -60,6 +62,22 @@
   // Without what the wallet hides (its asset filters), unless chosen already.
   const choices = $derived(traded.filter((id) => id === pay || id === get || !hiddenAsset(id, labelOf(id))).map((id) => ({ id, label: labelOf(id), seq: assetById(id)?.seq })));
 
+  // The asset and its side in the route (an asset's Swap or Sell: "swap/get/<id>", "swap/pay/<id>", ba/assetactions.ts),
+  // against ECX: read again as the route changes (back, forward, a reload).
+  const routed = $derived(parseDexRoute(nav.tab).swap);
+  $effect(() => {
+    const r = routed;
+    if (!r) return;
+    untrack(() => {
+      if (r.side === 'get') {
+        get = r.id;
+        if (pay === r.id || !pay) pay = CHN_ID;
+      } else {
+        pay = r.id;
+        if (get === r.id || !get) get = CHN_ID;
+      }
+    });
+  });
   // A pair asked for by another page (an asset's Trade button).
   $effect(() => {
     if (!tradeIntent.pay && !tradeIntent.get) return;

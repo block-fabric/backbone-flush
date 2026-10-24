@@ -50,7 +50,7 @@ describe('an asset\'s identity', () => {
     expect(r.container.querySelector('.asset-name')!.getAttribute('title')).toBe(`${long} $LONG #1739-0029`);
     expect(shown(r.container).name).toBe(long);
     const css = readFileSync(join(__dirname, 'AssetName.svelte'), 'utf8');
-    expect(css).toMatch(/\.first\) \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis/);
+    expect(css).toMatch(/\.first\) \{[^}]*min-width: min\(6em, 100%\);[^}]*text-overflow: ellipsis/);
     expect(css).toMatch(/\.ident \{[^}]*flex: none;/);
   });
 
