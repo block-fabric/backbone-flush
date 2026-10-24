@@ -244,9 +244,9 @@ bool FastBlocksHooks::CheckHeader(const CBlockHeader& header, const CBlockIndex&
         for (const CBlockIndex* index{&prev}; index && index->nHeight > 0 && index->m_ext; index = index->pprev) {
             first = SlotOf(index->nTime, m_params);
             // (Slots grow block by block: so many blocks back, the bound is passed.)
-            if (index->nNonce != 0 || ++walked > m_params.max_unanchored_slots) break;
+            if (index->nNonce != 0 || ++walked > m_params.MaxUnanchoredSlots(slot)) break;
         }
-        if (slot - first >= m_params.max_unanchored_slots) {
+        if (slot - first >= m_params.MaxUnanchoredSlots(slot)) {
             return invalid("bad-pos-unanchored", "a block of stake comes within max_unanchored_slots of the first one no anchor covers");
         }
     }
@@ -984,7 +984,7 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
         } else if (fast.first_unanchored_slot < 0) {
             fast.first_unanchored_slot = slot;
         }
-        if (slot - fast.first_unanchored_slot >= m_params.max_unanchored_slots) return Fail(reject_reason, "bad-pos-unanchored");
+        if (slot - fast.first_unanchored_slot >= m_params.MaxUnanchoredSlots(slot)) return Fail(reject_reason, "bad-pos-unanchored");
 
         // Liveness: the block's leader made it; the leaders of the slots since the last block of stake
         // (an epoch of them at most) made none -- of the slots at which a block could be made: not
@@ -1001,7 +1001,7 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
         if (prev->nHeight > 0 && !prev->m_ext) {
             charged_from = std::max(charged_from, SlotOf(prev->nTime, m_params) + 1);
         } else if (before_step_unanchored >= 0) {
-            charged_until = std::min(charged_until, before_step_unanchored + m_params.max_unanchored_slots);
+            charged_until = std::min(charged_until, before_step_unanchored + m_params.MaxUnanchoredSlots(slot));
         }
         std::vector<std::pair<int64_t, uint256>> missed;
         std::map<int64_t, SlotLeader> epochs;
@@ -1375,7 +1375,7 @@ void FastBlocksHooks::CheckSeeds() const
         std::vector<CBlockIndex*> blocks;
         CBlockIndex* index{chainman->ActiveChain().Tip()};
         for (int64_t i{0}; index && index->nHeight > 0; ++i, index = index->pprev) {
-            const bool recent{i < 2 * m_params.slots_per_epoch + m_params.max_unanchored_slots};
+            const bool recent{i < 2 * m_params.slots_per_epoch + m_params.MaxUnanchoredSlotsEver()};
             if (!recent && !(changed && SlotOf(index->nTime, m_params) >= *changed * m_params.slots_per_epoch)) break;
             if (index->m_ext) blocks.push_back(index);
         }
@@ -1459,7 +1459,7 @@ bool FastBlocksHooks::InTime(const CBlockIndex& tip, const CBlockIndex& target, 
     for (const CBlockIndex* index{&tip}; index && index->nHeight > target.nHeight; index = index->pprev) {
         if (index->m_ext) first = SlotOf(index->nTime, m_params);
     }
-    return slot - first < m_params.max_unanchored_slots;
+    return slot - first < m_params.MaxUnanchoredSlots(slot);
 }
 
 bool FastBlocksHooks::Acknowledgeable(const AnchorTicket& ticket, const CBlockIndex& tip, const FastState& fast, int64_t slot) const
@@ -1908,7 +1908,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         m_bid_inputs.pot = pot;
         m_bid_inputs.slot = slot;
         m_bid_inputs.first_unanchored_slot = fast.first_unanchored_slot;
-        m_bid_inputs.max_unanchored_slots = m_params.max_unanchored_slots;
+        m_bid_inputs.max_unanchored_slots = m_params.MaxUnanchoredSlots(slot);
         m_bid_inputs.missed = m_bid_missed;
         m_bid_inputs.spent_in_period = SpentInPeriod(validator->policy, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()));
         return DecideBid(validator->policy, m_bid_inputs);
@@ -2258,7 +2258,14 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     std::string balance_error;
     try {
         const UniValue balances{client.Call("getbalances", UniValue{UniValue::VARR}, /*wallet=*/true)};
-        balance = amount(balances.find_value("mine").find_value("trusted"));
+        // What it can spend: its confirmed coins and its unconfirmed ones (the enforcer's interface gives no "trusted",
+        // only confirmed and pending: in a mainchain gap every coin of a wallet that bids is the unconfirmed change of
+        // its last bid, which it spends all the same; read as confirmed alone it was "0.00", lab 2026-10-24).
+        const UniValue& mine{balances.find_value("mine")};
+        balance = amount(mine.find_value("trusted"));
+        if (balance) {
+            if (const auto pending{amount(mine.find_value("untrusted_pending"))}; pending && *pending > 0) *balance += *pending;
+        }
         if (!balance) balance_error = "the mainchain wallet said no balance";
     } catch (const std::exception& e) {
         balance_error = e.what();
@@ -2296,7 +2303,7 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
     report.inputs = m_bid_inputs;
     report.inputs.slot = slot;
     report.inputs.first_unanchored_slot = first_unanchored_slot;
-    report.inputs.max_unanchored_slots = m_params.max_unanchored_slots;
+    report.inputs.max_unanchored_slots = m_params.MaxUnanchoredSlots(slot);
     report.inputs.missed = m_bid_missed;
     if (!m_validator) return report;
     const AnchorBidPolicy& policy{m_validator->policy};
@@ -2377,7 +2384,7 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
         {
             LOCK(::cs_main);
             const CBlockIndex* index{chainman->ActiveChain().Tip()};
-            for (int i{0}; index && i < 2 * static_cast<int>(m_params.max_unanchored_slots) + 1000; ++i, index = index->pprev) {
+            for (int i{0}; index && i < 2 * static_cast<int>(m_params.MaxUnanchoredSlotsEver()) + 1000; ++i, index = index->pprev) {
                 if (index->m_ext && index->nNonce != 0) recent.push_back(index);
             }
         }

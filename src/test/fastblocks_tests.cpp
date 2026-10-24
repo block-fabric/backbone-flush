@@ -2206,6 +2206,27 @@ BOOST_AUTO_TEST_CASE(set_boundary_and_lead)
     }
 }
 
+BOOST_AUTO_TEST_CASE(long_gap_rule)
+{
+    // The eCash networks: the long-gap rule from their first epoch; at least 24 hours without BMM (user decision,
+    // 2026-10-24): 24 hours of unanchored slots, the seed and the set 48 hours ahead, the unbonding and the proofs past
+    // the set lead in anchors (ten-minute anchors).
+    for (const ChainType type : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        const Consensus::PosParams e{CChainParams::Ecash(type)->GetConsensus().pos};
+        BOOST_CHECK_EQUAL(e.gap_epoch, 0);
+        BOOST_CHECK_EQUAL(e.slot_seconds * e.MaxUnanchoredSlots(0), 24 * 3600);
+        BOOST_CHECK_EQUAL(e.SeedLookahead(0), 48 * 3600);
+        BOOST_CHECK_EQUAL(e.SetLead(0), e.SeedLookahead(0));
+        BOOST_CHECK_GT(e.unbonding_anchors * 600, e.SetLead(0) + e.slots_per_epoch * e.slot_seconds);
+        BOOST_CHECK_EQUAL(e.evidence_window_anchors, e.unbonding_anchors - 1);
+        BOOST_CHECK_EQUAL(e.MaxUnanchoredSlotsEver(), e.gap_max_unanchored_slots);
+        // The seed never stops blocks of stake before the unanchored limit through a lag of the median time of up to 24 hours.
+        BOOST_CHECK_GE(e.SeedLookahead(0) + e.slots_per_epoch * e.slot_seconds - 24 * 3600, e.slot_seconds * e.MaxUnanchoredSlots(0));
+    }
+    // The Chains networks: never.
+    BOOST_CHECK(!CChainParams::Main()->GetConsensus().pos.GapActive(1'000'000));
+}
+
 BOOST_AUTO_TEST_CASE(staking_parameters)
 {
     // The user's decisions (design, section 13): a minimum stake of 1 CHN (0.01 on the test networks,

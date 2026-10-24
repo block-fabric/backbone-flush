@@ -62,14 +62,15 @@ std::optional<size_t> ValidatorSet::Leader(int64_t slot, const uint256& seed) co
 
 int64_t SeedTime(int64_t epoch, const Consensus::PosParams& params)
 {
-    return SlotTime(epoch * params.slots_per_epoch, params) - params.seed_lookahead_seconds;
+    return SlotTime(epoch * params.slots_per_epoch, params) - params.SeedLookahead(epoch);
 }
 
 int64_t SetBoundary(int64_t epoch, const Consensus::PosParams& params)
 {
     const int64_t by_epoch{(epoch - 1) * params.slots_per_epoch};
-    if (params.set_lead_seconds <= 0) return by_epoch;
-    return std::min(by_epoch, SlotOf(SlotTime(epoch * params.slots_per_epoch, params) - params.set_lead_seconds, params));
+    const int64_t lead{params.SetLead(epoch)};
+    if (lead <= 0) return by_epoch;
+    return std::min(by_epoch, SlotOf(SlotTime(epoch * params.slots_per_epoch, params) - lead, params));
 }
 
 std::optional<int> SeedHeight(int64_t epoch, const Consensus::PosParams& params, const sidechain::Mainchain& record)

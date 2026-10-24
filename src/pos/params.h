@@ -8,6 +8,7 @@
 #include <serialize.h>
 #include <uint256.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -135,6 +136,24 @@ struct PosParams {
      * seed's block is known counts in its epoch's set, so a validator cannot pick a key or a stake for a seed.
      */
     int64_t set_lead_seconds{0};
+    /**
+     * The long-gap rule (doc/ecash-sidechains.md, "A mainchain gap"): from epoch gap_epoch, the seed lookahead, the set
+     * lead and the unanchored limit are these instead, sized so that blocks of stake go on for 24 hours without BMM and
+     * no seed stops them first (the mainchain's median time lags its last block by hours when its blocks are sparse:
+     * betanet, 2026-10-24, 5 h 20 min, which stopped blocks of stake four hours into a gap at the earlier values). Never (the maximum) on the networks without it. Per epoch for the seed and the set (an epoch has one
+     * of each), per slot's epoch for the unanchored limit.
+     */
+    int64_t gap_epoch{std::numeric_limits<int64_t>::max()};
+    int64_t gap_seed_lookahead_seconds{0};
+    int64_t gap_set_lead_seconds{0};
+    int64_t gap_max_unanchored_slots{0};
+    bool GapActive(int64_t epoch) const { return epoch >= gap_epoch; }
+    int64_t SeedLookahead(int64_t epoch) const { return GapActive(epoch) ? gap_seed_lookahead_seconds : seed_lookahead_seconds; }
+    int64_t SetLead(int64_t epoch) const { return GapActive(epoch) ? gap_set_lead_seconds : set_lead_seconds; }
+    /** The unanchored limit for a block of stake at `slot`. */
+    int64_t MaxUnanchoredSlots(int64_t slot) const { return slots_per_epoch > 0 && GapActive(slot / slots_per_epoch) ? gap_max_unanchored_slots : max_unanchored_slots; }
+    /** The largest unanchored limit of any slot: what walks of the block index that bound a run of blocks of stake allow for. */
+    int64_t MaxUnanchoredSlotsEver() const { return gap_epoch == std::numeric_limits<int64_t>::max() ? max_unanchored_slots : std::max(max_unanchored_slots, gap_max_unanchored_slots); }
     //! Signing two blocks for one slot costs this share of the stake (bonded and unbonding), in basis points.
     int64_t slash_bps{1000};
     //! The block that carries the proof is paid 1/reporter_share_divisor of the penalty; the rest goes to the pot's reserve.

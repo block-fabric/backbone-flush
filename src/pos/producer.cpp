@@ -430,7 +430,7 @@ std::optional<uint256> Producer::Produce(int64_t slot, std::string& error, Retry
         const FastState fast{GetFastState(view)};
         const auto [refused_tickets, refused_offences]{WITH_LOCK(m_mutex, return std::make_pair(m_refused_tickets, m_refused_offences))};
         ack = m_hooks.NextAck(*tip, fast, slot, &refused_tickets);
-        if (!ack && fast.first_unanchored_slot >= 0 && slot - fast.first_unanchored_slot >= params.max_unanchored_slots) {
+        if (!ack && fast.first_unanchored_slot >= 0 && slot - fast.first_unanchored_slot >= params.MaxUnanchoredSlots(slot)) {
             return fail("no anchor for too long: blocks of stake wait for one");
         }
         // The proofs this node knows that the chain has not punished yet, one per validator (a

@@ -208,7 +208,7 @@ std::optional<DeepForks> FastBlocksHooks::DeepForkMargin(const CBlockIndex& tip,
     // max_unanchored_slots blocks of stake and a BMM block below it).
     std::priority_queue<int> known;
     std::deque<int> unknown;
-    const int reach{static_cast<int>(m_params.max_unanchored_slots) + 2};
+    const int reach{static_cast<int>(m_params.MaxUnanchoredSlotsEver()) + 2};
     for (const ChainAnchor& anchor : anchors) {
         if (anchor.anchored->nHeight <= oldest->nHeight - 1) known.push(anchor.anchored->nHeight);
     }
