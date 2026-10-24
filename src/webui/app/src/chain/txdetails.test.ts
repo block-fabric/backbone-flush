@@ -154,7 +154,7 @@ describe('the wallet\'s own addresses of a move', () => {
     // The details: the headline with the display name, every address with its role.
     const view = render(LocalTxDetails, { wallet: 'w', txid: e.txid });
     const text = view.getByRole('region', { name: 'Asset movement' }).textContent ?? '';
-    expect(text).toContain('Registered Gold Bar Token, 1 g $GOLDEN-LONG-TICKER #1739-0029 · 12.50 created');
+    expect(text).toContain('Registered Gold Bar Token, 1 g GOLDEN-LONG-TICKER #1739-0029 · 12.50 created');
     const own = view.getByTestId('own-addresses').textContent ?? '';
     for (const part of [ME1, 'control coin', ME2, 'asset', OTHER, 'change']) expect(own).toContain(part);
     view.unmount();

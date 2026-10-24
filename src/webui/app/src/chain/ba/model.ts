@@ -550,25 +550,32 @@ export function displayNameProblem(text: string): string {
 
 /**
  * The parts of an asset's identity as the pages show it (AssetName.svelte, AssetBadge.svelte): its name first, then
- * its ticker. name: its display name, else a label of the chain that is not ticker-shaped (a name from before tickers,
- * "gold bar"); ticker: a label of letters and digits alone (the ticker rules, or an older name of that shape), or any
- * label beside a display name; seq: its number. A label that is a hash ("0x…") is neither. All text of the chain.
+ * its ticker. ticker: a label that keeps the rules of tickers (isTicker, as bitassets::IsTicker: 2 to 12 of A to Z and
+ * 0 to 9), the one shape shown as $TICKER; any other label ("gold bar", "EC X", 'ECX"', a look-alike letter) is a name,
+ * never in the ticker's place (security review 2026-10-24). name: its display name, else such a label; alias: such a
+ * label beside a display name (both are shown, as names). seq: its number. A label that is a hash ("0x…") is none of
+ * them. All text of the chain.
  */
-export function assetIdentity(label: string, display?: string, seq?: string): { name: string; ticker: string; seq: string } {
+export function assetIdentity(label: string, display?: string, seq?: string): { name: string; alias: string; ticker: string; seq: string } {
   const hash = /^0x[0-9a-f]/i.test(label);
-  // With a display name, the label is its ticker whatever its shape (a name from before the rules of tickers).
-  const ticker = !hash && label !== '' && (!!display || /^[A-Za-z0-9]+$/.test(label)) ? label : '';
-  const name = display || (!hash && !ticker ? label : '');
-  return { name, ticker, seq: seq ?? '' };
+  const ticker = isTicker(label) ? label : '';
+  const other = !hash && !ticker ? label : '';
+  const name = display || other;
+  return { name, alias: display && other ? other : '', ticker, seq: seq ?? '' };
+}
+
+/** An asset's id as the pages shorten it, its start and end, 64 bits in all (a look-alike of 32 is in reach of anyone): "0x1a2b3c4d…5e6f7a8b". */
+export function shortId(id: string): string {
+  return `0x${id.slice(0, 8)}…${id.slice(-8)}`;
 }
 
 /**
  * The part of an asset that no other has, shown beside its ticker (a display name is not unique, and may hold "$ECX" or
- * "#1739-0029" to pass for another: security review 2026-10-24): its number, else the start of its hash. ECX: none.
+ * "#1739-0029" to pass for another: security review 2026-10-24): its number, else its id shortened (shortId). ECX: none.
  */
 export function uniquePart(seq?: string, id?: string): string {
   if (seq) return `#${seq}`;
-  if (id && /^[0-9a-f]{16,}$/i.test(id) && !/^0+$/.test(id)) return `0x${id.slice(0, 8)}…`;
+  if (id && /^[0-9a-f]{16,}$/i.test(id) && !/^0+$/.test(id)) return shortId(id);
   return '';
 }
 
@@ -590,7 +597,7 @@ export function escapeName(text: string): string {
 export function assetText(label: string, display?: string, seq?: string, id?: string): string {
   if (label === TICKER && !display) return TICKER;
   const a = assetIdentity(label, display, seq);
-  const words = [a.name ? escapeName(a.name) : '', a.ticker ? `$${escapeName(a.ticker)}` : '', uniquePart(a.seq, id)].filter((x) => x !== '').join(' ');
+  const words = [a.name ? escapeName(a.name) : '', a.alias ? escapeName(a.alias) : '', a.ticker ? `$${a.ticker}` : '', uniquePart(a.seq, id)].filter((x) => x !== '').join(' ');
   return words || escapeName(label);
 }
 

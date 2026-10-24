@@ -4,8 +4,8 @@
   // logos.svelte.ts), else a round mark in the hue of its hash with its initials (the same everywhere, so that two
   // assets of names alike are told apart at a glance); ECX in the colour of the chain. The words are AssetName.svelte's,
   // whose header says the rules: the name, then the identity in a muted mark of its own ($TICKER and its number, else
-  // the start of its hash), so that a name cannot pass for another asset's ticker or number. The name gives way (an ellipsis) and the full text is in its title. showLabel={false}:
-  // the mark alone.
+  // its id shortened), so that a name cannot pass for another asset's ticker or number. The name gives way (an
+  // ellipsis) and the full text is in its title. showLabel={false}: the mark alone.
   import { css } from '../../lib/actions';
   import { assetHue, assetIdentity, initials, isChn } from './model';
   import { TICKER } from '../config';

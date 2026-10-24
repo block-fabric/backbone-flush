@@ -1001,9 +1001,9 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(nameOf(GOLD)).toBe('$GOLD #1739-0029');
     expect(nameOf(CHN_ID)).toBe('ECX');
     // Not listed (a private name): the start and end of its hash.
-    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('$G0LD 0x99999999…abcd');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('$G0LD 0x99999999…9999abcd');
     // A name of another shape, quoted and escaped after the unique part: it reads as text (audit 7 E-BA4).
-    expect(nameOf('9'.repeat(60) + 'abcd', 'gold (#1739-0029)')).toBe('0x99999999…abcd ("gold (\\#1739-0029)")');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'gold (#1739-0029)')).toBe('0x99999999…9999abcd ("gold (\\#1739-0029)")');
     // A display name that imitates another asset (security review 2026-10-24): after the real ticker and number, escaped.
     assets[0] = { ...assets[0], display_name: 'Bitcoin $ECX #1' };
     await refreshBitAssets();
@@ -1011,7 +1011,10 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     assets[0] = { ...assets[0], display_name: '"FLUSH"' };
     await refreshBitAssets();
     expect(nameOf(GOLD)).toBe('$GOLD #1739-0029 ("\\"FLUSH\\"")');
-    expect(nameOf('8'.repeat(64))).toBe('0x88888888…8888');
+    // A label outside the rules of tickers is never $TICKER there; two ids alike in their first 8 hex differ.
+    expect(nameOf('1a2b3c4d' + '0'.repeat(48) + '11111111', 'ECX"')).toBe('0x1a2b3c4d…11111111 ("ECX\\"")');
+    expect(nameOf('1a2b3c4d' + '0'.repeat(48) + '22222222', '\u0415CX')).toBe('0x1a2b3c4d…22222222 ("\u0415CX")');
+    expect(nameOf('8'.repeat(64))).toBe('0x88888888…88888888');
   });
 
   it('Browse assets: a page at a time from the node, never the whole list, the newest first (user feedback 2026-10-19; audit port-2 #4)', async () => {

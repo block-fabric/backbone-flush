@@ -20,7 +20,7 @@ import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo, PoolPreview } from './kinds';
 import { flipped, turn } from './cl';
-import { assetArg, assetIdentity, assetText, escapeName, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { assetArg, assetIdentity, assetText, escapeName, shortId, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -1054,10 +1054,11 @@ export function nameOf(id: string, label?: string): string {
   if (/^0+$/.test(id)) return TICKER;
   const listed = assetById(id);
   const text = label ?? listed?.label ?? holdingOf(id)?.label ?? '';
-  const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;
+  const tag = listed?.seq ? `#${listed.seq}` : shortId(id);
   const a = assetIdentity(text, listed?.display_name);
-  const head = a.ticker ? `$${escapeName(a.ticker)} ${tag}` : tag;
-  return a.name ? `${head} ("${escapeName(a.name)}")` : head;
+  const head = a.ticker ? `$${a.ticker} ${tag}` : tag;
+  const names = [a.name, a.alias].filter((x) => x !== '').map((x) => `"${escapeName(x)}"`);
+  return names.length ? `${head} (${names.join(', ')})` : head;
 }
 
 /**
