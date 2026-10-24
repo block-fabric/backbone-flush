@@ -75,3 +75,12 @@ Branch `photon-v3` (photon-v2 and allocations of up to 10 %): from block `SLOT99
 at graduation and claimed by the creator (`claimlaunch`), with no vesting yet (rug protection to come). The height is
 in the fingerprint: a node of v3 rebuilds its sidechain state once on its first start. A node of v2 follows the chain
 until the first launch with more than 5 % at or after the height, and forks off at that block.
+
+## Upgrade v4
+
+Branch `photon-v4` (photon-v3 and smaller payouts): from block `SLOT99_V4_HEIGHT` (src/kernel/chainparams.cpp)
+`small_payout_height`: the least ECX a pool, a book, a curve or an auction pays out is 0.00005 ECX (5 000 sat,
+`bitassets::MIN_CHN_PAYOUT_SMALL`; 0.0005 before), and the least order of a pair with ECX is worth that much on its ECX
+side (0.01 before): an order of about $0.50 at $10 000 an ECX. The payout cap per block is unchanged (500). The height is
+in the fingerprint: a node of v4 rebuilds its sidechain state once on its first start. A node of v3 follows the chain
+until the first block with an order or a payout under the old minimums at or after the height, and forks off there.

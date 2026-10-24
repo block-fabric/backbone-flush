@@ -932,6 +932,10 @@ public:
                 // 10 % (5 % before). In the fingerprint too: each node of v3 rebuilds its sidechain state once.
                 static constexpr int SLOT99_V3_HEIGHT{4400};
                 consensus.sidechain.allocation10_height = SLOT99_V3_HEIGHT;
+                // Upgrade v4 (doc/photon-slot.md, "Upgrade v4"), from block SLOT99_V4_HEIGHT: payouts and book orders of
+                // 0.00005 ECX at least (0.0005 and 0.01 before). In the fingerprint too: each node of v4 rebuilds its state once.
+                static constexpr int SLOT99_V4_HEIGHT{6000};
+                consensus.sidechain.small_payout_height = SLOT99_V4_HEIGHT;
                 m_temporary_notice = "Temporary: Flush on betanet slot 99 (Photon). A test chain in the slot voted in for Photon; it will be "
                                      "dropped when Flush gets its own slot (46). Do not keep value here.";
                 break;
