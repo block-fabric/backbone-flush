@@ -11,6 +11,7 @@
   // the pool of the default kind goes as before (swapasset); one pool of another kind by swappools; a route by swaproute,
   // its pools named (ba/kinds.ts executionOf).
   import SafeText from '../../components/SafeText.svelte';
+  import AssetBadge from './AssetBadge.svelte';
   import Icon from '../../components/Icon.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
@@ -397,7 +398,7 @@
         <ol class="route" aria-label="Route">
           {#each chosen.hops as h, k (k)}
             <li>
-              <span class="step-assets"><SafeText text={labelOf(h.from)} /> <Icon name="chevron-right" size={12} /> <SafeText text={labelOf(h.to)} /></span>
+              <span class="step-assets"><AssetBadge id={h.from} label={labelOf(h.from)} size="s" /> <Icon name="chevron-right" size={12} /> <AssetBadge id={h.to} label={labelOf(h.to)} size="s" /></span>
               <PoolKind kind={h.kind} showDefault />
               {#if h.out !== undefined}<span class="faint small">gives {formatAmount(h.out, decimalsOf(h.to))} <SafeText text={labelOf(h.to)} /></span>{/if}
               <button type="button" class="btn ghost small" onclick={() => openPool(h.pool)}>Pool</button>
@@ -512,8 +513,10 @@
   }
   .step-assets {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.25rem;
+    min-width: 0;
     font-weight: 600;
   }
   .wide {

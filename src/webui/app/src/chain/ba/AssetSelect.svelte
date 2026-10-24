@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Choosing an asset (ECX first): each by its id, its number first and its label quoted, since labels may
-  // look alike, and even hold another asset's number (audit 7 E-BA4), while numbers never do. Among hundreds:
+  // Choosing an asset (ECX first): each as the app shows an asset (its logo, its name, its $TICKER) and its number,
+  // since names may look alike, and even hold another asset's number (audit 7 E-BA4), while numbers never do. Among hundreds:
   // the searchable picker (AssetPicker.svelte: type a name or #number, favourites and the last picked on top).
   import AssetPicker from './AssetPicker.svelte';
   import { CHN_ID } from './model';

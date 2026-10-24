@@ -14,6 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import AssetName from './AssetName.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
   import Chart from './Chart.svelte';
   import OpenMarket from './OpenMarket.svelte';
@@ -21,7 +22,7 @@
   import { flipKind, kindOf } from './kinds';
   import type { Launch } from './launch';
   import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
-  import { ba, chnPrice, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
+  import { assetTextOf, ba, chnPrice, displayNameOf, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
   import { ignoreAsset, ignoreName, unignoreAsset, unignoreName } from './hide.svelte';
   import { ignoredAsset } from './visible.svelte';
   import { TICKER } from '../config';
@@ -118,7 +119,7 @@
     const wallet = wallets.current;
     if (!asset || wallet === null) return;
     const r = await ask({
-      title: t('Retire %1', asset.label),
+      title: t('Retire %1', assetTextOf(asset.asset, asset.label)),
       message: t('Retire %1 for good? It and its pools are deleted and its name is free again; the %2 %3 its pools hold go to mainchain miners, as a fee.', nameOf(asset.asset, asset.label), formatAmount(asset.release_fee ?? 0, 8), TICKER),
       informative: t('Anyone may retire a dead asset; this wallet pays the fee of the transaction.'),
       level: 'warning',
@@ -131,7 +132,7 @@
     try {
       const done = await walletRpc<{ txid: string }>(wallet, 'releaseasset', [assetArg(id)]);
       if (!done) return;
-      toast('success', t('Retiring an asset'), t('%1 is retired with the next block.', asset.label));
+      toast('success', t('Retiring an asset'), t('%1 is retired with the next block.', assetTextOf(asset.asset, asset.label)));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Retire'), errorText(e), 'error');
@@ -152,8 +153,7 @@
     <header class="panel hero">
       <AssetBadge {id} label={asset.label} size="l" showLabel={false} logo={asset.logo?.hash} />
       <div class="who">
-        <h2 class="name"><SafeText class="ticker" text={asset.label} /></h2>
-        {#if asset.display_name}<p class="display-name muted" data-testid="asset-display-name"><SafeText text={asset.display_name} /></p>{/if}
+        <h2 class="name"><AssetName label={asset.label} display={asset.display_name ?? ''} /></h2>
         <div class="tags">
           <span class="ba-tag" translate="no">#{asset.seq}</span>
           <VerifiedBadge {id} />
@@ -232,6 +232,7 @@
                   <button type="button" class="ba-row" onclick={() => trade(other)}>
                     <AssetBadge id={other} label={p.asset_a_id === id ? p.asset_b : p.asset_a} size="s" showLabel={false} />
                     <span class="main">
+                      <AssetName label={p.asset_a_id === id ? p.asset_b : p.asset_a} display={displayNameOf(other) ?? ''} />
                       <span>1 <SafeText text={asset.label} /> = {#if up.kind === 'each'}{up.price}{:else if up.kind === 'buys'}1/{up.amount}{:else}–{/if} <SafeText text={p.asset_a_id === id ? p.asset_b : p.asset_a} /></span>
                       <PoolKind kind={p.asset_a_id === id ? kindOf(p) : flipKind(kindOf(p))} />
                       <span class="faint small">
@@ -359,15 +360,11 @@
     min-width: 0;
   }
   .name {
+    display: flex;
+    min-width: 0;
     margin: 0;
     font-size: 1.7rem;
-    overflow-wrap: anywhere;
     letter-spacing: 0.01em;
-  }
-  .display-name {
-    margin: -0.2rem 0 0;
-    font-size: 1.05rem;
-    overflow-wrap: anywhere;
   }
   .tags {
     display: flex;

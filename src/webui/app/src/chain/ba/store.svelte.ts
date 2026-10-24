@@ -20,7 +20,7 @@ import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo, PoolPreview } from './kinds';
 import { flipped, turn } from './cl';
-import { assetArg, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { assetArg, assetIdentity, assetText, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -511,12 +511,12 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       if (ba.journal.funding.some((f) => f.wallet === wallet && f.asset === p.asset && !f.pool)) {
         // Straight into a pool: its own notice, once the pool can be made (fundReady).
       } else if (p.launch) {
-        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', p.name), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('launch', 'launches'); } }]);
+        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', assetText(p.name, p.display_name)), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('launch', 'launches'); } }]);
       } else if (p.follow) {
         const follow = p.follow;
-        toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', p.name) : t('%1 is in your assets: now start its auction.', p.name), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);
+        toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', assetText(p.name, p.display_name)) : t('%1 is in your assets: now start its auction.', assetText(p.name, p.display_name)), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);
       } else {
-        toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', p.name), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
+        toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', assetText(p.name, p.display_name)), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
       }
       changed = true;
       continue;
@@ -544,14 +544,14 @@ async function registerReadyOnce(wallet: string): Promise<void> {
         // The host would ask: the user confirms it on its card, told once.
         p.needsConfirm = done.needed;
         changed = true;
-        toast('info', t('%1 is ready to register', p.name), t('Confirm its registration on its card in Portfolio.'), 12000, [{ label: t('Confirm'), run: () => void registerByUser(p) }]);
+        toast('info', t('%1 is ready to register', assetText(p.name, p.display_name)), t('Confirm its registration on its card in Portfolio.'), 12000, [{ label: t('Confirm'), run: () => void registerByUser(p) }]);
         continue;
       }
       p.registration = done.result.txid;
       p.registeredAt = ba.height;
       p.error = undefined;
       changed = true;
-      toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', p.name));
+      toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', assetText(p.name, p.display_name)));
     } catch (e) {
       const err = BridgeError.from(e);
       // A locked wallet: the user registers it ("Register now", with the passphrase).
@@ -559,7 +559,7 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       if (p.error !== message) {
         p.error = message;
         changed = true;
-        if (message) toast('error', t('%1 was not registered', p.name), message, 12000, [{ label: t('Try again'), run: () => void registerByUser(p) }]);
+        if (message) toast('error', t('%1 was not registered', assetText(p.name, p.display_name)), message, 12000, [{ label: t('Try again'), run: () => void registerByUser(p) }]);
       }
     }
   }
@@ -901,7 +901,7 @@ export async function makeFundedPool(given: PendingFund): Promise<boolean> {
     f.poolTx = done.txid;
     f.error = undefined;
     saveJournal();
-    toast('success', t('Making its pool'), t('The pool of %1 is made with the next block; then put your liquidity in it.', f.name));
+    toast('success', t('Making its pool'), t('The pool of %1 is made with the next block; then put your liquidity in it.', assetTextOf(f.asset, f.name)));
     void refreshBitAssets();
     return true;
   } catch (e) {
@@ -932,7 +932,7 @@ export async function fundPosition(given: PendingFund): Promise<boolean> {
     f.doneAt = Date.now();
     f.error = undefined;
     saveJournal();
-    toast('success', t('Funding its pool'), t('Your liquidity is in the pool of %1 with the next block, over the full range: see it in Positions.', f.name));
+    toast('success', t('Funding its pool'), t('Your liquidity is in the pool of %1 with the next block, over the full range: see it in Positions.', assetTextOf(f.asset, f.name)));
     void refreshBitAssets();
     return true;
   } catch (e) {
@@ -962,8 +962,8 @@ async function fundReady(wallet: string): Promise<void> {
       const stage = fundStageOf(f);
       if (stage === f.told) continue;
       f.told = stage;
-      if (stage === 'pool') toast('info', t('%1 is registered', f.name), t('Now make its pool, at your price: your wallet confirms it.'), 15000, [{ label: t('Make its pool'), run: () => void makeFundedPool(f) }]);
-      else if (stage === 'position') toast('info', t('The pool of %1 is open', f.name), t('Now put your liquidity in it, over the full range: your wallet confirms it.'), 15000, [{ label: t('Put it in'), run: () => void fundPosition(f) }]);
+      if (stage === 'pool') toast('info', t('%1 is registered', assetTextOf(f.asset, f.name)), t('Now make its pool, at your price: your wallet confirms it.'), 15000, [{ label: t('Make its pool'), run: () => void makeFundedPool(f) }]);
+      else if (stage === 'position') toast('info', t('The pool of %1 is open', assetTextOf(f.asset, f.name)), t('Now put your liquidity in it, over the full range: your wallet confirms it.'), 15000, [{ label: t('Put it in'), run: () => void fundPosition(f) }]);
     }
   } finally {
     funding = false;
@@ -1037,8 +1037,15 @@ export function labelOf(id: string): string {
   return assetById(id)?.label ?? holdingOf(id)?.label ?? `0x${id.slice(0, 12)}…`;
 }
 
+/** An asset as one line of text, by id, for toasts and the titles of dialogs: "Theodore Brosevelt $BROSEVELT" (model.ts: assetText). Text of the chain. */
+export function assetTextOf(id: string, label?: string): string {
+  return assetText(label ?? labelOf(id), displayNameOf(id), assetById(id)?.seq);
+}
+
 /**
- * How a confirmation names an asset: its number first, then its label quoted ('#1739-0929 · "G0LD"'), or the
+ * How a confirmation names an asset: its number first, then its name quoted and its ticker ('#1739-0929 · "Gold Bar"
+ * $G0LD', the app's one identity of an asset: name, then $TICKER; a ticker is letters and digits alone, a name any
+ * text, hence the quotes), or the
  * start of its hash when it has none listed (a private name): labels are any printable ASCII, so look-alikes
  * (G0LD and GOLD, USDl and USDI) are told apart by the number, as the pickers show it (audit port-2 #5); and a
  * label may hold another asset's number ("GOLD (#1739-0029)"), which, quoted after the real one, reads as text
@@ -1049,7 +1056,9 @@ export function nameOf(id: string, label?: string): string {
   const listed = assetById(id);
   const text = label ?? listed?.label ?? holdingOf(id)?.label ?? '';
   const tag = listed?.seq ? `#${listed.seq}` : `0x${id.slice(0, 8)}…${id.slice(-4)}`;
-  return text ? `${tag} · "${text}"` : tag;
+  const a = assetIdentity(text, listed?.display_name);
+  const words = [a.name ? `"${a.name}"` : '', a.ticker ? `$${a.ticker}` : ''].filter((x) => x !== '').join(' ');
+  return words ? `${tag} · ${words}` : tag;
 }
 
 /**

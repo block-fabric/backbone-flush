@@ -1,6 +1,6 @@
 <script lang="ts">
-  // "Your assets": what the wallet holds beside ECX, on the Home and the Overview. Each asset by its logo (else its
-  // initials), its label and its number, its balance in its decimals (exact: the store reads amounts exactly), its worth
+  // "Your assets": what the wallet holds beside ECX, on the Home and the Overview. Each asset as the app shows it
+  // everywhere (AssetBadge: its logo, its name, its $TICKER, its number), its balance in its decimals (exact: the store reads amounts exactly), its worth
   // in ECX where a pool prices it, units on the way marked; the first HELD_SHOWN by worth, then balance, "View all" for
   // My assets; the assets only controlled below. From the store's one listmyassets, asked again with every block and
   // transaction of the wallet. Simple mode: a compact list.
@@ -49,23 +49,20 @@
   {:else if held.rows.length === 0 && held.controlledOnly.length === 0}
     <p class="muted empty">No assets yet. <button type="button" class="btn small" onclick={() => go('issue')}>Register new asset</button> <button type="button" class="btn ghost small" onclick={() => go('trade', 'swap')}>Get assets in Swap</button></p>
   {:else}
-    <!-- One compact row per asset (user feedback 2026-10-19): its logo, the crown if the wallet controls it, its ticker
-         with its number, its display name, its balance and its worth; narrow, the name goes first, then the worth. -->
+    <!-- One compact row per asset (user feedback 2026-10-19): the asset as the app shows it everywhere (its logo, its
+         name, its $TICKER and its number: AssetBadge), the crown if the wallet controls it, its balance and its worth;
+         narrow, the worth goes. -->
     <table class="held-table" class:compact={simple} aria-labelledby="held-title">
-      <thead class:sr-only={simple}><tr><th scope="col" class="c-img"><span class="sr-only">Image</span></th><th scope="col" class="c-ticker">Ticker</th><th scope="col" class="c-name">Name</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">{TICKER} worth</th></tr></thead>
+      <thead class:sr-only={simple}><tr><th scope="col" class="c-asset">Asset</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">{TICKER} worth</th></tr></thead>
       <tbody>
         {#each shown as r (r.holding.asset)}
-          {@const display = displayNameOf(r.holding.asset) ?? ''}
-          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, display, r.seq)} onclick={() => goTo('assets', '', r.holding.asset)}>
-            <td class="c-img"><AssetBadge id={r.holding.asset} label={r.holding.label} size="s" showLabel={false} /></td>
-            <td class="c-ticker">
+          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq)} onclick={() => goTo('assets', '', r.holding.asset)}>
+            <td class="c-asset">
               <button type="button" class="asset" onclick={(e) => { e.stopPropagation(); goTo('assets', '', r.holding.asset); }}>
+                <AssetBadge id={r.holding.asset} label={r.holding.label} seq={r.seq} size="s" />
                 {#if r.holding.control}<span class="crown" title="You control this asset"><Icon name="crown" size={12} label="You control this asset" /></span>{/if}
-                <SafeText class="ticker" text={r.holding.label} />
-                {#if r.seq}<span class="seq faint" translate="no">#{r.seq}</span>{/if}
               </button>
             </td>
-            <td class="c-name muted" title={display}>{#if display}<SafeText text={display} />{/if}</td>
             <td class="c-balance num" translate="no">{formatAmount(r.holding.balance, r.holding.decimals, { trim: false })}{#if r.pending}{' '}<span class="ba-warn on-way" title="Spendable after the next block">+{formatAmount(r.holding.pending, r.holding.decimals, { trim: false })}</span>{/if}</td>
             <td class="c-value num" translate="no">{r.value !== undefined ? formatPrice(r.value) : '–'}</td>
           </tr>
@@ -77,9 +74,8 @@
       <p class="small controlled" data-testid="controlled-only"><span class="muted">You control, without holding any:</span>
         {#each held.controlledOnly as r (r.holding.asset)}
           <button type="button" class="chip" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq)} onclick={() => goTo('assets', '', r.holding.asset)}>
-            <AssetBadge id={r.holding.asset} label={r.holding.label} size="s" showLabel={false} />
+            <AssetBadge id={r.holding.asset} label={r.holding.label} size="s" />
             <span class="crown" title="You control this asset"><Icon name="crown" size={11} label="You control this asset" /></span>
-            <SafeText class="ticker" text={r.holding.label} />
           </button>
         {/each}
       </p>
@@ -137,24 +133,14 @@
     text-overflow: ellipsis;
     vertical-align: middle;
   }
-  .c-img {
-    width: 2.2rem;
-  }
-  .hrow td.c-img {
-    padding-inline-end: 0;
-    text-overflow: clip;
-  }
-  .c-ticker {
-    width: 32%;
-  }
-  .c-name {
-    width: 28%;
+  .c-asset {
+    width: 56%;
   }
   .c-balance {
-    width: 22%;
+    width: 24%;
   }
   .c-value {
-    width: 18%;
+    width: 20%;
   }
   thead th {
     padding: 0 0.35rem 0.3rem;
@@ -186,18 +172,6 @@
     outline-offset: 2px;
     border-radius: var(--radius-s, 4px);
   }
-  .asset :global(.ticker),
-  .chip :global(.ticker) {
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  .seq {
-    font-size: 0.75rem;
-    flex: none;
-  }
   .crown {
     display: inline-flex;
     color: var(--warning, var(--accent));
@@ -228,24 +202,16 @@
     clip: rect(0 0 0 0);
     white-space: nowrap;
   }
-  /* Narrow: the display name goes first, then the worth. */
-  @container held (max-width: 30rem) {
-    .c-name {
-      display: none;
-    }
-    .c-ticker {
-      width: 52%;
-    }
-  }
+  /* Narrow: the worth goes; the name gives way before the ticker (AssetName). */
   @container held (max-width: 21rem) {
     .c-value {
       display: none;
     }
-    .c-ticker {
-      width: 56%;
+    .c-asset {
+      width: 60%;
     }
     .c-balance {
-      width: 38%;
+      width: 40%;
     }
   }
   .num {

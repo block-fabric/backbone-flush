@@ -19,7 +19,7 @@
   import { assetById, hasPool } from './ba/store.svelte';
   import UnitsInput from './ba/UnitsInput.svelte';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatUnits, unitsAtMost, unitsOf } from './ba/model';
-  import { ba, nameOf, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
+  import { assetTextOf, ba, nameOf, refreshBitAssets, sendIntent, startBitAssets, unlockHoldings } from './ba/store.svelte';
   import { TICKER } from './config';
 
   let { active = $bindable(false) }: { active?: boolean } = $props();
@@ -72,7 +72,7 @@
     if (wallet === null || !holding || !toValid || amount === null || busy) return;
     const address = to.trim();
     const r = await ask({
-      title: t('Send %1', holding.label),
+      title: t('Send %1', assetTextOf(holding.asset, holding.label)),
       message: t('Send %1 %2 to this address?', formatUnits(amount, decimals), nameOf(holding.asset, holding.label)),
       code: address,
       informative: t('It arrives with the next block. The fee is paid in %1 by this wallet.', TICKER),
@@ -93,7 +93,7 @@
       formKey++;
       void refreshBitAssets();
     } catch (e) {
-      await inform(t('Send %1', holding.label), errorText(e), 'error');
+      await inform(t('Send %1', assetTextOf(holding.asset, holding.label)), errorText(e), 'error');
     } finally {
       busy = false;
     }

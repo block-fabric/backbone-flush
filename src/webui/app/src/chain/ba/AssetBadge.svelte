@@ -1,14 +1,17 @@
 <script lang="ts">
-  // An asset as the pages show it: its logo from the chain (an <img> of a data: URL the host checked: logos.svelte.ts),
-  // else a round mark in the hue of its hash (the same everywhere, so that two assets of names alike are told apart at a
-  // glance), its label (its ticker), its display name after it, muted (not unique: never instead of the ticker), and its
-  // number. ECX in the colour of the chain.
-  import SafeText from '../../components/SafeText.svelte';
+  // An asset as the pages show it, the one identity of the app: LOGO, its name, then its ticker a little smaller and
+  // muted ("[logo] Theodore Brosevelt $BROSEVELT"). The logo is the chain's (an <img> of a data: URL the host checked:
+  // logos.svelte.ts), else a round mark in the hue of its hash with its initials (the same everywhere, so that two
+  // assets of names alike are told apart at a glance); ECX in the colour of the chain. The words are AssetName.svelte's,
+  // whose header says the rules: no ticker, the name and its number (looked up here when not given); no name, $TICKER
+  // alone; neither, its number. The name gives way (an ellipsis) and the full text is in its title. showLabel={false}:
+  // the mark alone.
   import { css } from '../../lib/actions';
-  import { assetHue, initials, isChn } from './model';
+  import { assetHue, assetIdentity, initials, isChn } from './model';
   import { TICKER } from '../config';
+  import AssetName from './AssetName.svelte';
   import { isLogoUrl, logoHashOf, logoUrl } from './logos.svelte';
-  import { displayNameOf } from './store.svelte';
+  import { assetById, displayNameOf } from './store.svelte';
 
   let {
     id,
@@ -35,6 +38,9 @@
   } = $props();
 
   const shownDisplay = $derived(display ?? displayNameOf(id) ?? '');
+  const parts = $derived(assetIdentity(label, shownDisplay, seq));
+  // A name without ticker is told apart by its number: the store's when the caller has none.
+  const shownSeq = $derived(seq || (!parts.ticker && !isChn(id) ? (assetById(id)?.seq ?? '') : ''));
 
   const url = $derived(isChn(id) ? '' : isLogoUrl(preview) ? preview : logoUrl(id, logo ?? logoHashOf(id)));
 </script>
@@ -43,14 +49,10 @@
   {#if url}
     <img class="mark logo" src={url} alt="" width="64" height="64" decoding="async" draggable="false" referrerpolicy="no-referrer" aria-hidden="true" />
   {:else}
-    <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? TICKER.charAt(0) : initials(label)}</span></span>
+    <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? TICKER.charAt(0) : initials(parts.ticker || parts.name || label)}</span></span>
   {/if}
   {#if showLabel}
-    <span class="words">
-      <SafeText class="label" text={label} />
-      {#if shownDisplay}<span class="display muted" title={shownDisplay}><span class="dot" aria-hidden="true">·</span>{' '}<SafeText text={shownDisplay} /></span>{/if}
-      {#if seq}<span class="seq faint" translate="no">#{seq}</span>{/if}
-    </span>
+    <span class="words"><AssetName {label} display={shownDisplay} seq={shownSeq} nameClass="label" /></span>
   {/if}
 </span>
 
@@ -106,45 +108,20 @@
   }
   .words {
     display: inline-flex;
-    align-items: baseline;
-    gap: 0.4rem;
     min-width: 0;
   }
   .words :global(.label) {
     font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
   }
   .l .words :global(.label) {
     font-size: 1.6rem;
     font-weight: 700;
   }
-  .seq {
-    font-size: 0.8rem;
-    white-space: nowrap;
-  }
-  /* The display name gives way before the ticker and the number. */
-  .display {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 400;
-  }
-  .words :global(.label) {
-    flex: none;
-    max-width: 100%;
-  }
-  .l .words {
+  .l .words :global(.asset-name) {
     flex-wrap: wrap;
+    white-space: normal;
   }
-  .l .display {
+  .l .words :global(.second) {
     font-size: 1.05rem;
-  }
-  .dot {
-    opacity: 0.7;
   }
 </style>

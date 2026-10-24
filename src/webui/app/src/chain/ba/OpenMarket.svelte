@@ -15,7 +15,7 @@
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { DEFAULT_RULES, type LaunchStats } from './launch';
   import { amountParam, assetArg, formatUnits, isChn, unitsAtMost, type Asset, type Pool } from './model';
-  import { ba, openMarketFor, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetTextOf, ba, openMarketFor, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
   let { asset, pools, launched }: { asset: Asset; pools: readonly Pool[]; launched: boolean } = $props();
@@ -59,7 +59,7 @@
     const sAmount = amountParam(amount, asset.decimals);
     const p = curveAssetParams(assetArg(asset.asset), sAmount, { feePercent, minBuy: minBuyText.trim() && minBuy !== null ? amountParam(minBuy, 8) : '', maxBuy: maxBuyText.trim() && maxBuy !== null ? amountParam(maxBuy, 8) : '' });
     const r = await ask({
-      title: t('Put %1 on a curve', asset.label),
+      title: t('Put %1 on a curve', assetTextOf(asset.asset, asset.label)),
       message: t('Put %1 %2 on a bonding curve?', formatUnits(amount, asset.decimals), asset.label),
       informative: t('%1 sold from the curve for %3, %2 into its locked pool at graduation. The fee: %4.', formatUnits(split.curve, asset.decimals, { max: 2 }), formatUnits(split.pool, asset.decimals, { max: 2 }), TICKER, launchFeeSplit(feeParts, true)),
       level: 'question',
@@ -73,7 +73,7 @@
     try {
       const done = await walletRpc<{ txid: string; asset: string; pool: string }>(wallet, 'curveasset', p);
       if (!done) return;
-      toast('success', t('On a curve'), t('%1 is on its curve with the next block.', asset.label));
+      toast('success', t('On a curve'), t('%1 is on its curve with the next block.', assetTextOf(asset.asset, asset.label)));
       open = '';
       amountText = '';
       void refreshBitAssets();

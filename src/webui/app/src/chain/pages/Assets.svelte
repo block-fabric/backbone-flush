@@ -267,7 +267,7 @@
       <p class="ba-help">{t('This node lists %1 assets at a time: type a name to find others, or a number or hash and press Enter.', formatCount(200))}</p>
     {/if}
     {#if found && !list.some((a) => a.asset === found?.asset)}
-      <p class="ba-help">Found by its hash: <button type="button" class="btn small ghost" onclick={() => (shown = found?.asset ?? null)}><SafeText text={found.label} /></button> <span class="faint" translate="no">{assetArg(found.asset)}</span></p>
+      <p class="ba-help">Found by its hash: <button type="button" class="btn small ghost" onclick={() => (shown = found?.asset ?? null)}><AssetBadge id={found.asset} label={found.label} display={found.display_name ?? ''} seq={found.seq} size="s" /></button> <span class="faint" translate="no">{assetArg(found.asset)}</span></p>
     {/if}
   {/if}
 </div>

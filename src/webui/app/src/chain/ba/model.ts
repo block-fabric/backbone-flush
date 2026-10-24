@@ -548,9 +548,38 @@ export function displayNameProblem(text: string): string {
   return '';
 }
 
-/** How an asset reads: its ticker (its name), its display name after it, its number ("GOLD · Gold Bar Token, 1 g · #1739-0029"). */
+/**
+ * The parts of an asset's identity as the pages show it (AssetName.svelte, AssetBadge.svelte): its name first, then
+ * its ticker. name: its display name, else a label of the chain that is not ticker-shaped (a name from before tickers,
+ * "gold bar"); ticker: a label of letters and digits alone (the ticker rules, or an older name of that shape), or any
+ * label beside a display name; seq: its number. A label that is a hash ("0x…") is neither. All text of the chain.
+ */
+export function assetIdentity(label: string, display?: string, seq?: string): { name: string; ticker: string; seq: string } {
+  const hash = /^0x[0-9a-f]/i.test(label);
+  // With a display name, the label is its ticker whatever its shape (a name from before the rules of tickers).
+  const ticker = !hash && label !== '' && (!!display || /^[A-Za-z0-9]+$/.test(label)) ? label : '';
+  const name = display || (!hash && !ticker ? label : '');
+  return { name, ticker, seq: seq ?? '' };
+}
+
+/**
+ * The asset as one line of text, for what the host draws (toasts, the titles of dialogs, tooltips): "Theodore
+ * Brosevelt $BROSEVELT"; no ticker: the name and its number ("gold bar #1739-0029"); no name: "$GOLD"; neither: its
+ * number, else its label (a hash). ECX: its ticker alone. Text of the chain.
+ */
+export function assetText(label: string, display?: string, seq?: string): string {
+  if (label === TICKER && !display) return TICKER;
+  const a = assetIdentity(label, display, seq);
+  if (a.name && a.ticker) return `${a.name} $${a.ticker}`;
+  if (a.name) return a.seq ? `${a.name} #${a.seq}` : a.name;
+  if (a.ticker) return `$${a.ticker}`;
+  return a.seq ? `#${a.seq}` : label;
+}
+
+/** How an asset reads in full (a tooltip): its name and ticker, then its number ("Gold Bar Token, 1 g $GOLD · #1739-0029"). */
 export function assetTitle(label: string, display?: string, seq?: string): string {
-  return [label, display ?? '', seq ? `#${seq}` : ''].filter((x) => x !== '').join(' · ');
+  const text = assetText(label, display);
+  return seq && !text.endsWith(`#${seq}`) ? `${text} · #${seq}` : text;
 }
 
 /** What is wrong with a name for a new asset ('' when nothing). */

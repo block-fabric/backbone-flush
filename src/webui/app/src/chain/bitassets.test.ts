@@ -643,7 +643,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'gram' } });
     await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('button').length).toBe(1));
     await fireEvent.click(within(screen.getByRole('list', { name: 'Assets' })).getByRole('button'));
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'GOLD' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('heading', { name: '$GOLD' })).toBeTruthy());
     expect(called('getasset').some((c) => (c.params as unknown[])[0] === assetArg(GOLD))).toBe(true);
     expect(screen.getByText('One gram of gold', { selector: '.info span' })).toBeTruthy();
     expect(screen.getByRole('table', { name: 'History of its data' })).toBeTruthy();
@@ -858,7 +858,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
     // The asset named with its number first: a look-alike label (G0LD) is told apart (audit port-2 #5), and a
     // label holding another number reads as text (audit 7 E-BA4).
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · $GOLD'));
     // The least confirmed is the least signed (min_out, audit 7 E-BA2).
     expect(document.querySelector('dialog[open]')?.textContent).toContain('At least 4.88 #1739-0029');
     await answer('yes');
@@ -902,7 +902,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await waitFor(() => expect(called('quotebid').length).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Bid' })).toHaveProperty('disabled', false));
     await fireEvent.click(screen.getByRole('button', { name: 'Bid' }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · $GOLD'));
     await answer('yes');
     await waitFor(() => expect(called('bidauction')[0]?.params).toEqual([id('d'), '1']));
     // Done (the host confirmed and ran it): the form is cleared.
@@ -921,7 +921,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.input(document.querySelector('#sell-end')!, { target: { value: '4' } });
     await waitFor(() => expect(screen.getByRole('img', { name: 'The price of one unit over the auction' })).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Start the auction/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · "GOLD"'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('#1739-0029 · $GOLD'));
     await answer('yes');
     await waitFor(() => expect(called('createauction')[0]?.params).toEqual([assetArg(GOLD), '50', 'ECX', '10', '4', 60, 1]));
   });
@@ -937,7 +937,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const send = screen.getByRole('button', { name: /^Send$/ });
     await waitFor(() => expect(send).toHaveProperty('disabled', false), { timeout: 3000 });
     await fireEvent.click(send);
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Send 12.5 #1739-0029 · "GOLD" to this address?'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Send 12.5 #1739-0029 · $GOLD to this address?'));
     await answer('yes', 4000);
     await waitFor(() => expect(called('sendasset')[0]?.params).toEqual([OTHER, assetArg(GOLD), '12.5']));
   });
@@ -953,7 +953,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.input(document.querySelector('#lq-amount-b')!, { target: { value: '5' } });
     await waitFor(() => expect(screen.getByText('Share of the pool')).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: /Make the pool/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Make the #4218-0372 · "SILVER" / ECX pool with 30'));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('Make the #4218-0372 · $SILVER / ECX pool with 30'));
     // Someone opens SILVER/ECX at 1 SILVER = 1000 ECX, and the store refreshes, while the dialog is open.
     pools.push({ pool: id('q'), asset_a: 'SILVER', asset_b: 'ECX', asset_a_id: SILVER, asset_b_id: CHN_ID, reserve_a: 10, reserve_b: 10000, price: 1000, shares: 316227, volume_a: 0, volume_b: 0, swaps: 0, created: 20, abandoned: false });
     await refreshBitAssets();
@@ -998,10 +998,11 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
 
   it('names an asset in a confirmation by its label and number, or the start of its hash (audit port-2 #5)', async () => {
     await refreshBitAssets();
-    expect(nameOf(GOLD)).toBe('#1739-0029 · "GOLD"');
+    expect(nameOf(GOLD)).toBe('#1739-0029 · $GOLD');
     expect(nameOf(CHN_ID)).toBe('ECX');
     // Not listed (a private name): the start and end of its hash.
-    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('0x99999999…abcd · "G0LD"');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('0x99999999…abcd · $G0LD');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'gold (#1739-0029)')).toBe('0x99999999…abcd · "gold (#1739-0029)"');
     expect(nameOf('8'.repeat(64))).toBe('0x88888888…8888');
   });
 
@@ -1036,7 +1037,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(called('searchassets').every((c) => ((c.params as unknown[])[4] as number) <= 200)).toBe(true);
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'zin' } });
     await waitFor(() => expect(tiles().length).toBe(1));
-    expect(within(screen.getByRole('list', { name: 'Assets' })).getByText('ZINC')).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: 'Assets' })).getByText('$ZINC')).toBeTruthy();
   }, 30000);
 
   it('Browse assets, Held or controlled: the wallet\'s searchmyassets with the same arguments, never mine to searchassets', async () => {
@@ -1610,7 +1611,7 @@ describe('Simple mode', () => {
     await waitFor(() => expect(screen.getByTestId('swap-plain').textContent).toMatch(/You pay 0\.5\s*ECX and get about/));
     expect(screen.getByTestId('swap-plain').textContent).toMatch(/At least .* if the price moves first/);
     // The plain summary names the asset with its number (audit 7 E-BA4).
-    expect(screen.getByTestId('swap-plain').textContent).toContain('#1739-0029 · "GOLD"');
+    expect(screen.getByTestId('swap-plain').textContent).toContain('#1739-0029 · $GOLD');
     await fireEvent.click(screen.getByRole('button', { name: /More options/ }));
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
@@ -1700,7 +1701,7 @@ describe('audit 7 E-BA6: amounts past 2^53 units, exact from the node to the dia
     await waitFor(() => expect(send).toHaveProperty('disabled', false), { timeout: 3000 });
     await fireEvent.click(send);
     // The confirmation of the page, then what the host is asked to confirm and run: the same digits.
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain(`Send 11,529,215,046.06846977 #1739-0029 · "GOLD" to this address?`));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain(`Send 11,529,215,046.06846977 #1739-0029 · $GOLD to this address?`));
     await answer('yes', 4000);
     await waitFor(() => expect(called('sendasset')[0]?.params).toEqual([OTHER, assetArg(GOLD), BIG]));
   });
@@ -1947,7 +1948,7 @@ describe('tickers and display names', () => {
     }
     // What is typed decomposed is sent composed.
     expect(normalizeDisplayName('Cafe\u0301')).toBe('Café');
-    expect(assetTitle('GOLD', 'Gold Bar Token, 1 g', '1739-0029')).toBe('GOLD · Gold Bar Token, 1 g · #1739-0029');
+    expect(assetTitle('GOLD', 'Gold Bar Token, 1 g', '1739-0029')).toBe('Gold Bar Token, 1 g $GOLD · #1739-0029');
     expect(assetTitle('gold bar', undefined, '1739-0029')).toBe('gold bar · #1739-0029');
   });
 
@@ -2027,17 +2028,15 @@ describe('tickers and display names', () => {
         if (!r.length) throw new Error('no rows');
         return r;
       });
-      // Image, Ticker (crown, #number), Name, Quantity, ECX worth.
-      expect([...held.querySelectorAll('thead th')].map((c) => c.textContent?.trim())).toEqual(['Image', 'Ticker', 'Name', 'Quantity', 'ECX worth']);
+      // Asset (logo, name, $TICKER, #number, crown), Quantity, ECX worth.
+      expect([...held.querySelectorAll('thead th')].map((c) => c.textContent?.trim())).toEqual(['Asset', 'Quantity', 'ECX worth']);
       const cells = [...rows[0].querySelectorAll('td')].map((c) => c.textContent?.trim() ?? '');
-      expect(rows[0].querySelector('.c-img .badge-asset')).not.toBeNull();
-      expect(cells[1]).toContain('GOLD');
-      expect(cells[1]).toContain('#1739-0029');
-      expect(cells[2]).toBe('Gold Bar Token, 1 g');
-      expect(cells[3]).toBe('200.00');
-      expect(cells[4]).toBe('20');
+      expect(rows[0].querySelector('.c-asset .badge-asset')).not.toBeNull();
+      expect(rows[0].querySelector('.c-asset .asset-name')?.textContent).toBe('Gold Bar Token, 1 g $GOLD #1739-0029');
+      expect(cells[1]).toBe('200.00');
+      expect(cells[2]).toBe('20');
       // The crown beside the logo, in the same cell, with its tooltip; SILVER is not controlled, and has no price.
-      expect(rows[0].querySelector('.c-ticker [title="You control this asset"]')).not.toBeNull();
+      expect(rows[0].querySelector('.c-asset [title="You control this asset"]')).not.toBeNull();
       expect(rows[1].querySelector('[title="You control this asset"]')).toBeNull();
       expect(rows[1].querySelector('.c-value')?.textContent).toBe('–');
       // Only controlled: an inline chip with its crown.
@@ -2048,25 +2047,25 @@ describe('tickers and display names', () => {
     }
   });
 
-  it('a picker and the lists show the ticker first, the display name after it, and find an asset by its display name', async () => {
+  it('a picker and the lists show the name first, $TICKER after it, and find an asset by its display name', async () => {
     assets[0] = { ...assets[0], display_name: 'Gold Bar Token, 1 g' };
     render(Assets);
     await loaded();
     const grid = await screen.findByRole('list', { name: 'Assets' });
-    await waitFor(() => expect(grid.textContent).toMatch(/GOLD\s*·\s*Gold Bar Token, 1 g\s*#1739-0029/));
+    await waitFor(() => expect(grid.textContent).toMatch(/Gold Bar Token, 1 g \$GOLD #1739-0029/));
   });
 
-  it('the ticker and the display name never run together: a separator wherever both show (user feedback 2026-10-19)', async () => {
+  it('one identity of an asset everywhere, its parts never run together: "Name $TICKER" (user feedback 2026-10-19, 2026-10-24)', async () => {
     assets[0] = { ...assets[0], display_name: 'Gold Bar Token, 1 g' };
-    const SEP = /GOLD\s+·\s+Gold Bar Token, 1 g/;
-    // My assets → Holdings: the heading of the asset picked ("GOLDGold Bar Token, 1 g" before).
+    const SEP = /Gold Bar Token, 1 g \$GOLD/;
+    // My assets → Holdings: the heading of the asset picked ("GOLDGold Bar Token, 1 g" before), and its row.
     let shown = render(MyAssets);
     await loaded();
     const panel = await screen.findByRole('region', { name: 'Manage GOLD' });
     await waitFor(() => expect(panel.querySelector('h2')?.textContent).toMatch(SEP));
-    expect(panel.querySelector('h2')?.textContent).not.toContain('GOLDGold');
+    expect(within(screen.getByRole('list', { name: 'Holdings' })).getAllByRole('button')[0].textContent).toMatch(SEP);
     shown.unmount();
-    // The picker of an asset (Swap): each option.
+    // The picker of an asset (Swap): each option, with its number.
     shown = render(Trade);
     await loaded();
     await fireEvent.click(document.querySelector('#swap-get')!);
@@ -2075,9 +2074,9 @@ describe('tickers and display names', () => {
       if (!o) throw new Error('no option');
       return o;
     });
-    expect(option.textContent).toMatch(SEP);
+    expect(option.textContent).toMatch(/Gold Bar Token, 1 g \$GOLD #1739-0029/);
     shown.unmount();
-    // The badge (lists, pools, auctions, activity, details): the dot after the ticker.
+    // The badge (lists, pools, auctions, activity, details).
     shown = render(Assets);
     await loaded();
     const badge = await waitFor(() => {
@@ -2085,9 +2084,9 @@ describe('tickers and display names', () => {
       if (!b) throw new Error('no badge');
       return b;
     });
-    expect(badge.textContent).toMatch(/GOLD\s*·\s+Gold Bar Token, 1 g/);
+    expect(badge.textContent).toMatch(SEP);
     shown.unmount();
-    // Home and Overview: the ticker and the name in cells of their own.
+    // Home and Overview: the same, in the one cell of the asset.
     for (const which of ['home', 'overview']) {
       shown = which === 'home' ? render(LocalCards) : render(LocalOverview);
       await loaded();
@@ -2096,8 +2095,7 @@ describe('tickers and display names', () => {
         if (!r) throw new Error('no row');
         return r;
       });
-      expect(row.querySelector('.c-ticker')?.textContent).not.toContain('Gold Bar');
-      expect(row.querySelector('.c-name')?.textContent?.trim()).toBe('Gold Bar Token, 1 g');
+      expect(row.querySelector('.c-asset')?.textContent).toMatch(SEP);
       shown.unmount();
     }
   });
