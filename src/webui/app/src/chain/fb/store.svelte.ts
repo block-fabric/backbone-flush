@@ -69,7 +69,8 @@ export async function refreshFb(): Promise<void> {
       attempt(() => rpc.raw<Schedule>('getleaderschedule', [pos.epoch + 1])),
       wallet === null ? Promise.resolve(null) : attempt(() => rpc.raw<WalletBond[]>('listbonds', [], { wallet })),
       wallet === null ? Promise.resolve(null) : attempt(() => rpc.raw<{ mine: { finality?: FinalityBalances } }>('getbalances', [], { wallet })),
-      fb.anchoring ? Promise.resolve(fb.anchoring) : attempt(() => request<Anchoring>('host', 'fastblocks.anchoring', {})),
+      // (Read each time: the policy changes live, setanchorbidpolicy.)
+      attempt(() => request<Anchoring>('host', 'fastblocks.anchoring', {})),
     ]);
     fb.pos = pos;
     fb.staking = staking;
