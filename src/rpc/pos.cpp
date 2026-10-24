@@ -5,6 +5,7 @@
 #include <addresstype.h>
 #include <arith_uint256.h>
 #include <chain.h>
+#include <common/args.h>
 #include <consensus/amount.h>
 #include <core_io.h>
 #include <kernel/chainparams.h>
@@ -49,6 +50,188 @@ pos::FastBlocksHooks& EnsureHooks()
 int64_t NowSlot(const Consensus::PosParams& params)
 {
     return pos::SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), params);
+}
+
+std::vector<RPCResult> PolicyFieldsDoc()
+{
+    return {
+        {RPCResult::Type::STR, "strategy", "fixed, minimal, fees, feespreventstall (fees + prevent stalling) or off"},
+        {RPCResult::Type::STR_AMOUNT, "floor", "The least it bids, in coins of the mainchain"},
+        {RPCResult::Type::STR_AMOUNT, "max", "The most it bids, always"},
+        {RPCResult::Type::STR_AMOUNT, "fixed", "The bid of the fixed strategy"},
+        {RPCResult::Type::NUM, "feeshare", "The percentage of the pot the fee strategies bid"},
+        {RPCResult::Type::NUM, "escalationstart", "The stall pressure from which minimal and feespreventstall raise the bid"},
+        {RPCResult::Type::ARR, "curve", "The escalation curve", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "pressure", "Stall pressure"}, {RPCResult::Type::NUM, "multiplier", "Multiplier of the base (fee estimate x requestvsize, else the floor)"}}}}},
+        {RPCResult::Type::BOOL, "interpolate", "Linear between the points of the curve (else steps)"},
+        {RPCResult::Type::BOOL, "usefeeestimate", "Escalate from the mainchain's next-block fee estimate"},
+        {RPCResult::Type::NUM, "requestvsize", "The size of a BMM request, in vbytes"},
+        {RPCResult::Type::NUM, "rebidafter", "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
+        {RPCResult::Type::NUM, "rebidstep", "The multiplier of each such raise"},
+        {RPCResult::Type::NUM, "rebidmax", "The most those raises multiply the bid"},
+        {RPCResult::Type::NUM, "warnmissed", "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
+        {RPCResult::Type::STR_AMOUNT, "periodcap", "The most the landed bids cost in periodhours (0: no cap)"},
+        {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
+        {RPCResult::Type::NUM, "lowbalanceblocks", "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
+    };
+}
+
+std::vector<RPCResult> PolicyResultDoc()
+{
+    return {
+        {RPCResult::Type::BOOL, "validator", "Whether this node is a validator (only validators bid)"},
+        {RPCResult::Type::BOOL, "bidding", "Whether its anchorer bids (a validator whose strategy is not off)"},
+        {RPCResult::Type::STR, "explanation", /*optional=*/true, "Why it does not bid, if it does not"},
+        {RPCResult::Type::OBJ, "policy", "The policy in force", PolicyFieldsDoc()},
+        {RPCResult::Type::OBJ, "defaults", "The policy of the options (-validatoranchorbid*), before setanchorbidpolicy", PolicyFieldsDoc()},
+        {RPCResult::Type::OBJ, "overrides", "The fields setanchorbidpolicy changed, kept in the node's settings", {}, {.skip_type_check = true}},
+        {RPCResult::Type::ARR, "strategies", "The strategies", {{RPCResult::Type::STR, "", "A strategy"}}},
+    };
+}
+
+std::string NotBiddingExplanation(const pos::FastBlocksHooks::AnchorBidReport& report)
+{
+    if (!report.validator) return "This node is not a validator: only validators bid for BMM commitments to their tickets (a node bids as a merged miner with setbmm instead).";
+    if (!report.bidder->policy.Bids()) return "The strategy is off: this validator bids for no anchors, and the chain relies on other bidders; blocks of stake halt after maxunanchoredslots without an anchor.";
+    return "";
+}
+
+UniValue PolicyResult(const pos::FastBlocksHooks::AnchorBidReport& report)
+{
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("validator", report.validator);
+    out.pushKV("bidding", report.validator && report.bidder->policy.Bids());
+    if (const std::string why{NotBiddingExplanation(report)}; !why.empty()) out.pushKV("explanation", why);
+    out.pushKV("policy", pos::PolicyToUniValue(report.bidder ? report.bidder->policy : report.defaults));
+    out.pushKV("defaults", pos::PolicyToUniValue(report.defaults));
+    out.pushKV("overrides", report.overrides);
+    UniValue strategies(UniValue::VARR);
+    for (const char* name : {"fixed", "minimal", "fees", "feespreventstall", "off"}) strategies.push_back(name);
+    out.pushKV("strategies", std::move(strategies));
+    return out;
+}
+
+pos::FastBlocksHooks::AnchorBidReport ReportNow(ChainstateManager& chainman, const pos::FastBlocksHooks& hooks)
+{
+    int64_t first{-1};
+    {
+        LOCK(::cs_main);
+        first = pos::GetFastState(chainman.ActiveChainstate().SideState().View()).first_unanchored_slot;
+    }
+    return hooks.GetAnchorBidReport(NowSlot(hooks.Params()), first);
+}
+
+const char* BidStatusName(pos::FastBlocksHooks::AnchorBidRecord::Status status)
+{
+    using enum pos::FastBlocksHooks::AnchorBidRecord::Status;
+    switch (status) {
+    case PENDING: return "pending";
+    case LANDED: return "landed";
+    case MISSED: return "missed";
+    case OUTBID: return "outbid";
+    }
+    return "";
+}
+
+UniValue BidResult(const pos::FastBlocksHooks::AnchorBidReport& report, int count)
+{
+    UniValue out(UniValue::VOBJ);
+    out.pushKV("validator", report.validator);
+    const bool bidding{report.validator && report.bidder->policy.Bids()};
+    out.pushKV("bidding", bidding);
+    if (const std::string why{NotBiddingExplanation(report)}; !why.empty()) out.pushKV("explanation", why);
+    if (report.bidder) out.pushKV("strategy", pos::StrategyName(report.bidder->policy.strategy));
+    out.pushKV("effective", ValueFromAmount(report.decision.bid ? report.decision.amount : 0));
+    out.pushKV("normal", ValueFromAmount(report.decision.normal));
+    out.pushKV("kind", report.decision.kind);
+    out.pushKV("reason", report.decision.reason);
+    out.pushKV("pressure", report.decision.pressure);
+    out.pushKV("multiplier", report.decision.multiplier);
+    if (report.bidder) out.pushKV("escalationstart", report.bidder->policy.escalation_start);
+    const auto& in{report.inputs};
+    out.pushKV("firstunanchoredslot", in.first_unanchored_slot);
+    out.pushKV("unanchoredslots", in.first_unanchored_slot >= 0 && in.slot > in.first_unanchored_slot ? in.slot - in.first_unanchored_slot : 0);
+    out.pushKV("maxunanchoredslots", in.max_unanchored_slots);
+    out.pushKV("pot", ValueFromAmount(in.pot));
+    if (in.fee_rate_per_kvb) out.pushKV("feerate", *in.fee_rate_per_kvb / 1000.0);
+    out.pushKV("feesource", report.fee_source);
+    out.pushKV("missed", report.missed);
+    if (report.balance) {
+        out.pushKV("balance", ValueFromAmount(*report.balance));
+        const CAmount rate{report.decision.bid ? report.decision.amount : 0};
+        if (rate > 0) out.pushKV("coverblocks", *report.balance / rate);
+    }
+    if (!report.balance_error.empty()) out.pushKV("balanceerror", report.balance_error);
+    out.pushKV("spentperiod", ValueFromAmount(report.spent));
+    if (report.bidder) {
+        out.pushKV("periodcap", ValueFromAmount(report.bidder->policy.period_cap));
+        out.pushKV("periodhours", report.bidder->policy.period_hours);
+    }
+    UniValue history(UniValue::VARR);
+    for (const auto& bid : report.history) {
+        if (static_cast<int>(history.size()) >= count) break;
+        UniValue entry(UniValue::VOBJ);
+        entry.pushKV("mainheight", bid.main_height + 1);
+        entry.pushKV("ticket", bid.ticket.GetHex());
+        entry.pushKV("offer", ValueFromAmount(bid.offer));
+        entry.pushKV("kind", bid.kind);
+        entry.pushKV("reason", bid.reason);
+        entry.pushKV("pressure", bid.pressure);
+        entry.pushKV("status", BidStatusName(bid.status));
+        entry.pushKV("cost", ValueFromAmount(bid.status == pos::FastBlocksHooks::AnchorBidRecord::Status::LANDED ? bid.offer : 0));
+        entry.pushKV("time", bid.time);
+        history.push_back(std::move(entry));
+    }
+    out.pushKV("history", std::move(history));
+    UniValue warnings(UniValue::VARR);
+    for (const std::string& warning : report.warnings) warnings.push_back(warning);
+    out.pushKV("warnings", std::move(warnings));
+    return out;
+}
+
+std::vector<RPCResult> BidResultDoc()
+{
+    return {
+        {RPCResult::Type::BOOL, "validator", "Whether this node is a validator (only validators bid)"},
+        {RPCResult::Type::BOOL, "bidding", "Whether its anchorer bids"},
+        {RPCResult::Type::STR, "explanation", /*optional=*/true, "Why it does not bid, if it does not"},
+        {RPCResult::Type::STR, "strategy", /*optional=*/true, "The strategy in force"},
+        {RPCResult::Type::STR_AMOUNT, "effective", "What it bids now for the next mainchain block"},
+        {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before escalation"},
+        {RPCResult::Type::STR, "kind", "fixed, floor, fees, rebid, escalation, max, periodcap or off"},
+        {RPCResult::Type::STR, "reason", "Why, in words"},
+        {RPCResult::Type::NUM, "pressure", "Stall pressure p: unanchoredslots / maxunanchoredslots (the chain halts at 1)"},
+        {RPCResult::Type::NUM, "multiplier", "The escalation (or rebid) multiplier applied"},
+        {RPCResult::Type::NUM, "escalationstart", /*optional=*/true, "The pressure from which the bid escalates"},
+        {RPCResult::Type::NUM, "firstunanchoredslot", "Slot of the first block of stake no anchor covers, -1 if none"},
+        {RPCResult::Type::NUM, "unanchoredslots", "Slots since then"},
+        {RPCResult::Type::NUM, "maxunanchoredslots", "The halt: blocks of stake stop after this many slots without an anchor"},
+        {RPCResult::Type::STR_AMOUNT, "pot", "The pot of the last anchor bid for"},
+        {RPCResult::Type::NUM, "feerate", /*optional=*/true, "The mainchain's next-block fee estimate, in sat/vB"},
+        {RPCResult::Type::STR, "feesource", "Where the estimate came from"},
+        {RPCResult::Type::NUM, "missed", "Mainchain blocks in a row that came without this validator's commitment"},
+        {RPCResult::Type::STR_AMOUNT, "balance", /*optional=*/true, "The bid wallet's balance (the mainchain wallet that pays the requests)"},
+        {RPCResult::Type::NUM, "coverblocks", /*optional=*/true, "How many mainchain blocks it covers at the current bid"},
+        {RPCResult::Type::STR, "balanceerror", /*optional=*/true, "Why the balance is not known"},
+        {RPCResult::Type::STR_AMOUNT, "spentperiod", "What the landed bids cost in the period"},
+        {RPCResult::Type::STR_AMOUNT, "periodcap", /*optional=*/true, "The cap of the period (0: none)"},
+        {RPCResult::Type::NUM, "periodhours", /*optional=*/true, "The period, in hours"},
+        {RPCResult::Type::ARR, "history", "The last bids, newest first",
+        {
+            {RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "mainheight", "The mainchain block it was for"},
+                {RPCResult::Type::STR_HEX, "ticket", "Its ticket"},
+                {RPCResult::Type::STR_AMOUNT, "offer", "The bid"},
+                {RPCResult::Type::STR, "kind", "As kind above"},
+                {RPCResult::Type::STR, "reason", "Why"},
+                {RPCResult::Type::NUM, "pressure", "The stall pressure then"},
+                {RPCResult::Type::STR, "status", "pending, landed, missed (the block had no commitment of this chain) or outbid (another commitment of this chain, or the mainchain went another way)"},
+                {RPCResult::Type::STR_AMOUNT, "cost", "What it cost (landed bids only)"},
+                {RPCResult::Type::NUM_TIME, "time", "When it was made"},
+            }},
+        }},
+        {RPCResult::Type::ARR, "warnings", "Warnings: the bid too low, the wallet low, the cap reached, the anchorer off", {{RPCResult::Type::STR, "", "A warning"}}},
+    };
 }
 
 uint256 ParsePubkey(const UniValue& value)
@@ -700,6 +883,7 @@ RPCMethod getanchorinfo()
                     {RPCResult::Type::NUM, "committedheight", /*optional=*/true, "Mainchain height of the commitment to it, if any"},
                 }},
             }},
+            {RPCResult::Type::OBJ, "bid", "What this node's anchorer bids, and why (see getanchorbidpolicy)", BidResultDoc()},
         }},
         RPCExamples{HelpExampleCli("getanchorinfo", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -765,7 +949,148 @@ RPCMethod getanchorinfo()
         tickets.push_back(std::move(entry));
     }
     result.pushKV("tickets", std::move(tickets));
+    result.pushKV("bid", BidResult(ReportNow(chainman, hooks), count));
     return result;
+},
+    };
+}
+
+RPCMethod getanchorticket()
+{
+    return RPCMethod{
+        "getanchorticket",
+        "Returns what a mainchain BMM commitment of this chain is: on FastBlocks a commitment is to an anchor ticket (h*), not to a block, "
+        "so the block it anchors is found here. A block hash committed to (a merged mined block) is getblockheader's.",
+        {
+            {"hash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The hash the mainchain committed to"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "hash", "The hash given"},
+            {RPCResult::Type::BOOL, "known", "Whether it is a ticket this node knows"},
+            {RPCResult::Type::STR_HEX, "anchored", /*optional=*/true, "The block it anchors"},
+            {RPCResult::Type::NUM, "anchoredheight", /*optional=*/true, "Its height, if this node has its header"},
+            {RPCResult::Type::BOOL, "inactivechain", /*optional=*/true, "Whether that block is in the active chain"},
+            {RPCResult::Type::STR_HEX, "payee", /*optional=*/true, "The script the pot is paid to"},
+            {RPCResult::Type::NUM, "committedheight", /*optional=*/true, "Mainchain height of the commitment to it, if on record"},
+        }},
+        RPCExamples{HelpExampleCli("getanchorticket", "\"hash\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    const pos::FastBlocksHooks& hooks{EnsureHooks()};
+    const uint256 hash{ParseHashV(request.params[0], "hash")};
+    UniValue result(UniValue::VOBJ);
+    result.pushKV("hash", hash.GetHex());
+    const auto ticket{hooks.GetTicket(hash)};
+    result.pushKV("known", ticket.has_value());
+    if (!ticket) return result;
+    result.pushKV("anchored", ticket->anchored.GetHex());
+    {
+        LOCK(::cs_main);
+        if (const CBlockIndex* index{chainman.m_blockman.LookupBlockIndex(ticket->anchored)}) {
+            result.pushKV("anchoredheight", index->nHeight);
+            result.pushKV("inactivechain", chainman.ActiveChain().Contains(*index));
+        }
+    }
+    result.pushKV("payee", HexStr(ticket->payee));
+    if (chainman.m_mainchain) {
+        if (const auto committed{chainman.m_mainchain->CommittedHeight(hash)}) result.pushKV("committedheight", *committed);
+    }
+    return result;
+},
+    };
+}
+
+RPCMethod getanchorbidpolicy()
+{
+    return RPCMethod{
+        "getanchorbidpolicy",
+        "Returns the bid policy of this validator's anchorer: how it bids for a BMM commitment to its ticket in every mainchain block "
+        "(see doc/fastblocks-anchor-bids.md). What it bids now: getanchorinfo's bid.",
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "", PolicyResultDoc()},
+        RPCExamples{HelpExampleCli("getanchorbidpolicy", "")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    ChainstateManager& chainman{EnsureAnyChainman(request.context)};
+    return PolicyResult(ReportNow(chainman, EnsureHooks()));
+},
+    };
+}
+
+RPCMethod setanchorbidpolicy()
+{
+    return RPCMethod{
+        "setanchorbidpolicy",
+        "Changes the bid policy of this validator's anchorer, at once and without a restart. The fields given change; the others stay. "
+        "Kept in the node's settings (settings.json), over the options (-validatoranchorbid*), which stay the defaults (reset: back to them). "
+        "Only a validator bids.",
+        {
+            {"policy", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "The fields to change",
+            {
+                {"strategy", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "fixed, minimal, fees, feespreventstall (fees + prevent stalling) or off"},
+                {"floor", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least it bids (0 allowed)"},
+                {"max", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The most it bids, always (at least floor and fixed)"},
+                {"fixed", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The bid of the fixed strategy"},
+                {"feeshare", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The percentage of the pot the fee strategies bid (0-100)"},
+                {"escalationstart", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The stall pressure from which the bid escalates (above 0, at most 1)"},
+                {"curve", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The escalation curve, \"p:x,...\" (or an array of {pressure, multiplier}); pressures ascending, multipliers 1-1000 not falling"},
+                {"interpolate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Linear between the points of the curve (else steps)"},
+                {"usefeeestimate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Escalate from the mainchain's next-block fee estimate"},
+                {"requestvsize", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The size of a BMM request, in vbytes (50-10000)"},
+                {"rebidafter", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
+                {"rebidstep", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The multiplier of each such raise (1-100)"},
+                {"rebidmax", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The most those raises multiply the bid (1-1000)"},
+                {"warnmissed", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
+                {"periodcap", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The most the landed bids cost in periodhours (0: no cap)"},
+                {"periodhours", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The period of the cap, in hours (1-744)"},
+                {"lowbalanceblocks", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
+            }},
+            {"reset", RPCArg::Type::BOOL, RPCArg::Default{false}, "Back to the options' policy first (the settings forgotten)"},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "The policy, as getanchorbidpolicy", PolicyResultDoc()},
+        RPCExamples{HelpExampleCli("setanchorbidpolicy", "'{\"strategy\":\"feespreventstall\",\"floor\":0.000005}'") +
+                    HelpExampleCli("-named setanchorbidpolicy", "floor=0.00001 max=0.0005") +
+                    HelpExampleCli("-named setanchorbidpolicy", "reset=true") +
+                    HelpExampleRpc("setanchorbidpolicy", "{\"curve\":\"0.5:1,0.75:3,0.9:6\"}")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    NodeContext& node{EnsureAnyNodeContext(request.context)};
+    ChainstateManager& chainman{EnsureChainman(node)};
+    const pos::FastBlocksHooks& hooks{EnsureHooks()};
+    const auto report{ReportNow(chainman, hooks)};
+    if (!report.validator) throw JSONRPCError(RPC_MISC_ERROR, NotBiddingExplanation(report));
+    const bool reset{!request.params[1].isNull() && request.params[1].get_bool()};
+    const UniValue fields{request.params[0].isNull() ? UniValue{UniValue::VOBJ} : request.params[0]};
+    if (!fields.isObject()) throw JSONRPCError(RPC_INVALID_PARAMETER, "policy: an object of fields");
+    pos::AnchorBidPolicy policy{reset ? report.defaults : report.bidder->policy};
+    std::string error;
+    if (!pos::ApplyPolicyFields(policy, fields, error)) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
+    if (error = pos::CheckPolicy(policy); !error.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
+    // The fields changed from the options' policy, as they are said (normalized).
+    UniValue overrides{reset ? UniValue{UniValue::VOBJ} : report.overrides};
+    const UniValue said{pos::PolicyToUniValue(policy)};
+    for (const std::string& key : fields.getKeys()) {
+        UniValue kept(UniValue::VOBJ);
+        for (const std::string& other : overrides.getKeys()) {
+            if (other != key) kept.pushKV(other, overrides.find_value(other));
+        }
+        kept.pushKV(key, said.find_value(key));
+        overrides = std::move(kept);
+    }
+    if (!hooks.SetAnchorBidPolicy(policy, overrides, error)) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
+    if (node.args) {
+        node.args->LockSettings([&](common::Settings& settings) {
+            if (overrides.getKeys().empty()) {
+                settings.rw_settings.erase(pos::ANCHOR_BID_SETTING);
+            } else {
+                settings.rw_settings[pos::ANCHOR_BID_SETTING] = overrides;
+            }
+        });
+        if (node.args->GetSettingsPath()) node.args->WriteSettingsFile();
+    }
+    return PolicyResult(ReportNow(chainman, hooks));
 },
     };
 }
@@ -1274,6 +1599,9 @@ void RegisterPosRPCCommands(CRPCTable& t)
         {"sidechain", &getvalidator},
         {"sidechain", &getleaderschedule},
         {"sidechain", &getanchorinfo},
+        {"sidechain", &getanchorticket},
+        {"sidechain", &getanchorbidpolicy},
+        {"sidechain", &setanchorbidpolicy},
         {"sidechain", &submitevidence},
         {"sidechain", &listevidence},
         {"sidechain", &setstaking},
