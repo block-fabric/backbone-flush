@@ -1439,7 +1439,7 @@ private:
             if (a == b) Fail(Code::INVALID_ARGUMENT, "two different assets make a pool");
             if (state.Launching(a) || state.Launching(b)) Fail(Code::FAILED_PRECONDITION, "an asset on its launch curve trades there alone until it graduates");
             const std::string kind{req.GetString("kind").empty() ? "constant" : req.GetString("kind")};
-            if (kind != "constant" && kind != "stable" && kind != "weighted") Fail(Code::INVALID_ARGUMENT, "kind: constant, stable or weighted");
+            if (kind != "constant" && kind != "stable" && kind != "weighted" && kind != "concentrated") Fail(Code::INVALID_ARGUMENT, "kind: constant, stable, weighted or concentrated");
             const uint32_t fee_ppm{static_cast<uint32_t>(req.GetUInt("fee_ppm") == 0 ? bitassets::LEGACY_FEE : req.GetUInt("fee_ppm"))};
             if (std::find(bitassets::FEE_TIERS.begin(), bitassets::FEE_TIERS.end(), fee_ppm) == bitassets::FEE_TIERS.end()) Fail(Code::INVALID_ARGUMENT, "fee_ppm: 100, 500, 3000 or 10000");
             if ((kind == "weighted") != (req.GetUInt("weight_a") != 0)) Fail(Code::INVALID_ARGUMENT, "weight_a goes with a weighted pool, which needs it");
@@ -1452,7 +1452,8 @@ private:
             if (req.GetUInt("amp") != 0) uri.emplace_back("amp", util::ToString(req.GetUInt("amp")));
             if (req.GetUInt("weight_a") != 0) uri.emplace_back("weight_a", util::ToString(req.GetUInt("weight_a")));
             for (const auto& [k, v] : uri) payload[k] = UniValue{v};
-            summary = strprintf("Create a %s pool of %s %s and %s %s at %s %%", kind == "constant" ? "constant-product" : kind, Decimal(ua, da, 12), ta, Decimal(ub, db, 12), tb, Decimal(fee_ppm, 4));
+            summary = kind == "concentrated" ? strprintf("Create a concentrated pool of %s and %s at %s %s per %s, fee %s %% (nothing put in: a position next)", ta, tb, Decimal(ub, db, 12), tb, Decimal(ua, da, 12) + " " + ta, Decimal(fee_ppm, 4))
+                                             : strprintf("Create a %s pool of %s %s and %s %s at %s %%", kind == "constant" ? "constant-product" : kind, Decimal(ua, da, 12), ta, Decimal(ub, db, 12), tb, Decimal(fee_ppm, 4));
             built.SetBool("app_ready", true);
         } else if (verb == "auction") {
             const AssetId base{ResolveRegistered(state, req.GetString("base"))}, quote{req.GetString("quote").empty() ? AssetId{} : ResolveRegistered(state, req.GetString("quote"))};
@@ -1512,6 +1513,11 @@ private:
             const std::string ta{ticker_of(pool->asset0)}, tb{ticker_of(pool->asset1)};
             uri = {{"pool", id}, {"asset_a", ta}, {"asset_b", tb}, {"price_lower", lower}, {"price_upper", upper}, {"amount_a", Decimal(a, d0, d0)},
                    {"amount_b", Decimal(b, d1, d1)}, {"slippage_bps", util::ToString(slippage)}};
+            // The price the page expects (expected_price: asset_b per asset_a), bound by the wallet within the slippage at signing.
+            if (!req.GetString("expected_price").empty()) {
+                ParseAmount(req.GetString("expected_price"), 8, "expected_price");
+                uri.emplace_back("price", req.GetString("expected_price"));
+            }
             for (const auto& [k, v] : uri) payload[k] = UniValue{v};
             summary = strprintf("Open a position of %s %s and %s %s from %s to %s %s per %s", Decimal(a, d0, d0), ta, Decimal(b, d1, d1), tb, lower, upper, tb, ta);
             Fact(built, "In range now", r["in_range"].isTrue() ? "yes: it earns fees at once" : "no: it earns nothing until the price comes in");

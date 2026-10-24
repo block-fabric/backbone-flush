@@ -126,7 +126,7 @@ URI_PARAMS = {
     "route": {"pools", "from", "to", "amount", "min_out", "slippage_bps"},
     "deposit": {"pool", "asset_a", "asset_b", "amount_a", "amount_b", "min_shares", "slippage_bps"},
     "withdraw": {"pool", "asset_a", "asset_b", "shares", "min_a", "min_b", "only", "slippage_bps"},
-    "position": {"pool", "asset_a", "asset_b", "price_lower", "price_upper", "amount_a", "amount_b", "slippage_bps"},
+    "position": {"pool", "asset_a", "asset_b", "price_lower", "price_upper", "amount_a", "amount_b", "price", "slippage_bps"},
     "reposition": {"position", "action", "percent", "slippage_bps"},
     "settle": {"order", "cancel"},
     "bid": {"auction", "amount", "buy_all"},

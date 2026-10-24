@@ -136,6 +136,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "openposition", 2, "price_upper" },
     { "openposition", 3, "amounts" },
     { "openposition", 4, "slippage" },
+    { "openposition", 5, "expected_price" },
     { "changeposition", 1, "change" },
     { "changeposition", 1, "add" },
     { "changeposition", 1, "remove" },

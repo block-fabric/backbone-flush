@@ -707,6 +707,11 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     const std::string head{"v=1&network=regtest&exp=" + Exp()};
     const auto plan{[&](const std::string& uri) { return Resolve(Parse(uri, NET, NOW), Source::BROWSER, reader, NOW); }};
 
+    // A concentrated pool made at a price (a launch straight into a funded pool: register, this, then a full-range position).
+    const Plan cl{plan("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=concentrated&fee_ppm=10000&amount_a=1&amount_b=20")};
+    BOOST_CHECK_EQUAL(cl.method, "createpool");
+    BOOST_CHECK_EQUAL(cl.params[4].find_value("curve").get_str(), "concentrated");
+
     // route: the pools follow one another from `from` to `to`; the quote hop by hop meets the floor; the path and pools to swaproute.
     reader.pool_quote = 5'000;
     const Plan route{plan("flush:route?" + head + "&pools=" + POOL_ID + "%2C" + POOL2_ID + "&from=ECX&to=TIDE&amount=1&min_out=0.004&slippage_bps=50")};
@@ -744,6 +749,11 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     const Plan full{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=0&price_upper=0&amount_a=1&amount_b=20&slippage_bps=100")};
     BOOST_CHECK_EQUAL(full.params[1].get_str(), "0");
     BOOST_CHECK(HasRow(full.preface, "Range", "the full range"));
+    // With the price the site showed: given to the wallet, which refuses at signing if the pool's is not near it.
+    const Plan priced{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=0&price_upper=0&amount_a=1&amount_b=20&price=20&slippage_bps=100")};
+    BOOST_CHECK_EQUAL(priced.params.size(), 6U);
+    BOOST_CHECK_EQUAL(priced.params[5].get_str(), "20");
+    BOOST_CHECK(HasRow(priced.preface, "At the price", "20 GOLD per ECX"));
     BOOST_CHECK_NE(ResolveRefused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&price_lower=10&price_upper=30&amount_a=1&amount_b=0&slippage_bps=100", reader).find("in that order"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=10&price_upper=30&amount_a=0&amount_b=0&slippage_bps=100").find("something to put in"), std::string::npos);
     // reposition: collect, remove (with its fees), close.

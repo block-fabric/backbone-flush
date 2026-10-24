@@ -442,7 +442,8 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         kind.pushKV("fee", fee);
         if (r.amp) kind.pushKV("amp", *r.amp);
         if (r.weight_a) kind.pushKV("weight_a", *r.weight_a);
-        plan.summary = strprintf("Create a %s pool of %s and %s", r.kind == "constant" ? "constant-product" : r.kind, Of(amount_a, a), Of(amount_b, b));
+        plan.summary = r.kind == "concentrated" ? strprintf("Create a concentrated pool of %s and %s at the price of %s for %s (nothing put in: a position next)", a.ticker, b.ticker, Of(amount_b, b), Of(amount_a, a))
+                                                : strprintf("Create a %s pool of %s and %s", r.kind == "constant" ? "constant-product" : r.kind, Of(amount_a, a), Of(amount_b, b));
         rows = Head(r, source, plan.summary, now);
         rows.push_back(confirm::Text("First asset", SideName(a)));
         rows.push_back(confirm::Text("Second asset", SideName(b)));
@@ -637,12 +638,17 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const UniValue& in_range{preview.find_value("in_range")};
         if (in_range.isBool()) rows.push_back(confirm::Text("Now", in_range.get_bool() ? "the pool's price is in this range: it earns fees at once" : "the pool's price is outside this range: it earns nothing until the price comes in"));
         rows.push_back(confirm::Text("Slippage", Bps(*r.slippage_bps) + " at most if the pool moves first (binds)"));
+        if (!r.price.empty()) {
+            Exact(r.price, 8, "price");
+            rows.push_back(confirm::Text("At the price", r.price + " " + b.ticker + " per " + a.ticker + ", as the site showed it: refused if the pool's price is further from it than the slippage"));
+        }
         plan.method = "openposition";
         plan.params.push_back(r.pool.GetHex());
         plan.params.push_back(r.price_lower);
         plan.params.push_back(r.price_upper);
         plan.params.push_back(std::move(amounts));
         plan.params.push_back(Percent(*r.slippage_bps));
+        if (!r.price.empty()) plan.params.push_back(r.price);
         break;
     }
     case Verb::REPOSITION: {
