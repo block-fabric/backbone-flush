@@ -5,6 +5,7 @@
 #ifndef BITCOIN_POS_HOOKS_H
 #define BITCOIN_POS_HOOKS_H
 
+#include <pos/anchorbid.h>
 #include <pos/evidence.h>
 #include <pos/feesplit.h>
 #include <pos/finality.h>
@@ -17,6 +18,8 @@
 #include <sidechain/store.h>
 #include <sync.h>
 #include <uint256.h>
+#include <univalue.h>
+#include <util/chaintype.h>
 
 #include <array>
 #include <atomic>
@@ -32,6 +35,8 @@
 class CBlockIndex;
 class CChainParams;
 class ChainstateManager;
+
+class ArgsManager;
 
 namespace pos {
 
@@ -390,23 +395,51 @@ public:
      * Called with cs_main held.
      */
     sidechain::PegStep AckPegStep(const AnchorAck& ack, const CBlockIndex& anchored, const CBlockIndex& prev) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    /** A validator's own anchorer (-validatoranchorbid): where the pot it wins goes, and how it bids. */
+    /** A validator's own anchorer: where the pot it wins goes, and how it bids (pos/anchorbid.h). */
     struct ValidatorBid {
         //! The producer's payout: the pot each anchor pays.
         CScript payee;
-        //! -validatoranchorbid: the least it bids (0 allowed: a request that pays no fee, for a miner that takes it).
-        CAmount floor{0};
-        //! -validatoranchorbidmode=fees: the bid is the pot the anchor will pay (the bidder's share of the fees of
-        //! the blocks it anchors, BidderShare, and the fees of their peg transactions), whole; at least `floor`,
-        //! at most `cap`. Else (the default) the pot less the operator's hundredth (Follower::Offer), at least `floor`.
-        bool fees{false};
-        //! -validatoranchorbidmax: the most it bids in fees mode, if given (`floor` wins over it).
-        std::optional<CAmount> cap;
-        /** The bid for an anchor whose pot is `pot`. */
-        CAmount For(CAmount pot) const;
+        //! The bid policy in force: the options' (-validatoranchorbid*), with what setanchorbidpolicy changed.
+        AnchorBidPolicy policy;
     };
-    /** A validator's own anchorer (-validatoranchorbid): none if off. */
+    /** A validator's own anchorer: none if this node is not a validator (its policy may be off). */
     std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /** A bid of the anchorer, and what became of it. */
+    struct AnchorBidRecord {
+        enum class Status { PENDING, LANDED, MISSED, OUTBID };
+        //! The mainchain tip the request followed: it is for the block after it.
+        int main_height{0};
+        uint256 main_tip;
+        uint256 ticket;
+        CAmount offer{0};
+        std::string kind;
+        std::string reason;
+        double pressure{0};
+        Status status{Status::PENDING};
+        int64_t time{0};
+    };
+    /** What the anchorer bids now, and why; what it bid; what its wallet covers. */
+    struct AnchorBidReport {
+        bool validator{false};
+        std::optional<ValidatorBid> bidder;
+        //! The policy of the options alone, and the fields setanchorbidpolicy changed (the node's settings).
+        AnchorBidPolicy defaults;
+        UniValue overrides{UniValue::VOBJ};
+        BidInputs inputs;
+        BidDecision decision;
+        //! Newest first.
+        std::vector<AnchorBidRecord> history;
+        int missed{0};
+        CAmount spent{0};
+        std::optional<CAmount> balance;
+        std::string balance_error;
+        std::string fee_source;
+        std::vector<std::string> warnings;
+    };
+    /** The report as of `slot`, the run without an anchor starting at `first_unanchored_slot` (-1: none). */
+    AnchorBidReport GetAnchorBidReport(int64_t slot, int64_t first_unanchored_slot) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /** Put `policy` in force (checked first: CheckPolicy), `overrides` being the fields set on the options' policy. */
+    bool SetAnchorBidPolicy(const AnchorBidPolicy& policy, const UniValue& overrides, std::string& error) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /**
      * Whether a BMM block built now would be in stall mode (and may take transactions): no active
      * validator set (`pos_active` false), or no block of stake for stall_seconds by `main_time`.
@@ -586,12 +619,41 @@ private:
         bool made{false};
     };
     mutable Bid m_bid GUARDED_BY(m_anchor_mutex);
-    //! A validator's own anchorer (-validatoranchorbid), if on.
+    //! A validator's own anchorer, if this node is a validator.
     mutable std::optional<ValidatorBid> m_validator GUARDED_BY(m_anchor_mutex);
+    //! The policy of the options, and the fields the settings changed.
+    mutable AnchorBidPolicy m_bid_defaults GUARDED_BY(m_anchor_mutex);
+    mutable UniValue m_bid_overrides GUARDED_BY(m_anchor_mutex){UniValue::VOBJ};
+    //! The bids made (newest last, BID_HISTORY at most), the run of missed blocks, what the last round saw.
+    mutable std::deque<AnchorBidRecord> m_bid_history GUARDED_BY(m_anchor_mutex);
+    mutable int m_bid_missed GUARDED_BY(m_anchor_mutex){0};
+    mutable int m_bid_missed_warned GUARDED_BY(m_anchor_mutex){0};
+    mutable BidInputs m_bid_inputs GUARDED_BY(m_anchor_mutex);
+    mutable std::optional<CAmount> m_bid_balance GUARDED_BY(m_anchor_mutex);
+    mutable std::string m_bid_balance_error GUARDED_BY(m_anchor_mutex);
+    mutable std::string m_bid_fee_source GUARDED_BY(m_anchor_mutex);
+    mutable uint256 m_bid_polled_for GUARDED_BY(m_anchor_mutex);
+    mutable bool m_bid_low_warned GUARDED_BY(m_anchor_mutex){false};
+    mutable bool m_bid_off_warned GUARDED_BY(m_anchor_mutex){false};
+    /** Settle the pending bids with the commitments of the mainchain record; what landed costs in the period. */
+    void SettleBids(const sidechain::Mainchain& record) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
+    CAmount SpentInPeriod(const AnchorBidPolicy& policy, int64_t now) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
+    /** The mainchain's next-block fee estimate and the bid wallet's balance, once per mainchain block. */
+    void PollBidSignals(const sidechain::Follower& follower, const uint256& main_tip, const AnchorBidPolicy& policy) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
 };
 
-/** What a validator's anchorer bids for a commitment by default, in satoshis of the mainchain (not on regtest: off). */
-inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{1000};
+/** The bids an anchorer remembers. */
+inline constexpr size_t BID_HISTORY{50};
+/** The node's setting (settings.json) that keeps the fields setanchorbidpolicy changed. */
+inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
+/**
+ * The anchor bid policy of the options: -validatoranchorbid (the floor; off), -validatoranchorbidmode (the old
+ * modes: standard is feespreventstall, fees is fees at 100 %), -validatoranchorbidmax and the others
+ * (-validatoranchorbidstrategy, ...). Off on regtest unless one is given. Errors logged, the defaults kept.
+ */
+AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain);
+/** The policy in a line, for the log. */
+std::string AnchorBidPolicySummary(const AnchorBidPolicy& policy);
 
 /** The FastBlocks hooks installed, if they are. */
 FastBlocksHooks* InstalledHooks();
