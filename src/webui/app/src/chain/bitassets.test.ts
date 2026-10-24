@@ -110,6 +110,8 @@ let previewExists = false;
 let paramsOn = false;
 /** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
 let launchCount = 2;
+/** Launches of the test's own, after the others (My launches: a curve never traded, one traded). */
+let extraLaunches: Record<string, unknown>[] = [];
 const MOON = id('m');
 const STAR = id('t');
 function launchOf(token: string, i = 0): Record<string, unknown> {
@@ -319,7 +321,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return { pools };
     case 'listlaunches': {
       const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
-      const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
+      const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i)), ...extraLaunches];
       const list = all.filter((l) => (o.status === 'graduated' ? l.status === 'graduated' : o.status === 'curve' || o.status === 'new' ? l.status === 'curve' : true) && Number(l.progress) >= (o.min_progress ?? 0));
       const from = Number(o.cursor || 0);
       const limit = o.limit ?? 50;
@@ -463,6 +465,7 @@ beforeEach(() => {
   previewExists = false;
   paramsOn = false;
   launchCount = 2;
+  extraLaunches = [];
   store = null;
   locked = false;
   calls.length = 0;
@@ -1103,17 +1106,51 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const cell = (row: HTMLElement, c: string) => row.querySelector(`.${c}`)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
     expect(moon.querySelector('.c-asset .badge-asset .asset-name')?.textContent).toBe('To the moon $MOON');
     // On its curve: the allocation and its amount; the progress; fees owed: claimable (the fees alone), Claim.
-    expect(cell(moon, 'c-alloc')).toMatch(/^Allocation 2% 20[,\u202f\u00a0 ]?000[,\u202f\u00a0 ]?000 MOON$/);
+    expect(cell(moon, 'c-alloc')).toMatch(/^Allocation 2% 20M MOON$/);
     expect(cell(moon, 'c-curve')).toMatch(/^Curve 40/);
     expect(cell(moon, 'c-claim')).toMatch(/^Claimable [\d.,]+ ECX$/);
     expect(within(moon).getByRole('button', { name: /Claim/ })).toBeTruthy();
     // Graduated, not minted: the allocation claimable now, and Claim sends claimlaunch.
     expect(cell(star, 'c-alloc')).toMatch(/^Allocation 2% /);
     expect(cell(star, 'c-curve')).toBe('Curve graduated');
-    expect(cell(star, 'c-claim')).toMatch(/^Claimable [\d.,\u202f\u00a0 ]+ STAR/);
+    expect(cell(star, 'c-claim')).toBe('Claimable 20.4M STAR');
     await fireEvent.click(within(star).getByRole('button', { name: /Claim/ }));
     await answer('yes');
     await waitFor(() => expect(called('claimlaunch').at(-1)?.params).toEqual([assetArg(STAR)]));
+  });
+
+  it('My launches: a curve never traded (6 decimals, 210M) and one traded (4 decimals), each clean in the holdings\' layout (user report 2026-10-24)', async () => {
+    dexOn = true;
+    const CORN = 'c0'.repeat(32);
+    const CAT = 'ca'.repeat(32);
+    const base = { ...launchOf(MOON), info: undefined, has_logo: false, creator_fees_owed: '0.00000000', allocation: 2, allocation_claimed: false, status: 'curve', graduated_height: undefined };
+    // As the node gives one with no buys yet: progress 0, no last price, volume or market value.
+    extraLaunches = [
+      { ...base, token: CORN, ticker: 'CORN', display_name: 'ECASHCORN', decimals: 6, supply: '210000000.000000', curve_supply: undefined, pool_supply: undefined, progress: 0, price: undefined, market_cap: undefined, volume: undefined, raised: '0.00000000', trades: 0 },
+      { ...base, token: CAT, ticker: 'SRSCAT', display_name: 'Serious Cat', decimals: 4, supply: '1000000.0000', curve_supply: undefined, pool_supply: undefined, progress: 12.5, price: 0.0001, volume: '10.00000000', raised: '62.50000000', trades: 3 },
+    ];
+    render(MyAssets);
+    await loaded();
+    const panel = await waitFor(() => screen.getByTestId('my-launches'));
+    const row = (t: string) => within(panel).getAllByTestId('my-launch').find((r) => r.textContent?.includes(t))!;
+    await waitFor(() => expect(row('CORN')).toBeTruthy());
+    const cell = (r: HTMLElement, c: string) => r.querySelector(`.${c}`)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    for (const r of [row('CORN'), row('SRSCAT')]) {
+      expect(r.textContent).not.toMatch(/NaN|Infinity|undefined|null/);
+      // The shared identity, in the holdings' row.
+      expect(r.querySelector('.c-asset .badge-asset .asset-name .ident')).not.toBeNull();
+      expect(r.classList.contains('ml-row')).toBe(true);
+    }
+    expect(row('CORN').querySelector('.asset-name')?.textContent).toMatch(/^ECASHCORN \$CORN /);
+    // Never traded: the allocation compact, an empty bar, "No trades yet", the curve's start price.
+    expect(cell(row('CORN'), 'c-alloc')).toBe('Allocation 2% 4.2M CORN');
+    expect(cell(row('CORN'), 'c-curve')).toMatch(/^Curve No trades yet start price [\d.,e−-]+ ECX$/);
+    expect((row('CORN').querySelector('.c-curve .ba-bar > span') as HTMLElement).style.width).toMatch(/^0(%|px)?$/);
+    expect(cell(row('CORN'), 'c-claim')).toBe('Claimable at graduation');
+    // Traded: its progress, no start price; 4 decimals compact.
+    expect(cell(row('SRSCAT'), 'c-alloc')).toBe('Allocation 2% 20k SRSCAT');
+    expect(cell(row('SRSCAT'), 'c-curve')).toMatch(/^Curve 12\.5/);
+    expect(row('SRSCAT').querySelector('[data-testid="start-price"]')).toBeNull();
   });
 
   it('the cards of the home: holdings, markets, auctions', async () => {

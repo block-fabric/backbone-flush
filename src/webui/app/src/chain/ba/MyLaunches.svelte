@@ -15,8 +15,9 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
-  import { claimable, creatorAllocation, type Launch, type LaunchPage } from './launch';
-  import { approx, assetArg, assetText, formatAmount, formatPercent, formatUnits, type Amount } from './model';
+  import { compactNumber } from './axis';
+  import { claimable, creatorAllocation, launchCurveFacts, type Launch, type LaunchPage } from './launch';
+  import { approx, assetArg, assetText, formatAmount, formatPercent, formatPrice, formatUnits, type Amount } from './model';
   import { assetById, ba, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
@@ -54,6 +55,12 @@
       live = false;
     };
   });
+
+  /** An amount of a launch's asset, compact (a supply of 210 million, 6 decimals: "4.2M"); the exact one in its title. */
+  function compactUnits(units: bigint, decimals: number): string {
+    const whole = Number(units) / 10 ** decimals;
+    return Number.isFinite(whole) ? compactNumber(whole) : '–';
+  }
 
   function open(l: Launch) {
     tradeIntent.launch = l.token;
@@ -101,21 +108,24 @@
       {#each launches as l (l.token)}
         {@const a = creatorAllocation(l)}
         {@const owed = claimable(l)}
-        {@const progress = a ? a.progress : Math.max(0, Math.min(100, Number(l.progress) || 0))}
+        {@const curve = launchCurveFacts(l)}
         <li class="ml-grid ml-row" data-testid="my-launch">
           <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} /></button></span>
           <span class="c-alloc" data-testid="allocation-line">
             <span class="cell-label">Allocation</span>
-            {#if a}<span><strong class="num">{a.percent}%</strong> <span class="faint small num">{formatUnits(a.units, a.decimals, { max: 2 })} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint">{t('no allocation')}</span>{/if}
+            {#if a}<span><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}
           </span>
           <span class="c-curve">
             <span class="cell-label">Curve</span>
-            <span class="curve"><span class="ba-bar"><span use:barWidth={progress / 100}></span></span><span class="num small">{l.status === 'graduated' ? t('graduated') : formatPercent(progress)}</span></span>
+            <span class="curve-cell">
+              <span class="curve"><span class="ba-bar"><span use:barWidth={curve.progress / 100}></span></span><span class="num small">{l.status === 'graduated' ? t('graduated') : curve.traded ? formatPercent(curve.progress) : t('No trades yet')}</span></span>
+              {#if curve.start && curve.price !== undefined && l.status !== 'graduated'}<span class="faint small num start" data-testid="start-price" title={t('start price %1 %2', formatPrice(curve.price), TICKER)}>{t('start price %1 %2', formatPrice(curve.price, 3), TICKER)}</span>{/if}
+            </span>
           </span>
           <span class="c-claim" data-testid="claimable">
             <span class="cell-label">Claimable</span>
             {#if owed.allocation || owed.fees}
-              <span class="num">{#if owed.allocation && a}{formatUnits(a.units, a.decimals, { max: 2 })} <SafeText text={l.ticker} />{/if}{#if owed.allocation && a && owed.fees}{' + '}{/if}{#if owed.fees}{formatAmount(l.creator_fees_owed, 8)} {TICKER}{/if}</span>
+              <span class="num">{#if owed.allocation && a}{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} />{/if}{#if owed.allocation && a && owed.fees}{' + '}{/if}{#if owed.fees}{formatAmount(l.creator_fees_owed, 8)} {TICKER}{/if}</span>
             {:else if a?.state === 'at-graduation'}<span class="faint small">{t('at graduation')}</span>
             {:else if a?.state === 'claimed'}<span class="faint small">{t('claimed')}</span>
             {:else}<span class="faint">–</span>{/if}
@@ -185,6 +195,17 @@
   }
   .c-alloc,
   .c-claim {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .curve-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .start {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
