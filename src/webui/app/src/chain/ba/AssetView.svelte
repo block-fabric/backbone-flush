@@ -15,6 +15,7 @@
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
   import AssetName from './AssetName.svelte';
+  import AssetActions from './AssetActions.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
   import Chart from './Chart.svelte';
   import OpenMarket from './OpenMarket.svelte';
@@ -22,7 +23,7 @@
   import { flipKind, kindOf } from './kinds';
   import type { Launch } from './launch';
   import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
-  import { assetTextOf, ba, chnPrice, displayNameOf, nameOf, priceSeries, refreshBitAssets, sellIntent, sendAsset, tradeIntent } from './store.svelte';
+  import { assetTextOf, ba, chnPrice, openMarketIntent, displayNameOf, nameOf, priceSeries, refreshBitAssets, sellIntent, tradeIntent } from './store.svelte';
   import { ignoreAsset, ignoreName, unignoreAsset, unignoreName } from './hide.svelte';
   import { ignoredAsset } from './visible.svelte';
   import { TICKER } from '../config';
@@ -93,6 +94,17 @@
   );
   const fields = $derived(DATA_FIELDS.filter((f) => asset?.data?.[f] !== undefined));
 
+  // Opened on its "Open a market" (an asset row's action): there, once.
+  $effect(() => {
+    if (!asset || openMarketIntent.asset !== id) return;
+    openMarketIntent.asset = '';
+    queueMicrotask(() => {
+      const at = document.getElementById('open-market');
+      at?.scrollIntoView?.({ block: 'start' });
+      at?.focus();
+    });
+  });
+
   function trade(other: string) {
     tradeIntent.pay = other;
     tradeIntent.get = id;
@@ -108,11 +120,6 @@
   function sell() {
     sellIntent.asset = id;
     go('auctions', 'sell');
-  }
-
-  function send() {
-    sendAsset(id);
-    go('send');
   }
 
   async function retire() {
@@ -164,8 +171,8 @@
         </div>
       </div>
       <div class="hero-actions">
-        <button type="button" class="btn primary" onclick={() => trade('0'.repeat(64))}><Icon name="swap" size={15} /> Trade</button>
-        {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={send}><Icon name="send" size={15} /> Send</button>{/if}
+        <!-- What can be done with it now, from its markets (ba/AssetActions.svelte): Swap, Buy on its curve, Open a market… -->
+        <AssetActions {id} label={asset.label} launch={launched} />
         {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={sell}><Icon name="gavel" size={15} /> Sell by auction</button>{/if}
         {#if controlled}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="crown" size={15} /> Manage</button>{/if}
         {#if controlled && !asset.fixed && ba.info?.tickers_active}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="edit" size={15} /> {asset.display_name ? 'Change display name' : 'Add a display name'}</button>{/if}
@@ -247,7 +254,7 @@
           {/if}
         </section>
 
-        {#if wallets.current !== null}<OpenMarket {asset} {pools} launched={!!launched} />{/if}
+        {#if wallets.current !== null}<div id="open-market" tabindex="-1"><OpenMarket {asset} {pools} launched={!!launched} /></div>{/if}
 
         {#if chnPool && !chnPool.abandoned}
           <section class="panel">

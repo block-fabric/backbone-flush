@@ -203,6 +203,12 @@
     background: var(--accent-soft);
     outline: none;
   }
+  /* Touch: items of 2.75rem. */
+  @media (pointer: coarse) {
+    .item {
+      min-height: 2.75rem;
+    }
+  }
   .item:disabled {
     color: var(--text-faint);
     cursor: default;

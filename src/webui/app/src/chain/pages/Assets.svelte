@@ -13,6 +13,7 @@
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import CreateAssetButton from '../ba/CreateAssetButton.svelte';
+  import AssetActions from '../ba/AssetActions.svelte';
   import AssetView from '../ba/AssetView.svelte';
   import { untrack } from 'svelte';
   import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
@@ -238,7 +239,7 @@
         {#each list as a (a.asset)}
           {@const price = chnPrice(a.asset)}
           {@const market = marketOf(a.asset, ba.pools, ba.auctions)}
-          <li>
+          <li class="tile-item">
             <button type="button" class="panel tile" onclick={() => (shown = a.asset)}>
               <span class="top">
                 <AssetBadge id={a.asset} label={a.label} display={a.display_name ?? ""} seq={a.seq} />
@@ -256,6 +257,8 @@
                 {#if a.releasable}<span class="ba-tag danger">Dead</span>{/if}
               </span>
             </button>
+            <!-- Its actions (ba/AssetActions.svelte), at the foot of its card, outside its button. -->
+            <AssetActions id={a.asset} label={a.label} />
           </li>
         {/each}
       </ul>
@@ -316,13 +319,21 @@
     padding: 0;
     list-style: none;
   }
+  .tile-item {
+    position: relative;
+  }
+  .tile-item > :global(.asset-actions) {
+    position: absolute;
+    right: 1rem;
+    bottom: 0.8rem;
+  }
   .tile {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
     width: 100%;
     height: 100%;
-    padding: 0.95rem 1rem;
+    padding: 0.95rem 1rem 3.6rem;
     color: var(--text);
     font: inherit;
     text-align: left;

@@ -643,13 +643,13 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     render(Assets);
     await loaded();
     const list = await screen.findByRole('list', { name: 'Assets' });
-    expect(within(list).getAllByRole('button').length).toBe(3);
+    expect(within(list).getAllByRole('listitem').length).toBe(3);
     await fireEvent.click(screen.getByRole('button', { name: /^Dead/ }));
-    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('button').length).toBe(1));
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('listitem').length).toBe(1));
     await fireEvent.click(screen.getByRole('button', { name: /^All/ }));
     await fireEvent.input(screen.getByRole('searchbox', { name: 'Find an asset' }), { target: { value: 'gram' } });
-    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('button').length).toBe(1));
-    await fireEvent.click(within(screen.getByRole('list', { name: 'Assets' })).getByRole('button'));
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Assets' })).getAllByRole('listitem').length).toBe(1));
+    await fireEvent.click(screen.getByRole('list', { name: 'Assets' }).querySelector('button.tile')!);
     await waitFor(() => expect(screen.getByRole('heading', { name: '$GOLD #1739-0029' })).toBeTruthy());
     expect(called('getasset').some((c) => (c.params as unknown[])[0] === assetArg(GOLD))).toBe(true);
     expect(screen.getByText('One gram of gold', { selector: '.info span' })).toBeTruthy();
@@ -1124,9 +1124,14 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const CORN = 'c0'.repeat(32);
     const CAT = 'ca'.repeat(32);
     const base = { ...launchOf(MOON), info: undefined, has_logo: false, creator_fees_owed: '0.00000000', allocation: 2, allocation_claimed: false, status: 'curve', graduated_height: undefined };
-    // As the node gives one with no buys yet: progress 0, no last price, volume or market value.
+    // As the PC node's listlaunches gives them on betanet (2026-10-24), with no buys yet: progress 0, no trades.
+    const CORN_LAUNCH = { ticker: 'CORN', display_name: 'ECASHCORN', height: 3997, status: 'curve', raised: 0, graduation: 500, progress: 0, price: 1.058201058201e-06, market_cap: 222.22222222, supply: 210000000, decimals: 6, curve_supply: 157500000, pool_supply: 52500000, curve_tokens_left: 157500000, fee: 1.15, allocation: 0.2, allocation_claimed: false, min_buy: 0, max_buy: 0, volume: 0, trades: 0, creator_fees_owed: 0 };
+    const RUG_LAUNCH = { ticker: 'RUG', display_name: 'Rugging', status: 'curve', raised: 0, graduation: 500, progress: 0, price: 0.0001481481481481, market_cap: 222.22222222, supply: 1500000, decimals: 6, fee: 5, allocation: 10, volume: 0, trades: 0 };
+    const RUG = 'd1'.repeat(32);
+    // The fields the node gives besides (its token, creator, pool), and those RUG's listing left out, as the node has them.
     extraLaunches = [
-      { ...base, token: CORN, ticker: 'CORN', display_name: 'ECASHCORN', decimals: 6, supply: '210000000.000000', curve_supply: undefined, pool_supply: undefined, progress: 0, price: undefined, market_cap: undefined, volume: undefined, raised: '0.00000000', trades: 0 },
+      { ...base, ...CORN_LAUNCH, token: CORN, creator: ME },
+      { ...base, curve_supply: undefined, pool_supply: undefined, creator_fees_owed: 0, allocation_claimed: false, ...RUG_LAUNCH, token: RUG, creator: ME },
       { ...base, token: CAT, ticker: 'SRSCAT', display_name: 'Serious Cat', decimals: 4, supply: '1000000.0000', curve_supply: undefined, pool_supply: undefined, progress: 12.5, price: 0.0001, volume: '10.00000000', raised: '62.50000000', trades: 3 },
     ];
     render(MyAssets);
@@ -1135,7 +1140,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const row = (t: string) => within(panel).getAllByTestId('my-launch').find((r) => r.textContent?.includes(t))!;
     await waitFor(() => expect(row('CORN')).toBeTruthy());
     const cell = (r: HTMLElement, c: string) => r.querySelector(`.${c}`)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-    for (const r of [row('CORN'), row('SRSCAT')]) {
+    for (const r of [row('CORN'), row('RUG'), row('SRSCAT')]) {
       expect(r.textContent).not.toMatch(/NaN|Infinity|undefined|null/);
       // The shared identity, in the holdings' row.
       expect(r.querySelector('.c-asset .badge-asset .asset-name .ident')).not.toBeNull();
@@ -1143,8 +1148,12 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     }
     expect(row('CORN').querySelector('.asset-name')?.textContent).toMatch(/^ECASHCORN \$CORN /);
     // Never traded: the allocation compact, an empty bar, "No trades yet", the curve's start price.
-    expect(cell(row('CORN'), 'c-alloc')).toBe('Allocation 2% 4.2M CORN');
-    expect(cell(row('CORN'), 'c-curve')).toMatch(/^Curve No trades yet start price [\d.,e−-]+ ECX$/);
+    // Its allocation kept (0.2% of 210M), compact; its start price as the node has it, about 1.06e-06 ECX.
+    expect(cell(row('CORN'), 'c-alloc')).toBe('Allocation 0.2% 420k CORN');
+    expect(cell(row('CORN'), 'c-curve')).toBe('Curve No trades yet start price 0.00000106 ECX');
+    expect(cell(row('RUG'), 'c-alloc')).toBe('Allocation 10% 150k RUG');
+    expect(cell(row('RUG'), 'c-curve')).toBe('Curve No trades yet start price 0.000148 ECX');
+    expect(cell(row('RUG'), 'c-claim')).toBe('Claimable at graduation');
     expect((row('CORN').querySelector('.c-curve .ba-bar > span') as HTMLElement).style.width).toMatch(/^0(%|px)?$/);
     expect(cell(row('CORN'), 'c-claim')).toBe('Claimable at graduation');
     // Traded: its progress, no start price; 4 decimals compact.
@@ -2252,6 +2261,74 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await fireEvent.click(rows().find((r) => r.dataset.kind === 'launch')!);
     await waitFor(() => expect(screen.queryByRole('table', { name: 'Markets' })).toBeNull());
     expect(called('getlaunch').length + called('listlaunches').length).toBeGreaterThan(0);
+  });
+
+  it('the actions of an asset row: the most relevant as a button, the rest in a menu by the keyboard; their routes kept by the pages', async () => {
+    dexOn = true;
+    nav.page = 'my-assets';
+    nav.tab = '';
+    let shown = render(MyAssets);
+    await loaded();
+    const holdings = await screen.findByRole('list', { name: 'Holdings' });
+    const gold = await waitFor(() => within(holdings).getAllByTestId('asset-actions')[0]);
+    // GOLD has a pool with ECX: Swap first, to get it.
+    const primary = gold.querySelector<HTMLButtonElement>('.act')!;
+    expect(primary.dataset.action).toBe('swap');
+    // The menu: opened from the keyboard on its first item, arrows, Escape back to its button.
+    const more = within(gold).getByRole('button', { name: /^More actions for/ });
+    await fireEvent.keyDown(more, { key: 'ArrowDown' });
+    const menu = await screen.findByRole('menu');
+    const items = within(menu).getAllByRole('menuitem').map((x) => x.textContent?.trim());
+    expect(items).toEqual(['Sell', 'Add liquidity', 'View market', 'Send', 'Receive', 'View asset']);
+    await waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell'));
+    await fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement?.textContent?.trim()).toBe('Add liquidity');
+    await fireEvent.keyDown(menu, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(more);
+    // A click on an action does not pick the row under it.
+    await fireEvent.click(more);
+    await fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Sell' }));
+    expect([nav.page, nav.tab]).toEqual(['trade', `swap/pay/${GOLD}`]);
+    shown.unmount();
+    // Swap takes the asset and its side from the route.
+    shown = render(Trade, { props: { page: 'trade' } });
+    await loaded();
+    await waitFor(() => expect((document.querySelector('#swap-pay') as HTMLElement).dataset.value).toBe(GOLD));
+    expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(CHN_ID);
+    nav.tab = `swap/get/${SILVER}`;
+    await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(SILVER));
+    shown.unmount();
+    // A launch's page from the route, its panel on the side named, focused.
+    nav.page = 'pools';
+    nav.tab = `launches/${MOON}/sell`;
+    shown = render(Trade, { props: { page: 'pools' } });
+    await loaded();
+    await waitFor(() => expect(document.activeElement?.id).toBe('launch-amount'));
+    expect(screen.getByLabelText('You sell')).toBeTruthy();
+    // Back: the list, its route without the launch.
+    await fireEvent.click(screen.getByRole('button', { name: /All launches/ }));
+    await waitFor(() => expect(nav.tab).toBe('launches'));
+    shown.unmount();
+    // My launches: Claim first for its creator; Buy in its menu, to the launch's page.
+    nav.page = 'my-assets';
+    nav.tab = '';
+    shown = render(MyAssets);
+    await loaded();
+    const moon = await waitFor(() => within(screen.getByTestId('my-launches')).getAllByTestId('my-launch').find((r) => r.textContent?.includes('MOON'))!);
+    expect(moon.querySelector<HTMLButtonElement>('.act')!.dataset.action).toBe('claim');
+    await fireEvent.click(within(moon).getByRole('button', { name: /^More actions for/ }));
+    await fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Buy' }));
+    expect([nav.page, nav.tab]).toEqual(['pools', `launches/${MOON}/buy`]);
+    shown.unmount();
+    // Browse assets: each card has its actions, outside its button.
+    nav.page = 'assets';
+    nav.tab = '';
+    render(Assets);
+    await loaded();
+    const tiles = await screen.findByRole('list', { name: 'Assets' });
+    await waitFor(() => expect(within(tiles).getAllByTestId('asset-actions').length).toBe(within(tiles).getAllByRole('listitem').length));
+    expect(tiles.querySelector('button.tile [data-testid="asset-actions"]')).toBeNull();
   });
 
   it('Create asset, top right of Swap, Markets, Portfolio and Browse assets, to the creation wizard', async () => {

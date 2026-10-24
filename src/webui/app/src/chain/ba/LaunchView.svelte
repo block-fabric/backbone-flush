@@ -6,6 +6,7 @@
   // graduates), sent as an order of the block's batch (buyfromlaunch, selltolaunch); the last blocks that traded on it
   // (getlaunchlog); its creator, their fees and allocation, and the payment of what they are owed (claimlaunch, which
   // anyone may send). Graduated: it trades in its pool with CHN (PoolView, Swap).
+  import { untrack } from 'svelte';
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { stacked } from '../../lib/actions';
@@ -26,7 +27,8 @@
   import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
-  let { token, back }: { token: string; back: () => void } = $props();
+  /** side: the panel's side the route names (Markets "launches/<token>/sell": ba/assetactions.ts), focused once shown. */
+  let { token, back, side: routeSide = 'buy' }: { token: string; back: () => void; side?: 'buy' | 'sell' } = $props();
 
   let launch = $state<Launch | null>(null);
   let error = $state('');
@@ -114,7 +116,17 @@
   const allocationShown = $derived(launch ? creatorAllocation(launch) : null);
 
   // --- Buying and selling on the curve ---
-  let side = $state<'buy' | 'sell'>('buy');
+  let side = $state<'buy' | 'sell'>(untrack(() => routeSide));
+  // The route's side, again as it changes (back, forward); its amount focused once the launch is read.
+  $effect(() => {
+    side = routeSide;
+  });
+  let focused = false;
+  $effect(() => {
+    if (!launch || focused) return;
+    focused = true;
+    queueMicrotask(() => document.getElementById('launch-amount')?.focus());
+  });
   let amount = $state<bigint | null>(null);
   let amountText = $state('');
   let slippage = $state(1);

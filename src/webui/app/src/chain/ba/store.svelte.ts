@@ -251,6 +251,8 @@ export const ba = $state({
 export const sendIntent = $state({ asset: '' });
 /** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id), a book (its base and quote). */
 export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '', createA: '', createB: '' });
+/** An asset whose page is opened on its "Open a market" (ba/AssetActions.svelte): AssetView scrolls to it, once. */
+export const openMarketIntent = $state({ asset: '' });
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
 

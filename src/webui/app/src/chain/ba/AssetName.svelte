@@ -50,16 +50,20 @@
 <span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<SafeText class="{nameClass} first" text={a.name} />{' '}{/if}{#if a.alias}<SafeText class="alias" text={a.alias} />{' '}{/if}{#if ticker || unique}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 
 <style>
+  /* Too narrow for both: the identity goes under the name (never cut: it is what tells the asset apart), the name
+     keeping a few letters before it does. */
   .asset-name {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: 0.4em;
+    gap: 0 0.4em;
     min-width: 0;
     max-width: 100%;
     white-space: nowrap;
   }
   .asset-name :global(.first) {
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: min(6em, 100%);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -69,6 +73,8 @@
   .ident {
     flex: none;
     display: inline-flex;
+    flex-wrap: wrap;
+    max-width: 100%;
     align-items: baseline;
     gap: 0.3em;
     padding: 0 0.35em;
