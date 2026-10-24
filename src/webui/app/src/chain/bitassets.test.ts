@@ -104,6 +104,8 @@ let activityCount = 1;
 let tickersOn = false;
 /** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
 let dexOn = false;
+/** Whether previewpool says the pool is there already (someone made it first). */
+let previewExists = false;
 /** The launch parameters (consensus "launchparams": a launch's own supply, decimals and fee; curveasset) apply. */
 let paramsOn = false;
 /** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
@@ -228,6 +230,8 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return list.slice(Number(p[2] ?? 0), Number(p[2] ?? 0) + Number(p[1] ?? 100));
     }
     case 'getpool': {
+      // By id, or by the pair.
+      if (p.length === 1) return pools.find((q) => q.pool === p[0]) ?? fail('No such pool');
       const x = pools.find((q) => [assetArg(q.asset_a_id), assetArg(q.asset_b_id)].sort().join() === [p[0], p[1]].sort().join());
       if (!x) fail('There is no pool of these assets');
       return x;
@@ -264,7 +268,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
         : { amount_in: Number(p[1]), amount_out: 0, path: [], pools: [], routes: [] };
     case 'previewpool': {
       const kind = (p[4] ?? {}) as { curve?: string; fee?: number; amp?: number; weight_a?: number };
-      return { pool: id('n'), exists: false, open: false, shares: 999000, price: Number(p[3]) / Number(p[1]), curve: kind.curve, fee: kind.fee, amp: kind.amp, default_kind: false, depth: [
+      return { pool: id('n'), exists: previewExists, open: false, shares: 999000, price: Number(p[3]) / Number(p[1]), curve: kind.curve, fee: kind.fee, amp: kind.amp, default_kind: false, depth: [
         { side: 'sell_a', size_percent: 1, amount_in: 0.1, amount_out: 0.0099, avg_price: 0.099, price_after: 0.098, price_impact: 0.4 },
         { side: 'sell_b', size_percent: 1, amount_in: 0.01, amount_out: 0.099, avg_price: 0.101, price_after: 0.102, price_impact: 0.4 },
         { side: 'sell_a', size_percent: 10, amount_in: 1, amount_out: 0.09, avg_price: 0.09, price_after: 0.08, price_impact: 9 },
@@ -452,6 +456,7 @@ beforeEach(() => {
   activityCount = 1;
   tickersOn = false;
   dexOn = false;
+  previewExists = false;
   paramsOn = false;
   launchCount = 2;
   store = null;
@@ -1435,7 +1440,7 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: concentrated liquidity and
     expect(screen.getByTestId('position-preview').textContent).toMatch(/Goes in\s*5\s*GOLD\s*0\.5\s*CHN/);
     await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
     await answer('yes');
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), asked[1], asked[2], { [assetArg(GOLD)]: '5' }, 1]));
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), asked[1], asked[2], { [assetArg(GOLD)]: '5' }, 1, 10]));
     // A range above the price: GOLD alone, CHN's field off.
     await fireEvent.input(document.querySelector('#cl-lower')!, { target: { value: '0.2' } });
     await fireEvent.input(document.querySelector('#cl-upper')!, { target: { value: '0.3' } });
@@ -2192,7 +2197,8 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('over the full range'));
     await answer('yes');
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), 0, 0, { [assetArg(GOLD)]: '5', ECX: '0.5' }, 1]));
+    // With the price shown, in the node's order (ECX in GOLD: 10), for the wallet to check at signing.
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), 0, 0, { [assetArg(GOLD)]: '5', ECX: '0.5' }, 1, 10]));
     // A range of one's own: its bounds, ±5% at first, to the node turned over (ECX in GOLD).
     await fireEvent.click(screen.getByRole('button', { name: 'Custom range' }));
     await waitFor(() => expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.095'));
@@ -2224,7 +2230,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('position'));
     expect(called('openposition')).toHaveLength(0);
     await fireEvent.click(screen.getByRole('button', { name: 'Put in your liquidity' }));
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(GOLD)]: '10', ECX: '1' }, 1]));
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(GOLD)]: '10', ECX: '1' }, 1, 10]));
     expect(asked).toEqual(['createpool', 'openposition']);
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('done'));
     await waitFor(() => expect(store).toMatchObject({ funding: [{ asset: GOLD, quote: CHN_ID, pool: id('n'), positionTx: id('7') }] }));
@@ -2272,13 +2278,51 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'concentrated', fee: 1 }, 1]));
     expect(called('previewpool').at(-1)?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'concentrated', fee: 1 }]);
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('pool-sent'));
-    clPool(id('n'), { asset_a: 'COPPER', asset_a_id: F, fee: 1 });
+    clPool(id('n'), { asset_a: 'COPPER', asset_a_id: F, fee: 1, price: 0.02 });
     await refreshBitAssets();
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('position'));
     await fireEvent.click(screen.getByRole('button', { name: 'Put in your liquidity' }));
     // The creator's own ECX and tokens, over the full range (prices of 0).
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(F)]: '100', ECX: '2' }, 1]));
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(F)]: '100', ECX: '2' }, 1, 50]));
     expect(asked).toEqual(['reserveasset+registerasset', 'createpool', 'openposition']);
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('done'));
+  });
+
+  /** New pool of 10 GOLD and 1 ECX, confirmed: what the next steps start from. */
+  async function newPool() {
+    dexOn = true;
+    nav.tab = 'new';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect((document.querySelector('#np-a') as HTMLElement | null)?.dataset.value).toBe(GOLD));
+    await fireEvent.input(document.querySelector('#np-amount-a')!, { target: { value: '10' } });
+    await fireEvent.input(document.querySelector('#np-amount-b')!, { target: { value: '1' } });
+    const make = () => screen.getByRole('button', { name: /Make and fund the pool/ }) as HTMLButtonElement;
+    await waitFor(() => expect(make().disabled).toBe(false));
+    await fireEvent.click(make());
+    await answer('yes');
+  }
+
+  it('a pool being funded is never one someone else opened first: the user is told, nothing is sent (security review 2026-10-23)', async () => {
+    await newPool();
+    // previewpool said nothing of it while typing; someone made it meanwhile, just before createpool.
+    previewExists = true;
+    await waitFor(() => expect(screen.getByTestId('fund-card').textContent).toMatch(/Someone opened a concentrated pool of GOLD at this fee first/));
+    expect(called('createpool')).toHaveLength(0);
+    expect(called('openposition')).toHaveLength(0);
+  });
+
+  it('the liquidity is refused if the pool\'s price moved from the creator\'s by more than 1% (security review 2026-10-23)', async () => {
+    await newPool();
+    await waitFor(() => expect(called('createpool')).toHaveLength(1));
+    // In a block, but traded to 0.2 ECX for 1 GOLD before the position: refused, nothing sent.
+    clPool(id('n'), { price: 0.2 });
+    await refreshBitAssets();
+    await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('position'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Put in your liquidity' }));
+    await waitFor(() => expect(screen.getByTestId('fund-card').textContent).toMatch(/The pool's price is 0\.2, not 0\.1, the price you set/));
+    expect(called('openposition')).toHaveLength(0);
+    expect(asked).toEqual(['createpool']);
   });
 });
