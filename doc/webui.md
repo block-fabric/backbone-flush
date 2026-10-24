@@ -586,7 +586,9 @@ shown; `chain/fb/model.ts` works out the rest (tested in `chain/fastblocks.test.
 RPCs (and submitevidence); bonding, unbonding, turning staking off and signing a proof of possession are host
 methods of local.cpp (`fastblocks.bond`, `.unbond`, `.staking`, `.pop`) that ask the desktop first, with the key in
 full, after the passphrase of a locked wallet; `fastblocks.anchoring` says the validator's own BMM bid
-(-validatoranchorbid), which no RPC gives. The UI says "BMM block" (a block of stake that records a BMM
+(its floor and strategy). Merged mining's "Anchor bids of this validator" (`chain/fb/AnchorBidPanel.svelte`) reads
+`getanchorbidpolicy` and `getanchorinfo`'s `bid`, and changes the policy with `setanchorbidpolicy`, a confirmed method
+(local.cpp `ConfirmedRpcMethods`: it spends the mainchain wallet); see doc/fastblocks-anchor-bids.md. The UI says "BMM block" (a block of stake that records a BMM
 commitment), "BMM-confirmed" and "BMM reward" where the RPCs and doc/fastblocks.md say anchor and acknowledgement.
 `e2e/fastblocks.js` runs the node as a genesis validator of regtest (`-posvalidators`, a key file with a second key
 to bond to, `-validatoranchorbid`): see `e2e/local.cmake`.
