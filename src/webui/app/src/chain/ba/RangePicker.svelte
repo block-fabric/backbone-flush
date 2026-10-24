@@ -187,6 +187,9 @@
     const sAmounts = { ...amounts };
     const sSlippage = slippage;
     const sSeen = seen;
+    // The price shown, in the node's order: the wallet refuses at signing a pool moved further than the slippage from it
+    // (expected_price; security review 2026-10-23).
+    const sExpected = Number(turn(price, flip).toPrecision(12));
     const r = await ask({
       title: t('Open a position'),
       message: sSeen.full
@@ -202,7 +205,7 @@
     if (r.choice !== 'yes') return;
     busy = true;
     try {
-      const done = await walletRpc<{ txid: string; position: string }>(wallet, 'openposition', [pool.pool, sOwn[0], sOwn[1], sAmounts, sSlippage]);
+      const done = await walletRpc<{ txid: string; position: string }>(wallet, 'openposition', [pool.pool, sOwn[0], sOwn[1], sAmounts, sSlippage, sExpected]);
       if (!done) return;
       toast('success', t('Opening a position'), t('In the pool with the next block: see it in Positions.'));
       aText = '';

@@ -19,7 +19,8 @@ import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo, PoolPreview } from './kinds';
-import { assetArg, EXACT_METHODS, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { flipped, turn } from './cl';
+import { assetArg, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
@@ -832,9 +833,24 @@ export function fundPoolParams(f: PendingFund): unknown[] {
   return [assetArg(f.asset), f.amount, assetArg(f.quote), f.quoteAmount, fundKind(f)];
 }
 
-/** openposition's parameters for a pool being funded: the full range (prices of 0: no bound), both amounts. */
-export function fundPositionParams(f: PendingFund): unknown[] {
-  return [f.pool ?? '', 0, 0, { [assetArg(f.asset)]: f.amount, [assetArg(f.quote)]: f.quoteAmount }, f.slippage];
+/** The most a pool being funded may have moved from the creator's price before the position goes in, in percent. */
+export const FUND_PRICE_TOLERANCE = 1;
+
+/** The creator's price of a pool being funded, as a pool of the lists gives it (1 of asset_a in asset_b). */
+export function fundPriceOf(f: Pick<PendingFund, 'asset' | 'amount' | 'quoteAmount'>, pool: Pick<Pool, 'asset_a_id'>): number {
+  const own = Number(f.quoteAmount) / Number(f.amount);
+  return pool.asset_a_id === f.asset ? own : 1 / own;
+}
+
+/**
+ * openposition's parameters for a pool being funded: the full range (prices of 0: no bound), both amounts, and the
+ * creator's price as the price the wallet expects (expected_price: the node's order, asset0 in asset1), so that it
+ * refuses at signing a pool moved further than the slippage from it (security review 2026-10-23: a pool opened or moved
+ * by someone else first).
+ */
+export function fundPositionParams(f: PendingFund, pool: Pick<Pool, 'asset_a_id' | 'asset_b_id'>): unknown[] {
+  const expected = Number(turn(fundPriceOf(f, pool), flipped(pool)).toPrecision(12));
+  return [f.pool ?? '', 0, 0, { [assetArg(f.asset)]: f.amount, [assetArg(f.quote)]: f.quoteAmount }, f.slippage, expected];
 }
 
 /** Where a pool being funded is. */
@@ -866,20 +882,18 @@ function fundEntry(f: PendingFund): PendingFund | undefined {
 
 /**
  * Make the pool of a PendingFund (the user's word: the wallet confirms createpool): at the price its amounts name, of
- * the curve concentrated, nothing put in. One someone made meanwhile, of that tier, is used as it is (no transaction).
+ * the curve concentrated, nothing put in. Only the pool this step makes is funded: one of the pair at that tier made by
+ * someone else first is never used (its price is theirs: security review 2026-10-23); the user is told, and stops.
  */
 export async function makeFundedPool(given: PendingFund): Promise<boolean> {
   const f = fundEntry(given) ?? given;
   const params = fundPoolParams(f);
   try {
     const preview = await rpc.raw<PoolPreview>('previewpool', params).catch(() => null);
-    if (preview?.exists && preview.pool) {
-      f.pool = preview.pool;
-      f.error = undefined;
+    if (preview?.exists) {
+      f.error = t('Someone opened a concentrated pool of %1 at this fee first, at a price of their own: this app does not put your liquidity in it. Look at its price on its page and open a position there if you want, or forget this one.', f.name);
       saveJournal();
-      toast('info', t('Its pool is there already'), t('A concentrated pool of %1 at this fee is open: your liquidity goes into it, at its price.', f.name));
-      void fundReady(f.wallet);
-      return true;
+      return false;
     }
     const done = await walletRpc<{ txid: string; pool: string }>(f.wallet, 'createpool', [...params, f.slippage]);
     if (!done) return false;
@@ -900,9 +914,19 @@ export async function makeFundedPool(given: PendingFund): Promise<boolean> {
 /** Put the liquidity of a PendingFund in its pool, over the full range (the user's word: the wallet confirms openposition). */
 export async function fundPosition(given: PendingFund): Promise<boolean> {
   const f = fundEntry(given) ?? given;
-  if (!f.pool) return false;
+  if (!f.pool || !f.poolTx) return false;
   try {
-    const done = await walletRpc<{ txid: string; position: string }>(f.wallet, 'openposition', fundPositionParams(f));
+    // The pool as it is now: refused if its price moved from the creator's by more than the tolerance (someone traded
+    // it, or it is not the pool that was made).
+    const pool = await rpc.raw<Pool>('getpool', [f.pool]);
+    const want = fundPriceOf(f, pool);
+    const now = Number(pool.price);
+    if (!(want > 0) || !(now > 0) || Math.abs(now / want - 1) * 100 > FUND_PRICE_TOLERANCE) {
+      f.error = t('The pool\'s price is %1, not %2, the price you set: it moved before your liquidity went in. Nothing was sent; look at the pool before putting liquidity in it.', formatPrice(now), formatPrice(want));
+      saveJournal();
+      return false;
+    }
+    const done = await walletRpc<{ txid: string; position: string }>(f.wallet, 'openposition', fundPositionParams(f, pool));
     if (!done) return false;
     f.positionTx = done.txid;
     f.doneAt = Date.now();
