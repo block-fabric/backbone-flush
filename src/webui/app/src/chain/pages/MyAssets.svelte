@@ -19,6 +19,7 @@
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetBadge from '../ba/AssetBadge.svelte';
+  import AssetName from '../ba/AssetName.svelte';
   import LocalTxCell from '../LocalTxCell.svelte';
   import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
@@ -49,9 +50,10 @@
     type Position,
     type Reservation,
     minChnText,
+    assetText,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, dropPending, fundingOf, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, displayNameOf, dropPending, fundingOf, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
   import FundCard from '../ba/FundCard.svelte';
   import { TICKER } from '../config';
@@ -148,7 +150,7 @@
   async function register(p: PendingIssue) {
     try {
       const txid = await registerNow(p);
-      if (txid) toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', p.name));
+      if (txid) toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', assetText(p.name, p.display_name)));
     } catch (e) {
       await inform(t('Register'), errorText(e), 'error');
     }
@@ -168,7 +170,7 @@
       const done = await walletRpc<{ txid: string }>(wallet, 'registerasset', [r.name, amountParam(straySupply, strayDecimals), strayDecimals, strayInfo.trim() ? { info: strayInfo } : {}, strayPublic]);
       if (!done) return;
       strayName = null;
-      toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', r.name));
+      toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', assetText(r.name ?? '')));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Register'), errorText(e), 'error');
@@ -341,7 +343,7 @@
                   <button type="button" class="ba-row" aria-current={picked === h.asset} onclick={() => (picked = h.asset)}>
                     <AssetBadge id={h.asset} label={h.label} showLabel={false} />
                     <span class="main">
-                      <SafeText text={h.label} />
+                      <AssetName label={h.label} display={displayNameOf(h.asset) ?? ''} />
                       <span class="faint small line">
                         {#if h.control}<span class="ba-tag accent">controlled</span>{/if}
                         <span>{approx(h.supply) > 0 ? formatPercent((approx(h.balance) / approx(h.supply)) * 100) : '–'} of the supply</span>

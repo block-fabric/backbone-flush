@@ -1,14 +1,12 @@
 <script lang="ts">
-  // Picking an asset among hundreds (user feedback 2026-10-19): a button that shows the asset chosen (its
-  // logo, its number first, its label, what the wallet holds), and opens a list to search: type a name or a
+  // Picking an asset among hundreds (user feedback 2026-10-19): a button that shows the asset chosen (as the
+  // app shows an asset everywhere, AssetBadge: its logo, its name, its $TICKER, its number; what the wallet holds), and opens a list to search: type a name or a
   // number (#1739-0029) to filter, the arrow keys, Page Up/Down, Home/End to move, Enter to pick, Escape to
   // close. Favourites (the star) and the last picked are on top (picks.svelte.ts). Only the rows in view are
   // drawn. Each asset says its number: labels may look alike, numbers never do (audit 7 E-BA4).
   import { t } from '../../lib/i18n.svelte';
   import Icon from '../../components/Icon.svelte';
-  import SafeText from '../../components/SafeText.svelte';
   import AssetBadge from './AssetBadge.svelte';
-  import AssetName from './AssetName.svelte';
   import { pickerRows, type PickChip, type PickChoice, type PickRow } from './picker';
   import { isFavourite, loadPicks, notePicked, picks, toggleFavourite } from './picks.svelte';
   import { displayNameOf } from './store.svelte';
@@ -54,7 +52,7 @@
     void loadPicks();
   });
 
-  const current = $derived(choices.find((c) => c.id === value));
+  const current = $derived(named.find((c) => c.id === value));
   const rows: PickRow[] = $derived(open ? pickerRows(filtered, query, picks.favourites, picks.recent) : []);
   const first = $derived(Math.max(0, Math.floor(scrollTop / ROW) - 3));
   const last = $derived(Math.min(rows.length, first + VIEW + 7));
@@ -150,11 +148,7 @@
     }}
   >
     {#if current}
-      <AssetBadge id={current.id} label={current.label} size="s" showLabel={false} />
-      <span class="name">
-        {#if current.seq}<span class="seq" translate="no">#{current.seq}</span>{/if}
-        <SafeText text={current.label} />
-      </span>
+      <span class="name"><AssetBadge id={current.id} label={current.label} display={current.display} seq={current.seq ?? ''} size="s" /></span>
       {#if current.warn}<span class="warn" title={current.warn}><Icon name="alert" size={14} label={current.warn} /></span>{/if}
       {#if current.held}<span class="held" translate="no">{current.held}</span>{/if}
     {:else}
@@ -210,11 +204,7 @@
                   onmousemove={() => (active = index)}
                   onclick={() => pick(c)}
                 >
-                  <AssetBadge id={c.id} label={c.label} size="s" showLabel={false} />
-                  <span class="name">
-                    {#if c.seq}<span class="seq" translate="no">#{c.seq}</span>{/if}
-                    <AssetName label={c.label} display={c.display ?? ''} displayClass="display" />
-                  </span>
+                  <span class="name"><AssetBadge id={c.id} label={c.label} display={c.display ?? ''} seq={c.seq ?? ''} size="s" /></span>
                   {#if c.warn}<span class="warn" title={c.warn}><Icon name="alert" size={14} label={c.warn} /></span>{/if}
                   {#if c.held}<span class="held" translate="no">{c.held}</span>{/if}
                   <button
@@ -263,23 +253,11 @@
     cursor: default;
   }
   .name {
+    display: flex;
     flex: 1;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .name :global(.ticker) {
-    font-weight: 600;
-  }
-  .name :global(.display) {
-    color: var(--text-muted);
-    font-weight: 400;
-  }
-  .seq {
-    margin-right: 0.4rem;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
   }
   .held {
     flex: none;

@@ -19,11 +19,12 @@
   import HiddenToggle from '../ba/HiddenToggle.svelte';
   import { hiddenAsset } from '../ba/visible.svelte';
   import AssetBadge from '../ba/AssetBadge.svelte';
+  import AssetName from '../ba/AssetName.svelte';
   import AuctionView from '../ba/AuctionView.svelte';
   import Chart from '../ba/Chart.svelte';
   import UnitsInput from '../ba/UnitsInput.svelte';
   import { amountParam, approx, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsAtMost, unitsOf, type Auction } from '../ba/model';
-  import { ba, decimalsOf, labelOf, moreAuctions, nameOf, refreshBitAssets, sellIntent, showMoreAuctions, startBitAssets } from '../ba/store.svelte';
+  import { ba, decimalsOf, displayNameOf, labelOf, moreAuctions, nameOf, refreshBitAssets, sellIntent, showMoreAuctions, startBitAssets } from '../ba/store.svelte';
 
   /** Shown as a tab of Swap's Advanced, under its heading. */
   let { embedded = false }: { embedded?: boolean } = $props();
@@ -245,6 +246,7 @@
                 <button type="button" class="ba-row" aria-current={picked === a.auction} onclick={() => (picked = a.auction)}>
                   <AssetBadge id={a.base_id} label={a.base} size="s" showLabel={false} />
                   <span class="main">
+                    <AssetName label={a.base} display={displayNameOf(a.base_id) ?? ''} />
                     <span>{formatAmount(a.remaining, decimalsOf(a.base_id), { max: 4 })} <SafeText text={a.base} /> <span class="faint">for</span> <SafeText text={a.quote} /></span>
                     <span class="ba-bar"><span use:barWidth={prog.sold}></span></span>
                   </span>

@@ -17,13 +17,15 @@
   import UnitsInput from './UnitsInput.svelte';
   import LogoPicker, { type PickedLogo } from './LogoPicker.svelte';
   import { amountParam, approx, assetArg, DATA_FIELDS, dataProblems, dataUpdates, displayNameProblem, MAX_DISPLAY_NAME_BYTES, normalizeDisplayName, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
-  import { ba, nameOf, refreshBitAssets, sellIntent, sendAsset, tickersActive, tradeIntent } from './store.svelte';
+  import { assetTextOf, ba, nameOf, refreshBitAssets, sellIntent, sendAsset, tickersActive, tradeIntent } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
 
   const id = $derived(holding.asset);
   const arg = $derived(assetArg(holding.asset));
   const decimals = $derived(holding.decimals);
+  // How its dialogs and notices name it: "Name $TICKER" (model.ts: assetText).
+  const named = $derived(assetTextOf(id, holding.label));
   const balance = $derived(unitsAtMost(holding.balance, holding.decimals));
   // While the control coin moves (a mint, a change, waiting for a block), what it does waits too (as chains-qt).
   const control = $derived(holding.control && !holding.control_pending);
@@ -74,7 +76,7 @@
   async function saveLogo(remove: boolean) {
     if (!remove && !logo) return;
     await run('setassetlogo', [arg, remove ? '' : (logo?.base64 ?? '')], () => {
-      toast('success', remove ? t('Logo removed') : t('Logo set'), t('The logo of %1 changes with the next block.', holding.label));
+      toast('success', remove ? t('Logo removed') : t('Logo set'), t('The logo of %1 changes with the next block.', named));
       logo = null;
     });
   }
@@ -97,7 +99,7 @@
   async function saveDisplay(remove: boolean) {
     if (!remove && (!displayValue || displayProblem || displayValue === asset?.display_name)) return;
     await run('setassetdisplayname', [arg, remove ? '' : displayValue], () => {
-      toast('success', remove ? t('Display name removed') : t('Display name set'), t('The display name of %1 changes with the next block.', holding.label));
+      toast('success', remove ? t('Display name removed') : t('Display name set'), t('The display name of %1 changes with the next block.', named));
     });
   }
   // Give control.
@@ -170,7 +172,7 @@
     const to = mintTo.trim();
     if (to && !mintToValid) return;
     const r = await ask({
-      title: t('Mint %1', holding.label),
+      title: t('Mint %1', named),
       message: t('Mint %1 more %2?', formatUnits(mintUnits, decimals), nameOf(holding.asset, holding.label)),
       informative: to ? t('The new coins go to %1. The supply goes up by as much.', to) : t('The new coins go to this wallet. The supply goes up by as much.'),
       level: 'question',
@@ -191,7 +193,7 @@
     if (Object.keys(problems).length || Object.keys(updates).length === 0) return;
     const lines = Object.entries(updates).map(([k, v]) => (v === null ? t('%1: deleted', t(FIELD_NAMES[k as DataField])) : t('%1: %2', t(FIELD_NAMES[k as DataField]), v)));
     const r = await ask({
-      title: t('Change the data of %1', holding.label),
+      title: t('Change the data of %1', named),
       message: tn('Change %n field(s) of the data of %1?', lines.length, nameOf(holding.asset, holding.label)),
       details: lines,
       informative: t('The change is on the chain for good: the history of each field keeps every value it had.'),
@@ -202,14 +204,14 @@
       ],
     });
     if (r.choice !== 'yes') return;
-    await run('updateasset', [arg, updates], () => toast('success', t('Data saved'), t('The data of %1 changes with the next block.', holding.label)));
+    await run('updateasset', [arg, updates], () => toast('success', t('Data saved'), t('The data of %1 changes with the next block.', named)));
   }
 
   async function giveControl() {
     const to = giveTo.trim();
     if (!to || !giveValid) return;
     const r = await ask({
-      title: t('Give control of %1', holding.label),
+      title: t('Give control of %1', named),
       message: t('Give the control coin of %1 to this address?', nameOf(holding.asset, holding.label)),
       code: to,
       informative: t('Its holder mints more and changes its data; only they can give it back.'),
@@ -221,14 +223,14 @@
     });
     if (r.choice !== 'yes') return;
     await run('transferassetcontrol', [arg, to], () => {
-      toast('success', t('Control given'), t('The control of %1 moves with the next block.', holding.label));
+      toast('success', t('Control given'), t('The control of %1 moves with the next block.', named));
       giveTo = '';
     });
   }
 
   async function fixSupply() {
     const r = await ask({
-      title: t('Fix the supply of %1', holding.label),
+      title: t('Fix the supply of %1', named),
       message: t('Burn the control coin of %1? Nobody will ever mint more of it or change its data.', nameOf(holding.asset, holding.label)),
       informative: t('This cannot be undone. Holders then know the supply will never grow.'),
       level: 'warning',
@@ -238,13 +240,13 @@
       ],
     });
     if (r.choice !== 'yes') return;
-    await run('fixassetsupply', [arg, true], () => toast('success', t('Supply fixed'), t('The supply of %1 is fixed with the next block.', holding.label)));
+    await run('fixassetsupply', [arg, true], () => toast('success', t('Supply fixed'), t('The supply of %1 is fixed with the next block.', named)));
   }
 
   async function burn() {
     if (burnUnits === null) return;
     const r = await ask({
-      title: t('Burn %1', holding.label),
+      title: t('Burn %1', named),
       message: t('Destroy %1 %2 for good?', formatUnits(burnUnits, decimals), nameOf(holding.asset, holding.label)),
       informative: t('The supply goes down by as much. This cannot be undone.'),
       level: 'warning',
