@@ -313,6 +313,10 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
       return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
+    case 'searchpools':
+      // An older node has none: the pages fall back on the pools they read (ba/search.ts).
+      if (!searchSupported) fail('Method not found', -32601);
+      return { pools };
     case 'listlaunches': {
       const o = (p[0] ?? {}) as { status?: string; cursor?: string; limit?: number; min_progress?: number };
       const all = [launchOf(MOON), launchOf(STAR), ...Array.from({ length: launchCount - 2 }, (_, i) => launchOf((i + 0x100).toString(16).padStart(64, '0'), i))];
@@ -609,9 +613,9 @@ describe('the journal of the app', () => {
 describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
   it('are in the Chain section and the menus, before the tools, with their quick actions', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
-    // The DEX in four (user decision, 2026-10-23): Swap, Pools, Launch, Portfolio, then Browse assets.
-    expect(own).toEqual(['staking', 'trade', 'pools', 'launch', 'my-assets', 'issue', 'assets', 'auctions']);
-    expect((LOCAL_PAGES as readonly LocalPage[]).filter((p) => ['trade', 'pools', 'launch', 'my-assets'].includes(p.id)).map((p) => p.title)).toEqual(['Swap', 'Pools', 'Launch', 'Portfolio']);
+    // The menu of the DEX (user decision, 2026-10-24): Browse assets, Portfolio, Create asset, Markets, Swap, then the rest.
+    expect(own).toEqual(['assets', 'my-assets', 'launch', 'pools', 'trade', 'staking', 'issue', 'auctions']);
+    expect((LOCAL_PAGES as readonly LocalPage[]).filter((p) => ['assets', 'trade', 'pools', 'launch', 'my-assets'].includes(p.id)).map((p) => p.title)).toEqual(['Browse assets', 'Portfolio', 'Create asset', 'Markets', 'Swap']);
     // Register new asset is Launch's wizard with no market, Auctions a tab of Swap's Advanced: not in the navigation.
     const navPages = own.filter((id) => id !== 'issue' && id !== 'auctions');
     expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...navPages, 'explorer']);
@@ -1227,9 +1231,9 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await loaded();
     const tiles = await screen.findByRole('list', { name: 'Assets' });
     await waitFor(() => expect(within(tiles).getAllByTestId('market-badge').map((b) => b.textContent?.trim())).toEqual(expect.arrayContaining(['1 pool', 'Book', 'No market'])));
-    await fireEvent.click(screen.getByRole('button', { name: /Create an asset/ }));
-    expect(nav.page).toBe('launch');
-    expect(nav.tab).toBe('register');
+    // Top right, always there: Create asset, the page of the creation wizard.
+    await fireEvent.click(screen.getByTestId('create-asset'));
+    expect([nav.page, nav.tab]).toEqual(['launch', 'fund']);
   });
 
   it('an asset: open a market, a curve for its controller once the launch parameters apply', async () => {
@@ -1667,7 +1671,7 @@ describe('Simple mode', () => {
     const tabs = () => screen.getAllByRole('tab').map((x) => x.textContent?.trim());
     await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Being created', 'Activity']));
     expect(screen.getByRole('list', { name: 'Holdings' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /Create an asset/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Create asset/ })).toBeTruthy();
     prefs.uiMode = 'advanced';
     await waitFor(() => expect(tabs()).toEqual(['Holdings', 'Being issued', 'Pool shares', 'My auctions', 'Activity']));
   });
@@ -2140,23 +2144,32 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(nav.tab).toBe('markets');
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Advanced' })).toBeTruthy());
     const tabsOf = (name: string) => within(screen.getByRole('tablist', { name })).getAllByRole('tab').map((x) => x.textContent?.trim());
-    expect(tabsOf('Advanced')).toEqual(['Swap', 'Markets', 'Order book', 'Other pools', 'Add liquidity', 'Create pool', 'Auctions', 'Treasury']);
+    expect(tabsOf('Advanced')).toEqual(['Swap', 'Market index', 'Order book', 'Other pools', 'Add liquidity', 'Create pool', 'Auctions', 'Treasury']);
     await fireEvent.click(screen.getByRole('tab', { name: 'Auctions' }));
     await waitFor(() => expect(screen.getByRole('tablist', { name: 'Auctions' })).toBeTruthy());
     await fireEvent.click(within(screen.getByRole('tablist', { name: 'Auctions' })).getByRole('tab', { name: 'Sell by auction' }));
     expect(nav.tab).toBe('auctions/sell');
-    // A tab of Pools asked for from here: shown on Pools.
+    // A tab of Markets asked for from here: shown on Markets, with Create asset top right.
     nav.tab = 'positions';
     await waitFor(() => expect(nav.page).toBe('pools'));
-    expect(tabsOf('Pools')).toEqual(['Pools', 'Positions', 'New pool']);
+    expect(tabsOf('Markets')).toEqual(['Markets', 'Positions', 'New pool']);
+    expect(screen.getByRole('heading', { name: 'Markets' })).toBeTruthy();
+    expect(screen.getByTestId('create-asset')).toBeTruthy();
     nav.tab = 'pools';
     await waitFor(() => expect(screen.getByTestId('dex-advanced').textContent).toMatch(/constant-product/));
     await fireEvent.click(screen.getByTestId('dex-advanced'));
     expect(nav.tab).toBe('classic');
     await waitFor(() => expect(nav.page).toBe('trade'));
+    // The launches' old links: Markets, on its launches (user decision, 2026-10-24).
     nav.tab = 'launches';
+    await waitFor(() => expect(nav.page).toBe('pools'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Launches' }).getAttribute('aria-pressed')).toBe('true'));
+    expect(within(screen.getByRole('tablist', { name: 'Markets' })).getByRole('tab', { name: 'Markets' }).getAttribute('aria-selected')).toBe('true');
+    // Create asset: the wizard alone, no tabs.
+    nav.tab = 'fund';
     await waitFor(() => expect(nav.page).toBe('launch'));
-    expect(tabsOf('Launch')).toEqual(['Create', 'Launches']);
+    expect(screen.getByRole('heading', { name: 'Create asset' })).toBeTruthy();
+    expect(screen.queryByRole('tablist')).toBeNull();
     // The commands lead there too.
     const chain = menuSections(buildCommands()).find((s) => s.group === 'Chains')!;
     chain.items.find((c) => c.label === 'New pool…')!.run();
@@ -2168,6 +2181,53 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     nav.page = 'trade';
     nav.tab = 'swap';
     await waitFor(() => expect(screen.queryByTestId('dex-advanced')).toBeNull());
+  });
+
+  it('Markets: every market in one table, pools and launches; filtered, found, sorted; a row opens its page', async () => {
+    dexOn = true;
+    clPool();
+    // The graduated launch's pool is its launch's row, not a row of its own.
+    pools.push({ ...pools[0], pool: id('g'), asset_a: 'STAR', asset_a_id: STAR, swaps: 1 });
+    nav.page = 'pools';
+    nav.tab = '';
+    render(Trade, { props: { page: 'pools' } });
+    await loaded();
+    const rows = () => within(screen.getByRole('table', { name: 'Markets' })).getAllByTestId('market-row');
+    await waitFor(() => expect(rows().map((r) => r.dataset.kind).sort()).toEqual(['graduated', 'launch', 'pool', 'pool']));
+    // Each row is its asset as the app shows it.
+    expect(rows().every((r) => r.querySelector('.badge-asset .asset-name'))).toBe(true);
+    const kinds = () => rows().map((r) => r.dataset.kind);
+    await fireEvent.click(screen.getByRole('button', { name: 'Launches' }));
+    await waitFor(() => expect(kinds()).toEqual(['launch']));
+    expect(rows()[0].textContent).toMatch(/40/);
+    await fireEvent.click(screen.getByRole('button', { name: 'Graduated' }));
+    await waitFor(() => expect(kinds()).toEqual(['graduated']));
+    await fireEvent.click(screen.getByRole('button', { name: 'Pools' }));
+    await waitFor(() => expect(kinds()).toEqual(['pool', 'pool']));
+    await fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Find a market' }), { target: { value: 'moon' } });
+    await waitFor(() => expect(kinds()).toEqual(['launch']));
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Find a market' }), { target: { value: '' } });
+    // Sorted by liquidity: the most first (the graduated launch raised 500 ECX).
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Sort markets' }), { target: { value: 'liquidity' } });
+    await waitFor(() => expect(kinds()[0]).toBe('graduated'));
+    // A launch opens its page (buy, sell); a pool its page (swap, add liquidity).
+    await fireEvent.click(rows().find((r) => r.dataset.kind === 'launch')!);
+    await waitFor(() => expect(screen.queryByRole('table', { name: 'Markets' })).toBeNull());
+    expect(called('getlaunch').length + called('listlaunches').length).toBeGreaterThan(0);
+  });
+
+  it('Create asset, top right of Swap, Markets, Portfolio and Browse assets, to the creation wizard', async () => {
+    dexOn = true;
+    for (const [page, view] of [['trade', Trade], ['pools', Trade], ['my-assets', MyAssets], ['assets', Assets]] as const) {
+      nav.page = page;
+      nav.tab = '';
+      const shown = render(view as typeof Trade, { props: { page } });
+      await loaded();
+      await fireEvent.click(await screen.findByTestId('create-asset'));
+      expect([nav.page, nav.tab], page).toEqual(['launch', 'fund']);
+      shown.unmount();
+    }
   });
 
   it('Swap: every venue of the pair quoted, an order book among them; the best is the default way', async () => {
@@ -2197,11 +2257,10 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     render(DialogHost);
     await loaded();
     const rows = await waitFor(() => {
-      const r = within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').slice(1);
+      const r = within(screen.getByRole('table', { name: 'Markets' })).getAllByRole('row').slice(1).filter((x) => /Concentrated/.test(x.textContent ?? ''));
       expect(r.length).toBe(1);
       return r;
     });
-    expect(rows[0].textContent).toMatch(/Concentrated/);
     await fireEvent.click(rows[0]);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Full range' }).getAttribute('aria-pressed')).toBe('true'));
     expect(document.querySelector('#cl-lower')).toBeNull();
@@ -2257,7 +2316,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     render(Trade);
     render(DialogHost);
     await loaded();
-    expect(screen.getByRole('heading', { name: 'Launch' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Create asset' })).toBeTruthy();
     await fireEvent.input(screen.getByLabelText('Its name'), { target: { value: 'COPPER' } });
     await waitFor(() => expect(screen.getByText(/is free/)).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));

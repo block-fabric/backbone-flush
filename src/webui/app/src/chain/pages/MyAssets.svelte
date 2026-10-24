@@ -19,6 +19,7 @@
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetBadge from '../ba/AssetBadge.svelte';
+  import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetName from '../ba/AssetName.svelte';
   import LocalTxCell from '../LocalTxCell.svelte';
   import { assetMovesOf } from '../txinfo.svelte';
@@ -296,7 +297,7 @@
     <header class="page-head">
       <h1>Portfolio</h1>
       <div class="row">
-        <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simple ? 'Create an asset' : 'Register new asset'}</button>
+        <CreateAssetButton />
         {#if simple}<button type="button" class="btn small" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>{/if}
         <button type="button" class="btn small ghost" onclick={() => go('receive')} title="Assets are received at any address of this wallet"><Icon name="receive" size={15} /> Receive</button>
       </div>
@@ -422,7 +423,7 @@
       {/if}
     {:else if tab === 'liquidity'}
       {#if (mine?.liquidity.length ?? 0) === 0}
-        <div class="panel ba-empty">No pool shares. Put two assets in a pool, over the full range, for a share of its fees.<div class="row center"><button type="button" class="btn primary" onclick={() => go('pools', 'pools')}>Pools</button></div></div>
+        <div class="panel ba-empty">No pool shares. Put two assets in a pool, over the full range, for a share of its fees.<div class="row center"><button type="button" class="btn primary" onclick={() => go('pools', 'pools')}>Markets</button></div></div>
       {:else}
         <div class="ba-cols">
           {#each mine?.liquidity ?? [] as pos (pos.pool)}

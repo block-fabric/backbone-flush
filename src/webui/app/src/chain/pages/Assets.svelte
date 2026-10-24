@@ -12,6 +12,7 @@
   import { rpc } from '../../lib/rpc';
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
+  import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetView from '../ba/AssetView.svelte';
   import { untrack } from 'svelte';
   import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
@@ -182,7 +183,7 @@
     <header class="page-head">
       <h1>Browse assets</h1>
       {#if ba.info}<span class="muted">{formatCount(ba.info.assets)} assets · {formatCount(ba.info.pools)} pools · {formatCount(ba.info.auctions)} auctions · next block {formatCount(ba.info.height)}</span>{/if}
-      {#if wallets.current !== null}<button type="button" class="btn primary create" onclick={() => go('issue')}><Icon name="issue" size={15} /> Create an asset</button>{/if}
+      <CreateAssetButton />
     </header>
 
     {#if ba.error}<p class="ba-problems bad" role="alert"><SafeText text={ba.error} /></p>{/if}
@@ -353,9 +354,6 @@
     justify-content: space-between;
     gap: 0.4rem 1rem;
     font-size: 0.88rem;
-  }
-  .create {
-    margin-left: auto;
   }
   .ba-tag.market.curve {
     color: var(--accent);

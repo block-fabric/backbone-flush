@@ -215,7 +215,7 @@
             <div class="panel-head"><h3>Launch</h3>{#if launched.status === 'graduated'}<span class="ba-tag accent">graduated</span>{:else}<span class="ba-tag">on its curve</span>{/if}</div>
             <div class="panel-body">
               <p class="ba-help">{#if launched.status === 'graduated'}Launched on a bonding curve; it graduated into its locked pool with {TICKER}.{:else}On its bonding curve: {formatPercent(Number(launched.progress))} of the way to graduation.{/if}{#if launched.allocation > 0} The creator's allocation is {launched.allocation}% of the supply, minted at graduation.{/if}</p>
-              <button type="button" class="btn small" onclick={() => { tradeIntent.launch = id; go('launch', 'launches'); }}>Its launch</button>
+              <button type="button" class="btn small" onclick={() => { tradeIntent.launch = id; go('pools', 'launches'); }}>Its launch</button>
             </div>
           </section>
         {/if}

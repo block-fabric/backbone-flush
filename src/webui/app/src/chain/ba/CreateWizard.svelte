@@ -312,7 +312,7 @@
           toast('success', t('Launching'), t('%1 is on its curve with the next block.', name));
           void refreshBitAssets();
           tradeIntent.launch = done.token;
-          go('launch', 'launches');
+          go('pools', 'launches');
           return;
         }
         await notePending({ wallet, name, asset: previewId, supply: unitsText(supplyValue, decimals), decimals, data: {}, public: true, time: Math.floor(Date.now() / 1000), reservation: reservation.txid, launch: options });

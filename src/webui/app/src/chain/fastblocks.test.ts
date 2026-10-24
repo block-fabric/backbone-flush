@@ -470,8 +470,8 @@ describe('the explorer of FastBlocks', () => {
 describe('the pages of FastBlocks', () => {
   it('are in the Chain section and the menus, before the tools, with Alt+6 to Alt+9 and a quick action', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
-    // Layers: Staking, one section, then the pages of the assets.
-    expect(own).toEqual(['staking', 'trade', 'pools', 'launch', 'my-assets', 'issue', 'assets', 'auctions']);
+    // The pages of the assets (user decision, 2026-10-24: Browse assets, Portfolio, Create asset, Markets, Swap), then Staking, one section.
+    expect(own).toEqual(['assets', 'my-assets', 'launch', 'pools', 'trade', 'staking', 'issue', 'auctions']);
     // Register new asset (issue) is a tab of Launch, Auctions one of Swap's Advanced (user decision, 2026-10-23).
     const navPages = own.filter((id) => id !== 'issue' && id !== 'auctions');
     expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...navPages, 'explorer']);
