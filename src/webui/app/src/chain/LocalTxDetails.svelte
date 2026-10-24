@@ -37,7 +37,7 @@
 
   /** The line that says what happened, in the app's words where they read better than the node's. */
   function headline(e: AssetTx): string {
-    const name = assetTitle(e.label ?? '', e.display_name ?? (e.asset ? displayNameOf(e.asset) : undefined));
+    const name = assetTitle(e.label ?? '', e.display_name ?? (e.asset ? displayNameOf(e.asset) : undefined), e.seq, e.asset);
     const amount = e.amount !== undefined ? formatAmount(e.amount, e.decimals ?? 0, { trim: false }) : '';
     switch (e.category) {
       case 'register':

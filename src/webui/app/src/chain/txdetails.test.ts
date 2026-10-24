@@ -109,7 +109,7 @@ describe('every kind of move', () => {
       expect(text, category).toContain('1,234,567.89');
       expect(text, category).toContain(sign > 0 ? 'Into this wallet' : sign < 0 ? 'Out of this wallet' : 'Neither in nor out');
       // The app's own headline where it reads better (a registration, a mint, a burn), else the node's words.
-      if (['register', 'mint', 'burn'].includes(category)) expect(text, category).toContain(category === 'register' ? 'Registered GOLDEN-LONG-TICKER · 1,234,567.89 created' : `${label} 1,234,567.89 GOLDEN-LONG-TICKER`);
+      if (['register', 'mint', 'burn'].includes(category)) expect(text, category).toContain(category === 'register' ? 'Registered GOLDEN-LONG-TICKER #1739-0029 · 1,234,567.89 created' : `${label} 1,234,567.89 GOLDEN-LONG-TICKER`);
       else expect(text, category).toContain(`What ${category} did`);
       // The wallet's own addresses, each once, with what it got; no fee here (the ECX side says it once).
       if (sign > 0) expect((text.match(new RegExp(ME1, 'g')) ?? []).length, category).toBe(1);
@@ -154,7 +154,7 @@ describe('the wallet\'s own addresses of a move', () => {
     // The details: the headline with the display name, every address with its role.
     const view = render(LocalTxDetails, { wallet: 'w', txid: e.txid });
     const text = view.getByRole('region', { name: 'Asset movement' }).textContent ?? '';
-    expect(text).toContain('Registered Gold Bar Token, 1 g $GOLDEN-LONG-TICKER · 12.50 created');
+    expect(text).toContain('Registered Gold Bar Token, 1 g $GOLDEN-LONG-TICKER #1739-0029 · 12.50 created');
     const own = view.getByTestId('own-addresses').textContent ?? '';
     for (const part of [ME1, 'control coin', ME2, 'asset', OTHER, 'change']) expect(own).toContain(part);
     view.unmount();

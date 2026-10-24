@@ -271,7 +271,7 @@
   <header class="head">
     <AssetBadge {id} label={holding.label} size="l" showLabel={false} />
     <div class="who">
-      <h2><AssetName label={holding.label} display={asset?.display_name ?? ''} /></h2>
+      <h2><AssetName label={holding.label} display={asset?.display_name ?? ''} {id} /></h2>
       <p class="amount"><strong class="num">{formatAmount(holding.balance, decimals)}</strong> <span class="muted">of {formatAmount(holding.supply, decimals)} in all</span></p>
       {#if approx(holding.pending) > 0}<p class="ba-warn small">+{formatAmount(holding.pending, decimals)} on the way: spendable after the next block</p>{/if}
       {#if holding.control_pending}<p class="faint small">The control coin is moving, with a transaction waiting for a block: minting and changes are possible again after it.</p>{/if}

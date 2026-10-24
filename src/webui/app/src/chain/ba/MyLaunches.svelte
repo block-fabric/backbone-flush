@@ -17,7 +17,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import { claimable, creatorAllocation, type Launch, type LaunchPage } from './launch';
   import { approx, assetArg, assetText, formatAmount, formatPercent, formatUnits, type Amount } from './model';
-  import { ba, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
   let launches = $state<Launch[]>([]);
@@ -67,7 +67,7 @@
     const owed = claimable(l);
     const r = await ask({
       title: t('Claim'),
-      message: t('Claim what your launch of %1 owes you?', assetText(l.ticker, l.display_name)),
+      message: t('Claim what your launch of %1 owes you?', assetText(l.ticker, l.display_name, assetById(l.token)?.seq, l.token)),
       informative: t('Your fees (%1 %3)%2. They go to the launch\'s creator address, of this wallet.', formatAmount(l.creator_fees_owed, 8), owed.allocation && a ? t(', and your allocation of %1 %2 (%3%), minted now', formatUnits(a.units, a.decimals), l.ticker, String(a.percent)) : '', TICKER),
       level: 'question',
       choices: [

@@ -1,51 +1,56 @@
 <script lang="ts">
   // An asset's identity in words, the one way the pages write it (AssetBadge.svelte puts its logo before it): its name,
-  // then its ticker after it, a little smaller and muted: "Theodore Brosevelt $BROSEVELT" (model.ts: assetIdentity).
+  // the human label, then its identity, a little smaller and muted in a mark of its own: its $TICKER and the part no
+  // other asset has, its number ("Theodore Brosevelt [$BROSEVELT #1739-0029]"; model.ts: assetIdentity, uniquePart).
+  // A display name is not unique and may hold "$ECX" or "#1739-0029" to pass for another asset (security review
+  // 2026-10-24): it is always followed by the real ticker and number, which are in their mark, never plain text like it.
   // - A label beside a display name is its ticker, whatever its shape (before the rules of tickers, "GOLD-BAR").
-  // - No ticker (a name from before tickers, "gold bar"): the name, its number muted after it ("gold bar #1739-0029"),
-  //   the number being what tells it apart (names are not unique).
-  // - No name: "$GOLD" alone (and its number, faint, where the caller asks for it: seq).
-  // - Neither (a label that is a hash, a private name): its number, else the start of its hash.
+  // - No ticker (a name from before tickers, "gold bar"): the name, then its number.
+  // - No name: its $TICKER and number alone, in the place of the name.
+  // - The number: the caller's (seq), else the store's (by id), else the start of its hash (id); none known: the label.
   // - ECX: its ticker alone, the one name the pages give the coin (config.ts: TICKER).
-  // With a ticker, the number is shown only where the caller passes it (seq), faint, after the ticker.
-  // The name gives way first (an ellipsis), the ticker and the number stay whole; the full text is in the title. All text
-  // of the chain: SafeText. The space between the parts is an expression, which the compiler keeps (user feedback
-  // 2026-10-19: "GOLDGold Bar Token"), so that the words are apart when copied and read out.
+  // The name gives way first (an ellipsis), the identity stays whole; the full text is in the title (assetTitle: the
+  // name escaped). All text of the chain: SafeText (translate="no", dir="auto": a bidirectional mark stays inside it).
+  // The space between the parts is an expression, which the compiler keeps (user feedback 2026-10-19: "GOLDGold Bar
+  // Token"), so that the words are apart when copied and read out.
   import SafeText from '../../components/SafeText.svelte';
   import { TICKER } from '../config';
-  import { assetIdentity, assetTitle } from './model';
+  import { assetIdentity, assetTitle, uniquePart } from './model';
+  import { assetById } from './store.svelte';
 
   let {
     label,
     display = '',
     seq = '',
+    id = '',
     nameClass = 'name',
   }: {
     /** The label of the chain (a ticker, an older name, or "0x" and a hash). */
     label: string;
     /** The display name: text of the chain; '' or undefined: none. */
     display?: string;
-    /** Its number (1739-0029): shown after a name without ticker always, after a ticker when given. */
+    /** Its number (1739-0029); '': the store's, by id. */
     seq?: string;
+    /** Its id (hex), for its number from the store, else the start of its hash. */
+    id?: string;
     nameClass?: string;
   } = $props();
 
-  const coin = $derived(label === TICKER && !display);
-  const a = $derived(assetIdentity(label, display, seq));
-  // The first part (bold) and the second (muted), as the rules above say.
-  const first = $derived(coin ? TICKER : a.name || (a.ticker ? `$${a.ticker}` : a.seq ? `#${a.seq}` : label));
-  const second = $derived(coin ? '' : a.name && a.ticker ? `$${a.ticker}` : a.name && a.seq ? `#${a.seq}` : '');
-  const third = $derived(!coin && a.ticker && a.seq ? `#${a.seq}` : '');
-  const full = $derived(coin ? TICKER : assetTitle(label, display, seq));
+  const coin = $derived((label === TICKER && !display) || (id !== '' && /^0+$/.test(id)));
+  const number = $derived(seq || (id ? (assetById(id)?.seq ?? '') : ''));
+  const a = $derived(assetIdentity(label, display, number));
+  const ticker = $derived(a.ticker ? `$${a.ticker}` : '');
+  const unique = $derived(uniquePart(number, id));
+  const full = $derived(coin ? TICKER : assetTitle(label, display, number, id));
 </script>
 
-<span class="asset-name" title={full} data-testid="asset-name"><SafeText class="{nameClass} first" text={first} />{#if second}{' '}<SafeText class="second" text={second} />{/if}{#if third}{' '}<span class="third" translate="no">{third}</span>{/if}</span>
+<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<SafeText class="{nameClass} first" text={a.name} />{' '}{/if}{#if ticker || unique}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 
 <style>
   .asset-name {
     display: inline-flex;
     align-items: baseline;
-    gap: 0.35em;
+    gap: 0.4em;
     min-width: 0;
     max-width: 100%;
     white-space: nowrap;
@@ -56,16 +61,33 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .asset-name :global(.second) {
+  /* The identity: the ticker and the number in a mark of their own, so that a "$" or "#" in a name (plain text) cannot
+     pass for them. */
+  .ident {
     flex: none;
-    font-size: 0.85em;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3em;
+    padding: 0 0.35em;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-s, 4px);
+    background: var(--surface-2);
+    font-size: 0.8em;
     font-weight: 500;
     color: var(--text-muted);
+    line-height: 1.35;
   }
-  .third {
-    flex: none;
-    font-size: 0.8em;
+  /* No name: the identity is the asset's words, in their place. */
+  .ident.alone {
+    flex: 0 1 auto;
+    font-size: 0.85em;
+  }
+  .ident.alone :global(.ticker) {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .unique {
+    font-variant-numeric: tabular-nums;
     font-weight: 400;
-    color: var(--text-muted);
   }
 </style>

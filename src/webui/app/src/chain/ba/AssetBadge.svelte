@@ -3,15 +3,15 @@
   // muted ("[logo] Theodore Brosevelt $BROSEVELT"). The logo is the chain's (an <img> of a data: URL the host checked:
   // logos.svelte.ts), else a round mark in the hue of its hash with its initials (the same everywhere, so that two
   // assets of names alike are told apart at a glance); ECX in the colour of the chain. The words are AssetName.svelte's,
-  // whose header says the rules: no ticker, the name and its number (looked up here when not given); no name, $TICKER
-  // alone; neither, its number. The name gives way (an ellipsis) and the full text is in its title. showLabel={false}:
+  // whose header says the rules: the name, then the identity in a muted mark of its own ($TICKER and its number, else
+  // the start of its hash), so that a name cannot pass for another asset's ticker or number. The name gives way (an ellipsis) and the full text is in its title. showLabel={false}:
   // the mark alone.
   import { css } from '../../lib/actions';
   import { assetHue, assetIdentity, initials, isChn } from './model';
   import { TICKER } from '../config';
   import AssetName from './AssetName.svelte';
   import { isLogoUrl, logoHashOf, logoUrl } from './logos.svelte';
-  import { assetById, displayNameOf } from './store.svelte';
+  import { displayNameOf } from './store.svelte';
 
   let {
     id,
@@ -39,20 +39,18 @@
 
   const shownDisplay = $derived(display ?? displayNameOf(id) ?? '');
   const parts = $derived(assetIdentity(label, shownDisplay, seq));
-  // A name without ticker is told apart by its number: the store's when the caller has none.
-  const shownSeq = $derived(seq || (!parts.ticker && !isChn(id) ? (assetById(id)?.seq ?? '') : ''));
 
   const url = $derived(isChn(id) ? '' : isLogoUrl(preview) ? preview : logoUrl(id, logo ?? logoHashOf(id)));
 </script>
 
-<span class="badge-asset {size}">
+<span class="badge-asset {size}" class:mark-only={!showLabel}>
   {#if url}
     <img class="mark logo" src={url} alt="" width="64" height="64" decoding="async" draggable="false" referrerpolicy="no-referrer" aria-hidden="true" />
   {:else}
     <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? TICKER.charAt(0) : initials(parts.ticker || parts.name || label)}</span></span>
   {/if}
   {#if showLabel}
-    <span class="words"><AssetName {label} display={shownDisplay} seq={shownSeq} nameClass="label" /></span>
+    <span class="words"><AssetName {label} display={shownDisplay} {seq} {id} nameClass="label" /></span>
   {/if}
 </span>
 
@@ -63,6 +61,10 @@
     gap: 0.55rem;
     min-width: 0;
     max-width: 100%;
+  }
+  /* The mark alone never gives way (a row of flex items would squeeze it under its neighbour). */
+  .mark-only {
+    flex: none;
   }
   .mark {
     --ba-h: 160;
@@ -121,7 +123,7 @@
     flex-wrap: wrap;
     white-space: normal;
   }
-  .l .words :global(.second) {
+  .l .words :global(.ident) {
     font-size: 1.05rem;
   }
 </style>
