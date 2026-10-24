@@ -2206,6 +2206,62 @@ BOOST_AUTO_TEST_CASE(set_boundary_and_lead)
     }
 }
 
+BOOST_AUTO_TEST_CASE(long_gap_rule)
+{
+    // The eCash networks: the long-gap rule from their first epoch; at least 24 hours without BMM (user decision,
+    // 2026-10-24): 24 hours of unanchored slots, the seed and the set 48 hours ahead, the unbonding and the proofs past
+    // the set lead in anchors (ten-minute anchors).
+    for (const ChainType type : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        const Consensus::PosParams e{CChainParams::Ecash(type)->GetConsensus().pos};
+        BOOST_CHECK_EQUAL(e.gap_epoch, 0);
+        BOOST_CHECK_EQUAL(e.slot_seconds * e.MaxUnanchoredSlots(0), 24 * 3600);
+        BOOST_CHECK_EQUAL(e.SeedLookahead(0), 48 * 3600);
+        BOOST_CHECK_EQUAL(e.SetLead(0), e.SeedLookahead(0));
+        BOOST_CHECK_GT(e.unbonding_anchors * 600, e.SetLead(0) + e.slots_per_epoch * e.slot_seconds);
+        BOOST_CHECK_EQUAL(e.evidence_window_anchors, e.unbonding_anchors - 1);
+        BOOST_CHECK_EQUAL(e.MaxUnanchoredSlotsEver(), e.gap_max_unanchored_slots);
+        // The seed never stops blocks of stake before the unanchored limit through a lag of the median time of up to 24 hours.
+        BOOST_CHECK_GE(e.SeedLookahead(0) + e.slots_per_epoch * e.slot_seconds - 24 * 3600, e.slot_seconds * e.MaxUnanchoredSlots(0));
+    }
+    // The Chains networks: never.
+    BOOST_CHECK(!CChainParams::Main()->GetConsensus().pos.GapActive(1'000'000));
+    // Slot 99 of betanet: from epoch 67, the one it halted in (2026-10-24); the epochs before keep their values.
+    CChainParams::MainNetOptions options;
+    options.betanet_slot99 = true;
+    const Consensus::PosParams b{CChainParams::Ecash(ChainType::ECASH_BETANET, options)->GetConsensus().pos};
+    BOOST_CHECK_EQUAL(b.gap_epoch, 67);
+    BOOST_CHECK_EQUAL(b.SeedLookahead(66), 9 * 3600);
+    BOOST_CHECK_EQUAL(b.SetLead(66), 9 * 3600);
+    BOOST_CHECK_EQUAL(b.MaxUnanchoredSlots(67 * b.slots_per_epoch - 1), 1920);
+    BOOST_CHECK_EQUAL(b.MaxUnanchoredSlots(67 * b.slots_per_epoch), 5760);
+    BOOST_CHECK_EQUAL(b.SeedLookahead(67), 48 * 3600);
+    // The halt replayed: betanet's block 973972 (14:55:43 UTC) had a median time of 09:35:20; Flush's last block was in
+    // slot 16079, the last of epoch 66. Epoch 66's seed was known; 67's was not at 9 hours (its seed time 10:00), and is
+    // at 48; the epochs with a seed go on past the unanchored limit (from slot 14874, 13:58:30).
+    BOOST_CHECK_EQUAL(b.genesis_time, 1792627200);
+    const int64_t median{1792834520};
+    BOOST_CHECK_EQUAL(pos::SlotTime(16080, b), 1792868400);
+    BOOST_CHECK_LT(pos::SeedTime(66, b), median);
+    Consensus::PosParams before{b};
+    before.gap_epoch = std::numeric_limits<int64_t>::max();
+    BOOST_CHECK_GT(pos::SeedTime(67, before), median);
+    BOOST_CHECK_LT(pos::SeedTime(67, b), median);
+    const int64_t limit{pos::SlotTime(14874 + b.MaxUnanchoredSlots(16080), b)};
+    int64_t epoch{67};
+    while (pos::SeedTime(epoch + 1, b) < median) ++epoch;
+    BOOST_CHECK_GT(pos::SlotTime((epoch + 1) * b.slots_per_epoch, b), limit);
+    BOOST_CHECK_EQUAL(limit, 1792868400 - 1206 * 15 + 24 * 3600);
+    // The set of epoch 67 on: an anchor 48 hours before its start, lower than epoch 66's boundary (a step back at the
+    // rule's epoch only, then never higher for a later epoch again).
+    BOOST_CHECK_LT(pos::SetBoundary(67, b), pos::SetBoundary(66, b));
+    int64_t last{pos::SetBoundary(67, b)};
+    for (int64_t e{68}; e < 400; ++e) {
+        BOOST_CHECK_GE(pos::SetBoundary(e, b), last);
+        BOOST_CHECK_LE(pos::SlotTime(std::max<int64_t>(pos::SetBoundary(e, b), 0), b), pos::SeedTime(e, b) + b.slot_seconds);
+        last = pos::SetBoundary(e, b);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(staking_parameters)
 {
     // The user's decisions (design, section 13): a minimum stake of 1 CHN (0.01 on the test networks,

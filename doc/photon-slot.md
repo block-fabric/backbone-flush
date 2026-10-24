@@ -90,3 +90,24 @@ launch curve fees 80 % to the creator and 20 % to security. At that block what t
 on 2026-10-24) is paid with its fees as their security part; its entries stay as a record, and what it held of assets
 (none from swaps of assets so far, or what accrued) stays held, unspendable. A node of v3 forks off at that very block
 (its coinbase pays the treasury's ECX: bad-cb-amount on v3), or at the first order or payout under the old minimums.
+
+## The halt of 2026-10-24 (the long-gap rule)
+
+eCash betanet made no block after 973972 (14:55:43 UTC); its blocks had been sparse all day (about one an hour), so
+that block's median time was 09:35:20, 5 h 20 min behind it. Flush's blocks of stake stopped after block 8964 (slot
+16079, 18:59:45), the last slot of epoch 66: epoch 67 starts at 19:00, its seed time (19:00 less the 9-hour lookahead) is
+10:00, and no block on record has a median time past 10:00, so its seed, and so its leaders, were unknown
+(`pos-seed-unknown`; `getposinfo` showed no leader). The set and the unanchored limit (8 hours from slot 14874, 13:58:30)
+were not the cause. `stalled` stayed false: it compares the mainchain's median time with the last block of stake, and
+without an eCash block there is no BMM block to carry transactions anyway.
+
+Branch `photon-v4-gap` (photon-v4-ui and the long-gap rule, doc/ecash-sidechains.md "A gap of the mainchain"): from epoch
+`SLOT99_GAP_EPOCH` = 67, the seed lookahead and the set lead are 48 hours and the unanchored limit 24 hours (5760 slots).
+Epochs 0 to 66 keep their seeds and sets, so no block of before changes and nothing is in the fingerprint. With it, epoch
+67 and every epoch after it whose start is before 09:35:20 + 48 h has its seed, and its set is the last anchor's before
+its start less 48 hours (the genesis validators, as at the halt). The chain resumes with the first slot a validator of
+the new release leads, without an eCash block, and goes on until 13:58:30 + 24 h (2026-10-25 13:58:30 UTC) if eCash stays
+silent; eCash's next block anchors the run (its commitment, to a ticket made before the gap, is acknowledged), and the
+run is final 3 anchors later. A node of before does not follow: for it epoch 67 has no seed (the blocks wait as
+`pos-seed-unknown`, not invalid), so every node of slot 99 takes the release; one left behind catches up once it does.
+Upgrade v4 (block 9000) is independent of it: it counts blocks, not epochs.

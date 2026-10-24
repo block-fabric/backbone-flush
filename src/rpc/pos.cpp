@@ -541,9 +541,17 @@ RPCMethod getposinfo()
             {RPCResult::Type::STR_HEX, "anchorpoint", /*optional=*/true, "The last block that took the peg actions: the next ticket anchors it or a block after it"},
             {RPCResult::Type::NUM, "lastposslot", "Slot of the last block of stake on the active chain, -1 if none"},
             {RPCResult::Type::NUM, "firstunanchoredslot", "Slot of the first block of stake no anchor covers, -1 if none"},
-            {RPCResult::Type::NUM, "maxunanchoredslots", "Blocks of stake go on for this many slots after the first one no anchor covers (max_unanchored_slots): how long the chain runs without a mainchain block"},
-            {RPCResult::Type::NUM, "setleadseconds", "The validator set of an epoch is fixed by an anchor at least an epoch, and at least this long, before it starts (set_lead_seconds)"},
-            {RPCResult::Type::NUM, "seedlookaheadseconds", "The seed of an epoch is the mainchain block this long before it starts (seed_lookahead_seconds)"},
+            {RPCResult::Type::NUM, "maxunanchoredslots", "Blocks of stake go on for this many slots after the first one no anchor covers (max_unanchored_slots, or the long-gap rule's from gapepoch): how long the chain runs without a mainchain block, now"},
+            {RPCResult::Type::NUM, "setleadseconds", "The validator set of the current epoch is fixed by an anchor at least an epoch, and at least this long, before it starts (set_lead_seconds, or the long-gap rule's)"},
+            {RPCResult::Type::NUM, "seedlookaheadseconds", "The seed of the current epoch is the mainchain block whose median time is this long before it starts (seed_lookahead_seconds, or the long-gap rule's)"},
+            {RPCResult::Type::NUM, "gapepoch", "The first epoch of the long-gap rule (blocks of stake go on for 24 hours without BMM, and no seed stops them first), -1 if never"},
+            {RPCResult::Type::OBJ, "gap", /*optional=*/true, "How long blocks of stake can go on if no mainchain block comes from now (with a mainchain record)",
+            {
+                {RPCResult::Type::NUM_TIME, "mainmediantime", "The median time of the last mainchain block on record"},
+                {RPCResult::Type::NUM_TIME, "seedsuntil", "The end of the last epoch whose seed that block makes known: no leader after it without a later mainchain block"},
+                {RPCResult::Type::NUM_TIME, "unanchoreduntil", /*optional=*/true, "When the unanchored limit stops blocks of stake without an anchor (a run of blocks no anchor covers)"},
+                {RPCResult::Type::NUM_TIME, "blocksuntil", "The earlier of the two: when blocks of stake stop if no mainchain block comes"},
+            }},
             {RPCResult::Type::NUM, "jailfixheight", "jail_fix_height: the first block of the liveness fix (no slot charged before the first block of stake, no jails that would leave too few validators)"},
             {RPCResult::Type::BOOL, "stalled", "Whether a BMM block built now may carry transactions (blocks of stake stalled)"},
             {RPCResult::Type::OBJ, "pot", "The fee pot",
@@ -620,10 +628,30 @@ RPCMethod getposinfo()
     if (fast.anchor_point_height >= 0) result.pushKV("anchorpoint", fast.anchor_point.GetHex());
     result.pushKV("lastposslot", fast.last_pos_slot);
     result.pushKV("firstunanchoredslot", fast.first_unanchored_slot);
-    result.pushKV("maxunanchoredslots", params.max_unanchored_slots);
-    result.pushKV("setleadseconds", params.set_lead_seconds);
-    result.pushKV("seedlookaheadseconds", params.seed_lookahead_seconds);
+    const int64_t epoch_now{pos::EpochOf(slot, params)};
+    result.pushKV("maxunanchoredslots", params.MaxUnanchoredSlots(slot));
+    result.pushKV("setleadseconds", params.SetLead(epoch_now));
+    result.pushKV("seedlookaheadseconds", params.SeedLookahead(epoch_now));
+    result.pushKV("gapepoch", params.gap_epoch == std::numeric_limits<int64_t>::max() ? int64_t{-1} : params.gap_epoch);
     const auto main_tip{chainman.m_mainchain ? chainman.m_mainchain->GetBlock(chainman.m_mainchain->Height()) : std::nullopt};
+    if (main_tip && params.slots_per_epoch > 0) {
+        // The last epoch whose seed is known (pos::SeedHeight: its seed time before the last median time), from now on.
+        int64_t epoch{std::max<int64_t>(epoch_now, 0)};
+        for (int i{0}; i < 1000 && pos::SeedTime(epoch + 1, params) < main_tip->time; ++i) ++epoch;
+        const bool seeded{pos::SeedTime(epoch, params) < main_tip->time};
+        const int64_t seeds_until{pos::SlotTime((seeded ? epoch + 1 : epoch) * params.slots_per_epoch, params)};
+        UniValue gap(UniValue::VOBJ);
+        gap.pushKV("mainmediantime", main_tip->time);
+        gap.pushKV("seedsuntil", seeds_until);
+        int64_t until{seeds_until};
+        if (fast.first_unanchored_slot >= 0) {
+            const int64_t unanchored{pos::SlotTime(fast.first_unanchored_slot + params.MaxUnanchoredSlots(slot), params)};
+            gap.pushKV("unanchoreduntil", unanchored);
+            until = std::min(until, unanchored);
+        }
+        gap.pushKV("blocksuntil", until);
+        result.pushKV("gap", std::move(gap));
+    }
     result.pushKV("jailfixheight", params.jail_fix_height);
     result.pushKV("stalled", hooks->Stalled(fast, main_tip ? main_tip->time : now, active));
     UniValue pot(UniValue::VOBJ);

@@ -228,9 +228,17 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
             BOOST_CHECK_GE(consensus.pos.seed_lookahead_seconds, 6 * 3600 + 3000 + consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
             BOOST_CHECK_GE(consensus.pos.max_unanchored_slots * consensus.pos.slot_seconds, 6 * 3600 + 2 * 600);
             BOOST_CHECK_LE(consensus.pos.max_unanchored_slots, DRIVECHAIN_UNDO_DEPTH);
+            // The long-gap rule (from every network's first epoch): 24 hours without BMM, the seed and the set 48 hours
+            // ahead; a whole run of it still within the blocks a reorg can take back.
+            BOOST_CHECK_EQUAL(consensus.pos.gap_epoch, 0);
+            BOOST_CHECK_EQUAL(consensus.pos.gap_max_unanchored_slots * consensus.pos.slot_seconds, 24 * 3600);
+            BOOST_CHECK_LE(consensus.pos.gap_max_unanchored_slots, DRIVECHAIN_UNDO_DEPTH);
+            BOOST_CHECK_EQUAL(consensus.pos.gap_seed_lookahead_seconds, 48 * 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.gap_set_lead_seconds, consensus.pos.gap_seed_lookahead_seconds);
+            BOOST_CHECK_GT(consensus.pos.evidence_window_anchors * 600, consensus.pos.gap_set_lead_seconds + 2 * consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
             BOOST_CHECK_EQUAL(consensus.pos.final_anchors, 3);
-            // Unbonding: a week (a day on ecashtest); proofs taken until the stake is paid back.
-            BOOST_CHECK_EQUAL(consensus.pos.unbonding_anchors, type == ChainType::ECASH_TESTNET ? 144 : 7 * 24 * 6);
+            // Unbonding: a week (three days on ecashtest, past the long-gap set lead); proofs taken until the stake is paid back.
+            BOOST_CHECK_EQUAL(consensus.pos.unbonding_anchors, type == ChainType::ECASH_TESTNET ? 432 : 7 * 24 * 6);
             BOOST_CHECK_EQUAL(consensus.pos.evidence_window_anchors, consensus.pos.unbonding_anchors - 1);
             // Both past the time a validator still leads after it unbonds (the set lead and two epochs), in anchors.
             BOOST_CHECK_GT(consensus.pos.evidence_window_anchors * 600, consensus.pos.set_lead_seconds + 2 * consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
