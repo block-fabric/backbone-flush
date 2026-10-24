@@ -28,6 +28,8 @@ export const LOCAL_ICONS = {
   back: 'M15 5l-7 7 7 7',
   /** A logo: a picture, a hill and a sun in a frame. */
   picture: 'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 9.5a1.5 1.5 0 1 0 0-.01',
+  /** Launch: a rocket going up. */
+  rocket: 'M12 3c3 2 4.5 5.5 4.5 9.5L15 16H9l-1.5-3.5C7.5 8.5 9 5 12 3zM12 9.5a1.5 1.5 0 1 0 0 .01M9 16l-2.5 3 3-.5M15 16l2.5 3-3-.5M12 17v4',
   /** The control coin: a crown. */
   crown: 'M4 17l-1-9 5 4 4-7 4 7 5-4-1 9zM5 20h14',
 } as const satisfies Record<string, string>;

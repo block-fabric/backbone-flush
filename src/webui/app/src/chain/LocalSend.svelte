@@ -120,7 +120,7 @@
       <p class="ba-help">You hold {formatAmount(holding.balance, decimals)} <SafeText text={holding.label} />. The fee of the transaction is paid in {TICKER}.</p>
       <div class="row">
         <button type="submit" class="btn primary" disabled={busy || !toValid || amount === null}><Icon name="send" size={17} /> {busy ? 'Working…' : 'Send'}</button>
-        <button type="button" class="btn ghost" onclick={() => go('my-assets')}>My assets</button>
+        <button type="button" class="btn ghost" onclick={() => go('my-assets')}>Portfolio</button>
       </div>
     </form>
   {:else if active}

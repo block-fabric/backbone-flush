@@ -158,7 +158,7 @@
       open = '';
       void refreshBitAssets();
     } catch (e) {
-      await inform(t('My assets'), errorText(e), 'error');
+      await inform(t('Portfolio'), errorText(e), 'error');
     } finally {
       busy = false;
     }

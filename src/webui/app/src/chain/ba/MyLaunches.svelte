@@ -55,7 +55,7 @@
 
   function open(l: Launch) {
     tradeIntent.launch = l.token;
-    go('trade', 'launches');
+    go('launch', 'launches');
   }
 
   async function claim(l: Launch) {

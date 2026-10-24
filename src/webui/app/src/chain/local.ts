@@ -7,9 +7,12 @@
 // schedule, finality and the BMM blocks, slashing and jail). Simple mode shows the essentials only (your stake,
 // your rewards, bond and unbond: fb/SimpleStaking).
 //
-// The assets of BitAssets: Assets (an explorer with each asset's supply, markets, auctions and history), My assets
-// (what the wallet holds and controls), Register new asset (the wizard), Trade (swaps and liquidity) and Auctions
-// (Dutch auctions); sending an asset is in the Send page (LocalSend.svelte).
+// The assets of BitAssets, and the DEX in four (user decision, 2026-10-23, "Orca-style"): Swap (the best price over
+// every venue), Pools (concentrated liquidity, the full range by default), Launch (the one create wizard: no market, a
+// bonding curve, or straight into a pool the creator funds) and Portfolio (what the wallet holds and controls; once My
+// assets). The pools of other kinds, the order books, the markets, the treasury and the auctions are behind Swap's
+// Advanced link (DEX_TABS). Browse assets is an explorer with each asset's supply, markets, auctions and history;
+// sending an asset is in the Send page (LocalSend.svelte), the deposits and withdrawals in the peg's page.
 //
 // Their RPC methods and host methods are in src/webui/local.cpp; see doc/webui.md, "Pages of a chain of its own",
 // doc/webui-parity.md (sections FB and BA) and doc/layers.md.
@@ -54,14 +57,20 @@ export interface LocalPage {
 
 export const LOCAL_PAGES = [
   { id: 'staking', title: 'Staking', simpleTitle: 'Stake and earn', simple: true, simpleSummary: 'Earn by putting your coins to work', icon: 'stake', section: 'chain', shortcut: 'Alt+6', summary: 'Blocks of stake: your stake and income, this node as a validator, the bonds, the validators, finality and slashing', keywords: 'fastblocks stake bond unbond validator epoch slot leader schedule jail income pos finality bmm anchor ticket final pot bid slash slashing evidence proof double sign banned penalty fee split', quick: { label: 'Stake', icon: 'stake', tab: 'bonds', simpleLabel: 'Stake and earn' } },
+  // The DEX in four (user decision, 2026-10-23, "Orca-style"): Swap, Pools, Launch, Portfolio. One page component for
+  // the first three (pages/Trade.svelte), each tab of it at home in one of them (DEX_TABS below). Its id stays trade.
+  { id: 'trade', title: 'Swap', simple: true, simpleSummary: 'Trade one asset for another', icon: 'swap', section: 'chain', shortcut: 'Alt+9', summary: 'Swap one asset for another at the best price over every pool, order book and curve', keywords: 'swap exchange trade amm dex route best price order book curve', quick: { label: 'Swap', icon: 'swap' } },
+  { id: 'pools', title: 'Pools', icon: 'pool', section: 'chain', summary: 'Concentrated liquidity: put two assets in a pool over the full range or a range of your own, for a share of its fees; your positions', keywords: 'pool liquidity concentrated position range full range provide fees earn create new pool' },
+  { id: 'launch', title: 'Launch', icon: 'rocket', section: 'chain', summary: 'Create an asset: with no market yet, on a bonding curve, or straight into a pool you fund; the launches on their curves', keywords: 'launch create new asset token register reserve bonding curve pool fund ticker graduate' },
+  // My assets is Portfolio (user decision, 2026-10-23); its id, links and shortcut stay.
+  { id: 'my-assets', title: 'Portfolio', simple: true, simpleSummary: 'The assets you hold', icon: 'holdings', section: 'chain', shortcut: 'Alt+8', summary: 'What this wallet holds and controls: balances, pool shares, auctions to collect, activity', wallet: true, keywords: 'my assets portfolio balances holdings mint burn control liquidity receipts activity' },
+  // Shown as "Register new asset" (user decision, 2026-10-15); its id stays issue.
+  // The Launch wizard with no market (user decision, 2026-10-23); go('issue') and its links lead there.
+  { id: 'issue', title: 'Register new asset', tabOf: { page: 'launch', tab: 'register' }, simpleTitle: 'Create an asset', simpleSummary: 'Make an asset of your own', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Register new asset', icon: 'issue', simpleLabel: 'Create an asset' } },
   // "Browse assets" (user feedback 2026-10-19: told apart from My assets); its id, links and shortcut stay.
   { id: 'assets', title: 'Browse assets', icon: 'gem', section: 'chain', shortcut: 'Alt+7', summary: 'Every asset of the chain: its supply, markets, auctions and history', keywords: 'bitassets explore token find search supply', quick: { label: 'Browse assets', icon: 'gem' } },
-  { id: 'my-assets', title: 'My assets', simple: true, simpleSummary: 'The assets you hold', icon: 'holdings', section: 'chain', shortcut: 'Alt+8', summary: 'What this wallet holds and controls: balances, pool shares, auctions to collect, activity', wallet: true, keywords: 'portfolio balances holdings mint burn control liquidity receipts activity' },
-  // Shown as "Register new asset" (user decision, 2026-10-15); its id stays issue.
-  // A tab of My assets (user feedback 2026-10-19); go('issue') and its links lead there.
-  { id: 'issue', title: 'Register new asset', tabOf: { page: 'my-assets', tab: 'register' }, simpleTitle: 'Create an asset', simpleSummary: 'Make an asset of your own', icon: 'issue', section: 'chain', summary: 'Create an asset of your own, with its supply, decimals and description', wallet: true, keywords: 'create new asset token register reserve mint', quick: { label: 'Register new asset', icon: 'issue', simpleLabel: 'Create an asset' } },
-  { id: 'trade', title: 'Trade', simpleTitle: 'Swap', simple: true, simpleSummary: 'Trade one asset for another', icon: 'swap', section: 'chain', shortcut: 'Alt+9', summary: 'Swap assets in their pools, provide liquidity for a share of the fees, and launch tokens on bonding curves', keywords: 'swap exchange amm pool liquidity price dex launch bonding curve', quick: { label: 'Swap', icon: 'swap' } },
-  { id: 'auctions', title: 'Auctions', icon: 'gavel', section: 'chain', summary: 'Buy at a price that falls block by block, or sell by Dutch auction', keywords: 'dutch auction bid sell buy', advanced: true },
+  // Behind the Advanced link of Swap (user decision, 2026-10-23): a tab of Swap's Advanced, not in the navigation.
+  { id: 'auctions', title: 'Auctions', tabOf: { page: 'trade', tab: 'auctions' }, icon: 'gavel', section: 'chain', summary: 'Buy at a price that falls block by block, or sell by Dutch auction', keywords: 'dutch auction bid sell buy', advanced: true },
 ] as const satisfies readonly LocalPage[];
 
 export type LocalPageId = (typeof LOCAL_PAGES)[number]['id'];
@@ -93,6 +102,39 @@ export function stakingTabOf(tab: string | undefined | null): { tab: StakingTab;
   return { tab: 'overview', view: 'validators' };
 }
 
+/**
+ * The tabs of the DEX (pages/Trade.svelte), each at home in one of its pages: what Swap, Pools and Launch show. A tab
+ * asked for on another of the three (nav.tab = 'positions' from Swap) moves to its page. `advanced`: behind the
+ * Advanced link of Swap (user decision, 2026-10-23), with the tabs of Advanced shown together.
+ */
+export const DEX_TABS = {
+  swap: { page: 'trade', label: 'Swap' },
+  markets: { page: 'trade', label: 'Markets', advanced: true },
+  book: { page: 'trade', label: 'Order book', advanced: true },
+  classic: { page: 'trade', label: 'Other pools', advanced: true },
+  liquidity: { page: 'trade', label: 'Add liquidity', advanced: true },
+  create: { page: 'trade', label: 'Create pool', advanced: true },
+  auctions: { page: 'trade', label: 'Auctions', advanced: true },
+  treasury: { page: 'trade', label: 'Treasury', advanced: true },
+  pools: { page: 'pools', label: 'Pools' },
+  positions: { page: 'pools', label: 'Positions' },
+  new: { page: 'pools', label: 'New pool' },
+  fund: { page: 'launch', label: 'Create' },
+  launch: { page: 'launch', label: 'Create' },
+  register: { page: 'launch', label: 'Create' },
+  launches: { page: 'launch', label: 'Launches' },
+} as const satisfies Record<string, { page: 'trade' | 'pools' | 'launch'; label: string; advanced?: boolean }>;
+export type DexTab = keyof typeof DEX_TABS;
+export type DexPage = (typeof DEX_TABS)[DexTab]['page'];
+/** The tab each page of the DEX opens on. */
+export const DEX_HOME: Record<DexPage, DexTab> = { trade: 'swap', pools: 'pools', launch: 'fund' };
+/** The tab of the DEX nav.tab names (the part before "/": Auctions' own tab follows it), else the page's own. */
+export function dexTabOf(tab: string, page: string): DexTab {
+  const head = tab.split('/')[0];
+  if (head in DEX_TABS) return head as DexTab;
+  return DEX_HOME[(page in DEX_HOME ? page : 'trade') as DexPage];
+}
+
 export const LOCAL_COMMANDS = [
   { id: 'fb.bond', label: 'Bond coins…', page: 'staking', tab: 'bonds', tip: 'Bond coins of the wallet to a validator key, add to a bond, or unbond', keywords: 'stake bond unbond validator' },
   { id: 'fb.node', label: 'This node as a validator', page: 'staking', tab: 'validator', tip: 'Its keys, staking on or off, its payout and bid, the slots it leads next', keywords: 'validator staking keys payout' },
@@ -101,15 +143,18 @@ export const LOCAL_COMMANDS = [
   { id: 'fb.bmm', label: 'BMM blocks and finality', page: 'staking', tab: 'finality', tip: 'How far the chain is BMM-confirmed and final, and the newest BMM blocks', keywords: 'bmm anchors final finality pot' },
   { id: 'fb.evidence', label: 'Proofs of double signing', page: 'staking', tab: 'slashing', tip: 'Proofs that a leader signed two blocks for one slot, and jailed validators', keywords: 'slashing evidence jail banned' },
   { id: 'ba.issue', label: 'Register new asset…', page: 'issue', tip: 'Reserve a name and register an asset with its supply', keywords: 'create new token' },
-  { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another in their pool', keywords: 'exchange trade' },
-  { id: 'ba.markets', label: 'Markets', page: 'trade', tab: 'markets', tip: 'Every pair: its price, its change and volume over a day, its liquidity', keywords: 'market index pairs volume liquidity price change verified curators issuers' },
-  { id: 'ba.book', label: 'Order book…', page: 'trade', tab: 'book', tip: 'The order book of two assets: limit orders to buy or sell at a price', keywords: 'order book limit orders bid ask spread' },
-  { id: 'ba.treasury', label: 'Treasury', page: 'trade', tab: 'treasury', tip: 'Where the fees go, and what the treasury holds per asset', keywords: 'treasury fees protocol security providers split' },
-  { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their pool for a share of its fees', keywords: 'pool provide' },
-  { id: 'ba.positions', label: 'Positions', page: 'trade', tab: 'positions', tip: 'Your positions of concentrated liquidity: in range or not, fees earned; collect, add, remove, close', keywords: 'concentrated liquidity position range ticks uniswap v3 fees collect' },
-  { id: 'ba.launches', label: 'Launches', page: 'trade', tab: 'launches', tip: 'Assets sold from a bonding curve until they graduate into a locked pool', keywords: 'launch bonding curve token new graduate pump fair' },
-  { id: 'ba.launch', label: 'Launch an asset…', page: 'trade', tab: 'launch', tip: 'Launch an asset of your own on a bonding curve', keywords: 'launch bonding curve token create new ticker' },
-  { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable or weighted, at a fee tier', keywords: 'pool curve stable weighted stableswap amplification weights fee tier' },
-  { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset', keywords: 'dutch auction' },
+  { id: 'ba.swap', label: 'Swap assets…', page: 'trade', tab: 'swap', tip: 'Trade one asset for another at the best price over every pool, order book and curve', keywords: 'exchange trade route' },
+  { id: 'ba.pools', label: 'Pools', page: 'pools', tab: 'pools', tip: 'The concentrated pools: their price, what they hold and trade; a position opened over the full range or a range of your own', keywords: 'pool liquidity concentrated provide' },
+  { id: 'ba.newpool', label: 'New pool…', page: 'pools', tab: 'new', tip: 'Make a concentrated pool of two assets at your price, and put your liquidity in it over the full range', keywords: 'create pool concentrated full range seed fund' },
+  { id: 'ba.positions', label: 'Positions', page: 'pools', tab: 'positions', tip: 'Your positions of concentrated liquidity: in range or not, fees earned; collect, add, remove, close', keywords: 'concentrated liquidity position range ticks uniswap v3 fees collect' },
+  { id: 'ba.launch', label: 'Launch an asset…', page: 'launch', tab: 'fund', tip: 'Create an asset of your own: with no market yet, on a bonding curve, or straight into a pool you fund', keywords: 'launch bonding curve token create new ticker pool fund' },
+  { id: 'ba.launches', label: 'Launches', page: 'launch', tab: 'launches', tip: 'Assets sold from a bonding curve until they graduate into a locked pool', keywords: 'launch bonding curve token new graduate pump fair' },
+  { id: 'ba.markets', label: 'Markets', page: 'trade', tab: 'markets', tip: 'Every pair: its price, its change and volume over a day, its liquidity (Advanced)', keywords: 'market index pairs volume liquidity price change verified curators issuers advanced' },
+  { id: 'ba.book', label: 'Order book…', page: 'trade', tab: 'book', tip: 'The order book of two assets: limit orders to buy or sell at a price (Advanced)', keywords: 'order book limit orders bid ask spread advanced' },
+  { id: 'ba.classic', label: 'Other pools', page: 'trade', tab: 'classic', tip: 'The pools of every kind: constant product, stable, weighted, concentrated (Advanced)', keywords: 'pool constant product stable weighted kinds advanced' },
+  { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their constant-product pool for a share of its fees (Advanced)', keywords: 'pool provide constant product advanced' },
+  { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable, weighted or concentrated, at a fee tier (Advanced)', keywords: 'pool curve stable weighted stableswap amplification weights fee tier advanced' },
+  { id: 'ba.treasury', label: 'Treasury', page: 'trade', tab: 'treasury', tip: 'Where the fees go, and what the treasury holds per asset (Advanced)', keywords: 'treasury fees protocol security providers split advanced' },
+  { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset (Advanced)', keywords: 'dutch auction advanced' },
   { id: 'ba.activity', label: 'Asset activity', page: 'my-assets', tab: 'activity', tip: 'The asset transactions of this wallet', keywords: 'history transactions' },
 ] as const satisfies readonly LocalCommand[];
