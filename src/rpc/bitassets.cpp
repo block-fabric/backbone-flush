@@ -1100,8 +1100,8 @@ RPCMethod getdexinfo()
     {
         const int next{chainman.ActiveChain().Height() + 1};
         // In force in the next block (from no_treasury_height no protocol part, and a fee in an asset keeps its security part in the pool).
-        parts.pushKV("liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.SwapProtocolShare(next)) / 10000.0));
-        parts.pushKV("security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+        parts.pushKV("liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.SwapSecurityShare(next) - params.SwapProtocolShare(next)) / 10000.0));
+        parts.pushKV("security", DecimalToJSON(params.SwapSecurityShare(next) / 10000.0));
         parts.pushKV("protocol", DecimalToJSON(params.SwapProtocolShare(next) / 10000.0));
     }
     result.pushKV("swap_fee_parts", std::move(parts));
@@ -1491,9 +1491,9 @@ RPCMethod gettreasury()
     const bitassets::State state{StateOf(chainman)};
     const int next{chainman.ActiveChain().Height() + 1};
     UniValue parts(UniValue::VOBJ);
-    parts.pushKV("swap_security", DecimalToJSON(params.dex_fee_security_share / 10000.0));
+    parts.pushKV("swap_security", DecimalToJSON(params.SwapSecurityShare(next) / 10000.0));
     parts.pushKV("swap_protocol", DecimalToJSON(params.SwapProtocolShare(next) / 10000.0));
-    parts.pushKV("swap_liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - params.SwapProtocolShare(next)) / 10000.0));
+    parts.pushKV("swap_liquidity_providers", DecimalToJSON((bitassets::FEE_DENOMINATOR - params.SwapSecurityShare(next) - params.SwapProtocolShare(next)) / 10000.0));
     parts.pushKV("launch_fee", DecimalToJSON(params.launch_fee / 10000.0));
     parts.pushKV("launch_creator", DecimalToJSON(params.LaunchCreatorShare(next) / 10000.0));
     parts.pushKV("launch_protocol", DecimalToJSON(params.LaunchProtocolShare(next) / 10000.0));

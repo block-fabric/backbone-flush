@@ -596,7 +596,7 @@ goes to a party named below, so that the parts add up to the fee, exactly.
 
 | | Layers (CHN) | Flush (ECX) |
 |---|---|---|
-| Swap fees (every pool kind and tier; order books charge none) | providers 89 %, security 11 %, protocol 0 | providers 85 %, security 11 %, protocol 4 % |
+| Swap fees (every pool kind and tier; order books charge none) | providers 89 %, security 11 %, protocol 0 | providers 85 %, security 15 % from `no_treasury_height` (before: security 11 %, protocol 4 %); a security part paid in an asset stays in its pool |
 | Launch curves: the fee of a trade | 1 % | 1.15 % |
 | … its parts | creator 80 %, security 20 %, protocol 0 | creator 50 %, protocol 30 %, security 20 % |
 | Network fees of transactions | the BMM bidder and the validators, by the fee curve; peg fees the bidder's | the same |
@@ -625,8 +625,9 @@ asset (not the chain's coin) cannot be paid by a coinbase: before `no_treasury_h
 **No treasury, from `no_treasury_height`** (`SidechainParams::NoTreasury`; never on the eCash networks until decided,
 regtest from the DEX's height, slot 99 at its upgrade v4). Before it, the treasury (table `0x9e`, `TreasuryEntry` per
 asset) took the protocol's parts (swaps 4 %, launches 30 % on Flush) and the assets' security parts, held by the chain
-itself, never spent (no rule ever spent from it). From it: a swap fee is 89 % to the providers and 11 % to the chain's
-security (the protocol's part stays in the pool), and a security part in an asset stays in its pool too; a launch's
+itself, never spent (no rule ever spent from it). From it: a swap fee is 85 % to the providers and 15 % to the chain's
+security (the protocol's 4 % joins the security part); a security part paid in an asset stays in its pool, so on that
+side of a pool the providers keep the whole fee; a launch's
 curve fee is 80 % to its creator and 20 % to security (a launch made before keeps its own parts, its protocol's going to
 its creator). At that block, once, what the treasury held of the chain's coin is paid with the block's fees as their
 security part (`SecurityFees`: the BMM bidder and the validators); its entries stay as a record, and what it held of

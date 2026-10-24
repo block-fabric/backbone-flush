@@ -42,8 +42,8 @@ A pair of assets can have several pools, one of each kind:
 
 **Fee tiers**: 0.01 %, 0.05 %, 0.30 %, 1.00 % of what goes in. Of each fee, most stays with the pool's providers; a
 part pays the chain's security (the miners who anchor it and the validators) and, on Flush, a part goes to the
-protocol's treasury: 89 % providers / 11 % security (on Flush before its no-treasury height: 85 % providers / 11 % security
-/ 4 % treasury).
+protocol's treasury: on Flush 85 % providers / 15 % security (before its no-treasury height 85 / 11 / 4 % treasury; on
+Layers 89 / 11). Of a fee paid in an asset rather than ECX the security part stays in the pool: the providers keep it all.
 Lower tiers suit stable pairs, higher ones volatile pairs. A pool may be made with a **dynamic fee**: its tier plus up to 2 %
 more while its price moves a lot, back to its tier when it is quiet.
 
@@ -133,9 +133,9 @@ verification back. CLI: `getverifications GOLD`; a curator: `verifyasset <oracle
 
 ## Where the fees go
 
-A swap fee goes 89 % to the pool's liquidity providers and 11 % to the chain's security (the miners who anchor it and
+A swap fee goes 85 % to the pool's liquidity providers and 15 % to the chain's security (the miners who anchor it and
 the validators, paid with each block's fees). A fee paid in an asset rather than ECX cannot pay them: its security part
-stays in the pool, for its providers. A launch curve's fee goes 80 % to the creator and 20 % to the chain's security.
+stays in the pool, so on that side the providers keep the whole fee. A launch curve's fee goes 80 % to the creator and 20 % to the chain's security.
 There is no treasury: on Flush the protocol's parts (4 % of swap fees, 30 % of launch fees) went to one until its
 no-treasury height; at that block what it held of ECX was paid to the chain's security, and `gettreasury` keeps its
 record.

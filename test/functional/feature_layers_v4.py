@@ -114,7 +114,8 @@ class LayersV4Test(LayersTest):
         assert not treasury["active"]
         assert_equal(next(b for b in treasury["balances"] if b["asset"] == "ECX")["balance"], 0)
         assert_equal(treasury["fee_parts"]["swap_protocol"], 0)
-        assert_equal(treasury["fee_parts"]["swap_liquidity_providers"], Decimal("89"))
+        # 85 % providers, 15 % security (the treasury's 4 % joins security); a fee in an asset keeps its security part in its pool.
+        assert_equal((treasury["fee_parts"]["swap_liquidity_providers"], treasury["fee_parts"]["swap_security"]), (Decimal("85"), Decimal("15")))
         assert_equal(n0.getdexinfo()["swap_fee_parts"]["protocol"], 0)
         # After H a swap gives the treasury nothing.
         n1.swapasset("ECX", Decimal("0.2"), "GOLD")

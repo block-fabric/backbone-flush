@@ -1897,8 +1897,9 @@ private:
                 m.SetString("to", to);
                 m.SetDouble("bps", share / 100.0);
             }};
-            swap_part("liquidity_providers", bitassets::FEE_DENOMINATOR - params.dex_fee_security_share - protocol_share);
-            swap_part("security", params.dex_fee_security_share);
+            const uint32_t security_share{params.SwapSecurityShare(tip.height + 1)};
+            swap_part("liquidity_providers", bitassets::FEE_DENOMINATOR - security_share - protocol_share);
+            swap_part("security", security_share);
             if (protocol_share) swap_part("treasury", protocol_share);
             if (m_node.mempool) f.SetDouble("min_relay_fee_ecx_per_kvb", static_cast<double>(m_node.mempool->m_opts.min_relay_feerate.GetFeePerK()) / COIN);
             return f;

@@ -167,6 +167,8 @@ struct SidechainParams {
     bool NoTreasury(int height) const { return DexActive(height) && height >= no_treasury_height; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
     uint32_t SwapProtocolShare(int height) const { return NoTreasury(height) ? 0 : dex_fee_protocol_share; }
+    //! A swap fee's security part in force: from no_treasury_height the protocol's part joins it (Flush: 11 % + 4 % = 15 %).
+    uint32_t SwapSecurityShare(int height) const { return NoTreasury(height) ? dex_fee_security_share + dex_fee_protocol_share : dex_fee_security_share; }
     uint32_t LaunchCreatorShare(int height) const { return NoTreasury(height) ? launch_creator_share + launch_protocol_share : launch_creator_share; }
     uint32_t LaunchProtocolShare(int height) const { return NoTreasury(height) ? 0 : launch_protocol_share; }
     bool Allocation10Active(int height) const { return DexCurvesActive(height) && height >= allocation10_height; }
@@ -175,7 +177,8 @@ struct SidechainParams {
      * chain's security (paid with the block's fees: the BMM bidder and the validators by the curve of the network fees,
      * when the fee is in the chain's coin; held by the treasury per asset otherwise) and the protocol's (to the
      * treasury); the liquidity providers keep the rest, the roundings' remainders included. Layers: security 11 %,
-     * protocol 0 (the providers keep 89 %).
+     * protocol 0 (the providers keep 89 %). From no_treasury_height the protocol's part joins the security part
+     * (SwapSecurityShare: Flush 15 %, providers 85 %), and a security part paid in an asset stays in its pool.
      */
     uint32_t dex_fee_security_share{110'000};
     uint32_t dex_fee_protocol_share{0};

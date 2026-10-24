@@ -47,10 +47,11 @@ describe('the treasury', () => {
 });
 
 describe('no treasury (from the network\'s no-treasury height)', () => {
-  it('the splits name no treasury when its part is 0: swaps 89/11, launches 80/20', () => {
-    const swap = swapFeeSplit({ liquidity_providers: 89, security: 11, protocol: 0 });
+  it('the splits name no treasury when its part is 0: swaps 85/15, launches 80/20', () => {
+    const swap = swapFeeSplit({ liquidity_providers: 85, security: 15, protocol: 0 });
     expect(swap).not.toMatch(/treasury/);
-    expect(swap).toMatch(/89%/);
+    expect(swap).toMatch(/85%/);
+    expect(swap).toMatch(/15%/);
     const launch = launchFeeSplit({ fee: 1.15, creator: 80, protocol: 0, security: 20 });
     expect(launch).not.toMatch(/treasury/);
     expect(launch).toMatch(/80%/);
