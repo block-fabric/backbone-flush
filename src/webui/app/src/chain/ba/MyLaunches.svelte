@@ -205,10 +205,10 @@
     gap: 0.1rem;
     min-width: 0;
   }
+  /* Never cut: a price of a 210M-supply launch (0.00000106) cut to "0.000001…" reads as another (real data, CORN on
+     betanet, 2026-10-24); it wraps under its words instead. */
   .start {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
   .curve {
     display: flex;
