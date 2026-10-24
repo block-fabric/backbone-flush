@@ -3,7 +3,7 @@
   // the newest BMM blocks (blocks of stake that record a BMM commitment, and merged mined ones), the tickets this
   // node knows (what BMM bidders ask the mainchain to commit to), commitments the active chain leaves out, the fee
   // pot BMM bidders win, and what this node itself bids (-validatoranchorbid). getanchorinfo, getposinfo, getblock;
-  // the bid from the host (fastblocks.anchoring), as no RPC says it.
+  // the bid from the host (fastblocks.anchoring); the whole policy is under Merged mining (AnchorBidPanel).
   import Amount from '../../components/Amount.svelte';
   import Icon from '../../components/Icon.svelte';
   import Pager from '../../components/Pager.svelte';
@@ -226,8 +226,8 @@
       <div class="panel-body side-form">
         <div class="fb-facts">
           <div>
-            <span>As a validator (-validatoranchorbid)</span>
-            <strong>{#if anchoring?.on}{t('%1 %2 a mainchain block', anchoring.bid ?? '', CHAIN.mainchain?.ticker ?? '')}{:else if anchoring?.validator}{t('off')}{:else}{t('not a validator')}{/if}</strong>
+            <span>As a validator (anchor bid policy)</span>
+            <strong>{#if anchoring?.on}{t('at least %1 %2 a mainchain block', anchoring.bid ?? '', CHAIN.mainchain?.ticker ?? '')}{:else if anchoring?.validator}{t('off')}{:else}{t('not a validator')}{/if}</strong>
           </div>
           <div>
             <span>Merged mining (setbmm)</span>
@@ -236,11 +236,11 @@
         </div>
         <p class="side-note fb-small">
           {#if anchoring?.on}
-            {t('This node bids %1 %2 at least for a BMM commitment to its ticket in every mainchain block, whatever the fees; the pot it wins goes to %3. The merged miner, if on, bids instead.', anchoring.bid ?? '', CHAIN.mainchain?.ticker ?? '', anchoring.payee ?? '')}
+            {t('This node bids %1 %2 at least for a BMM commitment to its ticket in every mainchain block, as its anchor bid policy says (Merged mining); the pot it wins goes to %3. The merged miner, if on, bids instead.', anchoring.bid ?? '', CHAIN.mainchain?.ticker ?? '', anchoring.payee ?? '')}
           {:else if anchoring?.validator}
-            {t('The validator’s own bidder is off (-validatoranchorbid=0, or on regtest by default; %1 elsewhere). Blocks of stake stop without BMM commitments: someone must bid for them.', anchoring.defaultbid)}
+            {t('The validator’s own bidder is off (its anchor bid policy says off, or on regtest by default; %1 at least elsewhere). Blocks of stake stop without BMM commitments: someone must bid for them.', anchoring.defaultbid)}
           {:else}
-            {t('A validator bids for a BMM commitment in every mainchain block (-validatoranchorbid, %1 by default), so that blocks of stake never wait for fees. This node bids only if merged mining is on.', anchoring?.defaultbid ?? '0.00001')}
+            {t('A validator bids for a BMM commitment in every mainchain block (its anchor bid policy, %1 at least by default), so that blocks of stake never wait for fees. This node bids only if merged mining is on.', anchoring?.defaultbid ?? '0.00001')}
           {/if}
         </p>
         <div class="row"><button type="button" class="btn small" onclick={() => go('bmm')}><Icon name="merged" size={14} /> Merged mining</button></div>

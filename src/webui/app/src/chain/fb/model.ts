@@ -139,10 +139,12 @@ export interface FinalityBalances {
 /** fastblocks.anchoring (local.cpp): this node's own bid for BMM commitments, as a validator. */
 export interface Anchoring {
   on: boolean;
+  /** The floor of the policy in force. */
   bid?: string;
+  strategy?: string;
+  max?: string;
   payee?: string;
   validator: boolean;
-  option?: string;
   defaultbid: string;
 }
 

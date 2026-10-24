@@ -9,6 +9,7 @@
   import SafeText from '../components/SafeText.svelte';
   import Amount from '../components/Amount.svelte';
   import AmountInput from '../components/AmountInput.svelte';
+  import AnchorBidPanel from '../chain/fb/AnchorBidPanel.svelte';
   import Icon from '../components/Icon.svelte';
   import { CHAIN } from '../chain/config';
   import { errorText, inform } from '../lib/dialogs.svelte';
@@ -17,7 +18,7 @@
   import { rpc } from '../lib/rpc';
   import { node, prefs, savePrefs, toast, wallets, walletsEnabled } from '../lib/state.svelte';
   import { coinsToSats, formatAmount, satsToCoins } from '../lib/units';
-  import { bmmBlocks, bmmHost, bmmShare, declined, type BmmRequest } from '../lib/side';
+  import { bmmBlocks, bmmHost, bmmShare, declined, resolveCommitment, type BmmRequest, type Commitment } from '../lib/side';
   import { noteManualRequest, refreshSide, side, startSide, type BmmLogEntry } from '../lib/sidestate.svelte';
 
   // Shown as a tab of Drivechains (embedded): without its own page title.
@@ -123,22 +124,41 @@
   const marks = $derived(bmmBlocks(side.main.events, MARKS).reverse());
   const share = $derived(bmmShare(side.main.events, MARKS));
   const rows = $derived(bmmBlocks(side.main.events, ROWS));
-  /** Whether the block of this chain a mainchain block committed to is in the chain of this node. */
-  let inChain = $state<Record<string, boolean>>({});
+  /**
+   * What each commitment of those blocks is (resolveCommitment): a block of this chain, or, on FastBlocks, an anchor
+   * ticket and the block it anchors; whether that is in the chain of this node; or a lookup that failed (asked again).
+   */
+  let commitments = $state<Record<string, Commitment>>({});
   $effect(() => {
-    const hashes = rows.map((r) => r.bmm).filter((h): h is string => !!h && !(h in inChain));
+    const hashes = rows.map((r) => r.bmm).filter((h): h is string => !!h && (!(h in commitments) || commitments[h].kind === 'error'));
     if (!hashes.length) return;
     (async () => {
-      const found: Record<string, boolean> = {};
-      for (const h of hashes) {
-        found[h] = await rpc
-          .raw<{ confirmations: number }>('getblockheader', [h, true])
-          .then((b) => b.confirmations >= 0)
-          .catch(() => false);
-      }
-      inChain = { ...inChain, ...found };
+      const found: Record<string, Commitment> = {};
+      for (const h of hashes) found[h] = await resolveCommitment(h);
+      commitments = { ...commitments, ...found };
     })();
   });
+
+  function commitmentClass(c: Commitment | undefined): string {
+    if (!c) return '';
+    if (c.kind === 'block' || c.kind === 'ticket') return c.inChain ? 'ok' : 'bad';
+    return c.kind === 'error' ? 'wait' : 'bad';
+  }
+
+  function commitmentText(c: Commitment | undefined): string {
+    if (!c) return '…';
+    switch (c.kind) {
+      case 'block':
+        return c.inChain ? t('In this chain') : t('Not in this chain');
+      case 'ticket':
+        if (c.anchoredHeight === undefined) return t('Anchor of a block this node does not have');
+        return c.inChain ? t('Anchored block %1, in this chain', formatCount(c.anchoredHeight)) : t('Anchor of block %1, not in this chain', formatCount(c.anchoredHeight));
+      case 'unknown':
+        return t('Not ours: another chain');
+      case 'error':
+        return t('Lookup failed');
+    }
+  }
 
   function describeEntry(e: BmmLogEntry): string {
     switch (e.kind) {
@@ -203,6 +223,7 @@
           <AmountInput id="bmm-always-amount" label="Offer for each block" bind:value={alwaysOffer} disabled={mining} />
           <p class="side-note side-warn">For tests: every block of {mainName} costs the offer, fees or not.</p>
         {/if}
+        <p class="side-note fb-small" id="bmm-offer-scope">This offer is merged mining's, used only while it is on. A validator's own anchor bids follow its anchor bid policy, below.</p>
         <div class="row">
           <button type="submit" class="btn primary" id="bmm-start" disabled={mining || busy}><Icon name="merged" size={16} /> Start mining</button>
           <button type="button" class="btn" id="bmm-stop" disabled={!mining || busy} onclick={() => setMining(false)}>Stop mining</button>
@@ -229,6 +250,9 @@
     </section>
   </div>
 
+  <!-- A validator's own anchorer, which bids whether merged mining is on or off (its policy, not the offer above). -->
+  <AnchorBidPanel />
+
   <div class="side-cols">
     <section class="panel">
       <div class="panel-head"><h2>Blocks of {mainName}</h2><span class="muted small">{share.of ? `${share.committed} of the last ${share.of} committed to this chain` : ''}</span></div>
@@ -251,7 +275,7 @@
                   <td class="num">{formatCount(r.height)}</td>
                   <td>{formatTime(r.time, true)}</td>
                   <td class="mono">{#if r.bmm}<button type="button" class="link mono" onclick={() => go('explorer', `search:${r.bmm}`)} translate="no">{shortHash(r.bmm, 10)}</button>{:else}<span class="muted">none</span>{/if}</td>
-                  <td>{#if r.bmm}<span class="status {inChain[r.bmm] ? 'ok' : inChain[r.bmm] === false ? 'bad' : ''}">{inChain[r.bmm] ? 'In this chain' : inChain[r.bmm] === false ? 'Not in this chain' : '…'}</span>{/if}</td>
+                  <td>{#if r.bmm}<span class="status {commitmentClass(commitments[r.bmm])}" class:anchor={commitments[r.bmm]?.kind === 'ticket'} title={commitments[r.bmm]?.kind === 'error' ? (commitments[r.bmm] as { message: string }).message : undefined}>{commitmentText(commitments[r.bmm])}</span>{/if}</td>
                 </tr>
               {/each}
             </tbody>
