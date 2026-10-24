@@ -143,14 +143,22 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // the pool kinds' quotes, simulation, preview, depth); the 23 that pay or sign (setassetlogo and setassetdisplayname,
     // routes and the pool kinds' among them) are confirmed by the host; no bond among any of them.
     // And getpoolcandles (the order book's price chart).
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U + 1U);
+    // And getanchorbidpolicy (the validator's anchor bid policy, read; setanchorbidpolicy is confirmed by the host) and
+    // getanchorticket (the block a mainchain commitment anchors).
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U + 1U + 2U);
     BOOST_CHECK(methods.contains("getpoolcandles"));
+    BOOST_CHECK(methods.contains("getanchorbidpolicy"));
+    BOOST_CHECK(methods.contains("getanchorticket"));
+    BOOST_CHECK(!methods.contains("setanchorbidpolicy"));
     const auto keyed{webui::local::KeyedRpcMethods()};
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
     // curveasset among them (an existing asset on a curve).
-    BOOST_CHECK_EQUAL(confirmed.size(), 32U);
+    BOOST_CHECK_EQUAL(confirmed.size(), 33U);
     BOOST_CHECK(confirmed.contains("curveasset"));
+    // The anchor bid policy spends the mainchain wallet: confirmed, as a change of the node.
+    BOOST_CHECK(confirmed.contains("setanchorbidpolicy"));
+    BOOST_CHECK(confirmed.at("setanchorbidpolicy").kind == webui::confirm::Method::Kind::NODE);
     for (const char* m : {"getposinfo", "getstakinginfo", "listbonds", "createbond", "createunbond", "setstaking", "signbondpop"}) {
         BOOST_CHECK_MESSAGE(!keyed.contains(m), m);
         BOOST_CHECK_MESSAGE(!confirmed.contains(m), m);

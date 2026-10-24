@@ -21,7 +21,9 @@ const TRANSLATE = new Set(['t', 'tn']);
 /** Functions that give words of the app already in the language shown (made with t() / tn()). */
 const SELF_TRANSLATED = new Set(['typeText', 'statusText', 'voteText', 'summaryText', 'signersText', 'pingText', 'rangeText', 'rateText', 'noWalletText', 'nodeWords', 'addressTypeText',
   // FastBlocks' pages (chain/fb/model.ts), each made with t() / tn().
-  'stateText', 'nodeStateText', 'untilText', 'feeSplitText', 'kindText', 'finalityText', 'pageTitle', 'scriptKindText', 'mainchainName']);
+  'stateText', 'nodeStateText', 'untilText', 'feeSplitText', 'kindText', 'finalityText', 'pageTitle', 'scriptKindText', 'mainchainName',
+  // Merged mining (pages/Bmm.svelte): what a commitment of this chain is, made with t().
+  'commitmentText']);
 /** Where a toast or a dialog of the app takes its words: the arguments (by place) and the fields of an object argument. */
 const MESSAGE_CALLS: Record<string, { args: number[]; props: string[] }> = {
   toast: { args: [1, 2], props: [] },

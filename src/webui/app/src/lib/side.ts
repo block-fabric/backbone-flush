@@ -355,6 +355,53 @@ export function bmmBlocks(events: readonly SideEvent[], count: number): BmmBlock
     .reverse();
 }
 
+/**
+ * What a mainchain commitment of this chain is, as this node sees it: a block of this chain (merged mined: the
+ * template's commitment), an anchor ticket (FastBlocks: the commitment is to a ticket, h*, and the ticket names the
+ * block it anchors), nothing this node knows (another chain's, or a ticket it never saw), or a lookup that failed.
+ */
+export type Commitment =
+  | { kind: 'block'; inChain: boolean; height?: number }
+  | { kind: 'ticket'; inChain: boolean; anchoredHeight?: number; anchored: string }
+  | { kind: 'unknown' }
+  | { kind: 'error'; message: string };
+
+/** RPC_INVALID_ADDRESS_OR_KEY: getblockheader's "Block not found". */
+const NOT_FOUND = -5;
+
+/** The two reads it makes (named here: the pages call no method chosen at run time). */
+export interface CommitmentReads {
+  header: (hash: string) => Promise<{ confirmations: number; height?: number }>;
+  ticket: (hash: string) => Promise<{ known: boolean; anchored?: string; anchoredheight?: number; inactivechain?: boolean }>;
+}
+
+const COMMITMENT_READS: CommitmentReads = {
+  header: (hash) => rpc.raw('getblockheader', [hash, true]),
+  ticket: (hash) => rpc.raw('getanchorticket', [hash]),
+};
+
+export async function resolveCommitment(hash: string, reads: CommitmentReads = COMMITMENT_READS): Promise<Commitment> {
+  const code = (e: unknown) => (e && typeof e === 'object' ? (e as { code?: number }).code : undefined);
+  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  try {
+    const header = await reads.header(hash);
+    return { kind: 'block', inChain: header.confirmations >= 0, height: header.height };
+  } catch (e) {
+    if (code(e) !== NOT_FOUND) return { kind: 'error', message: message(e) };
+  }
+  let ticket: Awaited<ReturnType<CommitmentReads['ticket']>>;
+  try {
+    ticket = await reads.ticket(hash);
+  } catch (e) {
+    // A chain without anchors (no such method, or not a chain of stake): the template's answer, not a block of this chain.
+    const c = code(e);
+    if (c === -32601 || c === -1) return { kind: 'unknown' };
+    return { kind: 'error', message: message(e) };
+  }
+  if (!ticket?.known || !ticket.anchored) return { kind: 'unknown' };
+  return { kind: 'ticket', inChain: !!ticket.inactivechain, anchoredHeight: ticket.anchoredheight, anchored: ticket.anchored };
+}
+
 /** Of the last `count` mainchain blocks, how many committed to a block of this chain. */
 export function bmmShare(events: readonly SideEvent[], count: number): { committed: number; of: number } {
   const last = events.slice(-count);
