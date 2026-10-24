@@ -3151,16 +3151,16 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     std::map<RoundKey, std::optional<dex::Clearing>> rounds;
     // The security and protocol parts of a round's swap fees, of each asset: the fee of what came in of it, ⌊in·fee/F⌋,
     // and its parts, each rounded down (SwapFeeParts); the liquidity providers keep the rest.
-    // From no_treasury_height (SidechainParams::NoTreasury) there is no protocol part (it stays in the pool, for the
-    // providers), and the security part of a fee in an asset (no coinbase pays it) stays in the pool as well: only the
-    // chain's coin's security part leaves it, paid with the block's fees.
+    // From no_treasury_height (SidechainParams::NoTreasury) there is no protocol part: it joins the security part (Flush:
+    // 85 % providers, 15 % security); and the security part of a fee in an asset (no coinbase pays it) stays in the pool,
+    // for its providers: only the chain's coin's security part leaves it, paid with the block's fees.
     const bool no_treasury{rules.NoTreasury(height)};
     const auto fee_parts{[&](uint32_t fee, const std::vector<dex::HopIn>& ins, bool chn0, bool chn1) {
         unsigned __int128 in0{0}, in1{0};
         for (const dex::HopIn& in : ins) (in.zero_in ? in0 : in1) += in.amount;
         const uint64_t fee0{static_cast<uint64_t>(in0 * fee / FEE_DENOMINATOR)}, fee1{static_cast<uint64_t>(in1 * fee / FEE_DENOMINATOR)};
         const auto parts{[&](uint64_t f, bool chn) {
-            FeeParts p{SwapFeeParts(f, rules.dex_fee_security_share, no_treasury ? 0 : rules.dex_fee_protocol_share)};
+            FeeParts p{SwapFeeParts(f, rules.SwapSecurityShare(height), rules.SwapProtocolShare(height))};
             if (no_treasury && !chn) p.security = 0;
             return p;
         }};

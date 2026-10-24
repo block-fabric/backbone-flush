@@ -674,7 +674,10 @@ BOOST_FIXTURE_TEST_CASE(no_treasury_from_its_height, NoTreasurySetup)
     chain.Require(MakeTx({}, SwapPools{CHN, {cp}, 30'000'000, 1, HOLDER}, {std::nullopt}, 30'000'000));
     chain.Require(MakeTx({g[2]}, SwapPools{GOLD, {cp}, 70'000, 1, HOLDER}, {std::nullopt}));
     chain.EndBlock();
-    const FeeParts coin{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(30'000'000) * 10'000 / FEE_DENOMINATOR), rules.dex_fee_security_share, 0)};
+    // 85 % providers, 15 % security (the protocol's 4 % joins the security part), and nothing to a treasury.
+    BOOST_CHECK_EQUAL(rules.SwapSecurityShare(102), rules.dex_fee_security_share + rules.dex_fee_protocol_share);
+    BOOST_CHECK_EQUAL(rules.SwapSecurityShare(101), rules.dex_fee_security_share);
+    const FeeParts coin{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(30'000'000) * 10'000 / FEE_DENOMINATOR), rules.dex_fee_security_share + rules.dex_fee_protocol_share, 0)};
     const auto round{curves::ClearPoolOf(Kind(Curve::CONSTANT_PRODUCT, 10'000), 10'000, before.reserve0, before.reserve1, {{true, 30'000'000}, {false, 70'000}})};
     BOOST_REQUIRE(round);
     BOOST_CHECK_EQUAL(chain.PoolAt(cp).reserve0, round->reserve0 - coin.security);
