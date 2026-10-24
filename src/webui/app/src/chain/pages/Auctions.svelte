@@ -246,7 +246,7 @@
                 <button type="button" class="ba-row" aria-current={picked === a.auction} onclick={() => (picked = a.auction)}>
                   <AssetBadge id={a.base_id} label={a.base} size="s" showLabel={false} />
                   <span class="main">
-                    <AssetName label={a.base} display={displayNameOf(a.base_id) ?? ''} />
+                    <AssetName label={a.base} display={displayNameOf(a.base_id) ?? ''} id={a.base_id} />
                     <span>{formatAmount(a.remaining, decimalsOf(a.base_id), { max: 4 })} <SafeText text={a.base} /> <span class="faint">for</span> <SafeText text={a.quote} /></span>
                     <span class="ba-bar"><span use:barWidth={prog.sold}></span></span>
                   </span>

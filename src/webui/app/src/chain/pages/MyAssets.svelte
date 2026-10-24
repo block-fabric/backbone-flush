@@ -150,7 +150,7 @@
   async function register(p: PendingIssue) {
     try {
       const txid = await registerNow(p);
-      if (txid) toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', assetText(p.name, p.display_name)));
+      if (txid) toast('success', t('Registering an asset'), t('%1 is being registered: it is in your assets after the next block.', assetText(p.name, p.display_name, undefined, p.asset)));
     } catch (e) {
       await inform(t('Register'), errorText(e), 'error');
     }
@@ -343,7 +343,7 @@
                   <button type="button" class="ba-row" aria-current={picked === h.asset} onclick={() => (picked = h.asset)}>
                     <AssetBadge id={h.asset} label={h.label} showLabel={false} />
                     <span class="main">
-                      <AssetName label={h.label} display={displayNameOf(h.asset) ?? ''} />
+                      <AssetName label={h.label} display={displayNameOf(h.asset) ?? ''} id={h.asset} />
                       <span class="faint small line">
                         {#if h.control}<span class="ba-tag accent">controlled</span>{/if}
                         <span>{approx(h.supply) > 0 ? formatPercent((approx(h.balance) / approx(h.supply)) * 100) : '–'} of the supply</span>

@@ -563,23 +563,40 @@ export function assetIdentity(label: string, display?: string, seq?: string): { 
 }
 
 /**
- * The asset as one line of text, for what the host draws (toasts, the titles of dialogs, tooltips): "Theodore
- * Brosevelt $BROSEVELT"; no ticker: the name and its number ("gold bar #1739-0029"); no name: "$GOLD"; neither: its
- * number, else its label (a hash). ECX: its ticker alone. Text of the chain.
+ * The part of an asset that no other has, shown beside its ticker (a display name is not unique, and may hold "$ECX" or
+ * "#1739-0029" to pass for another: security review 2026-10-24): its number, else the start of its hash. ECX: none.
  */
-export function assetText(label: string, display?: string, seq?: string): string {
-  if (label === TICKER && !display) return TICKER;
-  const a = assetIdentity(label, display, seq);
-  if (a.name && a.ticker) return `${a.name} $${a.ticker}`;
-  if (a.name) return a.seq ? `${a.name} #${a.seq}` : a.name;
-  if (a.ticker) return `$${a.ticker}`;
-  return a.seq ? `#${a.seq}` : label;
+export function uniquePart(seq?: string, id?: string): string {
+  if (seq) return `#${seq}`;
+  if (id && /^[0-9a-f]{16,}$/i.test(id) && !/^0+$/.test(id)) return `0x${id.slice(0, 8)}…`;
+  return '';
 }
 
-/** How an asset reads in full (a tooltip): its name and ticker, then its number ("Gold Bar Token, 1 g $GOLD · #1739-0029"). */
-export function assetTitle(label: string, display?: string, seq?: string): string {
-  const text = assetText(label, display);
-  return seq && !text.endsWith(`#${seq}`) ? `${text} · #${seq}` : text;
+/**
+ * A name of the chain as text the host draws (toasts, dialogs, tooltips), so that it cannot pass for the app's own
+ * words around it: a "$", "#", quote or backslash escaped with a backslash ("Bitcoin \$ECX \#1"), a control or
+ * invisible character (bidirectional, zero-width) written as its code point ("\u{202E}").
+ */
+export function escapeName(text: string): string {
+  return text.replace(/[\\"$#]/g, (c) => `\\${c}`).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`);
+}
+
+/**
+ * The asset as one line of text, for what the host draws (toasts, the titles of dialogs, tooltips), as the pages show
+ * it: its name (escapeName), its $TICKER, then its unique part (uniquePart): "Theodore Brosevelt $BROSEVELT
+ * #1739-0029"; no ticker: "gold bar #1739-0029"; no name: "$GOLD #1739-0029"; neither: its number, else the start of its
+ * hash, else its label. ECX: its ticker alone. Text of the chain.
+ */
+export function assetText(label: string, display?: string, seq?: string, id?: string): string {
+  if (label === TICKER && !display) return TICKER;
+  const a = assetIdentity(label, display, seq);
+  const words = [a.name ? escapeName(a.name) : '', a.ticker ? `$${escapeName(a.ticker)}` : '', uniquePart(a.seq, id)].filter((x) => x !== '').join(' ');
+  return words || escapeName(label);
+}
+
+/** How an asset reads in full (a tooltip): the same as assetText ("Gold Bar Token, 1 g $GOLD #1739-0029"). */
+export function assetTitle(label: string, display?: string, seq?: string, id?: string): string {
+  return assetText(label, display, seq, id);
 }
 
 /** What is wrong with a name for a new asset ('' when nothing). */

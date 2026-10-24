@@ -56,7 +56,7 @@
       <thead class:sr-only={simple}><tr><th scope="col" class="c-asset">Asset</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">{TICKER} worth</th></tr></thead>
       <tbody>
         {#each shown as r (r.holding.asset)}
-          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq)} onclick={() => goTo('assets', '', r.holding.asset)}>
+          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => goTo('assets', '', r.holding.asset)}>
             <td class="c-asset">
               <button type="button" class="asset" onclick={(e) => { e.stopPropagation(); goTo('assets', '', r.holding.asset); }}>
                 <AssetBadge id={r.holding.asset} label={r.holding.label} seq={r.seq} size="s" />
@@ -73,7 +73,7 @@
     {#if held.controlledOnly.length}
       <p class="small controlled" data-testid="controlled-only"><span class="muted">You control, without holding any:</span>
         {#each held.controlledOnly as r (r.holding.asset)}
-          <button type="button" class="chip" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq)} onclick={() => goTo('assets', '', r.holding.asset)}>
+          <button type="button" class="chip" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => goTo('assets', '', r.holding.asset)}>
             <AssetBadge id={r.holding.asset} label={r.holding.label} size="s" />
             <span class="crown" title="You control this asset"><Icon name="crown" size={11} label="You control this asset" /></span>
           </button>

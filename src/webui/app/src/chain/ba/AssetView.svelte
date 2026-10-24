@@ -153,7 +153,7 @@
     <header class="panel hero">
       <AssetBadge {id} label={asset.label} size="l" showLabel={false} logo={asset.logo?.hash} />
       <div class="who">
-        <h2 class="name"><AssetName label={asset.label} display={asset.display_name ?? ''} /></h2>
+        <h2 class="name"><AssetName label={asset.label} display={asset.display_name ?? ''} seq={asset.seq} {id} /></h2>
         <div class="tags">
           <span class="ba-tag" translate="no">#{asset.seq}</span>
           <VerifiedBadge {id} />
@@ -232,7 +232,7 @@
                   <button type="button" class="ba-row" onclick={() => trade(other)}>
                     <AssetBadge id={other} label={p.asset_a_id === id ? p.asset_b : p.asset_a} size="s" showLabel={false} />
                     <span class="main">
-                      <AssetName label={p.asset_a_id === id ? p.asset_b : p.asset_a} display={displayNameOf(other) ?? ''} />
+                      <AssetName label={p.asset_a_id === id ? p.asset_b : p.asset_a} display={displayNameOf(other) ?? ''} id={other} />
                       <span>1 <SafeText text={asset.label} /> = {#if up.kind === 'each'}{up.price}{:else if up.kind === 'buys'}1/{up.amount}{:else}–{/if} <SafeText text={p.asset_a_id === id ? p.asset_b : p.asset_a} /></span>
                       <PoolKind kind={p.asset_a_id === id ? kindOf(p) : flipKind(kindOf(p))} />
                       <span class="faint small">
