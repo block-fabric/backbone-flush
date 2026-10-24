@@ -193,7 +193,7 @@ message TreasuryBalance {
 }
 
 message Treasury {
-  // Whether this chain's rules have a treasury (they do: held by the chain itself, no key, no output).
+  // Whether this chain's rules have a treasury in the next block (false from no_treasury_height).
   bool available = 1;
   string reason = 2;
   // None: the treasury is no address (the chain holds it).
@@ -205,8 +205,11 @@ message Treasury {
   repeated TreasuryBalance balances = 7;
   // The security parts paid with the blocks' fees (to the BMM bidder and the validators), in all.
   double security_paid_ecx = 8;
-  // Whether a rule spends from it: false (none yet; a change of the rules would add one).
+  // Whether a rule spends from it: false (none ever).
   bool spending_rule = 9;
+  // The block from which there is no treasury (no_treasury_height; -1: never on this network): from it, available is
+  // false and this is the record of before (the protocol's parts go to the providers and the creators).
+  int32 removed_height = 10;
 }
 
 // ---------------------------------------------------------------------------------------------------------

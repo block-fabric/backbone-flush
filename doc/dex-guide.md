@@ -42,7 +42,8 @@ A pair of assets can have several pools, one of each kind:
 
 **Fee tiers**: 0.01 %, 0.05 %, 0.30 %, 1.00 % of what goes in. Of each fee, most stays with the pool's providers; a
 part pays the chain's security (the miners who anchor it and the validators) and, on Flush, a part goes to the
-protocol's treasury: on Layers 89 % providers / 11 % security; on Flush 85 % providers / 11 % security / 4 % treasury.
+protocol's treasury: 89 % providers / 11 % security (on Flush before its no-treasury height: 85 % providers / 11 % security
+/ 4 % treasury).
 Lower tiers suit stable pairs, higher ones volatile pairs. A pool may be made with a **dynamic fee**: its tier plus up to 2 %
 more while its price moves a lot, back to its tier when it is quiet.
 
@@ -105,8 +106,8 @@ auction made from it). flush.markets has the same wizard; it writes a `flush:` l
   supply become its ordinary pool with CHN, whose liquidity is **locked for good** (nobody holds its shares). Trading goes
   on there.
 - Fees: of every trade on the curve, 1 % on Layers (80 % of it to the creator, 20 % to the chain's security) and 1.15 % on
-  Flush by default, adjustable per launch from 0.3 % to 5 % with the launch parameters (50 % to the creator, 30 % to the
-  treasury, 20 % to the chain's security). The creator claims theirs any time. The creator's optional allocation (at most
+  Flush by default, adjustable per launch from 0.3 % to 5 % with the launch parameters (80 % to the creator, 20 % to the
+  chain's security; before Flush's no-treasury height 50 % creator, 30 % treasury, 20 % security). The creator claims theirs any time. The creator's optional allocation (at most
   5 %) is created only at graduation, and every launch shows it.
 - **An existing asset on a curve**: its controller can put part of its supply on a curve (an asset's page → Open a market
   → Bonding curve; `curveasset`), if it was never launched and has no pool with CHN yet. Its control coin goes with it:
@@ -130,12 +131,14 @@ shows a badge only for curators **you** chose to trust (none by default). A badg
 asset is what it claims to be (its issuer is who it says); it says nothing of its price. Curators can take a
 verification back. CLI: `getverifications GOLD`; a curator: `verifyasset <oracle> GOLD (false)`.
 
-## Where the fees go: the treasury
+## Where the fees go
 
-The protocol's parts of the fees accrue in a **treasury** that the chain holds itself: no key, no address, and no rule
-spends from it yet (what becomes of it is to be decided). `gettreasury` and the app show what it holds and where it came
-from. Fees paid in an asset (not the chain's coin) cannot pay the miners and validators directly: their security part
-waits in the treasury too, per asset.
+A swap fee goes 89 % to the pool's liquidity providers and 11 % to the chain's security (the miners who anchor it and
+the validators, paid with each block's fees). A fee paid in an asset rather than ECX cannot pay them: its security part
+stays in the pool, for its providers. A launch curve's fee goes 80 % to the creator and 20 % to the chain's security.
+There is no treasury: on Flush the protocol's parts (4 % of swap fees, 30 % of launch fees) went to one until its
+no-treasury height; at that block what it held of ECX was paid to the chain's security, and `gettreasury` keeps its
+record.
 
 ## Prices over time
 

@@ -79,8 +79,8 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 |---|---|---|
 | `status` | GetStatus | network, Flush tip, eCash tip, slot, escrow, launches today, `market_index`, `launch_params` (active, height, fee bounds and default in bps, supply bounds and multiple in units, decimals; `allocation_max_bps` and `allocation10_height`), `min_payout_sat` and `min_order_sat` (the least ECX paid out, and the least an order with ECX is worth on that side, in the next block: 5000 from `small_payout_height`, 50000 and 1000000 before), `small_payout_height` |
 | `stats` | GetStats | launch counts, 24 h and total volume, fees (trade bps, split), the curve's parameters, pools, liquidity |
-| `fees` | GetFees | fee tiers, kinds, the launch fee and its parts, the swap fee's parts (liquidity providers, security, treasury), the mempool's relay fee |
-| `treasury` | GetTreasury | `gettreasury`: balances by asset (held by the chain, no key, no spending rule yet), inflows by block (the market index), the security parts paid |
+| `fees` | GetFees | fee tiers, kinds, the launch fee and its parts, the swap fee's parts in force (liquidity providers, security; treasury before `no_treasury_height`), the mempool's relay fee |
+| `treasury` | GetTreasury | `gettreasury`: the treasury's record (`available` false and `removed_height` from `no_treasury_height`; before it the protocol's parts, held by the chain, never spent): balances by asset, inflows by block (the market index), the security parts paid |
 | `launches?filter=all\|new\|near\|curve\|graduated&sort=newest\|oldest\|progress\|mcap\|volume\|trades&q=&cursor=&limit≤100` | ListLaunches | `Page<LaunchSummary>` |
 | `launches/stats` | GetLaunchStats | getlaunchstats, and 24 h counts |
 | `launches/log?from_height=&to_height=` | GetLaunchLog | getlaunchlog (≤ 1000 blocks) |

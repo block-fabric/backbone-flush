@@ -1325,8 +1325,9 @@ inline constexpr std::array<uint8_t, 12> WEIGHTS{2, 5, 10, 20, 25, 40, 60, 75, 8
  * The treasury (doc/layers.md "Fees of the DEX"): what the protocol's parts of the DEX's fees and of the launches' fees
  * accrued, per asset (the chain's coin: the null id), held by the chain itself: no key, no output. Also the security
  * parts of swap fees paid in an asset (not the chain's coin), which no coinbase can pay: held per asset until a rule
- * says what becomes of them. NO RULE SPENDS FROM IT YET: the hook is TreasurySpend (state.cpp), which refuses
- * everything; a rule that spends (an emission, buybacks, a multisig of developers...) is a change of the rules.
+ * says what becomes of them. No rule ever spent from it. From SidechainParams::no_treasury_height there is no
+ * treasury: nothing accrues (the protocol's parts go to the providers and the creators, an asset's security part stays
+ * in its pool), its chain's coin was paid with that block's fees, and its entries stay as a record; assets held stay held.
  */
 struct TreasuryEntry {
     //! The protocol's: what it holds of the asset, and what came in, from swaps and from launches.

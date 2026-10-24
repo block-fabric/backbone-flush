@@ -162,6 +162,8 @@ public:
         std::optional<int> allocation10_height{};
         //! Smaller payouts: Consensus::SidechainParams::small_payout_height (-testactivationheight=smallpayouts@<height>; regtest only).
         std::optional<int> small_payout_height{};
+        //! No treasury: Consensus::SidechainParams::no_treasury_height (-testactivationheight=notreasury@<height>; regtest only).
+        std::optional<int> no_treasury_height{};
     };
 
     /**

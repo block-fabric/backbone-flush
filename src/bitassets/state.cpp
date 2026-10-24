@@ -2414,8 +2414,9 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
     // From launch_params_height every launch writes its supply (the network's too): its curve ends at its end exactly (StrictEnd).
     record.supply = supply != 0 ? supply : rules.LaunchParamsActive(height) ? LAUNCH_SUPPLY : 0;
     record.from_asset = from_asset;
-    record.creator_share = rules.launch_creator_share;
-    record.protocol_share = rules.launch_protocol_share;
+    // From no_treasury_height a launch has no protocol part: its creator's takes it.
+    record.creator_share = rules.NoTreasury(height) ? rules.launch_creator_share + rules.launch_protocol_share : rules.launch_creator_share;
+    record.protocol_share = rules.NoTreasury(height) ? 0 : rules.launch_protocol_share;
     record.security_share = rules.launch_security_share;
     if (uint64_t{rules.launch_creator_share} + rules.launch_protocol_share + rules.launch_security_share > FEE_DENOMINATOR) return invalid("bad-ba-launch-rules");
     record.graduation = static_cast<uint64_t>(rules.launch_graduation);
@@ -2997,6 +2998,21 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
         for (const size_t at : unused) payouts.erase(payouts.begin() + at);
         ORDER_COUNT.Put(out, 0);
     }
+    // At no_treasury_height, once: what the treasury held of the chain's coin is paid with this block's fees, as the
+    // security part it would have been (SecurityFees: the BMM bidder and the validators). Its entries stay as a record;
+    // what it held of assets stays held, unspendable (no rule ever spent from it, and none can now).
+    if (Params().GetConsensus().sidechain.no_treasury_height == height) {
+        if (auto entry{TREASURY.Get(out, CHN)}; entry && entry->balance > 0) {
+            SecurityFees fees{SECURITY_FEES.Get(out)};
+            if (fees.height != height) fees.amount = 0;
+            fees.height = height;
+            fees.amount = Add(fees.amount, entry->balance).value_or(MAX_AMOUNT);
+            fees.total = Add(fees.total, entry->balance).value_or(MAX_AMOUNT);
+            SECURITY_FEES.Put(out, fees);
+            entry->balance = 0;
+            TREASURY.Put(out, CHN, *entry);
+        }
+    }
     // Books with orders placed in the block: those that cross trade. Then the orders that expired out of their books.
     CrossBooks(height);
     SweepBooks(height);
@@ -3135,11 +3151,20 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     std::map<RoundKey, std::optional<dex::Clearing>> rounds;
     // The security and protocol parts of a round's swap fees, of each asset: the fee of what came in of it, ⌊in·fee/F⌋,
     // and its parts, each rounded down (SwapFeeParts); the liquidity providers keep the rest.
-    const auto fee_parts{[&](uint32_t fee, const std::vector<dex::HopIn>& ins) {
+    // From no_treasury_height (SidechainParams::NoTreasury) there is no protocol part (it stays in the pool, for the
+    // providers), and the security part of a fee in an asset (no coinbase pays it) stays in the pool as well: only the
+    // chain's coin's security part leaves it, paid with the block's fees.
+    const bool no_treasury{rules.NoTreasury(height)};
+    const auto fee_parts{[&](uint32_t fee, const std::vector<dex::HopIn>& ins, bool chn0, bool chn1) {
         unsigned __int128 in0{0}, in1{0};
         for (const dex::HopIn& in : ins) (in.zero_in ? in0 : in1) += in.amount;
         const uint64_t fee0{static_cast<uint64_t>(in0 * fee / FEE_DENOMINATOR)}, fee1{static_cast<uint64_t>(in1 * fee / FEE_DENOMINATOR)};
-        return std::make_pair(SwapFeeParts(fee0, rules.dex_fee_security_share, rules.dex_fee_protocol_share), SwapFeeParts(fee1, rules.dex_fee_security_share, rules.dex_fee_protocol_share));
+        const auto parts{[&](uint64_t f, bool chn) {
+            FeeParts p{SwapFeeParts(f, rules.dex_fee_security_share, no_treasury ? 0 : rules.dex_fee_protocol_share)};
+            if (no_treasury && !chn) p.security = 0;
+            return p;
+        }};
+        return std::make_pair(parts(fee0, chn0), parts(fee1, chn1));
     }};
     // One pass: the orders in `active` cleared together on `pools`, a round per hop, the pools of a round
     // in the order of their ids; what each gets (nullopt: it misses).
@@ -3178,7 +3203,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                             if (const auto state{GetClState(id)}) it = effects.cl.emplace(id, *state).first;
                         }
                         if (it != effects.cl.end()) {
-                            const auto [p0, p1]{fee_parts(kind.fee, ins)};
+                            const auto [p0, p1]{fee_parts(kind.fee, ins, pool->asset0.IsNull(), pool->asset1.IsNull())};
                             cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins, {p0.security + p0.protocol, p1.security + p1.protocol});
                         }
                     } else if (kind.params.GetCurve() == Curve::LAUNCH) {
@@ -3207,7 +3232,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 // Never more than the round's fees: the pool still holds its level (its worst point is net of all fees).
                 // A concentrated pool's round took them itself, out of what it kept beyond its walk.
                 if (kind.fee > 0 && kind.params.GetCurve() != Curve::LAUNCH && kind.params.GetCurve() != Curve::BOOK) {
-                    auto [p0, p1]{fee_parts(kind.fee, ins)};
+                    auto [p0, p1]{fee_parts(kind.fee, ins, pool->asset0.IsNull(), pool->asset1.IsNull())};
                     // What was taken is what is credited, exactly: at most the parts, at most what the pool holds (a
                     // concentrated pool: what it kept beyond its walk); the security part first, the protocol's the rest.
                     const auto clamp{[](FeeParts& p, uint64_t taken) {
@@ -3342,7 +3367,9 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             const uint64_t fees{effects.fees.contains(id) ? effects.fees.at(id) : 0};
             // Its fee's parts (as the launch was made): the creator's, the protocol's (the treasury), the chain's security
             // (with the block's fees); the rest, the roundings' remainder, goes with the curve into the pool.
-            const FeeParts part{LaunchFeeParts(fees, record->creator_share, record->protocol_share, record->security_share)};
+            // From no_treasury_height, no protocol part: the creator's takes it (80 % and 20 % for a launch of 50/30/20).
+            const FeeParts part{no_treasury ? LaunchFeeParts(fees, record->creator_share + record->protocol_share, 0, record->security_share)
+                                            : LaunchFeeParts(fees, record->creator_share, record->protocol_share, record->security_share)};
             record->creator_fees += part.creator;
             record->protocol_fees += part.protocol;
             record->security_fees += part.security;
@@ -4048,11 +4075,6 @@ CAmount State::BlockSecurityFees(int height) const
 }
 SecurityFees State::GetSecurityFees() const { return SECURITY_FEES.Get(*m_view); }
 
-/**
- * The hook of the treasury's spending rule: none yet (doc/layers.md "Fees of the DEX"). Whatever a future rule lets it
- * pay (an emission, buybacks, a multisig of developers...) would be decided here; until then nothing leaves it.
- */
-[[maybe_unused]] bool TreasurySpend(const AssetId&, uint64_t) { return false; }
 std::vector<std::pair<uint256, BookOrder>> State::BookSide(const uint256& book, bool asks, size_t max, int height) const
 {
     std::vector<std::pair<uint256, BookOrder>> side;

@@ -72,6 +72,8 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     if (sidechain.allocation10_height != std::numeric_limits<int>::max()) hasher << std::string{"allocation10"} << sidechain.allocation10_height;
     // Smaller payouts, the same way.
     if (sidechain.small_payout_height != std::numeric_limits<int>::max()) hasher << std::string{"smallpayouts"} << sidechain.small_payout_height;
+    // No treasury, the same way.
+    if (sidechain.no_treasury_height != std::numeric_limits<int>::max()) hasher << std::string{"notreasury"} << sidechain.no_treasury_height;
     return hasher.GetHash();
 }
 
