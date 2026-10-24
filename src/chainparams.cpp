@@ -59,6 +59,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.allocation10_height = *height;
         } else if (deployment_name == "smallpayouts") {
             options.small_payout_height = *height;
+        } else if (deployment_name == "notreasury") {
+            options.no_treasury_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {
             options.activation_heights[*buried_deployment] = *height;
         } else {

@@ -699,6 +699,8 @@ public:
             consensus.sidechain.allocation10_height = opts.dep_opts.allocation10_height.value_or(0);
             // Smaller payouts with the DEX from the first block, unless a test asks (-testactivationheight=smallpayouts@<height>).
             consensus.sidechain.small_payout_height = opts.dep_opts.small_payout_height.value_or(0);
+            // No treasury with the DEX from the first block, unless a test asks (-testactivationheight=notreasury@<height>).
+            consensus.sidechain.no_treasury_height = opts.dep_opts.no_treasury_height.value_or(0);
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -883,6 +885,9 @@ public:
         consensus.sidechain.allocation10_height = std::numeric_limits<int>::max();
         // Payouts of 0.00005 ECX at least (0.0005 until then): never on the eCash networks until a height is decided.
         consensus.sidechain.small_payout_height = std::numeric_limits<int>::max();
+        // No treasury (swap fees 89 % providers / 11 % security, launches 80 % creator / 20 % security): never on the eCash
+        // networks until a height is decided.
+        consensus.sidechain.no_treasury_height = std::numeric_limits<int>::max();
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

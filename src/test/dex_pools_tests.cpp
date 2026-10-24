@@ -641,4 +641,55 @@ BOOST_AUTO_TEST_CASE(fee_parts_conserve_every_kind)
     BOOST_CHECK_EQUAL(chain.Assets().GetSecurityFees().total, 0U);
 }
 
+namespace {
+/** Regtest with the DEX from the first block and no treasury from block 102 (the Chain starts at 100). */
+struct NoTreasurySetup : BasicTestingSetup {
+    NoTreasurySetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=notreasury@102"}}} {}
+};
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(no_treasury_from_its_height, NoTreasurySetup)
+{
+    Chain chain;
+    const auto& rules{Params().GetConsensus().sidechain};
+    BOOST_REQUIRE(!rules.NoTreasury(101) && rules.NoTreasury(102));
+    BOOST_REQUIRE_GT(rules.dex_fee_protocol_share, 0U);
+    const AssetId GOLD{HashName("GOLD")};
+    const auto g{chain.Issue("GOLD", 100'000'000, {10'000'000, 70'000, 70'000})};
+    chain.Create(g[0], GOLD, 10'000'000, std::nullopt, CHN, 500'000'000, Curve::CONSTANT_PRODUCT, 10'000);
+    chain.EndBlock();
+    const uint256 cp{PoolIdOf(GOLD, CHN, Kind(Curve::CONSTANT_PRODUCT, 10'000))};
+    // Before (block 101): the protocol's parts to the treasury, the asset's security part held by it.
+    chain.Require(MakeTx({}, SwapPools{CHN, {cp}, 30'000'000, 1, HOLDER}, {std::nullopt}, 30'000'000));
+    chain.Require(MakeTx({g[1]}, SwapPools{GOLD, {cp}, 70'000, 1, HOLDER}, {std::nullopt}));
+    BOOST_REQUIRE_EQUAL(chain.height, 101);
+    chain.EndBlock();
+    const TreasuryEntry held{chain.Assets().GetTreasury(CHN).value_or(TreasuryEntry{})};
+    BOOST_REQUIRE_GT(held.balance, 0U);
+    BOOST_CHECK_GT(chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{}).security_held, 0U);
+    const TreasuryEntry gold_before{chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{})};
+    // From block 102: swaps both ways; the protocol's part stays in the pool, the GOLD side's security part too; only the
+    // coin's security part leaves it, with the block's fees; and the treasury's coin is paid with block 102's fees.
+    const Pool before{chain.PoolAt(cp)};
+    chain.Require(MakeTx({}, SwapPools{CHN, {cp}, 30'000'000, 1, HOLDER}, {std::nullopt}, 30'000'000));
+    chain.Require(MakeTx({g[2]}, SwapPools{GOLD, {cp}, 70'000, 1, HOLDER}, {std::nullopt}));
+    chain.EndBlock();
+    const FeeParts coin{SwapFeeParts(static_cast<uint64_t>(static_cast<unsigned __int128>(30'000'000) * 10'000 / FEE_DENOMINATOR), rules.dex_fee_security_share, 0)};
+    const auto round{curves::ClearPoolOf(Kind(Curve::CONSTANT_PRODUCT, 10'000), 10'000, before.reserve0, before.reserve1, {{true, 30'000'000}, {false, 70'000}})};
+    BOOST_REQUIRE(round);
+    BOOST_CHECK_EQUAL(chain.PoolAt(cp).reserve0, round->reserve0 - coin.security);
+    BOOST_CHECK_EQUAL(chain.PoolAt(cp).reserve1, round->reserve1);
+    BOOST_CHECK_EQUAL(chain.Assets().BlockSecurityFees(102), static_cast<CAmount>(coin.security + held.balance));
+    // The treasury: its coin gone (paid), nothing more accrued, its record kept; what it held of GOLD stays, as it was.
+    const TreasuryEntry after{chain.Assets().GetTreasury(CHN).value_or(TreasuryEntry{})};
+    BOOST_CHECK_EQUAL(after.balance, 0U);
+    BOOST_CHECK_EQUAL(after.from_swaps, held.from_swaps);
+    BOOST_CHECK(chain.Assets().GetTreasury(GOLD).value_or(TreasuryEntry{}) == gold_before);
+    // A launch made from the height: no protocol part, its creator's takes it.
+    BOOST_CHECK_EQUAL(rules.LaunchProtocolShare(102), 0U);
+    BOOST_CHECK_EQUAL(rules.LaunchCreatorShare(102), rules.launch_creator_share + rules.launch_protocol_share);
+    BOOST_CHECK_EQUAL(rules.SwapProtocolShare(101), rules.dex_fee_protocol_share);
+    BOOST_CHECK_EQUAL(rules.SwapProtocolShare(102), 0U);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -619,14 +619,20 @@ bidder and the validators share them by the same curve as network fees (50/50 at
 into the pot or kept by the merged miner, and into the validator pool (`CheckFees`, `bad-pos-fee-split`). The coinbase
 may pay them beyond its transactions' fees (they are counted with what it mints: the DEX's coin, which the state held,
 paid out); a block of stake's `AfterBlock` counts them in the pot and pool outputs. Security parts of fees paid in an
-asset (not the chain's coin) cannot be paid by a coinbase: the treasury holds them per asset (`security_held`), to be
-paid by a later rule.
+asset (not the chain's coin) cannot be paid by a coinbase: before `no_treasury_height` the treasury held them per asset
+(`security_held`); from it they stay in their pool, for its providers.
 
-**The treasury** (table `0x9e`, `TreasuryEntry` per asset): the protocol's parts (from swaps, from launches) and the
-assets' security parts, held by the chain itself: no key, no output; its coin is in the peg balance (`HeldChn`). No
-rule spends from it yet: the hook is `TreasurySpend` (state.cpp), which refuses everything; a spending rule (an
-emission, buybacks, a multisig) is a change of the rules, to be decided. `gettreasury` (balances, inflows by source,
-the security parts paid, the parts in force); `getdexinfo`'s `swap_fee_parts`; `getlaunch`/`getlaunchstats`' shares.
+**No treasury, from `no_treasury_height`** (`SidechainParams::NoTreasury`; never on the eCash networks until decided,
+regtest from the DEX's height, slot 99 at its upgrade v4). Before it, the treasury (table `0x9e`, `TreasuryEntry` per
+asset) took the protocol's parts (swaps 4 %, launches 30 % on Flush) and the assets' security parts, held by the chain
+itself, never spent (no rule ever spent from it). From it: a swap fee is 89 % to the providers and 11 % to the chain's
+security (the protocol's part stays in the pool), and a security part in an asset stays in its pool too; a launch's
+curve fee is 80 % to its creator and 20 % to security (a launch made before keeps its own parts, its protocol's going to
+its creator). At that block, once, what the treasury held of the chain's coin is paid with the block's fees as their
+security part (`SecurityFees`: the BMM bidder and the validators); its entries stay as a record, and what it held of
+assets stays held, unspendable (it came out of many pools: none is the one to give it back to). `gettreasury` and the
+public API's `treasury` give that record, `active` false and `removed_height`; the parts in force in the next block are
+`getdexinfo`'s `swap_fee_parts`, `getlaunch`/`getlaunchstats`' shares and the API's `fees`.
 
 **Conservation, reorganisations.** Every part is an integer: the parts and the remainder add up to the fee charged
 (`fee_parts_exact`); a block's pools, treasury and security parts add up to what its orders paid in and got

@@ -157,6 +157,18 @@ struct SidechainParams {
      */
     int small_payout_height{std::numeric_limits<int>::max()};
     bool SmallPayoutsActive(int height) const { return DexActive(height) && height >= small_payout_height; }
+    /**
+     * No treasury: from this block the DEX's fees have no protocol part (dex_fee_protocol_share and launch_protocol_share
+     * go to the liquidity providers and to a launch's creator), the security part of a swap fee in an asset stays in its
+     * pool, and the chain's coin the treasury held is paid with this block's fees as their security part. Never unless a
+     * network sets it (regtest: 0, or -testactivationheight=notreasury@<height>).
+     */
+    int no_treasury_height{std::numeric_limits<int>::max()};
+    bool NoTreasury(int height) const { return DexActive(height) && height >= no_treasury_height; }
+    //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
+    uint32_t SwapProtocolShare(int height) const { return NoTreasury(height) ? 0 : dex_fee_protocol_share; }
+    uint32_t LaunchCreatorShare(int height) const { return NoTreasury(height) ? launch_creator_share + launch_protocol_share : launch_creator_share; }
+    uint32_t LaunchProtocolShare(int height) const { return NoTreasury(height) ? 0 : launch_protocol_share; }
     bool Allocation10Active(int height) const { return DexCurvesActive(height) && height >= allocation10_height; }
     /**
      * The parts of every DEX swap fee (all pool kinds and tiers; order books charge none), in millionths of the fee: the
