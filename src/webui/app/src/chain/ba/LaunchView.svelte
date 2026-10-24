@@ -8,6 +8,7 @@
   // anyone may send). Graduated: it trades in its pool with CHN (PoolView, Swap).
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
+  import { stacked } from '../../lib/actions';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
@@ -365,8 +366,8 @@
         <p class="ba-empty">No trade in the last blocks.</p>
       {:else}
         <div class="ba-wrap">
-          <table class="ba-table" aria-label="Recent blocks">
-            <thead><tr><th>Block</th><th class="end">Orders</th><th class="end">{TICKER} in</th><th class="end">{TICKER} out</th><th class="end">Bought</th><th class="end">Sold</th><th class="end">Fees</th><th></th></tr></thead>
+          <table class="ba-table" use:stacked aria-label="Recent blocks">
+            <thead><tr><th>Block</th><th class="end">Orders</th><th class="end">{TICKER} in</th><th class="end">{TICKER} out</th><th class="end">Bought</th><th class="end">Sold</th><th class="end">Fees</th><th>Events</th></tr></thead>
             <tbody>
               {#each log as r (r.height)}
                 <tr>

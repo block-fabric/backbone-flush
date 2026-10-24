@@ -1069,7 +1069,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await waitFor(() => expect(within(screen.getByRole('table', { name: 'Activity' })).getAllByRole('row').length).toBe(2 * ACTIVITY_PAGE + 1));
     const css = (await import('node:fs')).readFileSync(`${__dirname}/ba/ba.css`, 'utf8');
     expect(css).toMatch(/\.ba-wrap \{[^}]*container-type: inline-size/);
-    expect(css).toMatch(/@container \(max-width: 56rem\) \{[\s\S]*\.ba-table thead \{\s*display: none;/);
+    expect(css).toMatch(/@container \(max-width: 56rem\) \{[\s\S]*\.ba-table:not\(\.ba-nostack\) thead \{\s*display: none;/);
     expect(css).toMatch(/\.ba-page \.faint \{\s*color: var\(--text-muted\);/);
   });
 
@@ -1303,7 +1303,7 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
     await waitFor(() => expect(screen.getByTestId('pool-preview').textContent).toContain(id('n')));
     expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '10', 'CHN', '1', { curve: 'stable', fee: 0.05, amp: 100 }]);
     expect(screen.getByRole('img', { name: 'Price impact by the size of a trade, each way' })).toBeTruthy();
-    expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy();
+    expect(screen.getAllByRole('table', { name: /^Slippage, selling/ })).toHaveLength(2);
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await fireEvent.click(screen.getByRole('button', { name: /Create the pool/ }));
     await answer('yes');
@@ -1334,9 +1334,9 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
     expect(row.textContent).toContain('A 100');
     await fireEvent.click(row);
     await waitFor(() => expect(called('getpoolcurve')[0]?.params).toEqual([id('s'), 16]));
-    await waitFor(() => expect(screen.getByRole('table', { name: 'Slippage' })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('table', { name: 'Slippage, selling GOLD' })).toBeTruthy());
     // getpoolcurve's order (CHN first) turned into the page's (GOLD first): selling GOLD at 0.1% gets about 0.0499 CHN.
-    const first = within(screen.getByRole('table', { name: 'Slippage' })).getAllByRole('row')[1];
+    const first = within(screen.getByRole('table', { name: 'Slippage, selling GOLD' })).getAllByRole('row')[1];
     expect(first.textContent).toContain('0.0499');
     expect(screen.getByText(id('s'))).toBeTruthy();
 
