@@ -1,7 +1,8 @@
 <script lang="ts">
   // The pools: each pair and its kind (Layers' DEX: a pair may have several, of other curves and fees), what it
   // holds, its price, what it traded and how often; a pool opened: its page (PoolView.svelte). The Pools table of
-  // the Trade tab of the Qt window of BitAssets.
+  // the Trade tab of the Qt window of BitAssets. Pools (user decision, 2026-10-23): the concentrated pools alone
+  // (`concentrated`), with New pool; every kind behind the Advanced link (Other pools).
   import { selectable, stacked } from '../../lib/actions';
   import Icon from '../../components/Icon.svelte';
   import { t } from '../../lib/i18n.svelte';
@@ -18,6 +19,9 @@
   import { hiddenAsset } from './visible.svelte';
   import { ba, decimalsOf, morePools, showMorePools, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
+
+  /** The concentrated pools alone (Pools); else the pools of every kind (Advanced, Other pools). */
+  let { concentrated = false }: { concentrated?: boolean } = $props();
 
   let query = $state('');
   let showClosed = $state(false);
@@ -38,7 +42,8 @@
     name: (x, y) => `${x.asset_a}/${x.asset_b}`.localeCompare(`${y.asset_a}/${y.asset_b}`),
   };
   // The order books have their tab (Order book) and the market index (Markets): not pools to list here.
-  const pools = $derived(ba.pools.filter((p) => !isBook(p)));
+  // Pools: the concentrated ones alone (the launches' curves are in Launch).
+  const pools = $derived(ba.pools.filter((p) => !isBook(p) && (!concentrated || kindOf(p).curve === 'concentrated')));
   const matching = $derived(
     pools
       .filter((p) => showClosed || !p.abandoned)
@@ -66,7 +71,7 @@
   });
   const pool = $derived(ba.pools.find((p) => p.pool === open) ?? (fetched && fetched.pool === open ? fetched : null));
   /** Whether the chain has pools of other kinds (getdexinfo): then their filter, and a way to make one. */
-  const kinds = $derived(ba.dex?.curves_active === true || ba.pools.some((p) => p.default_kind === false));
+  const kinds = $derived(!concentrated && (ba.dex?.curves_active === true || ba.pools.some((p) => p.default_kind === false)));
 
   // A pool asked for by another page (My assets, a route's hop): opened.
   $effect(() => {
@@ -99,7 +104,8 @@
         </select>
       </label>
       {#if closed}<label class="check"><input type="checkbox" bind:checked={showClosed} /> <span>Closed pools ({closed})</span></label>{/if}
-      {#if ba.dex?.curves_active}<button type="button" class="btn small" onclick={() => (nav.tab = 'create')}><Icon name="plus" size={14} /> Create pool</button>{/if}
+      {#if concentrated}<button type="button" class="btn small primary" onclick={() => (nav.tab = 'new')}><Icon name="plus" size={14} /> New pool</button>
+      {:else if ba.dex?.curves_active}<button type="button" class="btn small" onclick={() => (nav.tab = 'create')}><Icon name="plus" size={14} /> Create pool</button>{/if}
     </div>
     <div class="ba-chips" role="group" aria-label="Filter pools">
       <button type="button" class="ba-chip" aria-pressed={filter === 'all'} onclick={() => (filter = 'all')}>All</button>
@@ -109,7 +115,7 @@
     </div>
     <HiddenToggle count={hiddenCount} bind:show={showHidden} />
     {#if list.length === 0}
-      <p class="ba-empty">{pools.length === 0 ? 'No pools yet: add liquidity, or create a pool, to make the first.' : 'No pool matches.'}</p>
+      <p class="ba-empty">{pools.length === 0 ? (concentrated ? 'No concentrated pool yet: make the first in New pool, at your price.' : 'No pools yet: add liquidity, or create a pool, to make the first.') : 'No pool matches.'}</p>
     {:else}
       <div class="ba-wrap">
         <table class="ba-table" use:stacked aria-label="Pools">
