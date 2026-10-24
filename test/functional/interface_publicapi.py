@@ -137,7 +137,11 @@ class PublicApiTest(LayersTest):
         assert_equal(fees["pool_fee_tiers_ppm"], [100, 500, 3000, 10000])
         treasury = api.rest("treasury")
         rt = n0.gettreasury()
-        assert treasury["available"] and not treasury["spending_rule"]
+        # No treasury on regtest from the DEX's height (no_treasury_height 0): the record, not available.
+        assert_equal((treasury["available"], treasury["removed_height"]), (rt["active"], rt["removed_height"]))
+        assert not treasury["available"] and not treasury["spending_rule"]
+        assert "treasury" not in {s["to"] for s in fees["swap_split"]}
+        assert_equal(fees["protocol_fee_share_ppm"], 0)
         assert_equal(Decimal(str(treasury["security_paid_ecx"])), rt["security_paid"])
         swap_split = {s["to"]: Decimal(str(s["bps"])) for s in fees["swap_split"]}
         assert_equal(swap_split["security"], rt["fee_parts"]["swap_security"] * 100)

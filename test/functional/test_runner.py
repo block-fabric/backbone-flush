@@ -191,7 +191,7 @@ BASE_SCRIPTS = [
     'feature_layers_dex.py',
     'feature_layers_dex_curves.py',
     'feature_layers_launch.py',
-    'feature_layers_small_payouts.py',
+    'feature_layers_v4.py',
     'feature_layers_cl.py',
     'feature_layers_book.py',
     'interface_publicapi.py',

@@ -43,6 +43,9 @@ export interface Treasury {
   /** The security parts paid with the blocks' fees, in all (CHN). */
   security_paid: Amount;
   spending_rule: boolean;
+  /** Whether it takes parts of the fees in the next block (false from the network's no-treasury height), and that height (-1: never; newer nodes). */
+  active?: boolean;
+  removed_height?: number;
 }
 
 /** A percent as the node writes it: at most 4 decimals, no trailing zeros ("89", "11", "0.5"). */

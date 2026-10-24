@@ -52,7 +52,8 @@ def taken(node, amount, fee_millionths):
 class LayersDexCurvesTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}"]
+        # The rules with the treasury (before no_treasury_height): its parts checked here; feature_layers_v4 checks those after.
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}", "-testactivationheight=notreasury@1000000"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
