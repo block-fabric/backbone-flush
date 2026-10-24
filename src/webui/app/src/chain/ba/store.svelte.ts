@@ -511,7 +511,7 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       if (ba.journal.funding.some((f) => f.wallet === wallet && f.asset === p.asset && !f.pool)) {
         // Straight into a pool: its own notice, once the pool can be made (fundReady).
       } else if (p.launch) {
-        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('launch', 'launches'); } }]);
+        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('pools', 'launches'); } }]);
       } else if (p.follow) {
         const follow = p.follow;
         toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)) : t('%1 is in your assets: now start its auction.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);

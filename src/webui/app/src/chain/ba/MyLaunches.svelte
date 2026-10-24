@@ -57,7 +57,7 @@
 
   function open(l: Launch) {
     tradeIntent.launch = l.token;
-    go('launch', 'launches');
+    go('pools', 'launches');
   }
 
   async function claim(l: Launch) {
