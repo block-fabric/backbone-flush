@@ -1129,6 +1129,9 @@ message BuildActionRequest {
   // address paid, and the fee to eCash's miners (ECX).
   string address = 52;
   string fee = 53;
+  // position: the pool's price the page expects (asset_b per asset_a): the wallet refuses at signing if the pool's is
+  // further from it than the slippage (a pool opened or moved by someone else first).
+  string expected_price = 54;
 }
 
 message Fact {

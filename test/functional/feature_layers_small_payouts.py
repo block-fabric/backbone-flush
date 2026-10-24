@@ -76,7 +76,7 @@ class LayersSmallPayoutsTest(LayersTest):
         assert n0.getblockcount() + 1 < SMALL_HEIGHT
         info = n0.getbitassetsinfo()
         assert_equal((info["min_chn_payout"], info["min_book_chn"], info["small_payout_height"]), (Decimal("0.0005"), Decimal("0.01"), SMALL_HEIGHT))
-        assert_raises_rpc_error(None, "dust", n0.placeorder, "ECX", Decimal("0.0001"), "GOLD", 1000)
+        assert_raises_rpc_error(None, "not accepted", n0.placeorder, "ECX", Decimal("0.0001"), "GOLD", 1000)
 
         self.log.info("A node without the rule (an old node: smallpayouts never, or FLUSHD_OLD) follows the chain until then")
         old = os.environ.get("FLUSHD_OLD")
@@ -93,7 +93,7 @@ class LayersSmallPayoutsTest(LayersTest):
         self.bmm_to(SMALL_HEIGHT - 1)
         info = n0.getbitassetsinfo()
         assert_equal((info["min_chn_payout"], info["min_book_chn"]), (Decimal("0.00005"), Decimal("0.00005")))
-        assert_raises_rpc_error(None, "dust", n0.placeorder, "ECX", Decimal("0.00004999"), "GOLD", 1000)
+        assert_raises_rpc_error(None, "not accepted", n0.placeorder, "ECX", Decimal("0.00004999"), "GOLD", 1000)
         buy = n0.placeorder("ECX", Decimal("0.0001"), "GOLD", 1000)
         assert buy["txid"] not in n2.getrawmempool()
         fork = self.bmm_on([n0, n1])

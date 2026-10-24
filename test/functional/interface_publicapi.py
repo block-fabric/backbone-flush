@@ -383,6 +383,11 @@ class PublicApiTest(LayersTest):
         rpq = n0.previewposition(clpool, Decimal("0.98"), Decimal("1.02"), amounts)
         assert_equal(pq["liquidity"], rpq["liquidity"])
         assert_equal((pq["tick_lower"], pq["tick_upper"]), (rpq["tick_lower"], rpq["tick_upper"]))
+        # The price the caller showed binds (a pool opened or moved first is refused); the full range is 0 and 0.
+        assert_raises_rpc_error(-8, "not the", n0.openposition, clpool, 0, 0, amounts, 1, 2)
+        full_range = n0.openposition(clpool, 0, 0, {"0x" + x: 100, "0x" + y: 100}, 1, 1)
+        self.bmm()
+        assert_equal(n0.getposition(full_range["position"])["tick_lower"], -887270)
         near = n0.openposition(clpool, Decimal("0.98"), Decimal("1.02"), amounts)
         self.bmm()
         position = api.rest(f"positions/{near['position']}")
@@ -532,6 +537,7 @@ class PublicApiTest(LayersTest):
         self.e2e_env = {"E2E_ADDRESS": mine, "E2E_ECASH_ADDRESS": main_address}
         for verb, query in [
             ("position", {"pool": clpool, "price_lower": "0.98", "price_upper": "1.02", "amount_a": "100", "amount_b": "100", "slippage_bps": "100"}),
+            ("position", {"pool": clpool, "price_lower": "0", "price_upper": "0", "amount_a": "100", "amount_b": "100", "slippage_bps": "100", "expected_price": "1"}),
             ("reposition", {"position": pos["position"], "action": "remove", "percent": "50", "slippage_bps": "100"}),
             ("reposition", {"position": pos["position"], "action": "collect"}),
             ("settle", {"order": order["order"], "cancel": "true"}),
@@ -548,6 +554,8 @@ class PublicApiTest(LayersTest):
             assert set(params) - {"network", "exp"} <= URI_PARAMS[verb], (verb, params)
             assert built["app_ready"]
             assert_equal(built["payload_hash"], action_hash(built["payload"]))
+            if verb == "position" and query.get("expected_price"):
+                assert_equal(params["price"], "1")
             if verb == "pegin":
                 assert_equal(built["deposit_address"], n0.getdepositaddress(mine)["depositaddress"])
             if verb in {"reposition", "settle", "bid", "claim", "pegout"}:

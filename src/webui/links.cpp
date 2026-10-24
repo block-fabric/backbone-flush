@@ -489,7 +489,8 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.ticker_b = SideTicker(need("ticker_b"), r.asset_b, "ticker_b");
         if (r.asset_a == r.asset_b) throw LinkError("asset_a and asset_b are the same");
         r.kind = need("kind");
-        if (r.kind != "constant" && r.kind != "stable" && r.kind != "weighted") throw LinkError("kind: constant, stable or weighted");
+        // concentrated: made at the price amount_b/amount_a, nothing put in (a position next: position).
+        if (r.kind != "constant" && r.kind != "stable" && r.kind != "weighted" && r.kind != "concentrated") throw LinkError("kind: constant, stable, weighted or concentrated");
         r.fee_ppm = Int(need("fee_ppm"), "fee_ppm", 1, 1'000'000);
         if (std::find(std::begin(bitassets::FEE_TIERS), std::end(bitassets::FEE_TIERS), static_cast<uint32_t>(r.fee_ppm)) == std::end(bitassets::FEE_TIERS)) {
             throw LinkError("fee_ppm: one of the fee tiers (100, 500, 3000, 10000)");
@@ -597,6 +598,8 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.amount_a = AmountOrZero(need("amount_a"), "amount_a");
         r.amount_b = AmountOrZero(need("amount_b"), "amount_b");
         if (r.amount_a == "0" && r.amount_b == "0") throw LinkError("amount_a and amount_b: something to put in");
+        // The pool's price the site showed (asset_b per asset_a): binds within the slippage (a pool opened or moved first is refused).
+        if (auto v{take("price")}) r.price = Amount(*v, "price");
         r.slippage_bps = Slippage(need("slippage_bps"));
         // Here the slippage binds (the call's own bound, no floor in the link): at most MAX_BINDING_SLIPPAGE_BPS.
         if (*r.slippage_bps > MAX_BINDING_SLIPPAGE_BPS) throw LinkError(strprintf("slippage_bps: at most %d here (it binds)", MAX_BINDING_SLIPPAGE_BPS));

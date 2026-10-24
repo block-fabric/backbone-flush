@@ -2747,6 +2747,7 @@ RPCMethod openposition()
                 {"asset", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "How much"},
             }},
             {"slippage", RPCArg::Type::NUM, RPCArg::Default{1}, "Liquidity less by this much, in percent, so that the amounts suffice if the price moves first"},
+            {"expected_price", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The pool's price the caller showed (asset0 in asset1, whole units): refused if the pool's price now is further from it than the slippage (a pool opened or moved by someone else first)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
         {
@@ -2777,6 +2778,17 @@ RPCMethod openposition()
     const arith_uint256 price{UintToArith256(cl->sqrt_price)}, sa{bitassets::cl::SqrtRatioAtTick(lower)}, sb{bitassets::cl::SqrtRatioAtTick(upper)};
     unsigned __int128 liquidity{bitassets::cl::LiquidityForAmounts(price, sa, sb, max0, max1)};
     const uint64_t slippage{Slippage(request.params[4], 1)};
+    if (!request.params[5].isNull()) {
+        // The price the caller showed binds: the pool's now (sqrt_price²·10^(d0−d1)) within the slippage of it, else refused.
+        const double expected{PriceArg(request.params[5])};
+        if (!(expected > 0) || !std::isfinite(expected)) throw JSONRPCError(RPC_INVALID_PARAMETER, "expected_price: a price above 0");
+        const long double sqrt_ratio{static_cast<long double>(price.getdouble()) / std::pow(2.0L, 96)};
+        const long double now{sqrt_ratio * sqrt_ratio * std::pow(10.0L, static_cast<int>(info0.decimals) - static_cast<int>(info1.decimals))};
+        const long double off{std::fabs(now / expected - 1.0L) * 10000};
+        if (!(off <= static_cast<long double>(slippage))) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The pool's price is %.8g, not the %.8g shown (%.2f %% off, more than the slippage): refused. Someone may have opened or moved the pool first", static_cast<double>(now), expected, static_cast<double>(off / 100)));
+        }
+    }
     liquidity = liquidity / 10000 * (10000 - slippage);
     if (liquidity == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little: no liquidity in that range (the amounts on the wrong side of the price?)");
     bitassets::OpenPosition open;
