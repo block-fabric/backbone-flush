@@ -36,7 +36,7 @@
 
 {#if ba.loaded && !ba.error}
   <div class="ba-cards">
-    <Card title="Markets" icon="swap" open={() => go('trade', simple ? 'swap' : 'pools')} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
+    <Card title="Markets" icon="swap" open={() => (simple ? go('trade', 'swap') : go('pools', 'pools'))} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
       <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
       <dl class="pairs">
         <dt>{simple ? 'Assets to swap' : 'Pools with liquidity'}</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>

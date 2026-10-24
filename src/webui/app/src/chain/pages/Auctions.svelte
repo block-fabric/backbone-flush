@@ -2,7 +2,8 @@
   // Auctions: the Dutch auctions of the chain (open, coming, sold out or ended, and those collected), each with
   // its price falling block by block and the bid panel (ba/AuctionView.svelte); and selling by auction: what,
   // for what, the price of all of it at the start and at the end, how long, from when; drawn before it is
-  // made. The Auctions tab of the Qt window of BitAssets.
+  // made. The Auctions tab of the Qt window of BitAssets. A tab of Swap's Advanced (chain/local.ts tabOf): its own tab
+  // follows "auctions/" in nav.tab ("auctions/sell").
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import TabRow from '../../components/TabRow.svelte';
@@ -24,6 +25,9 @@
   import { amountParam, approx, assetArg, AUCTION_STATUS, auctionProblems, auctionProgress, CHN_ID, formatAmount, formatPrice, formatUnits, isChn, parseUnits, unitPrice, unitsAtMost, unitsOf, type Auction } from '../ba/model';
   import { ba, decimalsOf, labelOf, moreAuctions, nameOf, refreshBitAssets, sellIntent, showMoreAuctions, startBitAssets } from '../ba/store.svelte';
 
+  /** Shown as a tab of Swap's Advanced, under its heading. */
+  let { embedded = false }: { embedded?: boolean } = $props();
+
   $effect(() => startBitAssets());
 
   type Tab = 'browse' | 'sell';
@@ -31,7 +35,11 @@
     { id: 'browse', label: 'Browse' },
     { id: 'sell', label: 'Sell by auction' },
   ];
-  const tab = $derived<Tab>(nav.tab === 'sell' ? 'sell' : 'browse');
+  const own = $derived(nav.tab.startsWith('auctions/') ? nav.tab.slice('auctions/'.length) : nav.tab);
+  const tab = $derived<Tab>(own === 'sell' ? 'sell' : 'browse');
+  function select(id: string) {
+    nav.tab = `auctions/${id}`;
+  }
 
   // --- Browse ---
   type Filter = 'live' | 'open' | 'upcoming' | 'done' | 'closed';
@@ -116,7 +124,7 @@
     if (sellIntent.asset) {
       base = sellIntent.asset;
       sellIntent.asset = '';
-      nav.tab = 'sell';
+      select('sell');
     }
   });
   $effect(() => {
@@ -169,7 +177,7 @@
     const r = await ask({
       title: t('Start an auction'),
       message: t('Sell %1 %2 for %3, from %4 down to %5 %3 for all of it, over %6 blocks?', formatUnits(amount, dbase), lb, lq, formatUnits(startParsed.units, dquote), formatUnits(endParsed.units, dquote), String(duration)),
-      informative: t('It starts %1 block(s) after the next block and takes bids for about %2. Its receipt, in My assets, collects what it brings in and what is left; before any bid, it cancels it.', String(startIn), niceTimeOffset(duration * spacing)),
+      informative: t('It starts %1 block(s) after the next block and takes bids for about %2. Its receipt, in Portfolio, collects what it brings in and what is left; before any bid, it cancels it.', String(startIn), niceTimeOffset(duration * spacing)),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -181,10 +189,10 @@
     try {
       const done = await walletRpc<{ txid: string }>(wallet, 'createauction', [assetArg(base), amountParam(amount, dbase), assetArg(quote), amountParam(startParsed.units, dquote), amountParam(endParsed.units, dquote), duration, startIn]);
       if (!done) return;
-      toast('success', t('Auction started'), t('It takes bids from the block after the next. Its receipt is in My assets.'));
+      toast('success', t('Auction started'), t('It takes bids from the block after the next. Its receipt is in Portfolio.'));
       amountText = '';
       picked = done.txid;
-      nav.tab = 'browse';
+      select('browse');
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Start an auction'), errorText(e), 'error');
@@ -194,12 +202,16 @@
   }
 </script>
 
-<div class="page ba-page auctions">
-  <header class="page-head">
-    <h1>Auctions</h1>
-    <span class="muted">The price of all of it falls block by block: the longer you wait, the less you pay, if anything is left.</span>
-  </header>
-  <TabRow label="Auctions" tabs={TABS} current={tab} select={(id) => (nav.tab = id)} />
+<div class="page ba-page auctions" class:embedded>
+  {#if !embedded}
+    <header class="page-head">
+      <h1>Auctions</h1>
+      <span class="muted">The price of all of it falls block by block: the longer you wait, the less you pay, if anything is left.</span>
+    </header>
+  {:else}
+    <p class="muted">The price of all of it falls block by block: the longer you wait, the less you pay, if anything is left.</p>
+  {/if}
+  <TabRow label="Auctions" tabs={TABS} current={tab} {select} />
 
   {#if tab === 'browse'}
     <div class="ba-chips" role="group" aria-label="Filter">
@@ -221,7 +233,7 @@
     </div>
     <HiddenToggle count={hiddenCount} bind:show={showHidden} />
     {#if list.length === 0}
-      <div class="panel ba-empty">{filter === 'closed' ? 'No auction was collected yet.' : 'No auction here.'} <button type="button" class="btn small" onclick={() => (nav.tab = 'sell')}>Sell by auction</button></div>
+      <div class="panel ba-empty">{filter === 'closed' ? 'No auction was collected yet.' : 'No auction here.'} <button type="button" class="btn small" onclick={() => select('sell')}>Sell by auction</button></div>
     {:else}
       <div class="ba-split">
         <section class="panel">
@@ -302,6 +314,9 @@
 </div>
 
 <style>
+  .embedded {
+    padding: 0;
+  }
   .finder-row {
     display: flex;
     flex-wrap: wrap;

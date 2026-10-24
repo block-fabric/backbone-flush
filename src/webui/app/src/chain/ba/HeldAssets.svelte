@@ -34,7 +34,7 @@
 
 <section class="panel held" aria-labelledby="held-title" data-testid="held-assets">
   <div class="head">
-    <h2 id="held-title">{#if home}My assets{:else}Your assets{/if}</h2>
+    <h2 id="held-title">{#if home}Portfolio{:else}Your assets{/if}</h2>
     {#if held.rows.length > 0}<button type="button" class="btn ghost small" onclick={() => go('my-assets')}>View all <Icon name="arrow" size={14} /></button>{/if}
   </div>
   <HiddenToggle count={visible.hidden} bind:show={showHidden} />
@@ -47,7 +47,7 @@
   {:else if ba.mineState === 'error' && !ba.mine}
     <p class="muted">The assets of the wallet could not be read: <SafeText text={ba.mineError} /></p>
   {:else if held.rows.length === 0 && held.controlledOnly.length === 0}
-    <p class="muted empty">No assets yet. <button type="button" class="btn small" onclick={() => go('issue')}>Register new asset</button> <button type="button" class="btn ghost small" onclick={() => go('trade', 'swap')}>Get assets in Trade</button></p>
+    <p class="muted empty">No assets yet. <button type="button" class="btn small" onclick={() => go('issue')}>Register new asset</button> <button type="button" class="btn ghost small" onclick={() => go('trade', 'swap')}>Get assets in Swap</button></p>
   {:else}
     <!-- One compact row per asset (user feedback 2026-10-19): its logo, the crown if the wallet controls it, its ticker
          with its number, its display name, its balance and its worth; narrow, the name goes first, then the worth. -->
@@ -72,7 +72,7 @@
         {/each}
       </tbody>
     </table>
-    {#if held.rows.length > HELD_SHOWN}<p class="faint small">And {held.rows.length - HELD_SHOWN} more in My assets.</p>{/if}
+    {#if held.rows.length > HELD_SHOWN}<p class="faint small">And {held.rows.length - HELD_SHOWN} more in Portfolio.</p>{/if}
     {#if held.controlledOnly.length}
       <p class="small controlled" data-testid="controlled-only"><span class="muted">You control, without holding any:</span>
         {#each held.controlledOnly as r (r.holding.asset)}
