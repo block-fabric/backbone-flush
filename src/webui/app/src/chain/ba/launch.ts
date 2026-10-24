@@ -189,6 +189,21 @@ export function curveShape(graduation: number, supply: number): CurveShape {
   return { graduation, supply, virtualCoin, virtualTokens, endTokens, k, curveSupply: virtualTokens - endTokens, poolSupply: supply / 4, startPrice, endPrice, startCap: startPrice * supply, endCap: endPrice * supply };
 }
 
+/**
+ * What My launches shows of a launch's curve, the same for one that never traded (progress 0, and no last price, volume
+ * or market value: user report 2026-10-24, CORN and RUG on betanet): its progress (0 to 100, 0 when absent), whether it
+ * traded, and its price, the curve's start price (start) when it has none of its own.
+ */
+export function launchCurveFacts(l: Pick<Launch, 'progress' | 'trades' | 'volume' | 'price' | 'graduation' | 'supply' | 'curve_supply' | 'pool_supply'>): { progress: number; traded: boolean; price: number | undefined; start: boolean } {
+  const progress = Math.max(0, Math.min(100, Number(l.progress) || 0));
+  const traded = (Number(l.trades) || 0) > 0 || approx(l.volume ?? 0) > 0 || progress > 0;
+  const live = Number(l.price);
+  if (traded && Number.isFinite(live) && live > 0) return { progress, traded, price: live, start: false };
+  const shape = curveShape(approx(l.graduation ?? 0), launchSupply(l, approx(l.supply ?? 0)));
+  const start = shape.startPrice;
+  return { progress, traded, price: Number.isFinite(start) && start > 0 ? start : undefined, start: true };
+}
+
 /** Where a curve is once it raised `raised` CHN: the amount it sold, its price (x / y), the reserves. */
 export function curvePointAt(shape: CurveShape, raised: number): { sold: number; price: number; coin: number; tokens: number } {
   const r = Math.min(Math.max(0, raised), shape.graduation);

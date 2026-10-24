@@ -1,7 +1,7 @@
 // Layers' launches as the pages see them (ba/launch.ts): the bonding curve from the rules, the split of the supply and
 // of the fee, the queries of the list, the options of launchtoken and what is wrong with them, what a creator is owed.
 import { describe, expect, it } from 'vitest';
-import { appendLaunches, claimable, curvePointAt, curveSeries, curveShape, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
+import { appendLaunches, claimable, curvePointAt, curveSeries, curveShape, launchCurveFacts, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
 
 describe('the bonding curve', () => {
   const shape = curveShape(500, 1_000_000_000);
@@ -94,5 +94,16 @@ describe('creatorAllocation (allocations of up to 10 %)', () => {
     // Of the launch's own supply (curve + pool), not the asset's supply after the mint.
     expect(creatorAllocation({ ...base, supply: '1100000000.000000', status: 'graduated' })?.units).toBe(100_000_000_000_000n);
     expect(creatorAllocation({ ...base, allocation: 0 })).toBeNull();
+  });
+});
+
+describe('the curve of a launch in My launches (launchCurveFacts)', () => {
+  it('a curve never traded: progress 0, not traded, the start price of its curve; a traded one: its own price', () => {
+    const corn = { progress: 0, trades: 0, volume: undefined as unknown as string, price: undefined as unknown as number, graduation: '500', supply: '210000000.000000', curve_supply: undefined, pool_supply: undefined };
+    const f = launchCurveFacts(corn);
+    expect(f).toMatchObject({ progress: 0, traded: false, start: true });
+    expect(f.price).toBeCloseTo(250 / (210_000_000 * 9 / 8), 15);
+    expect(launchCurveFacts({ ...corn, progress: 'x' as unknown as number, graduation: undefined as unknown as string, supply: undefined as unknown as string })).toMatchObject({ progress: 0, traded: false, price: undefined });
+    expect(launchCurveFacts({ ...corn, progress: 12.5, trades: 3, price: 0.0001, volume: '10' })).toEqual({ progress: 12.5, traded: true, price: 0.0001, start: false });
   });
 });
