@@ -1,5 +1,5 @@
 // The one identity of an asset in the pages (AssetBadge.svelte, AssetName.svelte): its logo, else the generated mark;
-// its name, then its identity muted in a mark of its own ($TICKER and its number, else the start of its hash), so that a
+// its name, then its identity muted in a mark of its own ($TICKER and its number, else its id shortened), so that a
 // display name cannot pass for another asset (security review 2026-10-24); the full text in the title; the same as one
 // line of text for what the host draws (model.ts: assetText), and the confirmations' words, unique part first (nameOf).
 import { render } from '@testing-library/svelte';
@@ -30,9 +30,9 @@ describe('an asset\'s identity', () => {
     expect(r.container.querySelector('.asset-name')!.textContent).toBe('Theodore Brosevelt $BROSEVELT #1739-0029');
   });
 
-  it('without a number, the start of its hash: the unique part is always there', () => {
+  it('without a number, its id shortened: the unique part is always there', () => {
     const r = render(AssetBadge, { id: ID, label: 'GOLD', display: 'Gold Bar' });
-    expect(shown(r.container)).toEqual({ name: 'Gold Bar', ident: '$GOLD 0xbbbbbbbb…' });
+    expect(shown(r.container)).toEqual({ name: 'Gold Bar', ident: '$GOLD 0xbbbbbbbb…bbbbbbbb' });
   });
 
   it('without a logo, the generated mark with the ticker\'s initials', () => {
@@ -99,12 +99,40 @@ describe('an asset\'s identity', () => {
 
   it('as one line of text, for toasts and dialogs', () => {
     expect(assetText('BROSEVELT', 'Theodore Brosevelt', '1739-0029')).toBe('Theodore Brosevelt $BROSEVELT #1739-0029');
-    expect(assetText('GOLD', undefined, undefined, ID)).toBe('$GOLD 0xbbbbbbbb…');
+    expect(assetText('GOLD', undefined, undefined, ID)).toBe('$GOLD 0xbbbbbbbb…bbbbbbbb');
     expect(assetText('gold bar', undefined, '1739-0029')).toBe('gold bar #1739-0029');
     expect(assetText('0xabcdef…', undefined, '1739-0029')).toBe('#1739-0029');
     expect(assetText('ECX')).toBe('ECX');
-    expect(assetText('GOLDEN-LONG', 'Gold Bar')).toBe('Gold Bar $GOLDEN-LONG');
+    // Beside a display name, a label outside the rules of tickers is a name too, never $TICKER.
+    expect(assetText('GOLDEN-LONG', 'Gold Bar')).toBe('Gold Bar GOLDEN-LONG');
     expect(assetTitle('GOLD', 'Gold Bar Token, 1 g', '1739-0029')).toBe('Gold Bar Token, 1 g $GOLD #1739-0029');
     expect(escapeName('a\\b "c" $d #e')).toBe('a\\\\b \\"c\\" \\$d \\#e');
+  });
+
+  it('only a label of the rules of tickers is shown as $TICKER; any other is plain text, as a name', () => {
+    // 'EC X', 'ECX"', and ECX with a Cyrillic Е (U+0415): not tickers (bitassets::IsTicker), never in the mark.
+    for (const label of ['EC X', 'ECX"', 'ЕCX', 'gold']) {
+      const r = render(AssetName, { label, seq: '9031-1144' });
+      expect(r.container.querySelector('.ticker'), label).toBeNull();
+      expect(shown(r.container), label).toEqual({ name: label, ident: '#9031-1144' });
+      expect(assetText(label, undefined, '9031-1144')).not.toContain('$');
+      // Beside a display name: after it, outside the mark.
+      const d = render(AssetName, { label, display: 'Bitcoin', seq: '9031-1144' });
+      expect(d.container.querySelector('.alias')?.textContent, label).toBe(label);
+      expect(d.container.querySelector('.ident')?.textContent, label).toBe('#9031-1144');
+    }
+    expect(assetText('ECX"', 'Bitcoin', '9031-1144')).toBe('Bitcoin ECX\\" #9031-1144');
+    expect(assetText('ЕCX', undefined, '9031-1144')).toBe('ЕCX #9031-1144');
+    expect(shown(render(AssetName, { label: 'GOLD2', seq: '9031-1144' }).container).ident).toBe('$GOLD2 #9031-1144');
+  });
+
+  it('two ids that share their first 8 hex characters look different (64 bits of the id shown)', () => {
+    const one = '1a2b3c4d' + '0'.repeat(48) + '11111111';
+    const two = '1a2b3c4d' + '0'.repeat(48) + '22222222';
+    const a = shown(render(AssetName, { label: 'GOLD', id: one }).container).ident;
+    const b = shown(render(AssetName, { label: 'GOLD', id: two }).container).ident;
+    expect(a).toBe('$GOLD 0x1a2b3c4d…11111111');
+    expect(b).toBe('$GOLD 0x1a2b3c4d…22222222');
+    expect(assetText('GOLD', undefined, undefined, one)).not.toBe(assetText('GOLD', undefined, undefined, two));
   });
 });
