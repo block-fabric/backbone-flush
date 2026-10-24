@@ -1084,12 +1084,18 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     const rows = within(panel).getAllByTestId('my-launch');
     const moon = rows.find((r) => r.textContent?.includes('MOON'))!;
     const star = rows.find((r) => r.textContent?.includes('STAR'))!;
-    // On its curve: the allocation, its amount, claimable at graduation; the progress; fees owed: Claim (the fees alone).
-    expect(moon.textContent).toMatch(/MOON: 2% allocation \(20[,\u202f\u00a0 ]?000[,\u202f\u00a0 ]?000 MOON\), claimable at graduation/);
-    expect(moon.textContent).toMatch(/40.*to graduation/);
-    // Graduated, not minted: claimable now, and Claim sends claimlaunch.
-    expect(star.textContent).toMatch(/STAR: 2% allocation .*claimable now/);
-    expect(star.textContent).toMatch(/graduated/);
+    // A row as the holdings': the asset (its identity), the allocation, the curve, what is claimable, Claim.
+    const cell = (row: HTMLElement, c: string) => row.querySelector(`.${c}`)?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    expect(moon.querySelector('.c-asset .badge-asset .asset-name')?.textContent).toBe('To the moon $MOON');
+    // On its curve: the allocation and its amount; the progress; fees owed: claimable (the fees alone), Claim.
+    expect(cell(moon, 'c-alloc')).toMatch(/^Allocation 2% 20[,\u202f\u00a0 ]?000[,\u202f\u00a0 ]?000 MOON$/);
+    expect(cell(moon, 'c-curve')).toMatch(/^Curve 40/);
+    expect(cell(moon, 'c-claim')).toMatch(/^Claimable [\d.,]+ ECX$/);
+    expect(within(moon).getByRole('button', { name: /Claim/ })).toBeTruthy();
+    // Graduated, not minted: the allocation claimable now, and Claim sends claimlaunch.
+    expect(cell(star, 'c-alloc')).toMatch(/^Allocation 2% /);
+    expect(cell(star, 'c-curve')).toBe('Curve graduated');
+    expect(cell(star, 'c-claim')).toMatch(/^Claimable [\d.,\u202f\u00a0 ]+ STAR/);
     await fireEvent.click(within(star).getByRole('button', { name: /Claim/ }));
     await answer('yes');
     await waitFor(() => expect(called('claimlaunch').at(-1)?.params).toEqual([assetArg(STAR)]));

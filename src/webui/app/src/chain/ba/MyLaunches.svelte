@@ -1,11 +1,13 @@
 <script lang="ts">
   // The launches this wallet made (My assets): their creator's address is one of the wallet's "launch creator" addresses
-  // (getaddressesbylabel; launchtoken and curveasset give each launch one). For each with an allocation: "<TICKER>: x%
-  // allocation (amount), claimable at graduation" with the curve's progress; once graduated, Claim (claimlaunch: the
-  // allocation minted to the creator's address, and its part of the fees owed). A launch without an allocation is
+  // (getaddressesbylabel; launchtoken and curveasset give each launch one). For each with an allocation, a row like the
+  // holdings': the asset, its allocation (percent and amount), the curve's progress, what is claimable now (or "at
+  // graduation"); once graduated, Claim (claimlaunch: the allocation minted to the creator's address, and its part of
+  // the fees owed). A launch without an allocation is
   // listed when the creator is owed fees. Read again with each block.
   // TODO(rug protection): the allocation is the creator's whole at graduation; a vesting or lock of it is to come.
   import Icon from '../../components/Icon.svelte';
+  import SafeText from '../../components/SafeText.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { go } from '../../lib/nav.svelte';
@@ -14,7 +16,7 @@
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
   import { claimable, creatorAllocation, type Launch, type LaunchPage } from './launch';
-  import { approx, assetArg, formatAmount, formatPercent, formatUnits, type Amount } from './model';
+  import { approx, assetArg, assetText, formatAmount, formatPercent, formatUnits, type Amount } from './model';
   import { ba, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
@@ -65,7 +67,7 @@
     const owed = claimable(l);
     const r = await ask({
       title: t('Claim'),
-      message: t('Claim what your launch of %1 owes you?', l.ticker),
+      message: t('Claim what your launch of %1 owes you?', assetText(l.ticker, l.display_name)),
       informative: t('Your fees (%1 %3)%2. They go to the launch\'s creator address, of this wallet.', formatAmount(l.creator_fees_owed, 8), owed.allocation && a ? t(', and your allocation of %1 %2 (%3%), minted now', formatUnits(a.units, a.decimals), l.ticker, String(a.percent)) : '', TICKER),
       level: 'question',
       choices: [
@@ -89,22 +91,36 @@
 </script>
 
 {#if launches.length > 0}
+  <!-- One row per launch, as the holdings below it (user feedback 2026-10-24): the asset (AssetBadge), the allocation
+       (its percent and amount), the curve's progress as a bar, what can be claimed, and Claim. Narrow, each row stacks:
+       the asset and Claim on top, then each value beside its word. -->
   <section class="panel my-launches" aria-labelledby="my-launches-title" data-testid="my-launches">
     <div class="panel-head"><h3 id="my-launches-title">My launches</h3><span class="muted small">{t('Your allocation and fees, claimable once each graduates')}</span></div>
+    <div class="ml-grid ml-head" aria-hidden="true"><span>Asset</span><span>Allocation</span><span>Curve</span><span>Claimable</span><span></span></div>
     <ul class="ba-list" aria-label="My launches">
       {#each launches as l (l.token)}
         {@const a = creatorAllocation(l)}
         {@const owed = claimable(l)}
-        <li class="ba-row launch" data-testid="my-launch">
-          <AssetBadge id={l.token} label={l.ticker} showLabel={false} />
-          <span class="main">
-            <button type="button" class="linkish" onclick={() => open(l)}><strong translate="no">{l.ticker}</strong></button>{#if a}: <span data-testid="allocation-line">{a.percent}% allocation ({formatUnits(a.units, a.decimals, { max: 2 })} {l.ticker}), {a.state === 'at-graduation' ? t('claimable at graduation') : a.state === 'claimable' ? t('claimable now') : t('claimed')}</span>{:else}: {t('no allocation')}{/if}
-            <span class="faint small line">
-              <span class="progress"><span class="ba-bar"><span use:barWidth={a ? a.progress / 100 : Number(l.progress) / 100}></span></span><span class="num">{l.status === 'graduated' ? t('graduated') : t('%1 to graduation', formatPercent(Number(l.progress)))}</span></span>
-              {#if owed.fees}<span>{t('fees owed %1 %2', formatAmount(l.creator_fees_owed, 8), TICKER)}</span>{/if}
-            </span>
+        {@const progress = a ? a.progress : Math.max(0, Math.min(100, Number(l.progress) || 0))}
+        <li class="ml-grid ml-row" data-testid="my-launch">
+          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} /></button></span>
+          <span class="c-alloc" data-testid="allocation-line">
+            <span class="cell-label">Allocation</span>
+            {#if a}<span><strong class="num">{a.percent}%</strong> <span class="faint small num">{formatUnits(a.units, a.decimals, { max: 2 })} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint">{t('no allocation')}</span>{/if}
           </span>
-          <span class="side">
+          <span class="c-curve">
+            <span class="cell-label">Curve</span>
+            <span class="curve"><span class="ba-bar"><span use:barWidth={progress / 100}></span></span><span class="num small">{l.status === 'graduated' ? t('graduated') : formatPercent(progress)}</span></span>
+          </span>
+          <span class="c-claim" data-testid="claimable">
+            <span class="cell-label">Claimable</span>
+            {#if owed.allocation || owed.fees}
+              <span class="num">{#if owed.allocation && a}{formatUnits(a.units, a.decimals, { max: 2 })} <SafeText text={l.ticker} />{/if}{#if owed.allocation && a && owed.fees}{' + '}{/if}{#if owed.fees}{formatAmount(l.creator_fees_owed, 8)} {TICKER}{/if}</span>
+            {:else if a?.state === 'at-graduation'}<span class="faint small">{t('at graduation')}</span>
+            {:else if a?.state === 'claimed'}<span class="faint small">{t('claimed')}</span>
+            {:else}<span class="faint">–</span>{/if}
+          </span>
+          <span class="c-action">
             {#if owed.allocation || owed.fees}
               <button type="button" class="btn small primary" disabled={busy !== ''} onclick={() => claim(l)}><Icon name="receive" size={14} /> {busy === l.token ? 'Claiming…' : 'Claim'}</button>
             {/if}
@@ -117,31 +133,135 @@
 
 <style>
   .my-launches {
+    container: launches / inline-size;
     margin-bottom: 1rem;
   }
-  .launch {
-    cursor: default;
-  }
-  .progress {
-    display: inline-flex;
+  /* The columns of the rows and of their words above them (the holdings' row: .ba-row, ba.css). */
+  .ml-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1.4fr) 6.5rem;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.75rem;
+    padding: 0.7rem 1rem;
   }
-  .progress .ba-bar {
-    width: 7rem;
+  .ml-head {
+    padding-block: 0 0.3rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
   }
-  .line {
+  .ml-row {
+    position: relative;
+    font-variant-numeric: tabular-nums;
+  }
+  .ml-row:hover {
+    background: var(--raised);
+  }
+  .ml-row > span {
+    min-width: 0;
+  }
+  .c-asset {
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.8rem;
   }
-  .linkish {
+  .asset {
+    display: inline-flex;
+    max-width: 100%;
+    min-width: 0;
+    padding: 0;
     border: 0;
     background: none;
-    padding: 0;
     color: inherit;
     font: inherit;
+    text-align: start;
     cursor: pointer;
+  }
+  .asset:hover :global(.label) {
     text-decoration: underline;
+  }
+  .asset:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-s, 4px);
+  }
+  .c-alloc,
+  .c-claim {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .curve {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+  .curve .ba-bar {
+    flex: 1 1 4rem;
+    max-width: 7rem;
+  }
+  .curve .num {
+    flex: none;
+  }
+  .c-action {
+    display: flex;
+    justify-content: flex-end;
+  }
+  /* The word of each value: for screen readers in the columns (the words above are for the eyes), shown narrow. */
+  .cell-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Narrow: each row stacks, the asset and Claim on top, each value beside its word (as the stacked tables: ba.css). */
+  @container launches (max-width: 40rem) {
+    .ml-head {
+      display: none;
+    }
+    .ml-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.3rem 0.75rem;
+    }
+    .c-asset {
+      grid-row: 1;
+      grid-column: 1;
+    }
+    .c-action {
+      grid-row: 1;
+      grid-column: 2;
+    }
+    .c-alloc,
+    .c-curve,
+    .c-claim {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+      text-align: end;
+    }
+    .cell-label {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip: auto;
+      flex: none;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      text-align: start;
+    }
+    .c-curve {
+      align-items: center;
+    }
+    .curve {
+      flex: 0 1 12rem;
+      justify-content: flex-end;
+    }
   }
 </style>
