@@ -1,19 +1,24 @@
 // The one wizard that creates an asset (ba/CreateWizard.svelte: "Register an asset" and "Launch" open it), and opening a
 // market for an asset that exists (ba/OpenMarket.svelte): the rules of a launch's parameters (consensus "launchparams":
 // its supply and decimals, its curve's trade fee; getlaunchstats' rules), what the wizard sends for each market (none:
-// reserveasset then registerasset; a bonding curve: reserveasset then launchtoken; a pool or an auction: the asset
-// registered first, its market opened once it exists), and whether an asset can be put on a curve (curveasset). Pure:
+// reserveasset then registerasset; a bonding curve: reserveasset then launchtoken; straight into a pool: the asset
+// registered first, then its pool made and funded), and whether an asset can be put on a curve (curveasset). Pure:
 // no state, no calls (tested in chain/ba/create.test.ts).
 import { approx, MAX_AMOUNT, type Amount } from './model';
 import { TICKER } from '../config';
 
-/** What the wizard opens for the asset once it exists. */
+/**
+ * The three ways of the wizard (user decision, 2026-10-23): no market yet; a bonding curve; straight into a pool, a
+ * concentrated pool with ECX at the creator's price, funded by the creator over the full range (reserveasset then
+ * registerasset, then createpool and openposition once each step before is in a block: ba/store.svelte.ts
+ * PendingFund). 'auction' is no way of the wizard any more (an auction is started from the asset's page), only read back
+ * from journals of before.
+ */
 export type MarketKind = 'none' | 'curve' | 'pool' | 'auction';
 export const MARKET_KINDS: readonly { id: MarketKind; label: string; summary: string }[] = [
-  { id: 'none', label: 'No market', summary: 'The supply goes to your wallet; open a market any time later.' },
+  { id: 'none', label: 'No market', summary: 'Register it alone, the supply to your wallet; open a pool any time later.' },
   { id: 'curve', label: 'Bonding curve', summary: 'Sold from a curve until it raises enough, then a locked pool.' },
-  { id: 'pool', label: 'Pool', summary: 'Your supply to your wallet, then a pool you seed at your price.' },
-  { id: 'auction', label: 'Dutch auction', summary: 'Your supply to your wallet, then sold at a price that falls block by block.' },
+  { id: 'pool', label: 'Straight into a pool', summary: `A pool with ${TICKER} at your price, funded with your ${TICKER} and tokens over the full range.` },
 ];
 
 /** The launch parameters of the rules (getlaunchstats' rules; the defaults of a node from before them). */
