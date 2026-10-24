@@ -939,7 +939,7 @@ public:
                 consensus.sidechain.allocation10_height = SLOT99_V3_HEIGHT;
                 // Upgrade v4 (doc/photon-slot.md, "Upgrade v4"), from block SLOT99_V4_HEIGHT: payouts and book orders of
                 // 0.00005 ECX at least (0.0005 and 0.01 before), and no treasury. In the fingerprint too: each node of v4 rebuilds its state once.
-                static constexpr int SLOT99_V4_HEIGHT{6000};
+                static constexpr int SLOT99_V4_HEIGHT{8400};
                 consensus.sidechain.small_payout_height = SLOT99_V4_HEIGHT;
                 // And no treasury (swap fees 89 % providers / 11 % security, launches 80 % creator / 20 % security; the
                 // treasury's ECX paid with block SLOT99_V4_HEIGHT's fees).
