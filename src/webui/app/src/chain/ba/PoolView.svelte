@@ -291,7 +291,9 @@
     <p class="ba-help">{t(CURVE_HELP[kind.curve])}</p>
   </section>
   <div class="ba-cols">
-    {#if !book}<section class="panel">
+    <!-- The depth across the row (its two tables side by side), the price and the curve under it: no half of the
+         page left empty beside a tall panel. -->
+    {#if !book}<section class="panel depth-panel">
       <div class="panel-head"><h3>Depth</h3><span class="muted small">a trade alone in its block, each way</span></div>
       <div class="panel-body">
         {#if aligned.length}
@@ -414,6 +416,9 @@
   }
   .kind-panel {
     padding: 1rem 1.1rem;
+  }
+  .depth-panel {
+    grid-column: 1 / -1;
   }
   .id {
     display: flex;

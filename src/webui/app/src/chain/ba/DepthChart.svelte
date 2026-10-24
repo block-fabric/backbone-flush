@@ -30,6 +30,10 @@
 
   const series = $derived(depthSeries(depth));
   const rows = $derived(slippageRows(depth));
+  /** The sizes the table shows at first. */
+  const SHOWN_ROWS = 12;
+  let allRows = $state(false);
+  const shownRows = $derived(allRows ? rows : rows.slice(0, SHOWN_ROWS));
   const pct = (x: number) => `${x >= 10 ? x.toFixed(0) : x >= 1 ? x.toFixed(1) : Number(x.toPrecision(2))}%`;
   const impact = (d: DepthPoint | undefined) => (d ? `${Number(d.price_impact).toFixed(2)}%` : '–');
 </script>
@@ -45,26 +49,33 @@
       <span class="faint">· size in percent of what the pool holds of what is sold</span>
     </p>
     {#if table}
-      <div class="ba-wrap">
-        <table class="ba-table slip" aria-label="Slippage">
-          <thead>
-            <tr><th class="end">Size</th><th class="end">Sell <SafeText text={labelA} /></th><th class="end">Gets <SafeText text={labelB} /></th><th class="end">Impact</th><th class="end">Sell <SafeText text={labelB} /></th><th class="end">Gets <SafeText text={labelA} /></th><th class="end">Impact</th></tr>
-          </thead>
-          <tbody>
-            {#each rows as r (r.size)}
-              <tr>
-                <td class="end" translate="no">{pct(r.size)}</td>
-                <td class="end" translate="no">{r.a ? formatAmount(r.a.amount_in, decimalsA, { max: 6 }) : '–'}</td>
-                <td class="end" translate="no">{r.a ? formatAmount(r.a.amount_out, decimalsB, { max: 6 }) : '–'}</td>
-                <td class="end" translate="no">{impact(r.a)}</td>
-                <td class="end" translate="no">{r.b ? formatAmount(r.b.amount_in, decimalsB, { max: 6 }) : '–'}</td>
-                <td class="end" translate="no">{r.b ? formatAmount(r.b.amount_out, decimalsA, { max: 6 }) : '–'}</td>
-                <td class="end" translate="no">{impact(r.b)}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+      <!-- One table each way, four columns: they fit a narrow panel as they are (not stacked into cards), a dozen rows
+           at first (the site's ladder), all on asking. -->
+      <div class="slips">
+        {#each [{ side: 'a' as const, sold: labelA, got: labelB, din: decimalsA, dout: decimalsB }, { side: 'b' as const, sold: labelB, got: labelA, din: decimalsB, dout: decimalsA }] as w (w.side)}
+          <div class="ba-wrap">
+            <table class="ba-table ba-nostack slip" aria-label={t('Slippage, selling %1', w.sold)}>
+              <thead>
+                <tr><th class="end">Size</th><th class="end">Sell <SafeText text={w.sold} /></th><th class="end">Gets <SafeText text={w.got} /></th><th class="end">Impact</th></tr>
+              </thead>
+              <tbody>
+                {#each shownRows as r (r.size)}
+                  {@const d = w.side === 'a' ? r.a : r.b}
+                  <tr>
+                    <td class="end" translate="no">{pct(r.size)}</td>
+                    <td class="end" translate="no">{d ? formatAmount(d.amount_in, w.din, { max: 6 }) : '–'}</td>
+                    <td class="end" translate="no">{d ? formatAmount(d.amount_out, w.dout, { max: 6 }) : '–'}</td>
+                    <td class="end" translate="no">{impact(d)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/each}
       </div>
+      {#if rows.length > SHOWN_ROWS}
+        <button type="button" class="btn small ghost all" aria-expanded={allRows} onclick={() => (allRows = !allRows)}>{allRows ? t('Fewer sizes') : t('All %1 sizes', String(rows.length))}</button>
+      {/if}
     {/if}
   {/if}
 </div>
@@ -97,8 +108,17 @@
   .small {
     font-size: 0.85rem;
   }
+  .slips {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(17rem, 100%), 1fr));
+    gap: 0.75rem;
+  }
   .slip td,
   .slip th {
     font-size: 0.85rem;
+    padding-inline: 0.45rem;
+  }
+  .all {
+    align-self: flex-start;
   }
 </style>
