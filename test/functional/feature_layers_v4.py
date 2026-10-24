@@ -2,13 +2,16 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Smaller payouts (smallpayouts, bitassets::MinChnPayout and MinBookChn):
+"""Upgrade v4's rules: smaller payouts (smallpayouts, bitassets::MinChnPayout and MinBookChn) and no treasury (notreasury),
+from the same height H:
 
   - before small_payout_height: the least ECX paid out is 0.0005 and an order of a pair with ECX is worth 0.01 on
     its ECX side (getbitassetsinfo's min_chn_payout, min_book_chn); an order of 0.0001 ECX is refused;
   - from it: 0.00005 ECX for both; an order of 0.0001 ECX is placed, crosses another, and pays its 0.0001 out;
-  - a node without the rule (FLUSHD_OLD: a flushd of v3; else this one with smallpayouts never) follows the chain
-    until the first block with an order or payout under the old minimum, and forks off there.
+  - no treasury: before H the protocol's parts of the fees accrue to the treasury; at H what it held of ECX is paid with
+    block H's fees (gettreasury: active false, its ECX 0), and nothing accrues after;
+  - a node without the rules (FLUSHD_OLD: a flushd of v3; else this one with both never) follows the chain until block
+    H, whose coinbase pays the treasury's ECX with the fees, and forks off there.
 """
 
 from decimal import Decimal
@@ -22,11 +25,11 @@ CURVES_HEIGHT = 15
 SMALL_HEIGHT = 60
 
 
-class LayersSmallPayoutsTest(LayersTest):
+class LayersV4Test(LayersTest):
     def set_test_params(self):
         super().set_test_params()
         self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}",
-                                           f"-testactivationheight=smallpayouts@{SMALL_HEIGHT}"]
+                                           f"-testactivationheight=smallpayouts@{SMALL_HEIGHT}", f"-testactivationheight=notreasury@{SMALL_HEIGHT}"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
@@ -71,6 +74,18 @@ class LayersSmallPayoutsTest(LayersTest):
         self.bmm()
         n0.sendasset(n1.getnewaddress(), "GOLD", 100000)
         self.bmm_to(CURVES_HEIGHT)
+        n0.addliquidity("GOLD", 10000, "ECX", 5)
+        self.bmm()
+
+        self.log.info("Before H: the protocol's parts of the swap fees go to the treasury")
+        n1.swapasset("ECX", Decimal("0.2"), "GOLD")
+        self.bmm()
+        treasury = n0.gettreasury()
+        assert treasury["active"]
+        assert_equal(treasury["removed_height"], SMALL_HEIGHT)
+        held = next(b for b in treasury["balances"] if b["asset"] == "ECX")["balance"]
+        assert held > 0, held
+        assert_equal(treasury["fee_parts"]["swap_protocol"], Decimal("4"))
 
         self.log.info("Before small_payout_height: 0.0005 ECX paid out at least, an order worth 0.01 ECX at least")
         assert n0.getblockcount() + 1 < SMALL_HEIGHT
@@ -82,24 +97,35 @@ class LayersSmallPayoutsTest(LayersTest):
         old = os.environ.get("FLUSHD_OLD")
         if old:
             n2.args[0] = old
-            self.restart_node(2, extra_args=[a for a in self.extra_args[2] if not a.startswith("-testactivationheight=smallpayouts")])
+            self.restart_node(2, extra_args=[a for a in self.extra_args[2] if not a.startswith(("-testactivationheight=smallpayouts", "-testactivationheight=notreasury"))])
         else:
-            self.restart_node(2, extra_args=self.extra_args[2] + ["-testactivationheight=smallpayouts@1000000"])
+            self.restart_node(2, extra_args=self.extra_args[2] + ["-testactivationheight=smallpayouts@1000000", "-testactivationheight=notreasury@1000000"])
         self.connect_nodes(2, 0)
         self.connect_nodes(2, 1)
         self.bmm()
 
-        self.log.info("From it: 0.00005 ECX for both; an order of 0.0001 ECX, and the old node forks off at its block")
+        self.log.info("At H: the treasury's ECX paid with block H's fees; the old node forks off at that block")
         self.bmm_to(SMALL_HEIGHT - 1)
-        info = n0.getbitassetsinfo()
-        assert_equal((info["min_chn_payout"], info["min_book_chn"]), (Decimal("0.00005"), Decimal("0.00005")))
-        assert_raises_rpc_error(None, "not accepted", n0.placeorder, "ECX", Decimal("0.00004999"), "GOLD", 1000)
-        buy = n0.placeorder("ECX", Decimal("0.0001"), "GOLD", 1000)
-        assert buy["txid"] not in n2.getrawmempool()
         fork = self.bmm_on([n0, n1])
         assert_equal(n0.getblockheader(fork)["height"], SMALL_HEIGHT)
         self.wait_until(lambda: any(t["hash"] == fork and t["status"] == "invalid" for t in n2.getchaintips()))
         assert_equal(n2.getblockcount(), SMALL_HEIGHT - 1)
+        treasury = n0.gettreasury()
+        assert not treasury["active"]
+        assert_equal(next(b for b in treasury["balances"] if b["asset"] == "ECX")["balance"], 0)
+        assert_equal(treasury["fee_parts"]["swap_protocol"], 0)
+        assert_equal(treasury["fee_parts"]["swap_liquidity_providers"], Decimal("89"))
+        assert_equal(n0.getdexinfo()["swap_fee_parts"]["protocol"], 0)
+        # After H a swap gives the treasury nothing.
+        n1.swapasset("ECX", Decimal("0.2"), "GOLD")
+        self.bmm_on([n0, n1])
+        assert_equal(next(b for b in n0.gettreasury()["balances"] if b["asset"] == "ECX")["balance"], 0)
+
+        self.log.info("From H: 0.00005 ECX for payouts and orders; an order of 0.0001 ECX")
+        info = n0.getbitassetsinfo()
+        assert_equal((info["min_chn_payout"], info["min_book_chn"]), (Decimal("0.00005"), Decimal("0.00005")))
+        assert_raises_rpc_error(None, "not accepted", n0.placeorder, "ECX", Decimal("0.00004999"), "GOLD", 1000)
+        n0.placeorder("ECX", Decimal("0.0001"), "GOLD", 1000)
 
         self.log.info("It crosses an order selling GOLD for 0.0001 ECX: the seller collects its 0.0001 ECX")
         sell = n1.placeorder("GOLD", Decimal("0.1"), "ECX", Decimal("0.001"))
@@ -113,4 +139,4 @@ class LayersSmallPayoutsTest(LayersTest):
 
 
 if __name__ == "__main__":
-    LayersSmallPayoutsTest(__file__).main()
+    LayersV4Test(__file__).main()

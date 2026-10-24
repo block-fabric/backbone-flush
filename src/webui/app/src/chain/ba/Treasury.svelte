@@ -6,6 +6,7 @@
   import { stacked } from '../../lib/actions';
   import SafeText from '../../components/SafeText.svelte';
   import { errorText } from '../../lib/dialogs.svelte';
+  import { t } from '../../lib/i18n.svelte';
   import { rpc } from '../../lib/rpc';
   import AssetBadge from './AssetBadge.svelte';
   import { launchFeeSplit, formatShare, swapFeeSplit, treasuryRows, type Treasury } from './fees';
@@ -53,7 +54,11 @@
   </section>
   <section class="panel">
     <div class="panel-head"><h3>Treasury</h3><span class="muted small">by asset</span></div>
-    <p class="ba-help note">Held by the chain itself: no keys; no rule spends from it yet. The security parts of swap fees in {TICKER} are paid with the blocks; in another asset, the treasury holds them.</p>
+    {#if treasury.active === false}
+      <p class="ba-help note" data-testid="treasury-removed">{t('There is no treasury since block %1: the fees go to the pools\' providers, to the launches\' creators and to the chain\'s security. At that block what it held of %2 was paid to the chain\'s security; this is its record (what it held of other assets stays held: no rule ever spent from it).', String(treasury.removed_height ?? ''), TICKER)}</p>
+    {:else}
+      <p class="ba-help note">Held by the chain itself: no keys; no rule ever spent from it. The security parts of swap fees in {TICKER} are paid with the blocks; in another asset, the treasury holds them.</p>
+    {/if}
     {#if rows.length === 0}
       <p class="ba-empty">Nothing yet: the treasury fills with the fees of swaps and launches.</p>
     {:else}

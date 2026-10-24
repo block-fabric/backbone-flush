@@ -75,7 +75,8 @@ class LayersDexTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
         # The fee split too (pos/feesplit.h): the security parts of the DEX's fees in the chain's coin are split with the block's fees.
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", "-testactivationheight=feesplit@1"]
+        # The rules with the treasury (before no_treasury_height): its parts checked here; feature_layers_v4 checks those after.
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", "-testactivationheight=feesplit@1", "-testactivationheight=notreasury@1000000"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
