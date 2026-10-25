@@ -155,8 +155,10 @@ export function launchTokenOptions(o: {
   supply: string;
   decimals: number;
   feePercent: number;
-}): Record<string, string | number> {
-  const out: Record<string, string | number> = {};
+  /** v5 (getlaunchstats fee_flow_active): where the creator's fees go and whether the control coin is kept (launch.ts feeFlowOptions). */
+  feeFlow?: Record<string, string | number | boolean> | null;
+}): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
   if (o.displayName) out.display_name = o.displayName;
   if (o.logo) out.logo = o.logo;
   if (o.info.trim()) out.info = o.info;
@@ -171,6 +173,7 @@ export function launchTokenOptions(o: {
     out.decimals = o.decimals;
     out.fee = Number(o.feePercent.toFixed(2));
   }
+  if (o.feeFlow) Object.assign(out, o.feeFlow);
   return out;
 }
 

@@ -15,6 +15,7 @@
   import SafeText from '../../components/SafeText.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import MintableBadge from './MintableBadge.svelte';
   import HiddenToggle from './HiddenToggle.svelte';
   import LaunchView from './LaunchView.svelte';
   import PoolKind from './PoolKind.svelte';
@@ -26,7 +27,7 @@
   import { searchPools } from './search';
   import { launchRoute, parseDexRoute, poolRoute } from './assetactions';
   import { nav } from '../../lib/nav.svelte';
-  import { assetById, ba, displayNameOf, holdingOf, tradeIntent } from './store.svelte';
+  import { assetById, ba, displayNameOf, holdingOf, noteLaunches, tradeIntent } from './store.svelte';
   import { hiddenAsset } from './visible.svelte';
   import { TICKER } from '../config';
 
@@ -128,6 +129,7 @@
       .then((page) => {
         if (!live) return;
         launches = page?.launches ?? [];
+        noteLaunches(launches);
         moreLaunches = Math.max(0, (page?.total ?? 0) - launches.length);
       })
       .catch(() => undefined);
@@ -263,7 +265,7 @@
           <tbody>
             {#each list as r (r.key)}
               <tr class="pick" data-testid="market-row" data-kind={r.kind} onclick={() => open(r)} use:selectable={() => open(r)}>
-                <td><span class="pair"><AssetBadge id={r.base.id} label={r.base.label} display={r.launch?.display_name} size="s" /> <span class="faint">/</span> <AssetBadge id={r.quote.id} label={r.quote.label} size="s" /></span></td>
+                <td><span class="pair"><AssetBadge id={r.base.id} label={r.base.label} display={r.launch?.display_name} size="s" /><MintableBadge mintable={r.launch ? r.launch.mintable === true : undefined} id={r.base.id} compact /> <span class="faint">/</span> <AssetBadge id={r.quote.id} label={r.quote.label} size="s" /></span></td>
                 <td>
                   {#if r.pool}<PoolKind kind={kindOf(r.pool)} />
                   {:else if r.kind === 'graduated'}<span class="ba-tag accent">Graduated</span>

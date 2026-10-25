@@ -47,7 +47,7 @@ export interface PendingIssue {
    * reservation is deep enough (the host asked both with the reservation: LaunchAfterReserve). The supply and decimals
    * above are then the launch's.
    */
-  launch?: Record<string, string | number>;
+  launch?: Record<string, string | number | boolean>;
   /** The market the wizard opens once it is registered (a pool, an auction): offered then, never sent by itself. */
   follow?: 'pool' | 'auction';
   /** When it was reserved (seconds), and the reservation's transaction. */
@@ -253,6 +253,25 @@ export const sendIntent = $state({ asset: '' });
 export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '', createA: '', createB: '' });
 /** An asset whose page is opened on its "Open a market" (ba/AssetActions.svelte): AssetView scrolls to it, once. */
 export const openMarketIntent = $state({ asset: '' });
+/**
+ * The launches whose creator kept the control coin (v5 keep_control: mintable, more can be made), by token, from every
+ * listlaunches and getlaunch the pages read (noteLaunches), and once per block for the pages that list assets
+ * (loadLaunchFlags): the loud marker of ba/MintableBadge.svelte.
+ */
+export const mintableLaunch = $state<Record<string, boolean>>({});
+export function noteLaunches(list: readonly { token: string; mintable?: boolean }[] | null | undefined): void {
+  for (const l of list ?? []) if (l && typeof l.token === 'string' && (l.mintable === true) !== (mintableLaunch[l.token] === true)) mintableLaunch[l.token] = l.mintable === true;
+}
+let flagsAt = -1;
+export function loadLaunchFlags(): void {
+  if (flagsAt === ba.version) return;
+  flagsAt = ba.version;
+  void rpc
+    .raw<{ launches?: { token: string; mintable?: boolean }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
+    .then((page) => noteLaunches(page?.launches))
+    .catch(() => undefined);
+}
+
 /** What another page asks the Auctions page to sell. */
 export const sellIntent = $state({ asset: '' });
 
@@ -323,12 +342,14 @@ export function sanitizeJournal(raw: unknown): Journal {
 }
 
 /** A launch's options read back from the journal: text and numbers only, the logo bounded; anything else dropped. */
-function launchOf(v: unknown): Record<string, string | number> | undefined {
+function launchOf(v: unknown): Record<string, string | number | boolean> | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const out: Record<string, string | number> = {};
+  const out: Record<string, string | number | boolean> = {};
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
     if (!/^[a-z_]{1,20}$/.test(k)) continue;
-    if (typeof x === 'number' && Number.isFinite(x)) out[k] = x;
+    // keep_control (v5): a boolean, kept with the launch that waits for its reservation.
+    if (typeof x === 'boolean') out[k] = x;
+    else if (typeof x === 'number' && Number.isFinite(x)) out[k] = x;
     else if (typeof x === 'string' && x.length <= (k === 'logo' ? MAX_LOGO_BASE64 : 1024)) out[k] = x;
   }
   return out;

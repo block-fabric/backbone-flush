@@ -1,7 +1,7 @@
 // Layers' launches as the pages see them (ba/launch.ts): the bonding curve from the rules, the split of the supply and
 // of the fee, the queries of the list, the options of launchtoken and what is wrong with them, what a creator is owed.
 import { describe, expect, it } from 'vitest';
-import { appendLaunches, claimable, curvePointAt, curveSeries, curveShape, launchCurveFacts, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
+import { appendLaunches, claimable, feeDestinationText, feeFlowOptions, feeFlowProblems, poolKindText, curvePointAt, curveSeries, curveShape, launchCurveFacts, launchOptions, launchProblems, launchQuery, rulesOf, supplySplit, type Launch } from './launch';
 
 describe('the bonding curve', () => {
   const shape = curveShape(500, 1_000_000_000);
@@ -78,9 +78,9 @@ describe('launching', () => {
   });
 
   it('pays the creator its fees from 0.0005 CHN, its allocation once graduated and not minted', () => {
-    expect(claimable({ creator_fees_owed: 0.0001, status: 'curve', allocation: 2, allocation_claimed: false })).toEqual({ fees: false, allocation: false });
-    expect(claimable({ creator_fees_owed: '0.01000000', status: 'graduated', allocation: 2, allocation_claimed: false })).toEqual({ fees: true, allocation: true });
-    expect(claimable({ creator_fees_owed: 0, status: 'graduated', allocation: 2, allocation_claimed: true })).toEqual({ fees: false, allocation: false });
+    expect(claimable({ creator_fees_owed: 0.0001, status: 'curve', allocation: 2, allocation_claimed: false })).toEqual({ fees: false, allocation: false, tokens: false });
+    expect(claimable({ creator_fees_owed: '0.01000000', status: 'graduated', allocation: 2, allocation_claimed: false })).toEqual({ fees: true, allocation: true, tokens: false });
+    expect(claimable({ creator_fees_owed: 0, status: 'graduated', allocation: 2, allocation_claimed: true })).toEqual({ fees: false, allocation: false, tokens: false });
   });
 });
 
@@ -105,5 +105,23 @@ describe('the curve of a launch in My launches (launchCurveFacts)', () => {
     expect(f.price).toBeCloseTo(250 / (210_000_000 * 9 / 8), 15);
     expect(launchCurveFacts({ ...corn, progress: 'x' as unknown as number, graduation: undefined as unknown as string, supply: undefined as unknown as string })).toMatchObject({ progress: 0, traded: false, price: undefined });
     expect(launchCurveFacts({ ...corn, progress: 12.5, trades: 3, price: 0.0001, volume: '10' })).toEqual({ progress: 12.5, traded: true, price: 0.0001, start: false });
+  });
+});
+
+describe('v5 fee flow (launch.ts)', () => {
+  it('launchtoken options only where they differ from the defaults; their problems; the facts in words', () => {
+    expect(feeFlowOptions({ destination: 'creator', burnPercent: 50, keepControl: false })).toEqual({});
+    expect(feeFlowOptions({ destination: 'burn', burnPercent: 50, keepControl: false })).toEqual({ fee_destination: 'burn' });
+    expect(feeFlowOptions({ destination: 'split', burnPercent: 25, keepControl: true })).toEqual({ fee_destination: 'split', burn_percent: 25, keep_control: true });
+    expect(feeFlowProblems({ destination: 'split', burnPercent: 0, keepControl: false, mintableConfirmed: false })).toHaveLength(1);
+    expect(feeFlowProblems({ destination: 'split', burnPercent: 100, keepControl: false, mintableConfirmed: false })).toHaveLength(1);
+    expect(feeFlowProblems({ destination: 'creator', burnPercent: 0, keepControl: true, mintableConfirmed: false })).toEqual(['Confirm that the asset stays mintable.']);
+    expect(feeFlowProblems({ destination: 'split', burnPercent: 40, keepControl: true, mintableConfirmed: true })).toEqual([]);
+    expect(feeDestinationText({ fee_destination: 'creator' })).toBe('To the creator');
+    expect(feeDestinationText({ fee_destination: 'burn' })).toBe('Bought back and burned');
+    expect(feeDestinationText({ fee_destination: 'split', burn_percent: 40 })).toBe('40% bought back and burned, 60% to the creator');
+    expect(poolKindText({ pool_kind: 'concentrated' })).toBe('Locked full-range position, 1 %');
+    expect(poolKindText({ pool_kind: undefined })).toBe('');
+    expect(claimable({ creator_fees_owed: 0, status: 'curve', allocation: 0, allocation_claimed: false, creator_tokens_owed: '5' }, 0.0005)).toEqual({ fees: false, allocation: false, tokens: true });
   });
 });
