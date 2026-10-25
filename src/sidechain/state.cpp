@@ -535,6 +535,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     if (!bitassets::CheckCurvesActivation(tx, params.DexCurvesActive(height), reject_reason)) return false;
     if (!bitassets::CheckLaunchParamsActivation(tx, params.LaunchParamsActive(height), reject_reason)) return false;
     if (!bitassets::CheckAllocationActivation(tx, params.Allocation10Active(height), reject_reason)) return false;
+    if (!bitassets::CheckFeeFlowActivation(tx, params.FeeFlowActive(height), reject_reason)) return false;
     // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
     // never outgrows what the next block with the peg actions is sure to pay.
     if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued(), params.DexActive(height))) return false;

@@ -165,6 +165,15 @@ struct SidechainParams {
      */
     int no_treasury_height{std::numeric_limits<int>::max()};
     bool NoTreasury(int height) const { return DexActive(height) && height >= no_treasury_height; }
+    /**
+     * The fee-flow release (v5): from this block a launch graduates into a locked full-range position of a concentrated
+     * pool at 1 % (its collected fees split between its creator and the chain's security), the security part of a swap
+     * fee paid in an asset is sold for the chain's coin, a launch chooses where its creator's fees go (the creator, a
+     * buyback and burn, or a split) and how long its allocation vests, and may keep its control coin. Never unless a
+     * network sets it (regtest: 0, or -testactivationheight=feeflow@<height>).
+     */
+    int fee_flow_height{std::numeric_limits<int>::max()};
+    bool FeeFlowActive(int height) const { return DexActive(height) && height >= fee_flow_height; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
     uint32_t SwapProtocolShare(int height) const { return NoTreasury(height) ? 0 : dex_fee_protocol_share; }
     //! A swap fee's security part in force: from no_treasury_height the protocol's part joins it (Flush: 11 % + 4 % = 15 %).

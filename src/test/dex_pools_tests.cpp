@@ -644,7 +644,7 @@ BOOST_AUTO_TEST_CASE(fee_parts_conserve_every_kind)
 namespace {
 /** Regtest with the DEX from the first block and no treasury from block 102 (the Chain starts at 100). */
 struct NoTreasurySetup : BasicTestingSetup {
-    NoTreasurySetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=notreasury@102"}}} {}
+    NoTreasurySetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=notreasury@102", "-testactivationheight=feeflow@1000000"}}} {}
 };
 } // namespace
 

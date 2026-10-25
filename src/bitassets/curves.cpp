@@ -13,6 +13,14 @@
 
 namespace bitassets {
 
+PoolParams GraduationParams()
+{
+    PoolParams params;
+    params.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    params.fee = GRADUATION_FEE;
+    return params;
+}
+
 uint256 PoolIdOf(const AssetId& a, const AssetId& b, const PoolParams& params)
 {
     if (params.Legacy()) return PoolId(a, b);

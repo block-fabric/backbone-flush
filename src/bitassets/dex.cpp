@@ -163,6 +163,19 @@ uint64_t HopAlone(const State& state, const uint256& id, const Pool& pool, const
         const auto cleared{state.ClearBook(id, pool, resting, {HopIn{pool.asset0 == in, amount}}, 0)};
         return cleared ? cleared->outs[0] : 0;
     }
+    // From fee_flow_height a pool of the chain's coin takes its fee on the coin's side, as its rounds do (State::ClearCoinSide).
+    const uint32_t fee{state.QuoteFee(id, params)};
+    if (state.CoinSideFees() && pool.asset0.IsNull() && fee > 0 && params.GetCurve() != Curve::LAUNCH) {
+        std::optional<ClState> cl;
+        std::map<int32_t, ClTick> ticks;
+        if (params.GetCurve() == Curve::CONCENTRATED) {
+            cl = state.GetClState(id);
+            if (!cl) return 0;
+        }
+        uint64_t security{0};
+        const auto cleared{state.ClearCoinSide(id, params, fee, pool, cl ? &*cl : nullptr, &ticks, {HopIn{pool.asset0 == in, amount}}, /*security_share=*/0, security)};
+        return cleared ? cleared->outs[0] : 0;
+    }
     if (params.GetCurve() == Curve::CONCENTRATED) {
         auto cl{state.GetClState(id)};
         if (!cl) return 0;

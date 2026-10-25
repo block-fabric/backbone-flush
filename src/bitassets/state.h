@@ -674,6 +674,12 @@ struct LaunchToken {
     CScript chn_to;
     //! The curve's fee (millionths): 0 for a launch of the kind KIND (the network's), else of LAUNCH_WITH_PARAMS_KIND.
     uint32_t fee{0};
+    //! From SidechainParams::fee_flow_height (a marker of LAUNCH_V5_KIND): where the creator's part of its fees goes
+    //! (FeeDestination), the burn's part of a split (basis points), and whether its creator keeps the control coin.
+    //! (No vesting: the allocation is the creator's at graduation, as before; user decision 2026-10-24.)
+    uint8_t destination{0};
+    uint16_t burn_bps{0};
+    bool keep_control{false};
     SERIALIZE_METHODS(LaunchToken, obj)
     {
         READWRITE(obj.reg, obj.reg.logo, obj.reg.display_name, obj.creator, obj.allocation, VARINT(obj.min_buy), VARINT(obj.max_buy), VARINT(obj.first_buy), VARINT(obj.first_min_out),
@@ -681,9 +687,39 @@ struct LaunchToken {
     }
     friend bool operator==(const LaunchToken&, const LaunchToken&) = default;
     bool WithParams() const { return fee != 0; }
+    /** Whether it is a launch of the fee-flow release's kind (LAUNCH_V5_KIND): any of its fields other than the network's defaults. */
+    bool V5() const;
 };
 /** The kind of the marker of a LaunchToken with its own parameters: its fields, then `fee` (VARINT). */
 inline constexpr uint8_t LAUNCH_WITH_PARAMS_KIND{36};
+/**
+ * The kind of the marker of a LaunchToken of the fee-flow release (from SidechainParams::fee_flow_height): its fields,
+ * `fee` (VARINT; 0: the network's, the supply and decimals then the network's too), `destination`, `burn_bps` and
+ * `keep_control`. One way to write a marker: the network's defaults alone (the creator, no control) are a launch of
+ * the kinds before.
+ */
+inline constexpr uint8_t LAUNCH_V5_KIND{37};
+/** Where the creator's part of a launch's fees goes (from the curve, and from its locked position once graduated). */
+enum class FeeDestination : uint8_t {
+    CREATOR = 0, //!< to its creator, claimed (ClaimLaunch)
+    BURN = 1,    //!< bought back in its own venue each block, and burned
+    SPLIT = 2,   //!< burn_bps of it bought back and burned, the rest its creator's
+};
+inline constexpr uint8_t MAX_FEE_DESTINATION{2};
+/**
+ * From fee_flow_height a launch graduates into a locked full-range position of a concentrated pool of the coin and its
+ * token at this fee tier (1 %, a fixed tier: GRADUATION_FEE), and the fees that position collects are split: this part
+ * (millionths) its creator's (by its FeeDestination), the rest the chain's security (as a swap fee's security part).
+ */
+inline constexpr uint32_t GRADUATION_FEE{10'000};
+inline constexpr uint32_t GRADUATED_CREATOR_SHARE{600'000};
+/**
+ * From fee_flow_height (user decision 2026-10-24), a pool of the chain's coin (asset0: constant product, stable,
+ * weighted, concentrated; a launch curve already did so) takes its whole fee on the coin's side (State::ClearCoinSide):
+ * a buy's fee out of the coin it pays in, a sale's out of the coin it gets; of the fee, the security part (15 %) to the
+ * block's security, the rest to the pool's coin for its providers (a concentrated pool: its in-range positions' fee
+ * growth in the coin, a locked position's split 60/40 by CollectLocked). Pools of two assets keep the rule before.
+ */
 
 /**
  * Put part of an existing asset's supply on a bonding curve (from SidechainParams::launch_params_height), by whoever
@@ -830,6 +866,8 @@ bool IsLaunchParamsOperation(const Operation& op);
  * MAX_LAUNCH_ALLOCATION_BEFORE_10 is not valid (bad-ba-launch), as it never was.
  */
 [[nodiscard]] bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason);
+/** Whether a transaction may be in a block where the fee-flow release is `active` or not: a launch of LAUNCH_V5_KIND not before (bad-ba-marker). */
+[[nodiscard]] bool CheckFeeFlowActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
 /** Whether an operation sets a logo (SetLogo, or a Register with one): valid from SidechainParams::logo_height only. */
 bool IsLogoOperation(const Operation& op);
@@ -1105,13 +1143,29 @@ struct LaunchRecord {
     //! existing asset on a curve (CurveAsset).
     uint64_t supply{0};
     bool from_asset{false};
+    //! From fee_flow_height (`v5`; records before end before it): where its creator's part of the fees goes, the burn's
+    //! part of a split, the blocks its allocation vests over from graduation (0: at once), whether its creator kept the
+    //! control coin; its allocation paid so far, its tokens bought back and burned, the coin waiting to buy them back,
+    //! and the locked position it graduated into (null: none, a pool of before).
+    bool v5{false};
+    uint8_t destination{0};
+    uint16_t burn_bps{0};
+    int32_t vesting{0};
+    bool keep_control{false};
+    uint64_t allocation_paid{0};
+    uint64_t burned{0};
+    uint64_t buyback{0};
+    uint256 position;
+    //! The creator's part of its locked position's fees in its own token, not paid yet (claimlaunch pays it).
+    uint64_t creator_tokens{0};
     template <typename Stream>
     void Serialize(Stream& s) const
     {
         s << txid << height << creator << allocation << min_buy << max_buy << fee << creator_share << graduation << virtual_coin << pool << pool_fees << creator_fees
           << creator_paid << graduated << raised_at_graduation << allocation_claimed << volume << trades << protocol_share << security_share << protocol_fees << security_fees;
         // A launch of before (supply 0, not from an asset) is written as it was.
-        if (supply != 0 || from_asset) s << VARINT(supply) << from_asset;
+        if (supply != 0 || from_asset || v5) s << VARINT(supply) << from_asset;
+        if (v5) s << destination << burn_bps << VARINT(static_cast<uint32_t>(vesting)) << keep_control << VARINT(allocation_paid) << VARINT(burned) << VARINT(buyback) << position << VARINT(creator_tokens);
     }
     template <typename Stream>
     void Unserialize(Stream& s)
@@ -1120,7 +1174,24 @@ struct LaunchRecord {
             creator_paid >> graduated >> raised_at_graduation >> allocation_claimed >> volume >> trades >> protocol_share >> security_share >> protocol_fees >> security_fees;
         supply = 0;
         from_asset = false;
+        v5 = false;
         if (!s.empty()) s >> VARINT(supply) >> from_asset;
+        if (!s.empty()) {
+            uint32_t blocks{0};
+            s >> destination >> burn_bps >> VARINT(blocks) >> keep_control >> VARINT(allocation_paid) >> VARINT(burned) >> VARINT(buyback) >> position >> VARINT(creator_tokens);
+            vesting = static_cast<int32_t>(blocks);
+            v5 = true;
+        }
+    }
+    /** The part of its allocation vested at `height` (units): all of it at graduation without vesting (or before v5), else linearly over `vesting` blocks from it. */
+    uint64_t AllocationVested(int height) const
+    {
+        if (!Graduated() || allocation == 0) return 0;
+        const uint64_t all{AllocationUnits()};
+        if (!v5 || vesting <= 0) return all;
+        const int64_t since{std::max<int64_t>(0, int64_t{height} - graduated)};
+        if (since >= vesting) return all;
+        return static_cast<uint64_t>(static_cast<unsigned __int128>(all) * static_cast<uint64_t>(since) / static_cast<uint64_t>(vesting));
     }
     friend bool operator==(const LaunchRecord&, const LaunchRecord&) = default;
     bool Graduated() const { return graduated >= 0; }
@@ -1384,6 +1455,8 @@ struct PoolParams {
  * of asset0, flags; not the scales, which follow from the assets).
  */
 uint256 PoolIdOf(const AssetId& a, const AssetId& b, const PoolParams& params);
+/** The kind of pool a launch made from fee_flow_height graduates into: concentrated, at GRADUATION_FEE (its id: PoolIdOf(CHN, token, it)). */
+PoolParams GraduationParams();
 /** Why the parameters of a CreatePool are not those of a pool (nullopt: they are); the weight is asset_a's. */
 std::optional<std::string> WhyNotPoolKind(uint8_t curve, uint32_t fee, uint32_t amp, uint8_t weight_a, uint8_t flags);
 /** The parameters of a pool of `a` and `b` made by `create` (the weight turned to asset0's); the scales from the decimals. */
@@ -1657,6 +1730,8 @@ public:
     // Concentrated liquidity (bitassets/clmath.h).
     std::optional<ClState> GetClState(const uint256& pool) const;
     std::optional<ClTick> GetClTick(const uint256& pool, int32_t tick) const;
+    /** Whether a pool is one a launch graduated into with its locked position (from fee_flow_height). */
+    bool IsLockedPool(const uint256& pool) const;
     std::optional<ClPosition> GetPosition(const uint256& id) const;
     /** The ticks of a pool with liquidity starting or ending there, in order, `max` at most. */
     std::vector<std::pair<int32_t, ClTick>> ClTicksOf(const uint256& pool, size_t max) const;
@@ -1733,6 +1808,34 @@ private:
                     std::string& reject_reason) const;
     /** A launch graduates (FinishBlock): its curve's coin and the tokens left into the token's pool with the coin, locked. */
     void Graduate(const AssetId& token, int height);
+    /** Graduate's part from fee_flow_height: into a locked full-range position (false: it cannot, and the launch graduates as before). */
+    bool GraduateLocked(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units, int height);
+    /**
+     * The fees a locked position (GraduateLocked) earned in the block, collected out of its pool: of each asset
+     * GRADUATED_CREATOR_SHARE to the launch's creator (by its fee destination), the rest to the chain's security (the
+     * chain's coin with the block's security fees, returned; in the token, none from fee_flow_height: ClearCoinSide).
+     */
+    uint64_t CollectLocked(const uint256& pool, const AssetId& token, int height);
+    /** What a protocol order (Order::sink) gets or gets back: bought back and burned, or back to wait. */
+    void PaySink(const Order& order, const AssetId& asset, uint64_t amount, uint64_t& security);
+    /** The orders the protocol makes in a block from fee_flow_height: buybacks; what they take is taken out of waiting. */
+    std::vector<Order> ProtocolOrders(int height);
+public:
+    /**
+     * A round of a pool of the chain's coin with its fee on the coin's side (from fee_flow_height): the round of the
+     * kind at no fee on the buys' coin less their fee (rounded up) and the sales' units whole, all at that round's one
+     * price; then each sale's fee (rounded up) out of the coin it gets. Of all the fees, `security_share` (millionths;
+     * rounded down) leaves for the chain's security (`security`), the rest stays in the pool's coin (a concentrated
+     * pool: added to its fee growth in the coin, at the liquidity in range after the round; with none, to the pool).
+     * Every order still gets the same price; min_out counts what it gets, net of the fee.
+     */
+    std::optional<dex::Clearing> ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
+                                               const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const;
+    /** Whether the pools of the chain's coin take their fees on its side (fee_flow_height reached: set by its first block's end). */
+    bool CoinSideFees() const;
+private:
+    /** A launch's creator's part of its fees by its destination (v5): the coin to creator_fees or buyback, the token to creator_tokens or burned. */
+    void CreditCreator(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units);
     /** The DEX's pool kinds' part of MakePlan: CreatePool, PoolDeposit, PoolWithdraw. */
     bool PlanPools(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                    const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit, std::string& reject_reason) const;

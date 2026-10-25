@@ -106,6 +106,11 @@ struct Tip {
 };
 
 double Whole(uint64_t units, int decimals) { return static_cast<double>(units) / std::pow(10.0, decimals); }
+/** A launch's fee destination as the API names it (bitassets::FeeDestination). */
+std::string DestinationName(uint8_t destination)
+{
+    return destination == static_cast<uint8_t>(bitassets::FeeDestination::BURN) ? "burn" : destination == static_cast<uint8_t>(bitassets::FeeDestination::SPLIT) ? "split" : "creator";
+}
 
 std::string Hex(const uint256& id) { return id.GetHex(); }
 
@@ -560,6 +565,8 @@ private:
         m.SetDouble("curve_supply", Whole(l.rec.CurveSupply(), l.decimals));
         m.SetDouble("pool_supply", Whole(l.rec.PoolSupply(), l.decimals));
         m.SetBool("from_asset", l.rec.from_asset);
+        m.SetBool("mintable", l.rec.keep_control);
+        m.SetString("fee_destination", DestinationName(l.rec.destination));
         m.SetDouble("fee_bps", l.rec.fee / 100.0);
         (void)state;
     }
@@ -2030,6 +2037,14 @@ private:
             d.SetDouble("min_buy_ecx", static_cast<double>(l.rec.min_buy) / COIN);
             d.SetDouble("max_buy_ecx", static_cast<double>(l.rec.max_buy) / COIN);
             d.SetDouble("curve_tokens_left", l.curve_left);
+            d.SetBool("fee_flow", l.rec.v5);
+            d.SetString("fee_destination", DestinationName(l.rec.destination));
+            d.SetDouble("burn_percent", l.rec.burn_bps / 100.0);
+            d.SetBool("mintable", l.rec.keep_control);
+            d.SetDouble("burned", Whole(l.rec.burned, l.decimals));
+            d.SetDouble("buyback_pending_ecx", static_cast<double>(l.rec.buyback) / COIN);
+            d.SetDouble("creator_tokens_owed", Whole(l.rec.creator_tokens, l.decimals));
+            d.SetString("pool_kind", l.rec.v5 ? "concentrated" : "constant_product");
             (void)launch;
             return d;
         });

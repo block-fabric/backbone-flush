@@ -260,6 +260,10 @@ message LaunchSummary {
   double pool_supply = 25;
   bool from_asset = 26;
   double fee_bps = 27;
+  // The fee-flow release: its creator kept the control coin (can create more units: a risk shown loudly), and where
+  // the creator's part of its fees goes (creator, burn, split).
+  bool mintable = 28;
+  string fee_destination = 29;
 }
 
 message LaunchDetail {
@@ -310,6 +314,19 @@ message LaunchDetail {
   double min_buy_ecx = 41;
   double max_buy_ecx = 42;
   double curve_tokens_left = 43;
+  // The fee-flow release (made from its height): a locked full-range position of a concentrated pool at 1 % at
+  // graduation (pool_kind concentrated; constant_product before), its fees 60 % to the creator (in ECX, and in its own
+  // units: creator_tokens_owed), 40 % to security; where the creator's part goes (creator, burn: bought back and
+  // burned each block, split: burn_percent of it); the units burned so far and the ECX waiting to buy back; and
+  // whether its creator kept the control coin (mintable: it can create more).
+  bool fee_flow = 46;
+  string fee_destination = 47;
+  double burn_percent = 48;
+  bool mintable = 49;
+  double burned = 50;
+  double buyback_pending_ecx = 51;
+  double creator_tokens_owed = 52;
+  string pool_kind = 53;
 }
 
 message ListLaunchesRequest {

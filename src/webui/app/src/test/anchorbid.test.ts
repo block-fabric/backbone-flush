@@ -122,7 +122,7 @@ describe('the anchor bid panel', () => {
     expect(screen.getByText('Fees + prevent stalling')).toBeTruthy();
     expect(
       screen.getByText(
-        'Bids exactly the fee share it owes when there are fees, and sends a stall boost only when needed. Its minimum may be set to 0 (bid nothing when there are no fees and no stall pressure); 500 sat is the default minimum.',
+        'Bids the minimum (564 sat by default), or the fee share it owes when that is more: the fees count toward the minimum, so only what they miss of it comes from you. When the chain nears its halt (the stall pressure), a flat boost: 4 times the minimum (2,256 sat), or the fee share if that is more. Never above the maximum.',
       ),
     ).toBeTruthy();
   });

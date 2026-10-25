@@ -79,6 +79,11 @@ struct Order {
     //! The pools of its hops (SwapPools); empty: the pool of each two assets of the path (PoolId), as Route and Swap.
     //! Orders live in the store during their block only (State::FinishBlock erases them), never in undo data.
     std::vector<uint256> pools;
+    //! An order the protocol makes in FinishBlock (never written, no transaction's): NONE for every order of a
+    //! transaction; BUYBACK buys a launch's token with its pending buyback coin and burns it. What such an order misses
+    //! (or a curve gives back) goes back to wait: nothing is ever lost.
+    enum class Sink : uint8_t { NONE = 0, BUYBACK = 2 };
+    Sink sink{Sink::NONE};
     SERIALIZE_METHODS(Order, obj) { READWRITE(obj.txid, obj.path, obj.amount_in, obj.min_out, obj.chn_to, obj.result_n, obj.payout, obj.pools); }
     /** The pool of hop `hop`. */
     uint256 PoolOfHop(size_t hop) const { return pools.empty() ? PoolId(path[hop], path[hop + 1]) : pools[hop]; }

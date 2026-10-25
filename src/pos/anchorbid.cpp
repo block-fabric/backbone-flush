@@ -131,7 +131,7 @@ const std::vector<std::string>& PolicyFieldNames()
 {
     static const std::vector<std::string> names{"strategy", "floor", "max", "fixed", "feeshare", "escalationstart", "curve", "interpolate",
                                                 "usefeeestimate", "requestvsize", "rebidafter", "rebidstep", "rebidmax", "warnmissed",
-                                                "periodcap", "periodhours", "lowbalanceblocks"};
+                                                "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost"};
     return names;
 }
 
@@ -161,6 +161,7 @@ std::string CheckPolicy(const AnchorBidPolicy& policy)
     if (policy.warn_missed < 0 || policy.warn_missed > 1000) return "warnmissed: from 0 (never) to 1000 mainchain blocks";
     if (policy.period_hours < 1 || policy.period_hours > 24 * 31) return "periodhours: from 1 to 744";
     if (policy.low_balance_blocks < 0 || policy.low_balance_blocks > 1'000'000) return "lowbalanceblocks: from 0 (no warning) to 1000000";
+    if (!(policy.boost >= 1) || policy.boost > 1000) return "boost: a multiplier of the floor from 1 to 1000";
     return "";
 }
 
@@ -173,6 +174,8 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy)
     out.pushKV("fixed", ValueFromAmount(policy.fixed));
     out.pushKV("feeshare", policy.fee_share_bps / 100.0);
     out.pushKV("escalationstart", policy.escalation_start);
+    out.pushKV("flatboost", policy.flat_boost);
+    out.pushKV("boost", policy.boost);
     UniValue curve(UniValue::VARR);
     for (const EscalationPoint& point : policy.curve) {
         UniValue entry(UniValue::VOBJ);
@@ -271,6 +274,10 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
             ok = integer(policy.period_hours);
         } else if (key == "lowbalanceblocks") {
             ok = integer(policy.low_balance_blocks);
+        } else if (key == "flatboost") {
+            ok = boolean(policy.flat_boost);
+        } else if (key == "boost") {
+            ok = real(policy.boost);
         } else {
             error = strprintf("%s: not a field of the policy (%s)", key, util::Join(PolicyFieldNames(), ", "));
             return false;
@@ -344,7 +351,18 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         break;
     }
     d.amount = d.normal;
-    if (policy.Escalates()) {
+    if (policy.Escalates() && policy.flat_boost) {
+        // The flat boost: under pressure, boost x the floor, or the fee share if it is more (no rebid, curve or estimate).
+        if (d.pressure >= policy.escalation_start) {
+            const CAmount boosted{Clamp(static_cast<double>(policy.floor) * policy.boost)};
+            if (boosted > d.amount) {
+                d.amount = boosted;
+                d.multiplier = policy.boost;
+                d.kind = "boost";
+                d.reason = strprintf("boost at %s: x%.2f the floor %s", p_text, policy.boost, FormatMoney(policy.floor));
+            }
+        }
+    } else if (policy.Escalates()) {
         // Missed blocks: the bid again, higher, whatever the pressure (capped).
         if (policy.rebid_after > 0 && inputs.missed >= policy.rebid_after) {
             const double factor{std::min(policy.rebid_max, std::pow(policy.rebid_step, inputs.missed / policy.rebid_after))};

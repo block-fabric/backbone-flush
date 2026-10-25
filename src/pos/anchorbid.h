@@ -39,7 +39,7 @@ std::optional<BidStrategy> ParseStrategy(const std::string& name);
 
 //! The least a validator's anchorer bids by default on the eCash networks: 0.000005 coins (500 sat, about
 //! 2.6 sat/vB for a ~190 vB request). (Off on regtest unless given.)
-inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{500};
+inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{564};
 //! The most it bids by default, whatever the fees, the pressure or the mempool: 0.001 coins (about 526 sat/vB).
 inline constexpr CAmount DEFAULT_ANCHOR_BID_MAX{100'000};
 //! What it spends at most by default in a period (landed bids): 0.01 coins a day.
@@ -70,6 +70,14 @@ struct AnchorBidPolicy {
     std::vector<EscalationPoint> curve{{0.5, 1}, {0.75, 2}, {0.9, 4}};
     //! Between the points of the curve: interpolated linearly (true) or in steps (false).
     bool interpolate{true};
+    /**
+     * The flat boost (the default, user decision 2026-10-24): "Fees + prevent stalling" bids max(floor, fee share) (the
+     * fees count toward the floor: only what they miss of it is the validator's), and under stall pressure (from
+     * escalation_start) max(boost x floor, fee share): no curve, no rebid multiplier, no fee estimate, no multiple of a
+     * large fee share. Off: the curve, the rebids and the estimate, as before.
+     */
+    bool flat_boost{true};
+    double boost{4};
     //! Under pressure, the base of the escalated bid is the mainchain's next-block fee estimate times the request's
     //! size (if known); else (or without an estimate) the floor (500 sat at least).
     bool use_fee_estimate{true};
