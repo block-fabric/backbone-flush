@@ -7,6 +7,7 @@
 import { approx, formatUnits, minChnPayout, unitsOf, type Amount } from './model';
 import type { LaunchParamRules } from './create';
 import { TICKER } from '../config';
+import { t } from '../../lib/i18n.svelte';
 
 /** A launch's token has 6 decimals and a billion units, fixed (bitassets::LAUNCH_DECIMALS, LAUNCH_SUPPLY). */
 export const LAUNCH_DECIMALS = 6;
@@ -31,6 +32,13 @@ export interface LaunchRules extends LaunchParamRules {
   log_blocks: number;
   /** Whether the next block takes launches. */
   active: boolean;
+  /** v5, fee flow (newer nodes): from its height, where a creator's fees go (fee_destination), keep_control, and a
+   *  graduation into a locked full-range position at graduation_fee percent, whose fees go graduated_creator_share
+   *  percent to the creator, the rest to the chain's security. */
+  fee_flow_active?: boolean;
+  fee_flow_height?: number;
+  graduation_fee?: number;
+  graduated_creator_share?: number;
 }
 
 export interface LaunchStats {
@@ -82,6 +90,18 @@ export interface Launch {
   volume: Amount;
   trades: number;
   graduated_height?: number;
+  /** v5, fee flow (newer nodes): where the creator's fees go, and what of them was burned (whole tokens); whether its
+   *  creator kept the control coin (mintable: more can be made); tokens owed to the creator (a split's part); the kind of
+   *  its pool once graduated and its position there. */
+  fee_flow?: boolean;
+  fee_destination?: FeeDestination;
+  burn_percent?: number;
+  mintable?: boolean;
+  burned?: Amount;
+  buyback_pending?: Amount;
+  creator_tokens_owed?: Amount;
+  pool_kind?: 'concentrated' | 'constant_product';
+  position?: string;
   /** From the launch parameters (newer nodes): its asset's decimals, what its curve sells and its pool gets (whole), and
    *  whether an asset that existed was put on the curve (curveasset). A node from before: 6, 750M, 250M. */
   decimals?: number;
@@ -273,8 +293,50 @@ export function launchProblems(o: { allocation: number; maxAllocation: number; f
 }
 
 /** What the creator can be paid now (claimlaunch): its fees (from the least payout, the node's), its allocation once graduated and not minted. */
-export function claimable(l: Pick<Launch, 'creator_fees_owed' | 'status' | 'allocation' | 'allocation_claimed'>, minChn = Number(minChnPayout()) / 1e8): { fees: boolean; allocation: boolean } {
-  return { fees: approx(l.creator_fees_owed) >= minChn, allocation: l.status === 'graduated' && l.allocation > 0 && !l.allocation_claimed };
+export function claimable(l: Pick<Launch, 'creator_fees_owed' | 'status' | 'allocation' | 'allocation_claimed'> & Partial<Pick<Launch, 'creator_tokens_owed'>>, minChn = Number(minChnPayout()) / 1e8): { fees: boolean; allocation: boolean; tokens: boolean } {
+  return { fees: approx(l.creator_fees_owed) >= minChn, allocation: l.status === 'graduated' && l.allocation > 0 && !l.allocation_claimed, tokens: approx(l.creator_tokens_owed ?? 0) > 0 };
+}
+
+// --- v5, fee flow ---
+
+/** Where a launch's creator fees go (launchtoken fee_destination). */
+export type FeeDestination = 'creator' | 'burn' | 'split';
+export const FEE_DESTINATIONS: { id: FeeDestination; label: string }[] = [
+  { id: 'creator', label: 'Creator' },
+  { id: 'burn', label: 'Buy back & burn' },
+  { id: 'split', label: 'Split' },
+];
+
+/** The fee-flow options of launchtoken, from the v5 height: only those that differ from the defaults. */
+export function feeFlowOptions(o: { destination: FeeDestination; burnPercent: number; keepControl: boolean }): Record<string, string | number | boolean> {
+  const out: Record<string, string | number | boolean> = {};
+  if (o.destination !== 'creator') out.fee_destination = o.destination;
+  if (o.destination === 'split') out.burn_percent = o.burnPercent;
+  if (o.keepControl) out.keep_control = true;
+  return out;
+}
+
+/** What is wrong with them ('' each when nothing): a split's burn above 0 and below 100; a control coin kept only on the creator's word. */
+export function feeFlowProblems(o: { destination: FeeDestination; burnPercent: number; keepControl: boolean; mintableConfirmed: boolean }): string[] {
+  const out: string[] = [];
+  if (o.destination === 'split' && !(o.burnPercent > 0 && o.burnPercent < 100)) out.push('A split burns more than 0% and less than 100% of the fees.');
+  if (o.keepControl && !o.mintableConfirmed) out.push('Confirm that the asset stays mintable.');
+  return out;
+}
+
+/** Where a launch's creator fees go, in the words of the app (made with t()): "To the creator", "Bought back and burned", "40% bought back and burned, 60% to the creator". */
+export function feeDestinationText(l: Pick<Launch, 'fee_destination' | 'burn_percent'>): string {
+  if (l.fee_destination === 'burn') return t('Bought back and burned');
+  if (l.fee_destination === 'split') {
+    const b = Math.max(0, Math.min(100, Number(l.burn_percent) || 0));
+    return t('%1% bought back and burned, %2% to the creator', String(b), String(100 - b));
+  }
+  return t('To the creator');
+}
+
+/** The kind of a graduated launch's pool, in the words of the app (made with t()); '' when the node does not say. */
+export function poolKindText(l: Pick<Launch, 'pool_kind'>, graduationFee = 1): string {
+  return l.pool_kind === 'concentrated' ? t('Locked full-range position, %1 %', String(graduationFee)) : l.pool_kind === 'constant_product' ? t('Locked constant-product pool') : '';
 }
 
 /**

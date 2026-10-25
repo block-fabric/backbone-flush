@@ -18,13 +18,14 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import MintableBadge from './MintableBadge.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { claimable, creatorAllocation, curvePointAt, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
+  import { claimable, creatorAllocation, curvePointAt, feeDestinationText, poolKindText, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, minChnPayout, minChnText, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
-  import { ba, nameOf, noteKnownAssets, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { ba, nameOf, noteKnownAssets, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
   /** side: the panel's side the route names (Markets "launches/<token>/sell": ba/assetactions.ts), focused once shown. */
@@ -46,6 +47,7 @@
       .then((l) => {
         if (!live) return;
         launch = l && typeof l === 'object' ? l : null;
+        if (launch) noteLaunches([launch]);
         error = '';
       })
       .catch((e) => {
@@ -111,7 +113,9 @@
   const now = $derived(curvePointAt(shape, graduated ? shape.graduation : raised));
   const series = $derived(curveSeries(shape));
   const split = $derived(launch ? launchFeeSplit(launchFeeParts(launch)) : '');
-  const owed = $derived(launch ? claimable(launch) : { fees: false, allocation: false });
+  const owed = $derived(launch ? claimable(launch) : { fees: false, allocation: false, tokens: false });
+  /** v5: the launch's fee flow, as its page says it (launch.ts feeDestinationText, poolKindText). */
+  const graduationFee = $derived(Number(stats?.rules?.graduation_fee ?? 1));
   // Shown to every buyer, above the curve: what the creator gets minted at graduation.
   const allocationShown = $derived(launch ? creatorAllocation(launch) : null);
 
@@ -226,7 +230,7 @@
     const r = await ask({
       title: t('Pay a launch\'s creator'),
       message: t('Send the creator of %1 what it is owed?', nameOf(token, launch.ticker)),
-      informative: t('Its fees (%1 %3)%2. Anyone may send this: nothing goes anywhere but to the creator.', formatAmount(launch.creator_fees_owed, 8), owed.allocation ? t(', and its allocation of %1% of the supply, minted now', String(launch.allocation)) : '', TICKER),
+      informative: t('Its fees (%1 %3)%2. Anyone may send this: nothing goes anywhere but to the creator.', formatAmount(launch.creator_fees_owed, 8), `${owed.allocation ? t(', and its allocation of %1% of the supply, minted now', String(launch.allocation)) : ''}${owed.tokens ? t(', and %1 tokens owed', formatAmount(launch.creator_tokens_owed ?? 0, DEC, { max: 2 })) : ''}`, TICKER),
       level: 'question',
       choices: [
         { id: 'no', label: 'Cancel' },
@@ -269,6 +273,7 @@
     <header class="panel head">
       <AssetBadge id={token} label={launch.ticker} display={launch.display_name ?? ''} size="l" />
       {#if graduated}<span class="ba-tag accent">Graduated</span>{:else}<span class="ba-tag">On its curve</span>{/if}
+      <MintableBadge mintable={launch.mintable === true} />
       {#if launch.allocation > 0}<span class="ba-tag warn" title={t('Minted to the creator at graduation, on top of the supply')}>Creator allocation {launch.allocation}%</span>{/if}
       <span class="grow"></span>
       {#if graduated}
@@ -282,7 +287,7 @@
 
     {#if graduated}
       <section class="panel graduated" data-testid="launch-graduated">
-        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} {TICKER}; that and what was left of it went into its pool with {TICKER} (constant product, 0.3%), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
+        <p><strong>Graduated — trades in its pool.</strong> At block {formatCount(launch.graduated_height ?? 0)} its curve raised {formatAmount(launch.raised, 8, { max: 4 })} {TICKER}; that and what was left of it went into its pool with {TICKER} ({#if launch.pool_kind}{poolKindText(launch, graduationFee)}{:else}constant product, 0.3%{/if}), whose shares nobody holds: the liquidity is locked for good. Anyone may add liquidity on top.</p>
       </section>
     {/if}
 
@@ -350,6 +355,10 @@
             <dt>Launched</dt><dd>block {formatCount(launch.height)}</dd>
             <dt>Supply</dt><dd>{formatAmount(launch.supply, DEC, { max: 0 })}</dd>
             <dt>Fee</dt><dd data-testid="launch-fee-split">{split}</dd>
+            {#if launch.fee_flow}
+              <dt>Creator fees</dt><dd data-testid="launch-fee-destination">{feeDestinationText(launch)}{#if approx(launch.burned ?? 0) > 0}{' · '}<span data-testid="launch-burned">{t('%1 burned', `${formatAmount(launch.burned ?? 0, DEC, { max: 2 })} ${launch.ticker}`)}</span>{/if}</dd>
+              {#if graduated && poolKindText(launch, graduationFee)}<dt>Its pool</dt><dd data-testid="launch-pool-kind">{poolKindText(launch, graduationFee)}</dd>{/if}
+            {/if}
             <dt>Allocation</dt><dd>{#if launch.allocation > 0}{launch.allocation}% of the supply, minted to the creator at graduation (dilution){#if launch.allocation_claimed}, minted{/if}{:else}none{/if}</dd>
           </dl>
         </div>
@@ -360,11 +369,12 @@
           <p class="mono break" translate="no"><SafeText text={launch.creator} /></p>
           <dl class="ba-lines">
             <dt>Fees owed</dt><dd>{formatAmount(launch.creator_fees_owed, 8)} {TICKER}</dd>
+            {#if approx(launch.creator_tokens_owed ?? 0) > 0}<dt>Tokens owed</dt><dd data-testid="launch-tokens-owed">{formatAmount(launch.creator_tokens_owed ?? 0, DEC, { max: 2 })} <SafeText text={launch.ticker} /></dd>{/if}
             <dt>Fees paid</dt><dd>{formatAmount(launch.creator_fees_paid, 8)} {TICKER}</dd>
             {#if launch.protocol_fees !== undefined}<dt>To the treasury</dt><dd>{formatAmount(launch.protocol_fees, 8)} {TICKER}</dd>{/if}
             {#if launch.security_fees !== undefined}<dt>To the chain's security</dt><dd>{formatAmount(launch.security_fees, 8)} {TICKER}</dd>{/if}
           </dl>
-          {#if owed.fees || owed.allocation}
+          {#if owed.fees || owed.allocation || owed.tokens}
             <div class="row"><button type="button" class="btn small" disabled={busy || wallets.current === null} onclick={claim}>Pay the creator what it is owed</button></div>
             <p class="ba-help">Anyone may send it: the {TICKER} go to the creator's address, by the coinbase{#if owed.allocation}, and its allocation is minted to it{/if}.</p>
           {/if}

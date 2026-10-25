@@ -14,6 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
+  import MintableBadge from './MintableBadge.svelte';
   import AssetName from './AssetName.svelte';
   import AssetActions from './AssetActions.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
@@ -166,6 +167,7 @@
           <VerifiedBadge {id} />
           {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<span class="ba-tag">Mintable</span>{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
+          <MintableBadge mintable={launched ? launched.mintable === true : false} />
           {#if controlled}<span class="ba-tag accent"><Icon name="crown" size={12} /> You control it</span>{/if}
           {#if asset.releasable}<span class="ba-tag danger">Dead</span>{/if}
         </div>

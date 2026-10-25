@@ -31,7 +31,7 @@
   import { compactNumber } from './axis';
   import { bpsOf, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { curveShape, DEFAULT_RULES, launchProblems, rulesOf, type LaunchStats } from './launch';
+  import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, launchProblems, rulesOf, type FeeDestination, type LaunchStats } from './launch';
   import { amountParam, CHN_ID, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
   import { ba, fundingOf, noteFunding, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
@@ -203,7 +203,20 @@
   let maxBuy = $state<bigint | null>(null);
   let maxBuyText = $state('');
   let allocation = $state(0);
-  const launchIssues = $derived(curve ? launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: minChnPayout() }) : []);
+  // v5, fee flow (getlaunchstats fee_flow_active): where the creator's fees go, and the control coin kept (mintable),
+  // only on the creator's explicit word.
+  const feeFlowOn = $derived(stats?.rules?.fee_flow_active === true);
+  let feeDestination = $state<FeeDestination>('creator');
+  let burnPercent = $state(50);
+  let keepControl = $state(false);
+  let mintableConfirmed = $state(false);
+  $effect(() => {
+    if (!keepControl) mintableConfirmed = false;
+  });
+  const feeFlow = $derived(curve && feeFlowOn ? { destination: feeDestination, burnPercent, keepControl, mintableConfirmed } : null);
+  const graduationFee = $derived(Number(stats?.rules?.graduation_fee ?? 1));
+  const graduatedShare = $derived(Number(stats?.rules?.graduated_creator_share ?? 60));
+  const launchIssues = $derived(curve ? [...launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: minChnPayout() }), ...(feeFlow ? feeFlowProblems(feeFlow) : [])] : []);
   const wholeSupply = $derived(supplyValue !== null ? Number(supplyValue) / 10 ** decimals : 0);
   const shape = $derived(curveShape(rules.graduation, wholeSupply || 1));
   const split = $derived(curveSplit(supplyValue ?? 0n));
@@ -268,7 +281,7 @@
   });
 
   /** launchtoken's options, as shown: taken when the user confirms. */
-  function launchOptionsNow(): Record<string, string | number> {
+  function launchOptionsNow(): Record<string, string | number | boolean> {
     return launchTokenOptions({
       displayName: display,
       logo: logo && logosSoon ? logo.base64 : '',
@@ -281,6 +294,7 @@
       supply: unitsText(supplyValue ?? 0n, decimals),
       decimals,
       feePercent,
+      feeFlow: feeFlow ? feeFlowOptions(feeFlow) : null,
     });
   }
 
@@ -383,6 +397,9 @@
     logo = null;
     created = '';
     allocation = 0;
+    feeDestination = 'creator';
+    burnPercent = 50;
+    keepControl = false;
     firstBuyText = minBuyText = maxBuyText = '';
     poolTokensText = poolChnText = '';
     market = initialMarket;
@@ -534,6 +551,26 @@
                   <span class="hint">None: all of it is the curve's and the pool's. At most {rules.maxAllocation}%.</span>
                 {/if}
               </div>
+              {#if feeFlowOn}
+                <div class="field">
+                  <span class="label" id="fee-dest-label">Creator fees go to</span>
+                  <div class="ba-chips" role="radiogroup" aria-labelledby="fee-dest-label">
+                    {#each FEE_DESTINATIONS as d (d.id)}<button type="button" class="ba-chip" role="radio" aria-checked={feeDestination === d.id} onclick={() => (feeDestination = d.id)}>{t(d.label)}</button>{/each}
+                  </div>
+                  {#if feeDestination === 'split'}
+                    <label for="launch-burn">Burned: {burnPercent}% (the rest to you)</label>
+                    <input id="launch-burn" type="number" min="1" max="99" step="1" bind:value={burnPercent} />
+                  {/if}
+                </div>
+                <div class="field">
+                  <label class="check"><input type="checkbox" bind:checked={keepControl} /> <span>Keep control coin</span></label>
+                  {#if keepControl}
+                    <label class="check ba-problems bad" data-testid="mintable-confirm"><input type="checkbox" bind:checked={mintableConfirmed} /> <span>Mintable: you can create more units at any time. Buyers will see this warning.</span></label>
+                  {:else}
+                    <span class="hint">Off: the supply is fixed for good.</span>
+                  {/if}
+                </div>
+              {/if}
               <UnitsInput id="launch-first" label="First buy (optional)" decimals={8} bind:units={firstBuy} bind:text={firstBuyText} unit={TICKER} allowZero hint="Bought in the launch's own block, at that block's price, like every buy of it" />
               <UnitsInput id="launch-min" label="Least a buy pays (optional)" decimals={8} bind:units={minBuy} bind:text={minBuyText} unit={TICKER} allowZero hint="A smaller buy is refunded: no dust orders" />
               <UnitsInput id="launch-max" label="Most a buy pays (optional)" decimals={8} bind:units={maxBuy} bind:text={maxBuyText} unit={TICKER} allowZero hint="A larger buy is refunded: no one buys the curve in one go" />
@@ -571,6 +608,11 @@
                 <dt>Price</dt><dd>from {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} each (9 times)</dd>
                 <dt>Market value</dt><dd>from {formatPrice(shape.startCap)} to {formatPrice(shape.endCap)} {TICKER}</dd>
                 <dt>Fee</dt><dd data-testid="launch-fee-split">{launchFeeSplit(feeParts, true)}</dd>
+                {#if feeFlow}
+                  <dt>Creator fees</dt><dd>{feeDestinationText({ fee_destination: feeDestination, burn_percent: burnPercent })}</dd>
+                  <dt>Control coin</dt><dd>{#if keepControl}<span class="ba-tag danger">Mintable: the creator can create more</span>{:else}Not kept: the supply is fixed{/if}</dd>
+                  <dt>After graduation</dt><dd data-testid="launch-graduation-review">{t('A locked full-range position at %1 %: its fees go %2 % to the creator and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER)}</dd>
+                {/if}
                 {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} {TICKER}</dd>{/if}
                 {#if minBuyText.trim() && minBuy}<dt>Least a buy</dt><dd>{formatUnits(minBuy, 8)} {TICKER}</dd>{/if}
                 {#if maxBuyText.trim() && maxBuy}<dt>Most a buy</dt><dd>{formatUnits(maxBuy, 8)} {TICKER}</dd>{/if}

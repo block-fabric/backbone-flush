@@ -15,10 +15,11 @@
   import { barWidth } from './actions';
   import AssetActions from './AssetActions.svelte';
   import AssetBadge from './AssetBadge.svelte';
+  import MintableBadge from './MintableBadge.svelte';
   import { compactNumber } from './axis';
   import { claimable, creatorAllocation, launchCurveFacts, type Launch, type LaunchPage } from './launch';
   import { approx, assetArg, assetText, formatAmount, formatPercent, formatPrice, formatUnits, type Amount } from './model';
-  import { assetById, ba, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
   let launches = $state<Launch[]>([]);
@@ -48,7 +49,8 @@
       return out;
     })()
       .then((list) => {
-        if (live) launches = list.filter((l) => l.allocation > 0 || claimable(l).fees);
+        noteLaunches(list);
+        if (live) launches = list.filter((l) => l.allocation > 0 || claimable(l).fees || claimable(l).tokens);
       })
       .catch(() => undefined);
     return () => {
@@ -110,7 +112,7 @@
         {@const owed = claimable(l)}
         {@const curve = launchCurveFacts(l)}
         <li class="ml-grid ml-row" data-testid="my-launch">
-          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} /></button></span>
+          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} /></button><MintableBadge mintable={l.mintable === true} compact /></span>
           <span class="c-alloc" data-testid="allocation-line">
             <span class="cell-label">Allocation</span>
             {#if a}<span><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}
@@ -124,15 +126,15 @@
           </span>
           <span class="c-claim" data-testid="claimable">
             <span class="cell-label">Claimable</span>
-            {#if owed.allocation || owed.fees}
-              <span class="num">{#if owed.allocation && a}{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} />{/if}{#if owed.allocation && a && owed.fees}{' + '}{/if}{#if owed.fees}{formatAmount(l.creator_fees_owed, 8)} {TICKER}{/if}</span>
+            {#if owed.allocation || owed.fees || owed.tokens}
+              <span class="num">{#if owed.allocation && a}{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} />{/if}{#if owed.allocation && a && owed.fees}{' + '}{/if}{#if owed.fees}{formatAmount(l.creator_fees_owed, 8)} {TICKER}{/if}{#if owed.tokens}{(owed.allocation && a) || owed.fees ? ' + ' : ''}{compactNumber(approx(l.creator_tokens_owed ?? 0))} <SafeText text={l.ticker} />{/if}</span>
             {:else if a?.state === 'at-graduation'}<span class="faint small">{t('at graduation')}</span>
             {:else if a?.state === 'claimed'}<span class="faint small">{t('claimed')}</span>
             {:else}<span class="faint">–</span>{/if}
           </span>
           <span class="c-action">
             <!-- Its actions (ba/AssetActions.svelte): Claim first when something is owed, then Buy, Sell, View market… -->
-            <AssetActions id={l.token} label={l.ticker} launch={l} claimable={owed.allocation || owed.fees} claim={() => claim(l)} busy={busy !== ''} />
+            <AssetActions id={l.token} label={l.ticker} launch={l} claimable={owed.allocation || owed.fees || owed.tokens} claim={() => claim(l)} busy={busy !== ''} />
           </span>
         </li>
       {/each}

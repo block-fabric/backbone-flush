@@ -23,7 +23,9 @@ const SELF_TRANSLATED = new Set(['typeText', 'statusText', 'voteText', 'summaryT
   // FastBlocks' pages (chain/fb/model.ts), each made with t() / tn().
   'stateText', 'nodeStateText', 'untilText', 'feeSplitText', 'kindText', 'finalityText', 'pageTitle', 'scriptKindText', 'mainchainName',
   // Merged mining (pages/Bmm.svelte): what a commitment of this chain is, made with t().
-  'commitmentText']);
+  'commitmentText',
+  // Launches' fee flow (chain/ba/launch.ts), each made with t().
+  'feeDestinationText', 'poolKindText']);
 /** Where a toast or a dialog of the app takes its words: the arguments (by place) and the fields of an object argument. */
 const MESSAGE_CALLS: Record<string, { args: number[]; props: string[] }> = {
   toast: { args: [1, 2], props: [] },

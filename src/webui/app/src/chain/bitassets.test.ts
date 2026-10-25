@@ -63,6 +63,7 @@ import { pendingList } from '../lib/pending.svelte';
 import { resetSearchSupport } from './ba/search';
 import { assetHidden, assetIgnored, filtersOf, ignoreAsset, ignoreName, loadHiding, resetHiding, searchFiltersOf, setFilters, unignoreAsset, unignoreName } from './ba/hide.svelte';
 import HeldAssets from './ba/HeldAssets.svelte';
+import MintableBadge from './ba/MintableBadge.svelte';
 import Transactions from '../pages/Transactions.svelte';
 import LocalSettings from './LocalSettings.svelte';
 import { LOCAL_SETTINGS_TABS } from './settings';
@@ -104,6 +105,9 @@ let activityCount = 1;
 let tickersOn = false;
 /** Layers' DEX with its pool kinds (getdexinfo): off, a node from before them (the method unknown). */
 let dexOn = false;
+/** v5, fee flow: getlaunchstats' rules from its height; fields of getlaunch's MOON and STAR besides. */
+let feeFlowOn = false;
+let launchPatch: Record<string, unknown> = {};
 /** Whether previewpool says the pool is there already (someone made it first). */
 let previewExists = false;
 /** The launch parameters (consensus "launchparams": a launch's own supply, decimals and fee; curveasset) apply. */
@@ -116,7 +120,7 @@ const MOON = id('m');
 const STAR = id('t');
 function launchOf(token: string, i = 0): Record<string, unknown> {
   const star = token === STAR;
-  return { token, ticker: token === MOON ? 'MOON' : star ? 'STAR' : `L${i}`, display_name: token === MOON ? 'To the moon' : undefined, info: token === MOON ? 'A token for the moon.\nhttps://example.org' : undefined, has_logo: false, creator: ME, txid: id('8'), height: 12, status: star ? 'graduated' : 'curve', pool: star ? id('g') : id('c'), raised: star ? '500.00000003' : '200.00000000', graduation: '500.00000000', progress: star ? 100 : 40, price: star ? 0.000002 : 0.00000081, market_cap: star ? '2000.00000000' : '810.00000000', supply: star ? '1020000000.000000' : '1000000000.000000', curve_tokens_left: star ? 0 : 400000000, fee: 1, creator_share: 30, creator_fees_owed: token === MOON ? '0.01000000' : '0.00000000', creator_fees_paid: '0.00000000', allocation: 2, allocation_claimed: false, min_buy: '0.00000000', max_buy: '0.00000000', volume: '210.00000000', trades: 5, ...(star ? { graduated_height: 18 } : {}) };
+  return { token, ticker: token === MOON ? 'MOON' : star ? 'STAR' : `L${i}`, display_name: token === MOON ? 'To the moon' : undefined, info: token === MOON ? 'A token for the moon.\nhttps://example.org' : undefined, has_logo: false, creator: ME, txid: id('8'), height: 12, status: star ? 'graduated' : 'curve', pool: star ? id('g') : id('c'), raised: star ? '500.00000003' : '200.00000000', graduation: '500.00000000', progress: star ? 100 : 40, price: star ? 0.000002 : 0.00000081, market_cap: star ? '2000.00000000' : '810.00000000', supply: star ? '1020000000.000000' : '1000000000.000000', curve_tokens_left: star ? 0 : 400000000, fee: 1, creator_share: 30, creator_fees_owed: token === MOON ? '0.01000000' : '0.00000000', creator_fees_paid: '0.00000000', allocation: 2, allocation_claimed: false, min_buy: '0.00000000', max_buy: '0.00000000', volume: '210.00000000', trades: 5, ...(star ? { graduated_height: 18 } : {}) , ...(token === MOON || token === STAR ? launchPatch : {}) };
 }
 const calls: BridgeRequest[] = [];
 
@@ -314,7 +318,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
-      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { ...(feeFlowOn ? { fee_flow_active: true, fee_flow_height: 30, graduation_fee: 1, graduated_creator_share: 60 } : {}), graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
     case 'searchpools':
       // An older node has none: the pages fall back on the pools they read (ba/search.ts).
       if (!searchSupported) fail('Method not found', -32601);
@@ -462,6 +466,8 @@ beforeEach(() => {
   activityCount = 1;
   tickersOn = false;
   dexOn = false;
+  feeFlowOn = false;
+  launchPatch = {};
   previewExists = false;
   paramsOn = false;
   launchCount = 2;
@@ -2512,5 +2518,91 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(screen.getByTestId('fund-card').textContent).toMatch(/The pool's price is 0\.2, not 0\.1, the price you set/));
     expect(called('openposition')).toHaveLength(0);
     expect(asked).toEqual(['createpool']);
+  });
+
+  it('v5 fee flow: where the creator fees go, the control coin kept only on an explicit word, the graduation reviewed', async () => {
+    dexOn = true;
+    tickersOn = true;
+    feeFlowOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
+    await waitFor(() => expect(screen.getByText(/Reserved by this wallet/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    // Creator (the default), Buy back & burn, Split with its burn.
+    const dest = screen.getByRole('radiogroup', { name: 'Creator fees go to' });
+    expect(within(dest).getAllByRole('radio').map((r) => [r.textContent, r.getAttribute('aria-checked')])).toEqual([['Creator', 'true'], ['Buy back & burn', 'false'], ['Split', 'false']]);
+    await fireEvent.click(within(dest).getByRole('radio', { name: 'Split' }));
+    await fireEvent.input(document.querySelector('#launch-burn')!, { target: { value: '100' } });
+    const next = () => screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement;
+    await waitFor(() => expect(next().disabled).toBe(true));
+    await fireEvent.input(document.querySelector('#launch-burn')!, { target: { value: '30' } });
+    await waitFor(() => expect(next().disabled).toBe(false));
+    // Keep control coin: off by default; on, nothing goes on before the warning is confirmed.
+    const keep = screen.getByRole('checkbox', { name: 'Keep control coin' }) as HTMLInputElement;
+    expect(keep.checked).toBe(false);
+    await fireEvent.click(keep);
+    const confirm = await screen.findByRole('checkbox', { name: 'Mintable: you can create more units at any time. Buyers will see this warning.' });
+    await waitFor(() => expect(next().disabled).toBe(true));
+    await fireEvent.click(confirm);
+    await waitFor(() => expect(next().disabled).toBe(false));
+    await fireEvent.click(next());
+    const review = await screen.findByTestId('launch-review');
+    expect(review.textContent).toMatch(/30% bought back and burned, 70% to the creator/);
+    expect(review.textContent).toMatch(/Mintable: the creator can create more/);
+    expect(screen.getByTestId('launch-graduation-review').textContent).toBe('A locked full-range position at 1 %: its fees go 60 % to the creator and 40 % to network security. All fees are taken in ECX.');
+    await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { fee_destination: 'split', burn_percent: 30, keep_control: true }]));
+  });
+
+  it('v5 fee flow: before its height, no fee-flow options', async () => {
+    dexOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    await loaded();
+    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
+    await waitFor(() => expect(screen.getByText(/Reserved by this wallet/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(document.querySelector('#launch-allocation')).not.toBeNull());
+    expect(screen.queryByRole('radiogroup', { name: 'Creator fees go to' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Keep control coin' })).toBeNull();
+  });
+
+  it('v5 fee flow: a launch page says where the fees go, what was burned, the tokens owed in Claim, its pool once graduated; Mintable, loud, everywhere', async () => {
+    dexOn = true;
+    feeFlowOn = true;
+    launchPatch = { fee_flow: true, fee_destination: 'split', burn_percent: 40, mintable: true, burned: '1234.5', creator_tokens_owed: '10', creator_fees_owed: '0', pool_kind: 'concentrated' };
+    nav.page = 'pools';
+    nav.tab = `launches/${MOON}/buy`;
+    let shown = render(Trade, { props: { page: 'pools' } });
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('launch-fee-destination').textContent).toBe('40% bought back and burned, 60% to the creator · 1,234.5 MOON burned'));
+    expect(screen.getAllByTestId('mintable')[0].textContent?.trim()).toBe('Mintable: the creator can create more');
+    expect(screen.getByTestId('launch-tokens-owed').textContent).toMatch(/^10 MOON/);
+    // Not graduated: no pool kind yet. Claim covers the tokens owed (no fees owed).
+    expect(screen.queryByTestId('launch-pool-kind')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Pay the creator what it is owed' }));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('and 10 tokens owed'));
+    await answer('yes');
+    await waitFor(() => expect(called('claimlaunch').length).toBe(1));
+    shown.unmount();
+    // The marker by id, where only the asset shows (Browse assets, the pickers): from the launches read.
+    const badge = render(MintableBadge, { id: MOON, compact: true });
+    expect(badge.getByTestId('mintable').textContent?.trim()).toBe('Mintable');
+    expect(badge.getByTestId('mintable').getAttribute('title')).toBe('Mintable: the creator can create more');
+    badge.unmount();
+    expect(render(MintableBadge, { id: SILVER }).queryByTestId('mintable')).toBeNull();
+    // Graduated: its pool's kind.
+    nav.tab = `launches/${STAR}/buy`;
+    shown = render(Trade, { props: { page: 'pools' } });
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('launch-pool-kind').textContent).toBe('Locked full-range position, 1 %'));
+    expect(screen.getByTestId('launch-graduated').textContent).toContain('Locked full-range position, 1 %');
   });
 });
