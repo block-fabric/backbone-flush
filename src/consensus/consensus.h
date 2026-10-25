@@ -17,6 +17,9 @@ inline constexpr unsigned int MAX_BLOCK_WEIGHT{4'000'000};
 inline constexpr unsigned int FASTBLOCKS_MAX_BLOCK_TX_WEIGHT{400'000};
 /** FastBlocks: the weight of a whole block on every network; the rest is the coinbase's (Consensus::Params::max_block_weight). */
 inline constexpr unsigned int FASTBLOCKS_MAX_BLOCK_WEIGHT{1'500'000};
+/** The long-gap rule's unanchored limit of the eCash networks (Consensus::PosParams::gap_max_unanchored_slots): 24 hours of
+ *  15-second slots. A run that long is well within the blocks a node can take back (DRIVECHAIN_UNDO_DEPTH, validation.h). */
+inline constexpr int64_t FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS{5760};
 /** The maximum allowed number of signature check operations in a block (network rule) */
 inline constexpr int64_t MAX_BLOCK_SIGOPS_COST{80'000};
 /** Coinbase transaction outputs can only be spent after this number of new blocks (network rule) */

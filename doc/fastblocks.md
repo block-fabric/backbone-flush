@@ -86,10 +86,11 @@ Counts of blocks that stand for durations were rescaled with the 15-second slot
 
 - `DRIVECHAIN_UNDO_DEPTH` (the deepest reorg: blocks below it lose their
   drivechain undo data, and a pruned node keeps the blocks above it whatever
-  its target) is 5760 blocks, 24 hours of slots (2880 were 12 hours at 15 s;
-  the template's 2880 are two days of one-minute blocks). 5760 full blocks of
-  1.5 MB with their undo data (about 9.9 GB) fit the least prune target of
-  10000 MiB, so the target still covers what the undo depth keeps;
+  its target) is 12960 blocks, 54 hours of slots (5760 before the long-gap
+  rule, whose unanchored run of up to 24 hours it covers twice with a margin;
+  2880 were 12 hours at 15 s). 12960 full blocks of 1.5 MB with their undo data
+  (about 22.4 GB) fit the least prune target of 24000 MiB (10000 before), so the
+  target still covers what the undo depth keeps;
 - the block download timeout counts in a minute per block at least (Bitcoin's
   rule: one block interval, plus half of one per other peer downloading), not
   15 seconds for a block of up to 1.5 MB, which slow links (Tor) missed;

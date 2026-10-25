@@ -12,6 +12,7 @@
 #include <checkqueue.h>
 #include <coins.h>
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <drivechain/miner.h>
 #include <sidechain/state.h>
 #include <sidechain/store.h>
@@ -87,12 +88,16 @@ inline constexpr unsigned int MIN_BLOCKS_TO_KEEP = 288;
  * sidechain database back (what they did that sidechains follow stays): no reorg can take them back.
  * A reorg deeper than this, like one past the blocks a pruned node keeps, cannot be made.
  *
- * FastBlocks: 5760 blocks, 24 hours of 15-second slots (the template's 2880 is two days of one-minute
- * blocks; at 15 seconds it was twelve hours: audit 7, finding 4). A sidechain node keeps the blocks
- * of these heights whatever its prune target (MinBlocksToKeep), and 5760 full blocks (1.5 MB each,
- * with undo data) fit the least prune target, MIN_SIDECHAIN_PRUNE_TARGET (network_parameters checks it).
+ * FastBlocks: 12960 blocks, 54 hours of 15-second slots (5760, 24 hours, before the long-gap rule; the
+ * template's 2880 is two days of one-minute blocks): more than twice the longest run of blocks of stake
+ * no anchor covers (FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS, 24 hours: a reorg of such a run, and of the
+ * blocks before it down to a final one, can be made; security review 2026-10-24), with six hours more.
+ * A sidechain node keeps the blocks of these heights whatever its prune target (MinBlocksToKeep), and
+ * 12960 full blocks (1.5 MB each, with undo data) fit the least prune target, MIN_SIDECHAIN_PRUNE_TARGET
+ * (network_parameters checks it).
  */
-inline constexpr int DRIVECHAIN_UNDO_DEPTH{5760};
+inline constexpr int DRIVECHAIN_UNDO_DEPTH{12960};
+static_assert(DRIVECHAIN_UNDO_DEPTH > 2 * FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS + 1000, "a run of the long-gap rule, twice, and a margin");
 /** Keys of the sidechain state noted as changed between two checks of the mempool, at most (Chainstate::NoteSideChanges): past it, all may have. */
 inline constexpr size_t MAX_SIDE_CHANGES_NOTED{100000};
 /** Transactions whose sidechain rules the mempool checks again at each change of the tip, at most (Chainstate::RemoveStaleDrivechainTxs): the others wait for the next. */
@@ -112,17 +117,18 @@ inline constexpr int DEFAULT_CHECKLEVEL{3};
 // Setting the target to >= 550 MiB will make it likely we can respect the target.
 inline constexpr uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES{550_MiB};
 /**
- * A sidechain node keeps a good history: it prunes no further than 10000 MiB of block and undo files
- * (-prune below it refuses to start; manual pruning, -prune=1, leaves that much too). Pruning goes by
- * whole files and leaves a margin for the next ones (BLOCKFILE_CHUNK_SIZE, UNDOFILE_CHUNK_SIZE): what
- * is left is never below 10000 MiB less a block file and that margin, still more than 10 GB.
+ * A sidechain node keeps a good history: it prunes no further than 24000 MiB of block and undo files
+ * (-prune below it refuses to start; manual pruning, -prune=1, leaves that much too; 10000 MiB before
+ * DRIVECHAIN_UNDO_DEPTH grew for the long-gap rule). Pruning goes by whole files and leaves a margin for
+ * the next ones (BLOCKFILE_CHUNK_SIZE, UNDOFILE_CHUNK_SIZE): what is left is never below 24000 MiB less a
+ * block file and that margin, still more than 24 GB.
  * Whatever the size, a sidechain node also keeps the blocks of the last DRIVECHAIN_UNDO_DEPTH heights
  * (MinBlocksToKeep): every block a reorg can take back, those that lose their commitment when the
  * mainchain drops it included (the Follower, and hooks that read a block's commitment from its data,
  * such as an acknowledgement of a block of stake, find it on disk rather than in the record, which
  * no longer has it). A block deeper than that can be taken back by no reorg.
  */
-inline constexpr uint64_t MIN_SIDECHAIN_PRUNE_TARGET{10000_MiB};
+inline constexpr uint64_t MIN_SIDECHAIN_PRUNE_TARGET{24000_MiB};
 /** The least -prune target of a chain, in bytes: MIN_SIDECHAIN_PRUNE_TARGET on a sidechain. */
 inline uint64_t MinPruneTarget(const Consensus::Params& params)
 {
