@@ -149,7 +149,8 @@ class LayersLongGapTest(LayersEcashTest):
                 pass
         self.wait_until(lambda: n2.getblockcount() >= n0.getblockcount() - 2 and n2.getblockhash(n0.getblockcount() - 5) == n0.getblockhash(n0.getblockcount() - 5), timeout=300)
         after = n0.getanchorinfo()
-        assert_equal(after["anchors"], before["anchors"])
+        # (The last commitment before the silence may still be acknowledged in it: one anchor at most.)
+        assert after["anchors"] - before["anchors"] <= 1, (before["anchors"], after["anchors"])
         gap_tip = n0.getblockcount()
         assert_equal(n0.getblock(n0.getbestblockhash())["finality"]["status"], "soft")
 
