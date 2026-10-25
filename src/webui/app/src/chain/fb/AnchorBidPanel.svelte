@@ -14,6 +14,8 @@
     feeshare: number;
     escalationstart: number;
     curve: { pressure: number; multiplier: number }[];
+    flatboost?: boolean;
+    boost?: number;
     interpolate: boolean;
     usefeeestimate: boolean;
     requestvsize: number;
@@ -83,7 +85,7 @@
     {
       id: 'feespreventstall',
       label: 'Fees + prevent stalling',
-      text: 'Bids exactly the fee share it owes when there are fees, and sends a stall boost only when needed. Its minimum may be set to 0 (bid nothing when there are no fees and no stall pressure); 500 sat is the default minimum.',
+      text: 'Bids the minimum (564 sat by default), or the fee share it owes when that is more: the fees count toward the minimum, so only what they miss of it comes from you. When the chain nears its halt (the stall pressure), a flat boost: 4 times the minimum (2,256 sat), or the fee share if that is more. Never above the maximum.',
     },
     { id: 'off', label: 'Off', text: 'No bids. The chain then relies on other bidders: without anchors its blocks of stake halt.' },
   ];
@@ -309,6 +311,8 @@
           <div class="anchor-grid" id="anchor-advanced-fields">
             <div class="field"><label for="anchor-feeshare">Fee share (%)</label><input id="anchor-feeshare" type="number" min="0" max="100" step="0.01" bind:value={form.feeshare} oninput={() => (dirty = true)} /></div>
             <div class="field"><label for="anchor-start">Escalation from pressure</label><input id="anchor-start" type="number" min="0.01" max="1" step="0.01" bind:value={form.escalationstart} oninput={() => (dirty = true)} /></div>
+            <div class="field"><label for="anchor-flat"><input id="anchor-flat" type="checkbox" checked={form.flatboost ?? true} onchange={(e) => { form!.flatboost = (e.currentTarget as HTMLInputElement).checked; dirty = true; }} /> Flat boost (the minimum times the boost; off: the curve, rebids and the fee estimate)</label></div>
+            <div class="field"><label for="anchor-boost">Boost (times the minimum)</label><input id="anchor-boost" type="number" min="1" max="1000" step="0.5" value={form.boost ?? 4} oninput={(e) => { form!.boost = Number((e.currentTarget as HTMLInputElement).value); dirty = true; }} /></div>
             <div class="field"><label for="anchor-curve">Escalation curve (p:multiplier)</label><input id="anchor-curve" type="text" class="mono" spellcheck="false" bind:value={curve} oninput={() => (dirty = true)} /></div>
             <label class="check"><input id="anchor-interpolate" type="checkbox" bind:checked={form.interpolate} onchange={() => (dirty = true)} /><span>Interpolate between points (else steps)</span></label>
             <label class="check"><input id="anchor-estimate" type="checkbox" bind:checked={form.usefeeestimate} onchange={() => (dirty = true)} /><span>Escalate from the next-block fee estimate of {mainName}</span></label>

@@ -701,6 +701,8 @@ public:
             consensus.sidechain.small_payout_height = opts.dep_opts.small_payout_height.value_or(0);
             // No treasury with the DEX from the first block, unless a test asks (-testactivationheight=notreasury@<height>).
             consensus.sidechain.no_treasury_height = opts.dep_opts.no_treasury_height.value_or(0);
+            // The fee-flow release only if a test asks (-testactivationheight=feeflow@<height>): the tests of before keep their rules.
+            consensus.sidechain.fee_flow_height = opts.dep_opts.fee_flow_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -896,6 +898,9 @@ public:
         // No treasury (swap fees 85 % providers / 15 % security, launches 80 % creator / 20 % security): never on the eCash
         // networks until a height is decided.
         consensus.sidechain.no_treasury_height = std::numeric_limits<int>::max();
+        // The fee-flow release (graduation into a locked concentrated position, assets' security parts sold for ECX,
+        // launches' fee destinations, vesting, control): never on the eCash networks until a height is decided.
+        consensus.sidechain.fee_flow_height = std::numeric_limits<int>::max();
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
@@ -952,6 +957,12 @@ public:
                 // And no treasury (swap fees 89 % providers / 11 % security, launches 80 % creator / 20 % security; the
                 // treasury's ECX paid with block SLOT99_V4_HEIGHT's fees).
                 consensus.sidechain.no_treasury_height = SLOT99_V4_HEIGHT;
+                // Upgrade v5, the fee-flow release (doc/photon-slot.md, "Upgrade v5"), from block SLOT99_V5_HEIGHT: launches
+                // made from it graduate into a locked full-range position at 1 %, their fees half to the creator, half to
+                // security; security parts in assets sold for ECX; fee destinations, vesting, kept control coins. After v4's
+                // block (which it builds on), with the long-gap rule (below) in force before it. In the fingerprint.
+                static constexpr int SLOT99_V5_HEIGHT{9100};
+                consensus.sidechain.fee_flow_height = SLOT99_V5_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
                 // four hours without a block and its median time lagged by 5 h 20 min). Its epochs before keep their seeds

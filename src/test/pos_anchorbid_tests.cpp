@@ -27,8 +27,15 @@ AnchorBidPolicy With(BidStrategy strategy)
 {
     AnchorBidPolicy policy;
     policy.strategy = strategy;
+    // The curve's escalation (the tests below it); the default's flat boost is flat_boost's own test.
+    policy.flat_boost = false;
+    policy.floor = 500;
+    policy.fixed = 500;
     return policy;
 }
+
+/** The policy of before the flat boost (a floor of 500, the curve), which the tests of the curve were written for. */
+AnchorBidPolicy Old() { return With(BidStrategy::FEES_PREVENT_STALL); }
 
 bool Close(double a, double b) { return std::abs(a - b) < 1e-9; }
 } // namespace
@@ -39,7 +46,9 @@ BOOST_AUTO_TEST_CASE(defaults)
 {
     const AnchorBidPolicy policy;
     BOOST_CHECK(policy.strategy == BidStrategy::FEES_PREVENT_STALL);
-    BOOST_CHECK_EQUAL(policy.floor, 500);
+    BOOST_CHECK_EQUAL(policy.floor, 564);
+    BOOST_CHECK(policy.flat_boost);
+    BOOST_CHECK(Close(policy.boost, 4));
     BOOST_CHECK_EQUAL(policy.max, 100'000);
     BOOST_CHECK_EQUAL(policy.fee_share_bps, 9900);
     BOOST_CHECK(Close(policy.escalation_start, 0.5));
@@ -48,6 +57,57 @@ BOOST_AUTO_TEST_CASE(defaults)
         BOOST_CHECK(ParseStrategy(StrategyName(s)) == s);
     }
     BOOST_CHECK(!ParseStrategy("standard"));
+}
+
+BOOST_AUTO_TEST_CASE(flat_boost)
+{
+    // "Fees + prevent stalling", the default (user decision 2026-10-24): max(564, fee share); under pressure max(4 x 564,
+    // fee share); never a multiple of the fee share, of the estimate or of a rebid; the max still caps.
+    AnchorBidPolicy policy;
+    policy.fee_share_bps = 10000; // the fee share is the pot
+    const auto bid{[&](double p, CAmount pot, int missed = 0) {
+        BidInputs in{At(p, 50'000, pot)};
+        in.missed = missed;
+        return DecideBid(policy, in);
+    }};
+    // No fees: exactly 564.
+    BOOST_CHECK_EQUAL(bid(0, 0).amount, 564);
+    // Fees below 564: still 564 (the fees count toward it).
+    BOOST_CHECK_EQUAL(bid(0, 300).amount, 564);
+    // Fees above: the fee share.
+    BOOST_CHECK_EQUAL(bid(0, 900).amount, 900);
+    BOOST_CHECK_EQUAL(bid(0, 50'000).amount, 50'000);
+    // The boost: 4 x 564 = 2256, flat, with no fees or fees below it; the fee share when more (not 4 x it).
+    BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 2256);
+    BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 2256);
+    BOOST_CHECK_EQUAL(bid(0.6, 900).amount, 2256);
+    BOOST_CHECK_EQUAL(bid(0.6, 5'000).amount, 5'000);
+    BOOST_CHECK_EQUAL(bid(0.6, 5'000).kind, "fees");
+    BOOST_CHECK_EQUAL(bid(0.6, 0).kind, "boost");
+    // Below the pressure threshold, no boost; missed blocks do not multiply it either.
+    BOOST_CHECK_EQUAL(bid(0.4, 0).amount, 564);
+    BOOST_CHECK_EQUAL(bid(0.4, 0, 9).amount, 564);
+    BOOST_CHECK_EQUAL(bid(0.6, 0, 9).amount, 2256);
+    // The max caps it.
+    policy.max = 1'000;
+    BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 1'000);
+    BOOST_CHECK_EQUAL(bid(0, 5'000).amount, 1'000);
+    // The PC's case (2026-10-24): a floor of 0.0002 boosted by the curve to 0.0008 is now 4 x the floor at most, never more.
+    policy.max = 100'000;
+    policy.floor = 20'000;
+    BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 80'000);
+    policy.floor = 564;
+    BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 2256);
+    // The policy's fields: flatboost and boost, set and printed.
+    AnchorBidPolicy set;
+    std::string error;
+    UniValue fields(UniValue::VOBJ);
+    fields.pushKV("flatboost", false);
+    fields.pushKV("boost", 3);
+    BOOST_CHECK(ApplyPolicyFields(set, fields, error));
+    BOOST_CHECK(!set.flat_boost);
+    BOOST_CHECK(Close(set.boost, 3));
+    BOOST_CHECK_EQUAL(PolicyToUniValue(set).find_value("boost").get_real(), 3);
 }
 
 BOOST_AUTO_TEST_CASE(pressure_and_curve)
@@ -113,21 +173,21 @@ BOOST_AUTO_TEST_CASE(below_the_threshold_the_mempool_does_not_count)
 BOOST_AUTO_TEST_CASE(the_incident)
 {
     // eCash at ~1 sat/vB, a run at p = 0.92: the floor (500) is over 190 vB x 1 sat/vB x 4, the bid 760.
-    const AnchorBidPolicy policy;
+    const AnchorBidPolicy policy{Old()};
     BOOST_CHECK_EQUAL(DecideBid(policy, At(0.3, 1000)).amount, 500);
     BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92, 1000)).amount, 760);
     // Without an estimate: the floor times the curve.
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92)).amount, 2000);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92)).amount, 2256);
     // A floor of 0 escalates from 500 sat.
-    AnchorBidPolicy zero;
+    AnchorBidPolicy zero{Old()};
     zero.floor = 0;
     const auto quiet{DecideBid(zero, At(0.1))};
     BOOST_CHECK(quiet.bid);
     BOOST_CHECK_EQUAL(quiet.amount, 0);
-    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92)).amount, 2000);
+    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92)).amount, 2256);
     // Not with the estimate off.
     zero.use_fee_estimate = false;
-    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92, 50'000)).amount, 2000);
+    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92, 50'000)).amount, 2256);
 }
 
 BOOST_AUTO_TEST_CASE(fee_share)
@@ -143,7 +203,7 @@ BOOST_AUTO_TEST_CASE(fee_share)
     BOOST_CHECK_EQUAL(share.kind, "fees");
     // Fees alone never escalates; fees + prevent stalling does, only when needed.
     BOOST_CHECK_EQUAL(DecideBid(fees, At(0.95, 1'000'000)).amount, 500);
-    const AnchorBidPolicy both;
+    const AnchorBidPolicy both{Old()};
     BOOST_CHECK_EQUAL(DecideBid(both, At(0.2, 1'000'000, 50'000)).amount, 49'500);
     BOOST_CHECK_EQUAL(DecideBid(both, At(0.95, 100'000, 50'000)).amount, 76'000);
     AnchorBidPolicy whole{fees};

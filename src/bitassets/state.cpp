@@ -54,7 +54,9 @@ void WriteOperation(DataStream& s, const Register& op)
 /** A launch with its own parameters is a marker of its own kind: the launch, then its curve's fee. */
 void WriteOperation(DataStream& s, const LaunchToken& op)
 {
-    if (op.WithParams()) {
+    if (op.V5()) {
+        s << LAUNCH_V5_KIND << op << VARINT(op.fee) << op.destination << op.burn_bps << op.keep_control;
+    } else if (op.WithParams()) {
         s << LAUNCH_WITH_PARAMS_KIND << op << VARINT(op.fee);
     } else {
         s << LaunchToken::KIND << op;
@@ -180,6 +182,12 @@ std::optional<uint64_t> Add(uint64_t a, uint64_t b)
 }
 } // namespace
 
+bool LaunchToken::V5() const
+{
+    return destination != 0 || burn_bps != 0 || keep_control;
+}
+
+
 bool AssetUpdates::Empty() const
 {
     return commitment.kind == UpdateKind::RETAIN && ipv4.kind == UpdateKind::RETAIN && ipv6.kind == UpdateKind::RETAIN &&
@@ -261,6 +269,14 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
             break;
         }
         case CurveAsset::KIND: ReadOperation<CurveAsset>(s, marker.operation); break;
+        case LAUNCH_V5_KIND: {
+            LaunchToken launch;
+            s >> launch >> VARINT(launch.fee) >> launch.destination >> launch.burn_bps >> launch.keep_control;
+            // One way to write a marker: the network's defaults alone are a launch of the kinds before.
+            if (!launch.V5()) return std::nullopt;
+            marker.operation = std::move(launch);
+            break;
+        }
         case LAUNCH_WITH_PARAMS_KIND: {
             LaunchToken launch;
             s >> launch >> VARINT(launch.fee);
@@ -701,6 +717,18 @@ bool CheckLaunchParamsActivation(const CTransaction& tx, bool active, std::strin
     return true;
 }
 
+bool CheckFeeFlowActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (!marker || !marker->operation) return true;
+    if (const auto* launch{std::get_if<LaunchToken>(&*marker->operation)}; launch && launch->V5()) {
+        reject_reason = "bad-ba-marker";
+        return false;
+    }
+    return true;
+}
+
 bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason)
 {
     if (active) return true;
@@ -805,6 +833,9 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
             if (launch->min_buy > MAX_AMOUNT || launch->max_buy > MAX_AMOUNT || (launch->max_buy != 0 && launch->max_buy < launch->min_buy)) return invalid("bad-ba-launch");
             if (launch->first_buy > MAX_AMOUNT || launch->first_min_out > MAX_AMOUNT || (launch->first_buy == 0 && launch->first_min_out != 0)) return invalid("bad-ba-launch");
             if (launch->first_buy > 0 && launch->chn_to.empty()) return invalid("bad-ba-chn-to");
+            // The fee-flow release's parameters: a destination, a split's burn part (1 to 99.99 %, none otherwise), a vesting.
+            if (launch->destination > MAX_FEE_DESTINATION) return invalid("bad-ba-launch");
+            if ((launch->destination == static_cast<uint8_t>(FeeDestination::SPLIT)) != (launch->burn_bps > 0) || launch->burn_bps >= 10'000) return invalid("bad-ba-launch");
         }
         if (!GoodData(reg->data)) return invalid("bad-ba-data");
         if (reg->text && (!IsAssetName(*reg->text) || HashName(*reg->text) != reg->name)) return invalid("bad-ba-name-text");
@@ -1101,6 +1132,12 @@ constexpr uint8_t BOOK_COUNTS{0x9c};
 //! The treasury (TreasuryEntry, by asset) and the security parts of the fees of the last block that had some (SecurityFees).
 const sidechain::Table<uint256, TreasuryEntry> TREASURY{0x9e};
 const sidechain::Cell<SecurityFees> SECURITY_FEES{0x9f, SecurityFees{}};
+//! From fee_flow_height: the pools of the chain's coin take their fees on its side (State::CoinSideFees), set once.
+const sidechain::Cell<bool> COIN_SIDE{0xa1, false};
+//! From fee_flow_height: the launches with coin waiting to buy their token back (LaunchRecord::buyback), by token.
+const sidechain::Table<AssetId, bool> BUYBACKS{0xa2};
+//! From fee_flow_height: the pools a launch graduated into with its locked position, by pool: the launch's token.
+const sidechain::Table<uint256, AssetId> GRAD_POOLS{0xa3};
 //! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent).
 const sidechain::Cell<uint32_t> BOOKS_LAYOUT{0x9d, 0};
 constexpr uint32_t BOOKS_LAYOUT_CURRENT{1};
@@ -1150,6 +1187,26 @@ sidechain::StoreBytes BookKey(const uint256& id, const BookOrder& order)
 }
 //! Dynamic fees: the volatility of each pool that has one (FeeState).
 const sidechain::Table<uint256, FeeState> FEE_STATES{0x8f};
+
+namespace {
+/** ⌊sqrt(amount1·2^192 / amount0)⌋, the largest root whose square is at most it: the Q96 square root of the price amount1/amount0. */
+arith_uint256 SqrtPriceOfAmounts(uint64_t amount0, uint64_t amount1)
+{
+    const curves::BigUint target{(curves::BigUint{amount1} << 192) / curves::BigUint{amount0}};
+    arith_uint256 lo{0}, hi{arith_uint256{1} << 161};
+    while (lo < hi) {
+        const arith_uint256 mid{lo + ((hi - lo + 1) >> 1)};
+        const curves::BigUint m{curves::BigUint::FromArith(mid)};
+        if (m * m <= target) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return lo;
+}
+} // namespace
+
 
 /** A tick's place in key order: tick + 2^31, big-endian (down: the order reversed). */
 sidechain::StoreBytes TickKey(uint8_t table, const uint256& pool, int32_t tick)
@@ -1645,6 +1702,8 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         fixed.fixed = true;
         plan.assets.emplace_back(curve->asset, std::move(fixed));
         if (GetPool(PoolId(CHN, curve->asset))) return invalid("bad-ba-launch-pooled");
+        // From fee_flow_height: nor of the kind it graduates into then (GraduationParams).
+        if (Params().GetConsensus().sidechain.FeeFlowActive(height) && GetPool(PoolIdOf(CHN, curve->asset, GraduationParams()))) return invalid("bad-ba-launch-pooled");
         LaunchToken launch;
         launch.reg.name = curve->asset;
         launch.creator = curve->creator;
@@ -1693,10 +1752,14 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (int64_t{height} - origin->height < reveal_depth) return invalid("bad-ba-reservation-too-young");
         debit(Token::Kind::RESERVATION, reservation->ToUint256(), 1);
         plan.reservations_gone.push_back(*reservation);
-        // A launch's token has no control coin and its whole supply is the curve's (and its pool's at graduation).
+        // A launch's token has no control coin and its whole supply is the curve's (and its pool's at graduation); from
+        // fee_flow_height its creator may keep the control coin (keep_control: it can mint more, change the asset; the
+        // curve still buys back only what it sold, StartBound), as the first output the marker names.
         if (!launch) {
             credit(Token::Kind::CONTROL, reg->name, 1);
             if (reg->supply > 0) credit(Token::Kind::ASSET, reg->name, reg->supply);
+        } else if (launch->keep_control) {
+            credit(Token::Kind::CONTROL, reg->name, 1);
         }
         AssetRecord record;
         record.seq = NextSeq();
@@ -1705,7 +1768,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (reg->text) record.text = *reg->text;
         record.decimals = reg->decimals;
         record.supply = record.minted = launch && !launch->WithParams() ? LAUNCH_SUPPLY : reg->supply;
-        record.fixed = launch != nullptr;
+        record.fixed = launch != nullptr && !launch->keep_control;
         // Its pool with the coin: the curve's until it graduates (counted as the pools with providers are).
         if (launch) record.provided_pools = 0;
         record.data = reg->data;
@@ -2421,6 +2484,14 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
     if (uint64_t{rules.launch_creator_share} + rules.launch_protocol_share + rules.launch_security_share > FEE_DENOMINATOR) return invalid("bad-ba-launch-rules");
     record.graduation = static_cast<uint64_t>(rules.launch_graduation);
     record.virtual_coin = record.graduation / 2;
+    // From fee_flow_height: its fee destination, vesting (the network's default if not given) and control.
+    if (rules.FeeFlowActive(height)) {
+        record.v5 = true;
+        record.destination = launch.destination;
+        record.burn_bps = launch.burn_bps;
+        record.vesting = 0;
+        record.keep_control = launch.keep_control;
+    }
     // Its curve: a pool of the coin (asset0: the null id) and the token, of the launch's kind, on the virtual reserves.
     PoolParams params;
     params.curve = static_cast<uint8_t>(Curve::LAUNCH);
@@ -2627,16 +2698,30 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
             record.creator_fees = 0;
             paid = true;
         }
-        // Its allocation, once graduated: minted to the one result output, the creator's.
+        // Its allocation, once graduated: minted to the one result output, the creator's; from fee_flow_height the part
+        // vested by now (linearly over its vesting from graduation), less what was paid of it, claimed when all is.
+        // Its part of its locked position's fees in its token (v5), with it in the one result.
+        uint64_t units_out{0};
         if (record.Graduated() && !record.allocation_claimed && record.allocation > 0) {
-            auto asset{*Assert(GetAsset(claim->token))};
-            const uint64_t units{record.AllocationUnits()};
-            asset.supply += units;
-            asset.minted += units;
-            plan.assets.emplace_back(claim->token, std::move(asset));
-            plan.results.push_back({claim->token, units});
+            const uint64_t vested{record.AllocationVested(height)};
+            const uint64_t units{vested - std::min(vested, record.allocation_paid)};
+            if (units > 0) {
+                auto asset{*Assert(GetAsset(claim->token))};
+                asset.supply += units;
+                asset.minted += units;
+                plan.assets.emplace_back(claim->token, std::move(asset));
+                units_out = units;
+                if (record.v5) record.allocation_paid += units;
+                record.allocation_claimed = !record.v5 || record.allocation_paid >= record.AllocationUnits();
+            }
+        }
+        if (record.v5 && record.creator_tokens > 0 && units_out <= MAX_AMOUNT - record.creator_tokens) {
+            units_out += record.creator_tokens;
+            record.creator_tokens = 0;
+        }
+        if (units_out > 0) {
+            plan.results.push_back({claim->token, units_out});
             plan.result_script = record.creator;
-            record.allocation_claimed = true;
             paid = true;
         }
         if (!paid) return invalid("bad-ba-launch-nothing-owed");
@@ -2668,18 +2753,7 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
             // A concentrated pool: made at the price the amounts name (asset1 per asset0), nothing in; liquidity comes by positions.
             if (GetPool(id)) return invalid("bad-ba-pool-exists");
             const uint64_t amount0{a_first ? create->amount_a : create->amount_b}, amount1{a_first ? create->amount_b : create->amount_a};
-            // ⌊sqrt(amount1·2^192 / amount0)⌋, the largest root whose square is at most it.
-            const curves::BigUint target{(curves::BigUint{amount1} << 192) / curves::BigUint{amount0}};
-            arith_uint256 lo{0}, hi{arith_uint256{1} << 161};
-            while (lo < hi) {
-                const arith_uint256 mid{lo + ((hi - lo + 1) >> 1)};
-                const curves::BigUint m{curves::BigUint::FromArith(mid)};
-                if (m * m <= target) {
-                    lo = mid;
-                } else {
-                    hi = mid - 1;
-                }
-            }
+            const arith_uint256 lo{SqrtPriceOfAmounts(amount0, amount1)};
             if (lo < cl::MinSqrtRatio() || lo >= cl::MaxSqrtRatio()) return invalid("bad-ba-cl-price");
             ClState state;
             state.sqrt_price = ArithToUint256(lo);
@@ -2978,17 +3052,22 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
         });
         for (const auto& key : old) out.Erase(key);
     }
+    // From fee_flow_height, once: the pools of the chain's coin take their fees on its side (for the quotes; the rounds go by height).
+    if (Params().GetConsensus().sidechain.FeeFlowActive(height) && !COIN_SIDE.Get(out)) COIN_SIDE.Put(out, true);
     std::vector<Order> orders;
     ORDERS.ForEach(out, [&](const uint32_t&, const Order& order) {
         orders.push_back(order);
         return true;
     });
+    // The orders of the block's transactions, then those the protocol makes (ProtocolOrders: never stored).
+    const size_t placed{orders.size()};
+    for (Order& order : ProtocolOrders(height)) orders.push_back(std::move(order));
     if (!orders.empty()) {
         ClearOrders(orders, payouts, height);
         // The places of CHN that are not paid (a CHN order filled, an order for CHN refunded): out of the
         // payouts, the last first, so that the others keep theirs. CHN paid are min_chn at least.
         std::vector<size_t> unused;
-        for (uint32_t i{0}; i < orders.size(); ++i) {
+        for (uint32_t i{0}; i < placed; ++i) {
             ORDERS.Erase(out, i);
             PENDING_RESULTS.Erase(out, COutPoint{orders[i].txid, orders[i].result_n});
             const int32_t at{orders[i].payout};
@@ -2996,7 +3075,7 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
         }
         std::sort(unused.rbegin(), unused.rend());
         for (const size_t at : unused) payouts.erase(payouts.begin() + at);
-        ORDER_COUNT.Put(out, 0);
+        if (placed > 0) ORDER_COUNT.Put(out, 0);
     }
     // At no_treasury_height, once: what the treasury held of the chain's coin is paid with this block's fees, as the
     // security part it would have been (SecurityFees: the BMM bidder and the validators). Its entries stay as a record;
@@ -3154,7 +3233,14 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     // From no_treasury_height (SidechainParams::NoTreasury) there is no protocol part: it joins the security part (Flush:
     // 85 % providers, 15 % security); and the security part of a fee in an asset (no coinbase pays it) stays in the pool,
     // for its providers: only the chain's coin's security part leaves it, paid with the block's fees.
+    // From fee_flow_height (SidechainParams::FeeFlowActive) a pool of the chain's coin takes its whole fee in the coin
+    // (State::ClearCoinSide): its rounds below; a pool of two assets keeps the rule above.
     const bool no_treasury{rules.NoTreasury(height)};
+    const bool fee_flow{rules.FeeFlowActive(height)};
+    const auto coin_side{[&](const Kind& kind, const std::optional<Pool>& pool) {
+        const Curve curve{kind.params.GetCurve()};
+        return fee_flow && pool && pool->asset0.IsNull() && kind.fee > 0 && curve != Curve::LAUNCH && curve != Curve::BOOK;
+    }};
     const auto fee_parts{[&](uint32_t fee, const std::vector<dex::HopIn>& ins, bool chn0, bool chn1) {
         unsigned __int128 in0{0}, in1{0};
         for (const dex::HopIn& in : ins) (in.zero_in ? in0 : in1) += in.amount;
@@ -3192,7 +3278,27 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 // the passes before cleared already (the same pool, reserves and orders) is not searched again.
                 const Kind& kind{kinds.at(id)};
                 std::optional<dex::Clearing> cleared;
-                if (pool && !amm::Abandoned(*pool)) {
+                const bool on_coin{coin_side(kind, pool)};
+                if (on_coin && !amm::Abandoned(*pool)) {
+                    // The fee on the coin's side (ClearCoinSide): the security part with the block's fees, the rest in the pool.
+                    uint64_t taken{0};
+                    ClState* cl{nullptr};
+                    std::map<int32_t, ClTick>* ticks{nullptr};
+                    if (kind.params.GetCurve() == Curve::CONCENTRATED) {
+                        auto it{effects.cl.find(id)};
+                        if (it == effects.cl.end()) {
+                            if (const auto state{GetClState(id)}) it = effects.cl.emplace(id, *state).first;
+                        }
+                        if (it != effects.cl.end()) {
+                            cl = &it->second;
+                            ticks = &effects.ticks[id];
+                        }
+                    }
+                    if (kind.params.GetCurve() != Curve::CONCENTRATED || cl) {
+                        cleared = ClearCoinSide(id, kind.params, kind.fee, *pool, cl, ticks, ins, rules.SwapSecurityShare(height), taken);
+                        if (cleared) effects.parts[CHN].security += taken;
+                    }
+                } else if (pool && !amm::Abandoned(*pool)) {
                     if (kind.params.GetCurve() == Curve::BOOK) {
                         // A book: its resting orders as this pass left them.
                         cleared = ClearBook(id, *pool, effects.books[id], ins, height);
@@ -3231,7 +3337,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                 // Swap fees: their security and protocol parts leave the pool (the liquidity providers keep the rest).
                 // Never more than the round's fees: the pool still holds its level (its worst point is net of all fees).
                 // A concentrated pool's round took them itself, out of what it kept beyond its walk.
-                if (kind.fee > 0 && kind.params.GetCurve() != Curve::LAUNCH && kind.params.GetCurve() != Curve::BOOK) {
+                if (!on_coin && kind.fee > 0 && kind.params.GetCurve() != Curve::LAUNCH && kind.params.GetCurve() != Curve::BOOK) {
                     auto [p0, p1]{fee_parts(kind.fee, ins, pool->asset0.IsNull(), pool->asset1.IsNull())};
                     // What was taken is what is credited, exactly: at most the parts, at most what the pool holds (a
                     // concentrated pool: what it kept beyond its walk); the security part first, the protocol's the rest.
@@ -3294,7 +3400,13 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         }
         return amount;
     }};
+    // The block's security parts in the chain's coin (paid with its fees: BlockSecurityFees), and the treasury's accruals.
+    uint64_t security{0};
     const auto pay{[&](const Order& order, const AssetId& asset, uint64_t amount) {
+        if (order.sink != Order::Sink::NONE) {
+            PaySink(order, asset, amount, security);
+            return;
+        }
         if (asset.IsNull()) {
             if (order.payout >= 0 && static_cast<size_t>(order.payout) < payouts.size()) payouts[order.payout] = CTxOut{static_cast<CAmount>(amount), order.chn_to};
         } else {
@@ -3303,7 +3415,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     }};
     // The market index (derived data, no rule reads it): each order's outcome, for its trades.
     const auto note{[&](size_t i, bool filled, const std::vector<uint64_t>& hops, uint64_t back) {
-        if (!market::Enabled()) return;
+        if (!market::Enabled() || orders[i].sink != Order::Sink::NONE) return;
         market::Fill f;
         f.txid = orders[i].txid;
         f.result_n = orders[i].result_n;
@@ -3331,8 +3443,6 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
         pay(orders[i], orders[i].path.front(), orders[i].amount_in);
         note(i, false, {}, 0);
     }};
-    // The block's security parts in the chain's coin (paid with its fees: BlockSecurityFees), and the treasury's accruals.
-    uint64_t security{0};
     const auto accrue{[&](const AssetId& asset, uint64_t protocol, uint64_t held, bool launch) {
         if (protocol == 0 && held == 0) return;
         TreasuryEntry entry{TREASURY.Get(Writable(), asset).value_or(TreasuryEntry{})};
@@ -3370,7 +3480,12 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             // From no_treasury_height, no protocol part: the creator's takes it (80 % and 20 % for a launch of 50/30/20).
             const FeeParts part{no_treasury ? LaunchFeeParts(fees, record->creator_share + record->protocol_share, 0, record->security_share)
                                             : LaunchFeeParts(fees, record->creator_share, record->protocol_share, record->security_share)};
-            record->creator_fees += part.creator;
+            // From fee_flow_height a launch made then sends its creator's part where it chose (CreditCreator).
+            if (record->v5) {
+                CreditCreator(kind.token, *record, part.creator, 0);
+            } else {
+                record->creator_fees += part.creator;
+            }
             record->protocol_fees += part.protocol;
             record->security_fees += part.security;
             record->pool_fees += fees - part.creator - part.protocol - part.security;
@@ -3385,6 +3500,10 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             const auto pool{GetPool(id)};
             // At the curve's end, or once it raised what it graduates at.
             if (pool && (effects.ended.contains(id) || pool->reserve0 >= record->virtual_coin + record->graduation)) Graduate(kind.token, height);
+        }
+        // The locked positions of the pools the block traded in: their fees collected and split (CollectLocked).
+        for (const auto& [id, state] : effects.cl) {
+            if (const auto token{GRAD_POOLS.Get(out, id)}) security += CollectLocked(id, *token, height);
         }
     }};
 
@@ -3502,6 +3621,59 @@ uint64_t WalkOut(const std::vector<ClSegment>& segs, uint64_t x, bool zero_in)
     return 0;
 }
 } // namespace
+
+std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
+                                                  const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const
+{
+    security = 0;
+    if (fee >= FEE_DENOMINATOR || security_share > FEE_DENOMINATOR || !pool.asset0.IsNull()) return std::nullopt;
+    const auto fee_of{[&](uint64_t amount) { return std::min(amount, static_cast<uint64_t>((static_cast<unsigned __int128>(amount) * fee + FEE_DENOMINATOR - 1) / FEE_DENOMINATOR)); }};
+    // The buys' coin less its fee, the sales' units whole: one round at no fee, at its one price.
+    std::vector<dex::HopIn> net;
+    net.reserve(orders.size());
+    unsigned __int128 fees{0};
+    for (const dex::HopIn& order : orders) {
+        if (order.zero_in) {
+            const uint64_t f{fee_of(order.amount)};
+            net.push_back({true, order.amount - f});
+            fees += f;
+        } else {
+            net.push_back(order);
+        }
+    }
+    std::optional<dex::Clearing> cleared;
+    if (params.GetCurve() == Curve::CONCENTRATED) {
+        if (!cl || !ticks) return std::nullopt;
+        cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net);
+    } else {
+        cleared = curves::ClearPoolOf(params, /*fee=*/0, pool.reserve0, pool.reserve1, net);
+    }
+    if (!cleared) return cleared;
+    // Each sale's fee out of the coin it gets.
+    for (size_t i{0}; i < orders.size(); ++i) {
+        if (orders[i].zero_in) continue;
+        const uint64_t f{fee_of(cleared->outs[i])};
+        cleared->outs[i] -= f;
+        fees += f;
+    }
+    if (fees > MAX_AMOUNT) return std::nullopt;
+    const uint64_t all{static_cast<uint64_t>(fees)};
+    const uint64_t to_security{static_cast<uint64_t>(static_cast<unsigned __int128>(all) * security_share / FEE_DENOMINATOR)};
+    const uint64_t providers{all - to_security};
+    // The providers' part into the pool's coin (the buys' fees never went in, the sales' went out with what they got).
+    if (providers > MAX_AMOUNT - cleared->reserve0) return std::nullopt;
+    cleared->reserve0 += providers;
+    // A concentrated pool: its in-range positions' fee growth in the coin (Q128 per unit of liquidity in range after the round).
+    if (cl && providers > 0) {
+        const unsigned __int128 liquidity{cl->Liquidity()};
+        if (liquidity > 0) {
+            const arith_uint256 l{(arith_uint256{static_cast<uint64_t>(liquidity >> 64)} << 64) | arith_uint256{static_cast<uint64_t>(liquidity)}};
+            cl->fee_growth0 = ArithToUint256(UintToArith256(cl->fee_growth0) + (arith_uint256{providers} << 128) / l);
+        }
+    }
+    security = to_security;
+    return cleared;
+}
 
 std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take) const
 {
@@ -3958,11 +4130,16 @@ void State::Graduate(const AssetId& token, int height)
     // What the curve raised (its coin less the virtual), the tokens it has left, and the fees kept for the pool.
     const uint64_t raised{curve.reserve0 - std::min(curve.reserve0, record.virtual_coin)};
     const uint64_t left{curve.reserve1 - std::min(curve.reserve1, record.CurveEnd())};
+    const uint64_t coin{raised + record.pool_fees}, units{left + record.PoolSupply()};
+    // From fee_flow_height a launch made then (`v5`) graduates into a concentrated pool at GRADUATION_FEE, the same
+    // reserves in one full-range position nobody holds the token of (locked: nobody can ever withdraw it); what the
+    // rounding of its liquidity leaves stays in the pool, nobody's. The fees it collects: CollectLocked.
+    if (record.v5 && GraduateLocked(token, record, coin, units, height)) return;
     Pool pool;
     pool.asset0 = CHN;
     pool.asset1 = token;
-    pool.reserve0 = raised + record.pool_fees;
-    pool.reserve1 = left + record.PoolSupply();
+    pool.reserve0 = coin;
+    pool.reserve1 = units;
     // Every share locked: nobody holds any, and nobody ever can.
     pool.shares = Isqrt(static_cast<unsigned __int128>(pool.reserve0) * pool.reserve1);
     pool.creation = record.txid;
@@ -3982,6 +4159,194 @@ void State::Graduate(const AssetId& token, int height)
     entry.reserve_coin = pool.reserve0;
     entry.reserve_tokens = pool.reserve1;
     out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
+}
+
+bool State::GraduateLocked(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units, int height)
+{
+    sidechain::StoreOverlay& out{Writable()};
+    const PoolParams params{GraduationParams()};
+    const uint256 id{PoolIdOf(CHN, token, params)};
+    // Never into a pool there is (none can be: a token on its curve is never pooled, CurveAsset checks it).
+    if (coin == 0 || units == 0 || GetPool(id)) return false;
+    const arith_uint256 price{SqrtPriceOfAmounts(coin, units)};
+    if (price < cl::MinSqrtRatio() || price >= cl::MaxSqrtRatio()) return false;
+    const int32_t spacing{cl::TickSpacing(params.fee)};
+    const int32_t lower{-(cl::MAX_TICK / spacing) * spacing}, upper{(cl::MAX_TICK / spacing) * spacing};
+    unsigned __int128 liquidity{cl::LiquidityForAmounts(price, cl::SqrtRatioAtTick(lower), cl::SqrtRatioAtTick(upper), coin, units)};
+    liquidity = std::min(liquidity, MaxLiquidityPerTick(spacing));
+    if (liquidity == 0) return false;
+    const auto needed{cl::AmountsForLiquidity(price, cl::SqrtRatioAtTick(lower), cl::SqrtRatioAtTick(upper), liquidity, /*round_up=*/true)};
+    if (!needed || needed->first > coin || needed->second > units) return false;
+    ClState state;
+    state.sqrt_price = ArithToUint256(price);
+    state.tick = cl::TickAtSqrtRatio(price);
+    state.SetLiquidity(liquidity);
+    // Its two ticks: fresh, no fee yet on either side.
+    ClTick lo, hi;
+    lo.gross_hi = hi.gross_hi = lo.net_hi = hi.net_hi = static_cast<uint64_t>(liquidity >> 64);
+    lo.gross_lo = hi.gross_lo = lo.net_lo = hi.net_lo = static_cast<uint64_t>(liquidity);
+    hi.net_negative = true;
+    ClPosition position;
+    position.pool = id;
+    position.tick_lower = lower;
+    position.tick_upper = upper;
+    position.liquidity_hi = static_cast<uint64_t>(liquidity >> 64);
+    position.liquidity_lo = static_cast<uint64_t>(liquidity);
+    position.txid = record.txid;
+    position.height = height;
+    Pool pool;
+    pool.asset0 = CHN;
+    pool.asset1 = token;
+    pool.reserve0 = coin;
+    pool.reserve1 = units;
+    // Open (above MIN_LIQUIDITY) with no shares: its positions are its providers.
+    pool.shares = MIN_LIQUIDITY + 1;
+    pool.creation = record.txid;
+    pool.height = height;
+    SetPool(record.pool, std::nullopt);
+    if (POOL_PARAMS.Contains(out, record.pool)) POOL_PARAMS.Erase(out, record.pool);
+    SetPool(id, pool);
+    POOL_PARAMS.Put(out, id, params);
+    SetClState(id, state);
+    for (const auto& [tick, value] : {std::make_pair(lower, lo), std::make_pair(upper, hi)}) {
+        out.Put(TickKey(CL_TICKS, id, tick), sidechain::EncodeValue(value));
+        out.Put(TickKey(CL_TICKS_DOWN, id, tick), {});
+    }
+    // The position's id: of the launch's transaction, which is no OpenPosition; no token of it is ever made.
+    const uint256 position_id{PositionId(record.txid)};
+    CL_POSITIONS.Put(out, position_id, position);
+    GRAD_POOLS.Put(out, id, token);
+    record.graduated = height;
+    record.raised_at_graduation = coin - std::min(coin, record.pool_fees);
+    record.pool_fees = 0;
+    record.pool = id;
+    record.position = position_id;
+    LAUNCHES.Put(out, token, record);
+    LaunchLogEntry entry;
+    if (const auto bytes{out.Get(HeightKey(LAUNCH_LOG, height, token))}) entry = sidechain::DecodeValue<LaunchLogEntry>(*bytes);
+    entry.graduated = true;
+    entry.reserve_coin = pool.reserve0;
+    entry.reserve_tokens = pool.reserve1;
+    out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
+    return true;
+}
+
+void State::CreditCreator(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units)
+{
+    // The burn's part (in basis points): none to the creator alone, all for BURN, burn_bps of a SPLIT.
+    const uint64_t bps{record.destination == static_cast<uint8_t>(FeeDestination::BURN)    ? 10'000
+                       : record.destination == static_cast<uint8_t>(FeeDestination::SPLIT) ? record.burn_bps
+                                                                                            : 0};
+    const auto burn_of{[&](uint64_t amount) { return static_cast<uint64_t>(static_cast<unsigned __int128>(amount) * bps / 10'000); }};
+    const uint64_t coin_burn{burn_of(coin)}, units_burn{burn_of(units)};
+    record.creator_fees = Add(record.creator_fees, coin - coin_burn).value_or(MAX_AMOUNT);
+    record.creator_tokens = Add(record.creator_tokens, units - units_burn).value_or(MAX_AMOUNT);
+    // The coin waits to buy the token back (FinishBlock: a BUYBACK order in its venue); the token is burned now.
+    record.buyback = Add(record.buyback, coin_burn).value_or(MAX_AMOUNT);
+    if (record.buyback > 0 && !BUYBACKS.Contains(Writable(), token)) BUYBACKS.Put(Writable(), token, true);
+    if (units_burn > 0) {
+        AssetRecord asset{*Assert(GetAsset(token))};
+        asset.supply -= std::min(asset.supply, units_burn);
+        asset.burned = Add(asset.burned, units_burn).value_or(MAX_AMOUNT);
+        ASSETS.Put(Writable(), token, asset);
+        record.burned = Add(record.burned, units_burn).value_or(MAX_AMOUNT);
+    }
+}
+
+void State::PaySink(const Order& order, const AssetId& asset, uint64_t amount, uint64_t& security)
+{
+    if (amount == 0) return;
+    sidechain::StoreOverlay& out{Writable()};
+    (void)security;
+    const AssetId& token{order.path.back()};
+    auto record{GetLaunch(token)};
+    if (!record) return;
+    if (asset.IsNull()) {
+        // Missed, or given back by a curve at its end: it waits again.
+        record->buyback = Add(record->buyback, amount).value_or(MAX_AMOUNT);
+        if (!BUYBACKS.Contains(out, token)) BUYBACKS.Put(out, token, true);
+    } else {
+        // Bought back: burned (out of the supply, for good).
+        AssetRecord burned{*Assert(GetAsset(token))};
+        burned.supply -= std::min(burned.supply, amount);
+        burned.burned = Add(burned.burned, amount).value_or(MAX_AMOUNT);
+        ASSETS.Put(out, token, burned);
+        record->burned = Add(record->burned, amount).value_or(MAX_AMOUNT);
+    }
+    LAUNCHES.Put(out, token, *record);
+}
+
+std::vector<Order> State::ProtocolOrders(int height)
+{
+    std::vector<Order> made;
+    if (!Params().GetConsensus().sidechain.FeeFlowActive(height)) return made;
+    sidechain::StoreOverlay& out{Writable()};
+    const uint64_t min_chn{MinChnPayout(height)};
+    // Buybacks: the coin waiting buys the token in its venue (its curve, then the pool it graduated into), within a
+    // curve's bounds for a buy, once it is min_chn at least and gets something.
+    std::vector<AssetId> tokens;
+    BUYBACKS.ForEach(out, [&](const AssetId& token, const bool&) {
+        tokens.push_back(token);
+        return true;
+    });
+    for (const AssetId& token : tokens) {
+        auto record{GetLaunch(token)};
+        if (!record || record->buyback == 0) {
+            BUYBACKS.Erase(out, token);
+            continue;
+        }
+        if (!GetPool(record->pool)) continue;
+        uint64_t amount{record->buyback};
+        if (!record->Graduated()) {
+            if (amount < record->min_buy) continue;
+            if (record->max_buy > 0) amount = std::min(amount, record->max_buy);
+        }
+        if (amount < min_chn) continue;
+        const auto outs{dex::QuoteRoutePools(*this, CHN, {record->pool}, amount)};
+        if (!outs || outs->back() == 0) continue;
+        Order order;
+        order.path = {CHN, token};
+        order.pools = {record->pool};
+        order.amount_in = amount;
+        order.min_out = 1;
+        order.sink = Order::Sink::BUYBACK;
+        made.push_back(std::move(order));
+        record->buyback -= amount;
+        LAUNCHES.Put(out, token, *record);
+        if (record->buyback == 0) BUYBACKS.Erase(out, token);
+    }
+    return made;
+}
+
+uint64_t State::CollectLocked(const uint256& pool_id, const AssetId& token, int height)
+{
+    sidechain::StoreOverlay& out{Writable()};
+    auto record{GetLaunch(token)};
+    if (!record || !record->v5 || record->position.IsNull() || record->pool != pool_id) return 0;
+    auto position{CL_POSITIONS.Get(out, record->position)};
+    const auto cl{GetClState(pool_id)};
+    auto pool{GetPool(pool_id)};
+    if (!position || !cl || !pool) return 0;
+    const ClTick lo{GetClTick(pool_id, position->tick_lower).value_or(ClTick{})}, hi{GetClTick(pool_id, position->tick_upper).value_or(ClTick{})};
+    const auto [in0, in1]{FeeGrowthInside(*cl, position->tick_lower, position->tick_upper, lo, hi)};
+    const uint64_t earned0{Earned(in0, position->inside0_last, position->Liquidity())}, earned1{Earned(in1, position->inside1_last, position->Liquidity())};
+    position->inside0_last = ArithToUint256(in0);
+    position->inside1_last = ArithToUint256(in1);
+    CL_POSITIONS.Put(out, record->position, *position);
+    // Out of the pool, never more than it holds; the Q128 rounding leaves the rest there. (From fee_flow_height its
+    // fees are in the coin alone: ClearCoinSide; a token part, none, would stay unowned but for the creator's.)
+    const uint64_t got0{std::min(earned0, pool->reserve0)}, got1{std::min(earned1, pool->reserve1)};
+    if (got0 == 0 && got1 == 0) return 0;
+    const auto creator_of{[](uint64_t amount) { return static_cast<uint64_t>(static_cast<unsigned __int128>(amount) * GRADUATED_CREATOR_SHARE / FEE_DENOMINATOR); }};
+    const uint64_t creator0{creator_of(got0)}, creator1{creator_of(got1)};
+    pool->reserve0 -= got0;
+    pool->reserve1 -= creator1;
+    SetPool(pool_id, *pool);
+    CreditCreator(token, *record, creator0, creator1);
+    record->security_fees = Add(record->security_fees, got0 - creator0).value_or(MAX_AMOUNT);
+    LAUNCHES.Put(out, token, *record);
+    (void)height;
+    return got0 - creator0;
 }
 
 bool State::OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const
@@ -4035,6 +4400,8 @@ std::optional<OracleContract> State::GetContract(const Txid& id) const { return 
 PoolParams State::GetPoolParams(const uint256& pool) const { return POOL_PARAMS.Get(*m_view, pool).value_or(PoolParams{}); }
 std::optional<LaunchRecord> State::GetLaunch(const AssetId& token) const { return LAUNCHES.Get(*m_view, token); }
 std::optional<ClState> State::GetClState(const uint256& pool) const { return CL_STATES.Get(*m_view, pool); }
+bool State::CoinSideFees() const { return COIN_SIDE.Get(*m_view); }
+bool State::IsLockedPool(const uint256& pool) const { return GRAD_POOLS.Contains(*m_view, pool); }
 std::optional<ClTick> State::GetClTick(const uint256& pool, int32_t tick) const
 {
     const auto bytes{m_view->Get(TickKey(CL_TICKS, pool, tick))};
@@ -4229,7 +4596,8 @@ CAmount State::HeldChn() const
     if (const auto treasury{GetTreasury(CHN)}) held += static_cast<CAmount>(treasury->balance);
     // The launches' fees not paid out yet: for the pools they graduate into, and their creators'.
     LAUNCHES.ForEach(*m_view, [&](const uint256&, const LaunchRecord& launch) {
-        held += static_cast<CAmount>(launch.pool_fees + launch.creator_fees);
+        // From fee_flow_height, also the coin waiting to buy its token back (none before).
+        held += static_cast<CAmount>(launch.pool_fees + launch.creator_fees + launch.buyback);
         return true;
     });
     ForEachAuction([&](const Txid&, const Auction& auction) {

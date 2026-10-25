@@ -61,6 +61,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.small_payout_height = *height;
         } else if (deployment_name == "notreasury") {
             options.no_treasury_height = *height;
+        } else if (deployment_name == "feeflow") {
+            options.fee_flow_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {
             options.activation_heights[*buried_deployment] = *height;
         } else {

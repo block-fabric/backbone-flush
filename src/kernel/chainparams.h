@@ -164,6 +164,8 @@ public:
         std::optional<int> small_payout_height{};
         //! No treasury: Consensus::SidechainParams::no_treasury_height (-testactivationheight=notreasury@<height>; regtest only).
         std::optional<int> no_treasury_height{};
+        //! The fee-flow release: Consensus::SidechainParams::fee_flow_height (-testactivationheight=feeflow@<height>; regtest only).
+        std::optional<int> fee_flow_height{};
     };
 
     /**

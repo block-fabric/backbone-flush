@@ -111,3 +111,31 @@ silent; eCash's next block anchors the run (its commitment, to a ticket made bef
 run is final 3 anchors later. A node of before does not follow: for it epoch 67 has no seed (the blocks wait as
 `pos-seed-unknown`, not invalid), so every node of slot 99 takes the release; one left behind catches up once it does.
 Upgrade v4 (block 9000) is independent of it: it counts blocks, not epochs.
+
+## Upgrade v5 (the fee-flow release)
+
+Branch `photon-v5` (photon-v4-gap and the fee-flow release): from block `SLOT99_V5_HEIGHT` = 9100
+(`fee_flow_height`; in the fingerprint: a node of v5 rebuilds its sidechain state once):
+
+- **Fees on the ECX side.** Every pool paired with ECX (constant product, stable, weighted, concentrated) takes its
+  whole fee in ECX (`State::ClearCoinSide`): a buy's fee out of the ECX it pays in, a sale's out of the ECX it gets (its
+  units go whole through the curve). The batch round is the pool's own at no fee on the buys' ECX less their fee and the
+  sales' units whole, all at one price; then each sale pays the fee, rounded up, out of what it gets; `min_out` counts
+  the net. Of the fees, 15 % to the block's security, 85 % back into the pool's ECX (a concentrated pool: its in-range
+  positions' fee growth in ECX). Quotes use the same. Pools of two assets keep v4's rule. Launch curves already did so.
+- **Graduation.** A launch made from H graduates into a locked full-range position of a concentrated pool of ECX at 1 %
+  (`GraduateLocked`): the same reserves as before, no position token, so nobody can withdraw. Its fees (in ECX) are
+  collected each block it trades: 60 % to the creator (`GRADUATED_CREATOR_SHARE`, by its fee destination, claimlaunch),
+  40 % to that block's security. Launches made before H graduate as before (their terms were fixed when made).
+- **Fee destination** (launchtoken `fee_destination`, fixed at creation): `creator` (default), `burn` (the creator's
+  ECX buys the token back in its own market each block, by a protocol order, and the units bought are burned: the
+  supply falls, `burned` counts them; what an order misses waits for the next block), or `split` (`burn_percent`).
+  The 20 % security part of a curve's fees is unchanged.
+- **Keep control** (launchtoken `keep_control`, off by default): the creator keeps the control coin and can mint;
+  every page marks the launch "Mintable: the creator can create more" (the wizard asks to confirm). The curve still
+  buys back only what it sold.
+- No vesting (the allocation is the creator's at graduation, as before) and no anchor reserve (user decisions).
+
+A node of v4 forks off at the first block after H with a trade in a pool of ECX, a graduation, or a launch with the new
+options. The anchorer's "Fees + prevent stalling" bids max(564 sat, the fee share), and under stall pressure a flat boost:
+max(4 × 564, the fee share), capped by the maximum (not consensus; `flatboost`, `boost` in setanchorbidpolicy).

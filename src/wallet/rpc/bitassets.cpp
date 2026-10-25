@@ -2355,6 +2355,9 @@ RPCMethod launchtoken()
                 {"first_min_out", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least the first buy gets (0: any): the rules refuse its order below it, its " + CURRENCY_UNIT + " back; refused here if its quote alone is less"},
                 {"min_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The least " + CURRENCY_UNIT + " a buy on the curve pays (0: any)"},
                 {"max_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The most " + CURRENCY_UNIT + " a buy on the curve pays (0: any)"},
+                {"fee_destination", RPCArg::Type::STR, RPCArg::Default{"creator"}, "Where the creator's part of its fees goes (from the fee-flow release, getlaunchstats' rules.fee_flow_active), fixed for good: \"creator\" (claimlaunch), \"burn\" (bought back in its own market each block and burned), or \"split\" (burn_percent of it burned, the rest the creator's)"},
+                {"burn_percent", RPCArg::Type::NUM, RPCArg::Default{0}, "With fee_destination \"split\": the part bought back and burned, in percent, above 0 and below 100"},
+                {"keep_control", RPCArg::Type::BOOL, RPCArg::Default{false}, "Keep the asset's control coin (from the fee-flow release): the creator can then mint more units at any time. Every page marks such a launch \"Mintable: the creator can create more\""},
             }},
         },
         RPCResult{RPCResult::Type::OBJ, "", "",
@@ -2438,12 +2441,36 @@ RPCMethod launchtoken()
     launch.first_buy = coin("first_buy");
     if (options.exists("first_min_out")) launch.first_min_out = bitassets::ParseUnits(options["first_min_out"], static_cast<uint8_t>(decimals), /*allow_zero=*/true);
     CheckFirstBuy(supply, fee, launch.first_buy, launch.first_min_out, launch.min_buy, launch.max_buy, static_cast<uint8_t>(decimals));
+    // The fee-flow release's options (the node refuses them before its height: bad-ba-marker).
+    if (options.exists("fee_destination")) {
+        const std::string destination{options["fee_destination"].get_str()};
+        if (destination == "creator") {
+            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::CREATOR);
+        } else if (destination == "burn") {
+            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::BURN);
+        } else if (destination == "split") {
+            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::SPLIT);
+        } else {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_destination: creator, burn or split");
+        }
+    }
+    if (launch.destination == static_cast<uint8_t>(bitassets::FeeDestination::SPLIT)) {
+        const double percent{options.exists("burn_percent") ? options["burn_percent"].get_real() : 0.0};
+        const long bps{std::lround(percent * 100)};
+        if (bps <= 0 || bps >= 10000) throw JSONRPCError(RPC_INVALID_PARAMETER, "burn_percent: above 0 and below 100 with a split");
+        launch.burn_bps = static_cast<uint16_t>(bps);
+    } else if (options.exists("burn_percent") && options["burn_percent"].get_real() != 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "burn_percent goes with fee_destination \"split\"");
+    }
+    launch.keep_control = options.exists("keep_control") && options["keep_control"].get_bool();
     std::vector<Out> outs;
     if (launch.first_buy > 0) {
         if (launch.first_buy < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
         launch.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
         outs.push_back({ChangeDestination(*pwallet), std::nullopt});
     }
+    // The control coin kept: to an address of this wallet, after the first buy's output.
+    if (launch.keep_control) outs.push_back({NewDestination(*pwallet, "asset control"), Token{Token::Kind::CONTROL, asset, 1}});
     const CTransactionRef tx{Send(*pwallet, launch, outs, {reservation->outpoint}, static_cast<CAmount>(launch.first_buy))};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
