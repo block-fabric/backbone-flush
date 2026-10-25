@@ -139,12 +139,15 @@ class LayersLongGapTest(LayersEcashTest):
         assert_greater_than(MAX_UNANCHORED, n2.getblock(n2.getbestblockhash())["slot"] - stuck_info["firstunanchoredslot"])
         if old:
             n2.args[0] = n0.args[0]
-        self.restart_node(2, extra_args=self.validator_args(2))
-        self.connect_all()
-        # It had found the blocks past its limit invalid (bad-pos-unanchored), which its block index keeps: taken back.
-        self.wait_until(lambda: any(t["hash"] == n0.getbestblockhash() for t in n2.getchaintips()) or n2.getblockcount() >= n0.getblockcount() - 2, timeout=60)
-        n2.reconsiderblock(n0.getbestblockhash())
-        self.wait_until(lambda: n2.getblockcount() >= n0.getblockcount() - 2, timeout=180)
+        # Its block index holds the others' blocks it found invalid under the old rule (past its limit), and its own
+        # since: it builds its chain again from its blocks under the rule (-reindex), and takes the others'.
+        self.restart_node(2, extra_args=self.validator_args(2) + ["-reindex"])
+        for a, b in ((0, 2), (1, 2)):
+            try:
+                self.connect_nodes(a, b)
+            except AssertionError:
+                pass
+        self.wait_until(lambda: n2.getblockcount() >= n0.getblockcount() - 2 and n2.getblockhash(n0.getblockcount() - 5) == n0.getblockhash(n0.getblockcount() - 5), timeout=300)
         after = n0.getanchorinfo()
         assert_equal(after["anchors"], before["anchors"])
         gap_tip = n0.getblockcount()
@@ -191,6 +194,15 @@ class LayersLongGapTest(LayersEcashTest):
         self.wait_in_sync()
         assert_peg_balance(main, self.nodes)
         n0.setbmm(False)
+
+
+    @staticmethod
+    def known(node, blockhash):
+        try:
+            node.getblockheader(blockhash)
+            return True
+        except Exception:
+            return False
 
 
 if __name__ == '__main__':

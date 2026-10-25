@@ -2220,6 +2220,11 @@ BOOST_AUTO_TEST_CASE(long_gap_rule)
         BOOST_CHECK_GT(e.unbonding_anchors * 600, e.SetLead(0) + e.slots_per_epoch * e.slot_seconds);
         BOOST_CHECK_EQUAL(e.evidence_window_anchors, e.unbonding_anchors - 1);
         BOOST_CHECK_EQUAL(e.MaxUnanchoredSlotsEver(), e.gap_max_unanchored_slots);
+        // A reorg of a whole run, twice over, with a margin, can be made (security review 2026-10-24): strictly within the
+        // blocks a node can take back, and keeps.
+        BOOST_CHECK_GT(int64_t{DRIVECHAIN_UNDO_DEPTH}, 2 * e.MaxUnanchoredSlotsEver() + 1000);
+        BOOST_CHECK_EQUAL(e.gap_max_unanchored_slots, FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS);
+        BOOST_CHECK_LT(int64_t{DRIVECHAIN_UNDO_DEPTH} * CChainParams::Ecash(type)->GetConsensus().max_block_weight * 115 / 100, static_cast<int64_t>(MinPruneTarget(CChainParams::Ecash(type)->GetConsensus())));
         // The seed never stops blocks of stake before the unanchored limit through a lag of the median time of up to 24 hours.
         BOOST_CHECK_GE(e.SeedLookahead(0) + e.slots_per_epoch * e.slot_seconds - 24 * 3600, e.slot_seconds * e.MaxUnanchoredSlots(0));
     }

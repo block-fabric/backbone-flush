@@ -60,7 +60,7 @@ constexpr bool DEFAULT_SPEND_ZEROCONF{true};
 
 int64_t PruneGBtoMiB(int64_t gb) { return gb * GB_BYTES / (1024 * 1024); }
 int PruneMiBtoGB(int64_t mib) { return (mib * 1024 * 1024 + GB_BYTES - 1) / GB_BYTES; }
-//! The least prune size in GB the chain takes (MinPruneTarget: 10000 MiB, so 11 GB, on a sidechain).
+//! The least prune size in GB the chain takes (MinPruneTarget: 24000 MiB, so 26 GB, on a sidechain).
 int MinPruneGB() { return static_cast<int>((MinPruneTarget(Params().GetConsensus()) + GB_BYTES - 1) / GB_BYTES); }
 int DefaultPruneGB() { return std::max(DEFAULT_PRUNE_TARGET_GB, MinPruneGB()); }
 //! The least -prune target of the chain of these arguments, in bytes (before the chain is selected).

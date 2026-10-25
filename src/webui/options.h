@@ -119,7 +119,7 @@ public:
     static constexpr int64_t MAX_PRUNE_GB{1'000'000};
 
     /**
-     * A prune size of settings.json below the least of the chain (MinPruneTarget: 10000 MiB on a sidechain;
+     * A prune size of settings.json below the least of the chain (MinPruneTarget: 24000 MiB on a sidechain;
      * an older version offered 2 GB), raised to it, rounded up to whole GB, before the node starts, which
      * would refuse it. Not when -prune is given on the command line or in the configuration file (that
      * decides). @return the size it was, in MiB, when raised

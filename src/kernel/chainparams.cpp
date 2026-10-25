@@ -988,7 +988,7 @@ public:
         //   stake is picked for a known seed): bonds, unbonds and jails take effect about 49 hours after their anchor
         //   (10 before), and the leaders of an epoch are known two days ahead.
         if (consensus.pos.gap_epoch == std::numeric_limits<int64_t>::max()) consensus.pos.gap_epoch = 0;
-        consensus.pos.gap_max_unanchored_slots = 5760;          // 24 hours of 15-second slots
+        consensus.pos.gap_max_unanchored_slots = FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS; // 24 hours of 15-second slots
         consensus.pos.gap_seed_lookahead_seconds = 48 * 3600;   // two days
         consensus.pos.gap_set_lead_seconds = 48 * 3600;         // as long
         consensus.pos.final_anchors = 3;                 // half an hour (6 minutes on Chains); not consensus
