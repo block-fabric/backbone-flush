@@ -966,7 +966,7 @@ public:
                 consensus.sidechain.fee_flow_height = SLOT99_V5_HEIGHT;
                 // Upgrade v6 (doc/photon-slot.md, "Upgrade v6"), from block SLOT99_V6_HEIGHT: launches made from it graduate at 100
                 // ECX (500 before), their curve scaled with it; a launch keeps what it was made under. In the fingerprint.
-                static constexpr int SLOT99_V6_HEIGHT{18100};
+                static constexpr int SLOT99_V6_HEIGHT{18177};
                 consensus.sidechain.graduation100_height = SLOT99_V6_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
