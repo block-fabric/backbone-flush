@@ -7,6 +7,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <set>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -102,19 +103,26 @@ BOOST_AUTO_TEST_CASE(detects_wsl)
 
 BOOST_AUTO_TEST_CASE(logs_the_origin_only)
 {
-    // A connect callback: no address, nonce or network in the log; an action link: its verb alone.
-    for (const std::string& uri : {URI, std::string{"https://user:pw@flush.markets/connect?x=1#address=bflx1q&nonce=n"}, std::string{"flush:connect?v=1&nonce=abc#x"}}) {
-        const std::string logged{LoggableUri(uri)};
-        BOOST_CHECK_EQUAL(logged.find('#'), std::string::npos);
-        BOOST_CHECK_EQUAL(logged.find('?'), std::string::npos);
-        BOOST_CHECK_EQUAL(logged.find("nonce"), std::string::npos);
-        BOOST_CHECK_EQUAL(logged.find("bflx1q"), std::string::npos);
+    // Whatever ends the host, no secret after it is logged: ? # \ ; a path, a user part, a port; an opaque link's verb alone.
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {URI, "https://flush.markets"},
+        {"https://flush.markets?nonce=n1&address=bflx1qsecret", "https://flush.markets"},
+        {"https://flush.markets#address=bflx1qsecret&nonce=n1", "https://flush.markets"},
+        {"https://flush.markets\\connect#address=bflx1qsecret", "https://flush.markets"},
+        {"https://flush.markets;address=bflx1qsecret", "https://flush.markets"},
+        {"https://user:pw@flush.markets:8443/connect?nonce=n1", "https://flush.markets"},
+        {"https://[::1]:8443/x#address=bflx1qsecret", "https://[::1]"},
+        {"flush:connect?address=bflx1qsecret&nonce=n1", "flush:connect"},
+        {"flush:connect#address=bflx1qsecret", "flush:connect"},
+        {"flush:launch;nonce=n1", "flush:launch"},
+        {"file:///home/me/.flush/debug.log", "file://"},
+        {"nothing", "(an address)"},
+        {":nonce=n1", "(an address)"},
+    };
+    for (const auto& [uri, logged] : cases) {
+        BOOST_CHECK_EQUAL(LoggableUri(uri), logged);
+        for (const char* secret : {"#", "?", ";", "\\", "nonce", "bflx1q", "pw"}) BOOST_CHECK_EQUAL(LoggableUri(uri).find(secret), std::string::npos);
     }
-    BOOST_CHECK_EQUAL(LoggableUri(URI), "https://flush.markets");
-    BOOST_CHECK_EQUAL(LoggableUri("https://user:pw@flush.markets/connect#a"), "https://flush.markets");
-    BOOST_CHECK_EQUAL(LoggableUri("flush:connect?v=1&nonce=abc"), "flush:connect");
-    BOOST_CHECK_EQUAL(LoggableUri("file:///home/me/.flush/debug.log"), "file://");
-    BOOST_CHECK_EQUAL(LoggableUri("nothing"), "(an address)");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
