@@ -27,7 +27,7 @@ constexpr std::pair<BidStrategy, const char*> STRATEGIES[]{
 };
 
 //! Without a fee estimate, the base of an escalated bid: the floor, but this at least (a floor of 0 escalates too).
-constexpr CAmount ESCALATION_FALLBACK_BASE{DEFAULT_VALIDATOR_ANCHOR_BID};
+constexpr CAmount ESCALATION_FALLBACK_BASE{564};
 
 std::optional<double> Number(const UniValue& value)
 {
@@ -309,6 +309,14 @@ double EscalationMultiplier(const AnchorBidPolicy& policy, double p)
     return curve.back().multiplier;
 }
 
+std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent)
+{
+    const CAmount replacement{std::max(amount, previous + 500)};
+    if (replacement > policy.max) return std::nullopt;
+    if (policy.period_cap > 0 && replacement > std::max<CAmount>(policy.period_cap - spent, 0)) return std::nullopt;
+    return replacement;
+}
+
 BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
 {
     BidDecision d;
@@ -319,6 +327,23 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         d.reason = "off: no bids (the chain relies on other bidders)";
         return d;
     }
+    // Flat policies follow the next-block estimate even before stall pressure builds. Keep the operator's
+    // floor as an optional override; a disabled estimate still respects the mainchain relay minimum.
+    CAmount base{policy.floor};
+    if (policy.flat_boost && policy.strategy == BidStrategy::FEES_PREVENT_STALL) {
+        const CAmount relay{Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * policy.request_vsize / 1000.0))};
+        base = std::max(base, relay);
+        if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) {
+            const CAmount estimate{Clamp(std::ceil(static_cast<double>(*inputs.fee_rate_per_kvb) / 1000.0) * policy.request_vsize)};
+            base = std::max(base, estimate);
+        }
+    }
+    if (policy.strategy == BidStrategy::FEES_PREVENT_STALL && policy.flat_boost && inputs.pot <= 0 &&
+        !inputs.pending_actions && d.pressure < policy.escalation_start) {
+        d.kind = "idle";
+        d.reason = "skipped: nothing to anchor";
+        return d;
+    }
     // The strategy's own bid.
     switch (policy.strategy) {
     case BidStrategy::FIXED:
@@ -327,23 +352,23 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         d.reason = strprintf("fixed %s", FormatMoney(policy.fixed));
         break;
     case BidStrategy::MINIMAL:
-        d.normal = policy.floor;
-        d.kind = "floor";
-        d.reason = strprintf("floor %s", FormatMoney(policy.floor));
+        d.normal = base;
+        d.kind = base > policy.floor ? "base" : "floor";
+        d.reason = strprintf("base %s", FormatMoney(base));
         break;
     case BidStrategy::FEES:
     case BidStrategy::FEES_PREVENT_STALL: {
         const CAmount pot{std::max<CAmount>(inputs.pot, 0)};
         // All but the operator's margin, as Follower::Offer: pot - pot / 100 at 99 %.
         const CAmount share{pot - (pot / 10000) * (10000 - policy.fee_share_bps) - (pot % 10000) * (10000 - policy.fee_share_bps) / 10000};
-        if (share > policy.floor) {
+        if (share > base) {
             d.normal = share;
             d.kind = "fees";
             d.reason = strprintf("fee share %s (%.2f %% of a pot of %s)", FormatMoney(share), policy.fee_share_bps / 100.0, FormatMoney(pot));
         } else {
-            d.normal = policy.floor;
-            d.kind = "floor";
-            d.reason = strprintf("floor %s (fee share %s)", FormatMoney(policy.floor), FormatMoney(share));
+            d.normal = base;
+            d.kind = base > policy.floor ? "base" : "floor";
+            d.reason = strprintf("base %s (fee share %s)", FormatMoney(base), FormatMoney(share));
         }
         break;
     }
@@ -352,14 +377,14 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     }
     d.amount = d.normal;
     if (policy.Escalates() && policy.flat_boost) {
-        // The flat boost: under pressure, boost x the floor, or the fee share if it is more (no rebid, curve or estimate).
+        // Boost only the base, never a large fee share.
         if (d.pressure >= policy.escalation_start) {
-            const CAmount boosted{Clamp(static_cast<double>(policy.floor) * policy.boost)};
+            const CAmount boosted{Clamp(static_cast<double>(base) * policy.boost)};
             if (boosted > d.amount) {
                 d.amount = boosted;
                 d.multiplier = policy.boost;
                 d.kind = "boost";
-                d.reason = strprintf("boost at %s: x%.2f the floor %s", p_text, policy.boost, FormatMoney(policy.floor));
+                d.reason = strprintf("boost at %s: x%.2f the base %s", p_text, policy.boost, FormatMoney(base));
             }
         }
     } else if (policy.Escalates()) {

@@ -1,9 +1,9 @@
 # FastBlocks: the anchor bid policy
 
 A validator's own anchorer bids, from the mainchain wallet, for a BMM commitment to
-its ticket in every mainchain block (see "The anchorer" in [fastblocks.md](fastblocks.md)).
-Blocks of stake halt after `max_unanchored_slots` (1920 on the eCash networks, 8
-hours of 15-second slots) without an anchor, so a bid that miners leave out for
+its ticket when fees, peg work, maintenance or stall pressure call for one (see "The anchorer" in [fastblocks.md](fastblocks.md)).
+Blocks of stake halt after the configured unanchored limit (24 hours on upgraded
+slot 99, formerly 8 hours) without an anchor, so a bid that miners leave out for
 hours halts the chain. The bid policy says what the anchorer offers, and how it
 raises its offer as the chain nears that halt. It is consensus-neutral: what a node
 bids is its own business; the chain only sees which commitment landed.
@@ -20,27 +20,43 @@ its own offer: the "Offer for each block" of Merged mining's Automatic mining is
 | Fixed (`fixed`) | `fixed` for every mainchain block, whatever the fees or the pressure. |
 | Minimal: keep the chain moving (`minimal`) | `floor`; the stall boost and the rebids below. |
 | Fees (`fees`) | The fee share the anchor owes (`feeshare` % of the pot it will pay, 99 % by default: the operator keeps 1 %), at least `floor`. No boost. `-validatoranchorbidmode=fees` is this at 100 %. |
-| Fees + prevent stalling (`feespreventstall`, the default) | Exactly the fee share it owes when there are fees, at least `floor`, and a stall boost only when needed. The minimum may be 0 (nothing bid while there are no fees and no stall pressure); 500 sat is the default. `-validatoranchorbidmode=standard` is this. |
+| Fees + prevent stalling (`feespreventstall`, the default) | The higher of the estimated base and fee share, a 4x base boost near a stall, and no bid when there is nothing to anchor. `-validatoranchorbidmode=standard` is this. |
 | Off (`off`) | Nothing: the chain relies on other bidders, and halts without them. Logged as a warning, shown in the app. |
 
 Whatever the strategy, the bid is at most `max`, and within the period's cap.
 
-## The stall boost
+## Automatic base and stall boost
 
-The stall pressure is `p = (slot − firstunanchoredslot) / maxunanchoredslots`: 0
-while anchors land, 1 at the halt. Below `escalationstart` (0.5) the bid is never
-raised for the mempool, whatever it says. From there the bid is raised to
+For `feespreventstall` with `flatboost` (the default), the base is the largest of:
 
-    base × multiplier(p)
+- the operator's `floor` (default 0);
+- the mainchain relay minimum times `requestvsize`, rounded up to a satoshi;
+- the next-block fee estimate rounded up to whole sat/vB, times `requestvsize` (default 189 vB).
 
-if that is more, where the base is the mainchain's next-block fee estimate
-(`estimatesmartfee 1`, or `estimatefee` on a Bitcoin ABC node) times the request's
-size (`requestvsize`, 190 vB), or, without an estimate (an enforcer-only node, a
-regtest mainchain, `usefeeestimate` false), the floor (500 sat at least, so that a
-floor of 0 escalates too). `multiplier` follows the curve (default
-`0.5:1,0.75:2,0.9:4`), linearly between its points (`interpolate`, or in steps),
-its last value beyond. Once an anchor lands the run ends, p falls to 0, and the bid
-is the strategy's own again.
+The estimate is refreshed each mainchain block using `estimatesmartfee 1`, then
+`estimatefee`, then `getmempoolinfo.mempoolminfee`. If the backend exposes none,
+the relay minimum is used; if it cannot expose that either, 1 sat/vB is assumed.
+`usefeeestimate=false` disables the estimate, retaining the relay minimum and floor.
+For example, 1.41 sat/vB becomes 2 x 189 = 378 sat. The size is configurable:
+188 vB would give 376 sat. It is a size allowance, not a measurement of the signed request.
+
+The normal bid is `max(base, fee share)`: fees count toward the base, with the
+validator covering the difference. At stall pressure
+`p = (slot - firstunanchoredslot) / maxunanchoredslots` of `escalationstart` (0.5),
+the bid becomes `max(boost x base, fee share)`; `boost` defaults to 4. Large fee
+shares are never multiplied. `max` and the spending cap still apply.
+
+The default strategy skips a bid with reason **"skipped: nothing to anchor"** when
+there is no fee pot, no pending peg/staking work and pressure is below the threshold.
+Pending work includes uncredited mainchain deposits, withdrawals/bundles, staking
+payouts, and validator-set refresh once per epoch. A long record catch-up is handled
+conservatively by bidding. An idle decision is checked again within the same mainchain
+block: new work or stall pressure can start a bid without waiting for another block.
+Fixed bidding remains available for operators who want a request every block.
+
+With `flatboost=false`, the legacy floor/curve/rebid policy remains available.
+Its escalation base uses the unrounded estimate times the size, or the floor
+(at least 564 sat) without an estimate. The curve defaults to `0.5:1,0.75:2,0.9:4`.
 
 The bid is made again for the same mainchain block whenever the policy bids a tenth
 more than the request in the mempool (and 500 sat more): mainchain blocks may be
@@ -82,7 +98,7 @@ without a restart, and keeps the fields it changed in the node's settings
 | Field | Option | Default |
 |---|---|---|
 | `strategy` | `-validatoranchorbidstrategy` (or the older `-validatoranchorbidmode`) | `feespreventstall`; off on regtest unless an anchor option is given; `-novalidatoranchorbid` / `-validatoranchorbid=off`: `off` |
-| `floor` | `-validatoranchorbid` | 0.000005 (500 sat) |
+| `floor` | `-validatoranchorbid` | 0 (the relay/estimated base still applies) |
 | `max` | `-validatoranchorbidmax` | 0.001 (raised to the floor or the fixed bid if below them) |
 | `fixed` | `-validatoranchorbidfixed` | the floor |
 | `feeshare` | `-validatoranchorbidshare` | 99 |
@@ -90,7 +106,7 @@ without a restart, and keeps the fields it changed in the node's settings
 | `curve` | `-validatoranchorbidcurve` | `0.5:1,0.75:2,0.9:4` |
 | `interpolate` | `-validatoranchorbidinterpolate` | true |
 | `usefeeestimate` | `-validatoranchorbidfeeestimate` | true |
-| `requestvsize` | | 190 |
+| `requestvsize` | | 189 |
 | `rebidafter`, `rebidstep`, `rebidmax` | `-validatoranchorbidrebid` (the first) | 3, 2, 8 |
 | `warnmissed` | | 3 |
 | `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 |

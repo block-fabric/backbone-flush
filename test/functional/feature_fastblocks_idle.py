@@ -64,7 +64,7 @@ class FastBlocksIdleTest(SidechainTest):
             self.connect_nodes(a, b)
 
     def validator_args(self, i):
-        return self.side_args + [f"-validatorkeyfile={self.key_files[i]}", "-validatoranchorbid=0.00001"]
+        return self.side_args + [f"-validatorkeyfile={self.key_files[i]}", "-validatoranchorbid=0.00001", "-validatoranchorbidstrategy=fixed"]
 
     def set_time(self, t):
         self.now = t

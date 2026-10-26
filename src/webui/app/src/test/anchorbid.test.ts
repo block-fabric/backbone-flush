@@ -97,6 +97,13 @@ beforeEach(() => {
 afterEach(() => setTransport(null));
 
 describe('the anchor bid panel', () => {
+  it('explains the dynamic base and shows a skipped idle bid', async () => {
+    bid = { ...BID, effective: 0, normal: 0, kind: 'idle', reason: 'skipped: nothing to anchor', pressure: 0.1 };
+    render(AnchorBidPanel);
+    await waitFor(() => expect(document.getElementById('anchor-bid-reason')?.textContent).toBe('skipped: nothing to anchor'));
+    expect(PRESETS.find((p) => p.id === 'feespreventstall')?.text).toMatch(/rounded up to whole sat\/vB/);
+  });
+
   it('shows the bid now and why, the run and its pressure, the wallet, the warnings and the last bids', async () => {
     render(AnchorBidPanel);
     await waitFor(() => expect(document.getElementById('anchor-bid-reason')?.textContent).toMatch(/escalation at p=0.92/));
@@ -122,7 +129,7 @@ describe('the anchor bid panel', () => {
     expect(screen.getByText('Fees + prevent stalling')).toBeTruthy();
     expect(
       screen.getByText(
-        'Bids the minimum (564 sat by default), or the fee share it owes when that is more: the fees count toward the minimum, so only what they miss of it comes from you. When the chain nears its halt (the stall pressure), a flat boost: 4 times the minimum (2,256 sat), or the fee share if that is more. Never above the maximum.',
+        PRESETS.find((p) => p.id === 'feespreventstall')!.text,
       ),
     ).toBeTruthy();
   });

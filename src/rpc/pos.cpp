@@ -61,6 +61,8 @@ std::vector<RPCResult> PolicyFieldsDoc()
         {RPCResult::Type::STR_AMOUNT, "fixed", "The bid of the fixed strategy"},
         {RPCResult::Type::NUM, "feeshare", "The percentage of the pot the fee strategies bid"},
         {RPCResult::Type::NUM, "escalationstart", "The stall pressure from which minimal and feespreventstall raise the bid"},
+        {RPCResult::Type::BOOL, "flatboost", "Use the flat boost instead of the legacy curve and rebids"},
+        {RPCResult::Type::NUM, "boost", "Flat boost multiplier of the base"},
         {RPCResult::Type::ARR, "curve", "The escalation curve", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "pressure", "Stall pressure"}, {RPCResult::Type::NUM, "multiplier", "Multiplier of the base (fee estimate x requestvsize, else the floor)"}}}}},
         {RPCResult::Type::BOOL, "interpolate", "Linear between the points of the curve (else steps)"},
         {RPCResult::Type::BOOL, "usefeeestimate", "Escalate from the mainchain's next-block fee estimate"},
@@ -152,6 +154,8 @@ UniValue BidResult(const pos::FastBlocksHooks::AnchorBidReport& report, int coun
     out.pushKV("unanchoredslots", in.first_unanchored_slot >= 0 && in.slot > in.first_unanchored_slot ? in.slot - in.first_unanchored_slot : 0);
     out.pushKV("maxunanchoredslots", in.max_unanchored_slots);
     out.pushKV("pot", ValueFromAmount(in.pot));
+    out.pushKV("pendingactions", in.pending_actions);
+    out.pushKV("relayfeerate", in.relay_rate_per_kvb / 1000.0);
     if (in.fee_rate_per_kvb) out.pushKV("feerate", *in.fee_rate_per_kvb / 1000.0);
     out.pushKV("feesource", report.fee_source);
     out.pushKV("missed", report.missed);
@@ -206,6 +210,8 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::NUM, "unanchoredslots", "Slots since then"},
         {RPCResult::Type::NUM, "maxunanchoredslots", "The halt: blocks of stake stop after this many slots without an anchor"},
         {RPCResult::Type::STR_AMOUNT, "pot", "The pot of the last anchor bid for"},
+        {RPCResult::Type::BOOL, "pendingactions", "Peg actions or staking maintenance need an anchor"},
+        {RPCResult::Type::NUM, "relayfeerate", "Mainchain relay minimum, in sat/vB"},
         {RPCResult::Type::NUM, "feerate", /*optional=*/true, "The mainchain's next-block fee estimate, in sat/vB"},
         {RPCResult::Type::STR, "feesource", "Where the estimate came from"},
         {RPCResult::Type::NUM, "missed", "Mainchain blocks in a row that came without this validator's commitment"},
