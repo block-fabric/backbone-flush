@@ -67,7 +67,7 @@ def taken(node, amount, fee_millionths):
     fee = amount * fee_millionths // 1000000
     out = 0
     for key in ("security", "protocol"):
-        share = int(Decimal(str(parts[key])) * 10000)
+        share = int(Decimal(str(parts.get(key, 0))) * 10000)
         out += fee * share // 1000000
     return out
 
@@ -76,7 +76,7 @@ class LayersDexTest(LayersTest):
         super().set_test_params()
         # The fee split too (pos/feesplit.h): the security parts of the DEX's fees in the chain's coin are split with the block's fees.
         # The rules with the treasury (before no_treasury_height): its parts checked here; feature_layers_v4 checks those after.
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", "-testactivationheight=feesplit@1", "-testactivationheight=notreasury@1000000"]
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", "-testactivationheight=feesplit@1"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
@@ -192,9 +192,9 @@ class LayersDexTest(LayersTest):
         # Each better than alone: the other's flow nets against it.
         assert_greater_than(Decimal(chn_out) / COIN, alone_sell)
         assert_greater_than(Decimal(gold_out) / 100, alone_buy)
-        # What came in and went out, less the security and protocol parts of each side's 0.3 % fee (which left the pool:
-        # the coin's security part paid with the block's fees, GOLD's held by the treasury).
-        assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out - taken(n0, 5000, 3000), r_c + units("0.2", 8) - chn_out - taken(n0, units("0.2", 8), 3000)))
+        # What came in and went out, less the security part of the ECX side's 0.3 % fee (which left the pool, paid with the
+        # block's fees; GOLD's stays in the pool).
+        assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out, r_c + units("0.2", 8) - chn_out - taken(n0, units("0.2", 8), 3000)))
         assert_greater_than(n0.getdexinfo()["security_paid"], 0)
 
         self.log.info("Batch: an order whose min_out the batch misses is refunded; the other fills as alone")
@@ -369,7 +369,8 @@ class LayersDexTest(LayersTest):
             n.setstaking(False)
         time.sleep(2)
         self.wait_in_sync()
-        assert_equal(self.reserves(n0, "SILVER", "OIL"), (r_s + 4000 - silver_out - taken(n0, 4000, 3000), r_o + 3000 - oil_out - taken(n0, 3000, 3000)))
+        # Two assets: the security parts stay in the pool.
+        assert_equal(self.reserves(n0, "SILVER", "OIL"), (r_s + 4000 - silver_out, r_o + 3000 - oil_out))
         self.check_states()
         assert_peg_balance(main, self.nodes)
 

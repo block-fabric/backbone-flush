@@ -45,7 +45,7 @@ def taken(node, amount, fee_millionths):
     fee = amount * fee_millionths // 1000000
     out = 0
     for key in ("security", "protocol"):
-        share = int(Decimal(str(parts[key])) * 10000)
+        share = int(Decimal(str(parts.get(key, 0))) * 10000)
         out += fee * share // 1000000
     return out
 
@@ -53,7 +53,7 @@ class LayersDexCurvesTest(LayersTest):
     def set_test_params(self):
         super().set_test_params()
         # The rules with the treasury (before no_treasury_height): its parts checked here; feature_layers_v4 checks those after.
-        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}", "-testactivationheight=notreasury@1000000"]
+        self.side_args = self.side_args + [f"-testactivationheight=dex@{DEX_HEIGHT}", f"-testactivationheight=dexcurves@{CURVES_HEIGHT}"]
         self.extra_args = [self.side_args] * self.num_nodes
 
     def run_test(self):
@@ -188,7 +188,8 @@ class LayersDexCurvesTest(LayersTest):
         # The round's reserves less the security and protocol parts of each side's fee (which left the pool).
         fee = pool["fee_millionths"]
         in0, in1 = (300000, 100000) if usdx0 else (100000, 300000)
-        assert_equal((a0, a1), (e0 - taken(n0, in0, fee), e1 - taken(n0, in1, fee)))
+        # Two assets: the security parts stay in the pool (no treasury).
+        assert_equal((a0, a1), (e0, e1))
         simulated = n0.simulateclearing(stable, [{"asset": "USDX", "amount": 3000}, {"asset": "USDY", "amount": 1000}])
         assert_equal(len(simulated["outs"]), 2)
 
