@@ -11,8 +11,8 @@ import { t } from '../../lib/i18n.svelte';
 
 /** A launch's token has 6 decimals and a billion units, fixed (bitassets::LAUNCH_DECIMALS, LAUNCH_SUPPLY). */
 export const LAUNCH_DECIMALS = 6;
-/** What getlaunchstats' rules say on every network today, for a node that did not answer yet. */
-export const DEFAULT_RULES: LaunchRules = { graduation: 500, fee: 1, creator_share: 30, supply: 1_000_000_000, curve_supply: 750_000_000, pool_supply: 250_000_000, max_allocation: 5, log_blocks: 10_080, active: false };
+/** What getlaunchstats' rules say for a new launch (v6: 100 CHN to graduate), for a node that did not answer yet; a launch made before keeps its own (500): each launch's graduation is its own field. */
+export const DEFAULT_RULES: LaunchRules = { graduation: 100, fee: 1, creator_share: 30, supply: 1_000_000_000, curve_supply: 750_000_000, pool_supply: 250_000_000, max_allocation: 5, log_blocks: 10_080, active: false };
 
 export interface LaunchRules extends LaunchParamRules {
   /** CHN a curve raises before it graduates. */

@@ -1170,6 +1170,25 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(row('SRSCAT').querySelector('[data-testid="start-price"]')).toBeNull();
   });
 
+  it('v6: a launch of 100 and one of 500 side by side, each its own curve and prices (My launches)', async () => {
+    dexOn = true;
+    const NEW = 'e1'.repeat(32);
+    const OLD = 'e2'.repeat(32);
+    const base = { ...launchOf(MOON), info: undefined, has_logo: false, creator_fees_owed: 0, allocation: 1, allocation_claimed: false, status: 'curve', graduated_height: undefined, curve_supply: undefined, pool_supply: undefined, decimals: 6, supply: 1000000000, price: undefined, volume: 0, trades: 0, raised: 0, progress: 0 };
+    extraLaunches = [
+      { ...base, token: NEW, ticker: 'NEWB', display_name: 'New at 100', graduation: 100 },
+      { ...base, token: OLD, ticker: 'OLDB', display_name: 'Old at 500', graduation: 500 },
+    ];
+    render(MyAssets);
+    await loaded();
+    const panel = await waitFor(() => screen.getByTestId('my-launches'));
+    const row = (t: string) => within(panel).getAllByTestId('my-launch').find((r) => r.textContent?.includes(t))!;
+    await waitFor(() => expect(row('NEWB')).toBeTruthy());
+    // The curve's start price of each: 50 / 1.125e9 and 250 / 1.125e9.
+    expect(row('NEWB').querySelector('[data-testid="start-price"]')?.textContent).toBe('start price 0.0000000444 ECX');
+    expect(row('OLDB').querySelector('[data-testid="start-price"]')?.textContent).toBe('start price 0.000000222 ECX');
+  });
+
   it('the cards of the home: holdings, markets, auctions', async () => {
     render(LocalCards);
     await loaded();
