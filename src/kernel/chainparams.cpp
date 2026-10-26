@@ -705,6 +705,8 @@ public:
             consensus.sidechain.fee_flow_height = opts.dep_opts.fee_flow_height.value_or(std::numeric_limits<int>::max());
             // Graduation at 100 coins only if a test asks (-testactivationheight=graduation100@<height>).
             consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v7 only if a test asks (-testactivationheight=v7@<height>).
+            consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -884,8 +886,9 @@ public:
         consensus.pos.jail_fix_height = 0;
         // The fees of the DEX (doc/layers.md "Fees of the DEX"): swap fees 85 % to the liquidity providers, 15 % to the
         // chain's security (the BMM bidder and the validators, by the curve of the network fees), all in ECX in a pool of
-        // ECX; a launch's curve charges 1.15 % of a trade: 80 % to its creator, 20 % to the chain's security; a graduated
-        // launch's locked position 60 % / 40 %. No treasury, no protocol part.
+        // ECX; a launch's curve charges 1.15 % of a trade: from the first block (upgrade v7, below) 25 % to the chain's
+        // security, 75 % split as the launch says (its creator by default); a graduated launch's locked position 60 % (the
+        // split's) / 40 %. No treasury, no protocol part.
         consensus.sidechain.dex_fee_security_share = 150'000;
         consensus.sidechain.dex_fee_protocol_share = 0;
         consensus.sidechain.launch_fee = 11'500;
@@ -900,6 +903,9 @@ public:
         consensus.sidechain.small_payout_height = 0;
         consensus.sidechain.no_treasury_height = 0;
         consensus.sidechain.fee_flow_height = 0;
+        // Upgrade v7 from the first block: the DEX's ECX payouts in every block (not only with the peg actions), and the
+        // launch fee split (25 % security, 75 % split). Graduation at 100 ECX: launch_graduation above.
+        consensus.sidechain.v7_height = 0;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
@@ -916,6 +922,9 @@ public:
             // eCash, which Flush (formerly Starbase) is.
             MakeSidechain({.slot = 46, .genesis_message = "Flush: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1792540800,
                            .message_start = {0x66, 0x6c, 0x78, 0x21}, .default_port = 8255, .bech32_hrp = "flx"});
+            // A DNS seed (A records of the project's servers, at this network's P2P port 8255; not consensus). -addnode
+            // stays the fallback (doc/mainnet-readiness.md).
+            vSeeds.emplace_back("seed.mainnet.flush.markets.");
             break;
         case ChainType::ECASH_BETANET:
             MakeSidechain({.slot = 46, .genesis_message = "Flush on eCash betanet 21/Oct/2026", .genesis_time = 1792540800,

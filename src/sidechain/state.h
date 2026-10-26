@@ -239,8 +239,22 @@ public:
      * so that those, however many, cannot hold deposits and refunds back. Each
      * queue has half of the block, and what one does not use goes to the other,
      * so that neither holds the other back. The rest is queued for the next blocks. A block that takes no peg actions pays none (`max_payouts` 0): what it owes is queued.
+     * `paid_now` (upgrade v7, PayBlock: the assets' payouts of the block itself, at most bitassets::MAX_TX_PAYOUTS_PER_BLOCK)
+     * is paid in any case, last, out of the half of `owed_tx`: the block pays at most the larger of `max_payouts` and its size.
      */
-    std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts = MAX_PAYOUTS_PER_BLOCK, size_t owed_tx_assets = 0);
+    std::vector<CTxOut> TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts = MAX_PAYOUTS_PER_BLOCK, size_t owed_tx_assets = 0,
+                                    std::vector<CTxOut> paid_now = {});
+    /**
+     * What a block's coinbase pays after its first output (ConnectBlock, and block assembly the same way): `owed` (what
+     * the peg actions and the refunds gave rise to), `peg_owed` (what the sidechain's own peg actions owe) and
+     * `tx_payouts` (what the block's transactions and its DEX's end pay out in the chain's coin, the assets'). Before
+     * SidechainParams::v7_height all wait in their queues for a block with the peg actions (`peg_step`), which pays
+     * MAX_PAYOUTS_PER_BLOCK of them; from it (InstantPayoutsActive) the assets' are paid by the block itself, whatever its
+     * kind, (bitassets::MAX_TX_PAYOUTS_PER_BLOCK of them at most: the bound of a block's transactions, with what waits,
+     * keeps them within; any beyond would wait as before), and the peg actions' keep their rule.
+     */
+    std::vector<CTxOut> PayBlock(int height, const Consensus::SidechainParams& params, bool peg_step, std::vector<CTxOut> owed, std::vector<CTxOut> peg_owed,
+                                 std::vector<CTxOut> tx_payouts);
     /** Payouts owed and not paid yet, oldest first: from the mainchain, and from transactions. */
     std::vector<CTxOut> Queue() const;
     std::vector<CTxOut> TxQueue() const;

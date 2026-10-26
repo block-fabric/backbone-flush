@@ -791,6 +791,24 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
         } else if (key == "burn_percent") {
             if (!value.isNum()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: burn_percent is a number");
             dialog->rows.push_back(confirm::Text("Bought back and burned", confirm::ValueText(value) + " % of the creator's fees (the rest yours)"));
+        } else if (key == "fee_split") {
+            // Upgrade v7: every recipient of the tunable part of the fees, in full (the node checks the split itself).
+            if (!value.isArray() || value.empty() || value.size() > bitassets::MAX_FEE_SHARES) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: fee_split is a list of 1 to 5 {to, bps}");
+            dialog->rows.push_back(confirm::Text("Fee split", "The 75 % of the curve's fees that are not the network's (and the creator's 60 % of the locked pool's), fixed for good:"));
+            for (const UniValue& e : value.getValues()) {
+                if (!e.isObject() || !e["to"].isStr() || !e["bps"].isNum()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: each fee_split entry is {to, bps}");
+                const std::string& to{e["to"].get_str()};
+                const int64_t bps{e["bps"].getInt<int64_t>()};
+                if (bps < 1 || bps > bitassets::FEE_SPLIT_BPS) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: a fee share is 1 to 10000 basis points");
+                const std::string share{strprintf("%d.%02d %%", bps / 100, bps % 100)};
+                if (to == "creator") {
+                    dialog->rows.push_back(confirm::Text("To you (claimed)", share));
+                } else if (to == "burn") {
+                    dialog->rows.push_back(confirm::Text("Bought back and burned", share));
+                } else {
+                    dialog->rows.push_back(confirm::Text("Paid to " + to, share + " (paid by the chain, no claim)"));
+                }
+            }
         } else if (key == "keep_control") {
             if (!value.isBool()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: keep_control is true or false");
             if (value.get_bool()) {

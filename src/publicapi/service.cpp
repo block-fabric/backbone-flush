@@ -129,6 +129,19 @@ std::string AddressOf(const CScript& script)
     return script.empty() ? "" : "script:" + HexStr(script).substr(0, 128);
 }
 
+/** A launch's split (upgrade v7; v5's destination mapped onto one), with what each recipient was paid and is owed. */
+void FillSplit(Message& m, const bitassets::LaunchRecord& rec)
+{
+    for (const bitassets::FeeShareView& share : bitassets::FeeSplitView(rec)) {
+        Message& e{m.Add("fee_split")};
+        e.SetString("to", std::string_view{share.kind} == "address" ? AddressOf(share.script) : std::string{share.kind});
+        e.SetUInt("bps", share.bps);
+        e.SetString("kind", share.kind);
+        e.SetDouble("paid_ecx", static_cast<double>(share.paid) / COIN);
+        e.SetDouble("owed_ecx", static_cast<double>(share.owed) / COIN);
+    }
+}
+
 /** An exact amount from a decimal the node's methods wrote (AmountToJSON: plain decimals). */
 uint64_t UnitsOf(const UniValue& value, int decimals)
 {
@@ -568,6 +581,7 @@ private:
         m.SetBool("mintable", l.rec.keep_control);
         m.SetString("fee_destination", DestinationName(l.rec.destination));
         m.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
+        FillSplit(m, l.rec);
         m.SetDouble("fee_bps", l.rec.fee / 100.0);
         (void)state;
     }
@@ -638,7 +652,7 @@ private:
     {
         const Consensus::SidechainParams& p{Params().GetConsensus().sidechain};
         // (A protocol part of before is the creator's: slot-99 history only.)
-        return FeesOf(p.launch_fee, p.LaunchCreatorShare(height) + p.LaunchProtocolShare(height), p.launch_security_share);
+        return FeesOf(p.launch_fee, p.LaunchCreatorShare(height) + p.LaunchProtocolShare(height), p.LaunchSecurityShare(height));
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -1389,6 +1403,51 @@ private:
                 summary += strprintf(", buying at least %s for %s %s", Decimal(floor, decimals), Decimal(ecx, 8), CURRENCY_UNIT);
                 (void)back;
             }
+            // Upgrade v7: the split of the tunable part of its fees (a launchpad's share), in the link as split=<to>:<bps>.
+            std::vector<std::string> entries;
+            for (size_t i{0}; i < req.Count("split"); ++i) {
+                for (const std::string& part : util::SplitString(req.StringAt("split", i), ',')) {
+                    if (!part.empty()) entries.push_back(part);
+                }
+            }
+            if (!entries.empty()) {
+                const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
+                if (!rules.FeeSplitActive(tip.height + 1)) Fail(Code::FAILED_PRECONDITION, "split: launches with a fee split do not apply yet on this network (status.launch_params.fee_split_active)");
+                if (entries.size() > bitassets::MAX_FEE_SHARES) Fail(Code::INVALID_ARGUMENT, "split: 1 to 5 entries");
+                std::vector<bitassets::FeeShare> split;
+                UniValue shares(UniValue::VARR);
+                for (const std::string& entry_text : entries) {
+                    const size_t colon{entry_text.rfind(':')};
+                    if (colon == std::string::npos || colon == 0) Fail(Code::INVALID_ARGUMENT, "split: <creator | burn | address>:<basis points>");
+                    const std::string to{entry_text.substr(0, colon)};
+                    const auto parsed{ToIntegral<uint32_t>(entry_text.substr(colon + 1))};
+                    const uint64_t bps{parsed.value_or(0)};
+                    if (bps < 1 || bps > bitassets::FEE_SPLIT_BPS) Fail(Code::INVALID_ARGUMENT, "split: a share is 1 to 10000 basis points");
+                    bitassets::FeeShare share;
+                    share.bps = static_cast<uint16_t>(bps);
+                    std::string shown{to};
+                    if (to == "creator") {
+                        share.kind = bitassets::FeeShare::CREATOR;
+                    } else if (to == "burn") {
+                        share.kind = bitassets::FeeShare::BURN;
+                    } else {
+                        const CTxDestination dest{to.size() <= 128 ? DecodeDestination(to) : CNoDestination{}};
+                        if (!IsValidDestination(dest)) Fail(Code::INVALID_ARGUMENT, "split: \"creator\", \"burn\" or an address of this chain: " + to.substr(0, 128));
+                        share.kind = bitassets::FeeShare::ADDRESS;
+                        share.script = GetScriptForDestination(dest);
+                        shown = EncodeDestination(dest);
+                    }
+                    split.push_back(share);
+                    uri.emplace_back("split", shown + ":" + util::ToString(bps));
+                    UniValue entry(UniValue::VOBJ);
+                    entry.pushKV("to", shown);
+                    entry.pushKV("bps", static_cast<int>(bps));
+                    shares.push_back(std::move(entry));
+                    Fact(built, "Fee share", strprintf("%s: %u.%02u %% of the tunable %u %% of the fee", shown, bps / 100, bps % 100, (bitassets::FEE_DENOMINATOR - rules.LaunchSecurityShare(tip.height + 1)) / 10'000));
+                }
+                if (!bitassets::CheckFeeSplit(split)) Fail(Code::INVALID_ARGUMENT, "split: the shares sum to 10000 basis points, \"creator\" and \"burn\" at most once each, up to 3 different addresses");
+                payload["fee_split"] = shares;
+            }
             uri.emplace_back("slippage_bps", util::ToString(slippage));
             built.SetBool("app_ready", true);
         } else if (verb == "register") {
@@ -1848,6 +1907,9 @@ private:
             // The most a launch's allocation is in the next block (10 % from allocation10_height, 5 % before), and that height.
             lp.SetUInt("allocation_max_bps", bitassets::MaxLaunchAllocation(rules.Allocation10Active(tip.height + 1)));
             lp.SetInt("allocation10_height", rules.allocation10_height == std::numeric_limits<int>::max() ? -1 : rules.allocation10_height);
+            lp.SetBool("fee_split_active", rules.FeeSplitActive(tip.height + 1));
+            lp.SetInt("v7_height", rules.v7_height == std::numeric_limits<int>::max() ? -1 : rules.v7_height);
+            lp.SetBool("instant_payouts_active", rules.InstantPayoutsActive(tip.height + 1));
             return s;
         });
 
@@ -1999,6 +2061,7 @@ private:
             d.SetDouble("creator_tokens_owed", Whole(l.rec.creator_tokens, l.decimals));
             d.SetString("pool_kind", l.rec.v5 ? "concentrated" : "constant_product");
             d.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
+            FillSplit(d, l.rec);
             (void)launch;
             return d;
         });

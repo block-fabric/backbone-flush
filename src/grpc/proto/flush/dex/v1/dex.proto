@@ -82,6 +82,12 @@ message LaunchParams {
   // and that height (-1: never on this network).
   uint32 allocation_max_bps = 11;
   int32 allocation10_height = 12;
+  // Upgrade v7: whether the next block takes a launch's fee split (BuildActionRequest.fee_split), and v7's first block (-1:
+  // never on this network); from it a launch's curve fee is 25 % security, 75 % its split's, and the DEX's ECX payouts
+  // come in the next block (instant_payouts_active).
+  bool fee_split_active = 13;
+  int32 v7_height = 14;
+  bool instant_payouts_active = 15;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -221,6 +227,22 @@ message LaunchSummary {
   string fee_destination = 29;
   // What this launch graduates at (its own: 100 ECX for launches made from slot 99's upgrade v6, 500 before).
   double graduation_ecx = 30;
+  // Upgrade v7: the split of the tunable part of its fees (v5's destination mapped onto one; empty before v5).
+  repeated LaunchFeeShare fee_split = 31;
+}
+
+// Upgrade v7: one recipient of a launch's fees' tunable part (75 % of the curve's fee, and the creator's 60 % of its
+// locked position's fees). In a BuildActionRequest only `to` and `bps` are read.
+message LaunchFeeShare {
+  // "creator", "burn" or the address paid.
+  string to = 1;
+  // In basis points of the tunable part (the shares sum to 10000).
+  uint32 bps = 2;
+  // creator (claimed: claimlaunch), burn (bought back and burned each block), address (paid by the chain once 0.001 ECX is owed).
+  string kind = 3;
+  // What it was paid, and what it is owed and not paid yet.
+  double paid_ecx = 4;
+  double owed_ecx = 5;
 }
 
 message LaunchDetail {
@@ -286,6 +308,8 @@ message LaunchDetail {
   string pool_kind = 53;
   // What this launch graduates at (its own, as made).
   double graduation_ecx = 54;
+  // Upgrade v7: the split of the tunable part of its fees, with what each recipient was paid.
+  repeated LaunchFeeShare fee_split = 55;
 }
 
 message ListLaunchesRequest {
@@ -1111,6 +1135,11 @@ message BuildActionRequest {
   // position: the pool's price the page expects (asset_b per asset_a): the wallet refuses at signing if the pool's is
   // further from it than the slippage (a pool opened or moved by someone else first).
   string expected_price = 54;
+  reserved 55;
+  // launch (upgrade v7, status.launch_params.fee_split_active): the split of the tunable part of its fees, as the link's
+  // split=: "<to>:<bps>" each ("creator", "burn" or an address; the query takes split= again or one list, comma
+  // separated), 1 to 5 entries summing to 10000: "creator" and "burn" at most once each, up to 3 addresses. None: all to the creator.
+  repeated string split = 56;
 }
 
 message Fact {

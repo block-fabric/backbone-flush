@@ -183,11 +183,31 @@ struct SidechainParams {
     int64_t launch_graduation_v6{int64_t{100} * 100'000'000};
     /** What a launch made at `height` graduates at. */
     int64_t LaunchGraduation(int height) const { return height >= graduation100_height ? launch_graduation_v6 : launch_graduation; }
+    /**
+     * Upgrade v7 (user decision 2026-10-26), from this block:
+     *  - instant DEX payouts: what the transactions and the DEX's block end pay out in the chain's coin (swaps, curve
+     *    sales, pools, auctions, the fee split's addresses) is paid by the coinbase of the block itself, every block, not
+     *    only in one that takes the peg actions (sidechain::State::PayBlock); the peg actions keep their rule;
+     *  - the fee split: a launch's curve fee is launch_security_share_v7 (25 %) the chain's security and the rest
+     *    (75 %) split as its launch says (bitassets::FeeShare: the creator, up to 3 more addresses, a buyback and burn),
+     *    and so is its creator's part of its locked position's fees.
+     * Never (the maximum) unless a network sets it; regtest unless -testactivationheight=v7@<height>.
+     */
+    int v7_height{std::numeric_limits<int>::max()};
+    uint32_t launch_security_share_v7{250'000};
+    bool InstantPayoutsActive(int height) const { return DexActive(height) && height >= v7_height; }
+    bool FeeSplitActive(int height) const { return FeeFlowActive(height) && height >= v7_height; }
+    //! The parts of a launch's curve fee for a launch made at `height`.
+    uint32_t LaunchSecurityShare(int height) const { return FeeSplitActive(height) ? launch_security_share_v7 : launch_security_share; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
     uint32_t SwapProtocolShare(int height) const { return NoTreasury(height) ? 0 : dex_fee_protocol_share; }
     //! A swap fee's security part in force: from no_treasury_height the protocol's part joins it (Flush: 11 % + 4 % = 15 %).
     uint32_t SwapSecurityShare(int height) const { return NoTreasury(height) ? dex_fee_security_share + dex_fee_protocol_share : dex_fee_security_share; }
-    uint32_t LaunchCreatorShare(int height) const { return NoTreasury(height) ? launch_creator_share + launch_protocol_share : launch_creator_share; }
+    uint32_t LaunchCreatorShare(int height) const
+    {
+        if (FeeSplitActive(height)) return 1'000'000 - launch_security_share_v7;
+        return NoTreasury(height) ? launch_creator_share + launch_protocol_share : launch_creator_share;
+    }
     uint32_t LaunchProtocolShare(int height) const { return NoTreasury(height) ? 0 : launch_protocol_share; }
     bool Allocation10Active(int height) const { return DexCurvesActive(height) && height >= allocation10_height; }
     /**

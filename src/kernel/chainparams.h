@@ -166,6 +166,8 @@ public:
         std::optional<int> fee_flow_height{};
         //! Graduation at 100 coins: Consensus::SidechainParams::graduation100_height (-testactivationheight=graduation100@<height>; regtest only).
         std::optional<int> graduation100_height{};
+        //! Upgrade v7 (instant DEX payouts, the fee split): Consensus::SidechainParams::v7_height (-testactivationheight=v7@<height>; regtest only).
+        std::optional<int> v7_height{};
     };
 
     /**
