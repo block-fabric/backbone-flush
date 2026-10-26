@@ -330,13 +330,24 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     // Flat policies follow the next-block estimate even before stall pressure builds. Keep the operator's
     // floor as an optional override; a disabled estimate still respects the mainchain relay minimum.
     CAmount base{policy.floor};
+    CAmount plain_base{policy.floor};
     if (policy.flat_boost && policy.strategy == BidStrategy::FEES_PREVENT_STALL) {
-        const CAmount relay{Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * policy.request_vsize / 1000.0))};
+        // The relay floor for the largest request a wallet makes (250 vB: a request of more inputs than the usual 189 vB
+        // was refused under it, "min relay fee not met, 19 < 21").
+        const CAmount relay{Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * std::max(policy.request_vsize, 250) / 1000.0))};
         base = std::max(base, relay);
-        if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) {
-            const CAmount estimate{Clamp(std::ceil(static_cast<double>(*inputs.fee_rate_per_kvb) / 1000.0) * policy.request_vsize)};
-            base = std::max(base, estimate);
-        }
+        // The next-block estimate, else what recent mainchain blocks took for a BMM request, rounded up to whole
+        // sat/vB, and never below the network's least competitive rate (min_rate_per_kvb: 2 sat/vB on eCash, where a
+        // bid of the relay floor stayed in the mempool while other slots' requests of 2-3 sat/vB got in, 2026-10-26).
+        std::optional<CAmount> rate;
+        if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) rate = inputs.fee_rate_per_kvb;
+        if (!rate && inputs.included_rate_per_kvb && *inputs.included_rate_per_kvb > 0) rate = inputs.included_rate_per_kvb;
+        const CAmount per_kvb{std::max(rate.value_or(0), inputs.min_rate_per_kvb)};
+        if (per_kvb > 0) base = std::max(base, Clamp(std::ceil(static_cast<double>(per_kvb) / 1000.0) * policy.request_vsize));
+        // Missed mainchain blocks: the base itself goes up, twice for every two missed (at most the boost's factor); the
+        // boost stays boost x the base before it (so never more than boost x the competitive base).
+        plain_base = base;
+        if (inputs.missed >= 2) base = Clamp(static_cast<double>(base) * std::min(policy.boost, std::pow(2.0, inputs.missed / 2)));
     }
     if (policy.strategy == BidStrategy::FEES_PREVENT_STALL && policy.flat_boost && inputs.pot <= 0 &&
         !inputs.pending_actions && d.pressure < policy.escalation_start) {
@@ -379,7 +390,7 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     if (policy.Escalates() && policy.flat_boost) {
         // Boost only the base, never a large fee share.
         if (d.pressure >= policy.escalation_start) {
-            const CAmount boosted{Clamp(static_cast<double>(base) * policy.boost)};
+            const CAmount boosted{Clamp(static_cast<double>(plain_base) * policy.boost)};
             if (boosted > d.amount) {
                 d.amount = boosted;
                 d.multiplier = policy.boost;

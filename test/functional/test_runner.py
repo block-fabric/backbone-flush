@@ -180,6 +180,7 @@ BASE_SCRIPTS = [
     'feature_fastblocks_p2p.py',
     'feature_fastblocks_fork.py',
     'feature_fastblocks_idle.py',
+    'feature_fastblocks_idle_skip.py',
     'feature_fastblocks_anchorbid.py',
     'feature_fastblocks_anchorpolicy.py',
     'feature_fastblocks_anchoractivity.py',

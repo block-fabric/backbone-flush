@@ -86,8 +86,8 @@ BOOST_AUTO_TEST_CASE(flat_boost)
     BOOST_CHECK_EQUAL(bid(0.6, 5000).amount, 5000);
     BOOST_CHECK_EQUAL(bid(0.6, 5000).kind, "fees");
     BOOST_CHECK_EQUAL(bid(0.6, 0).kind, "boost");
-    BOOST_CHECK_EQUAL(bid(0.4, 0, 9).amount, 378);
-    BOOST_CHECK_EQUAL(bid(0.6, 0, 9).amount, 1512);
+    BOOST_CHECK_EQUAL(bid(0.4, 0, 9).amount, 4 * 378); // missed blocks raise the base (x4 at most)
+    BOOST_CHECK_EQUAL(bid(0.6, 0, 9).amount, 1512);  // the boost: 4 x the base before, not more
     policy.max = 1000;
     BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 1000);
     BOOST_CHECK_EQUAL(bid(0, 5000).amount, 1000);
@@ -128,16 +128,16 @@ BOOST_AUTO_TEST_CASE(idle_and_relay_minimum)
     BOOST_CHECK(DecideBid(policy, in).bid);
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1512);
     in.relay_rate_per_kvb = 5000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3780);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 5000); // the relay floor for a request of 250 vB
     in.fee_rate_per_kvb.reset();
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3780);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 5000);
     in.relay_rate_per_kvb = 1001; // relay amount rounds upward, not to the nearest satoshi
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 760);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1004);
     in.fee_rate_per_kvb = 2000; // exact whole sat/vB is not rounded again
     in.relay_rate_per_kvb = 1000;
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1512);
     policy.use_fee_estimate = false;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 756);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
     policy.strategy = BidStrategy::FIXED;
     policy.fixed = 123;
     in.slot = 5100;
@@ -359,6 +359,39 @@ BOOST_AUTO_TEST_CASE(fields_and_checks)
     BOOST_CHECK(refused(R"({"strategy":"standard"})"));
     BOOST_CHECK(refused(R"({"periodhours":0})"));
     BOOST_CHECK(refused(R"({"bid":1})"));
+}
+
+BOOST_AUTO_TEST_CASE(competitive_base)
+{
+    // 2026-10-26: through the enforcer's interface no estimate reached the node and it bid the relay floor (189 sat), which
+    // waited while other slots' requests of 2-3 sat/vB got in. The base: the estimate, else what blocks took for a BMM
+    // request, rounded up, never below the network's least (2 sat/vB on eCash); missed blocks raise the base itself.
+    AnchorBidPolicy policy;
+    BidInputs in{At(0)};
+    in.pending_actions = true;
+    in.min_rate_per_kvb = 2000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
+    in.fee_rate_per_kvb = 1410; // 1.41 sat/vB: rounded up to 2
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
+    in.fee_rate_per_kvb = 2500;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3 * 189);
+    in.fee_rate_per_kvb.reset();
+    in.included_rate_per_kvb = 2900; // what the last block took
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3 * 189);
+    // Missed: x2 at 2, x4 at 4 and more (the boost's factor at most).
+    in.missed = 2;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 3 * 189);
+    in.missed = 7;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 3 * 189);
+    in.slot = in.first_unanchored_slot + 900; // under pressure: the boost of the base before, the same
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 3 * 189);
+    in.slot = in.first_unanchored_slot;
+    // Nothing pending, no fees, no pressure: no bid; a fee share or the pressure: a bid.
+    in.missed = 0;
+    in.pending_actions = false;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    in.pot = 1000;
+    BOOST_CHECK(DecideBid(policy, in).bid);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -144,6 +144,8 @@ struct PosParams {
      * of each), per slot's epoch for the unanchored limit.
      */
     int64_t gap_epoch{std::numeric_limits<int64_t>::max()};
+    //! Not consensus: the least feerate a validator's anchorer bids, per 1000 vbytes (2 sat/vB on the eCash networks).
+    int64_t min_bid_rate_per_kvb{0};
     int64_t gap_seed_lookahead_seconds{0};
     int64_t gap_set_lead_seconds{0};
     int64_t gap_max_unanchored_slots{0};

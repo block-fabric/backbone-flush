@@ -302,6 +302,15 @@ bool Staking::ApplyTx(sidechain::StoreOverlay& out, const CTransaction& tx, int 
     return true;
 }
 
+bool Staking::SetChanged(const sidechain::StoreView& view, int64_t epoch) const
+{
+    const StakeState stake{STAKE_STATE.Get(view)};
+    // Before the first set was made (the genesis validators not loaded yet): the first peg step makes it.
+    if (!stake.genesis_loaded) return true;
+    const auto last{SETS.Get(view, stake.set_version)};
+    return !last || *last != MakeSet(view, epoch).Validators();
+}
+
 ValidatorSet Staking::MakeSet(const sidechain::StoreView& view, int64_t epoch) const
 {
     std::vector<Consensus::PosValidator> chosen;

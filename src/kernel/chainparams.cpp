@@ -992,6 +992,8 @@ public:
         consensus.pos.gap_max_unanchored_slots = FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS; // 24 hours of 15-second slots
         consensus.pos.gap_seed_lookahead_seconds = 48 * 3600;   // two days
         consensus.pos.gap_set_lead_seconds = 48 * 3600;         // as long
+        // Not consensus: an anchor bid of at least 2 sat/vB (miners there took 2-3 sat/vB for BMM requests; 1 waited).
+        consensus.pos.min_bid_rate_per_kvb = 2000;
         consensus.pos.final_anchors = 3;                 // half an hour (6 minutes on Chains); not consensus
         // Unbonding: a week on ecash and ecashbeta (user requirement), three days on ecashtest; a proof of double signing is
         // taken until the stake it slashes is paid back: the window one anchor less than unbonding (an unbond of a set's
