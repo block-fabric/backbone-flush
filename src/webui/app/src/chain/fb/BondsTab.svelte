@@ -84,7 +84,7 @@
       amountKey++;
       amount = null;
       if (unbond) {
-        toast('success', t('Unbond sent'), t('%1 is paid back to %2 at BMM commitment %3 or so.', String(result.amount), String(result.owner), String(result.releaseanchor)));
+        toast('success', t('Unbond sent'), t('%1 is paid back to %2 at BMM commitment %3 or so.', typeof result.amount === 'number' || typeof result.amount === 'string' ? satsToCoins(coinsToSats(result.amount)) : String(result.amount), String(result.owner), String(result.releaseanchor)));
       } else {
         const short = result.eligible === false ? t('That is less than the minimum stake: the key takes part once it has that much.') : t('The key takes part from the epoch after next (on eCash, about ten hours later).');
         toast('success', t('Bond sent'), `${t('The key has %1 bonded once it is mined.', String(result.bonded))} ${short}`);
@@ -192,7 +192,7 @@
                 <tr class:chosen={selected === b.validator} onclick={() => pick(b)}>
                   <td><Key key={b.validator} mine={localKeys.has(b.validator)} /></td>
                   <td class="end"><Amount sats={coinsToSats(b.bonded)} /></td>
-                  <td class="end" title={b.unbonds.map((u) => t('%1 at BMM commitment %2', String(u.amount), u.releaseanchor)).join('\n')}>
+                  <td class="end" title={b.unbonds.map((u) => t('%1 at BMM commitment %2', satsToCoins(coinsToSats(u.amount)), u.releaseanchor)).join('\n')}>
                     <Amount sats={coinsToSats(b.unbonding)} />
                     {#if b.unbonds.length && pos}<span class="faint fb-small"><br />{t('paid at commitment %1 (now %2)', formatCount(Math.min(...b.unbonds.map((u) => u.releaseanchor))), formatCount(pos.anchors))}</span>{/if}
                   </td>

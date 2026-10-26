@@ -16,7 +16,7 @@
   import AssetActions from './AssetActions.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import { compactNumber } from './axis';
-  import { claimable, creatorAllocation, launchCurveFacts, type Launch, type LaunchPage } from './launch';
+  import { claimable, creatorAllocation, launchCurveFacts, launchDecimals, type Launch, type LaunchPage } from './launch';
   import { approx, assetArg, assetText, formatAmount, formatPercent, formatPrice, formatUnits, type Amount } from './model';
   import { assetById, ba, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
@@ -88,7 +88,7 @@
     try {
       const done = await walletRpc<{ txid: string; fees: Amount; allocation: Amount }>(wallet, 'claimlaunch', [assetArg(l.token)]);
       if (!done) return;
-      toast('success', t('Claimed'), approx(done.allocation) > 0 ? t('%1 %2 and %3 %4, with the next block.', String(done.allocation), l.ticker, formatAmount(done.fees, 8), TICKER) : t('%1 %2, with the next block.', formatAmount(done.fees, 8), TICKER));
+      toast('success', t('Claimed'), approx(done.allocation) > 0 ? t('%1 %2 and %3 %4, with the next block.', formatAmount(done.allocation, launchDecimals(l)), l.ticker, formatAmount(done.fees, 8), TICKER) : t('%1 %2, with the next block.', formatAmount(done.fees, 8), TICKER));
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Claim'), errorText(e), 'error');
