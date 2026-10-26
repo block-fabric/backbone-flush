@@ -431,19 +431,24 @@ private:
         Window w;
         if (!Enabled()) return w;
         const uint32_t day_ago{now > 86400 ? now - 86400 : 0};
-        const auto candles{Candles(view, market, Interval::H1, day_ago > 3600 ? day_ago - 3600 : 0, now, 26)};
-        std::optional<double> before;
+        // The window: the hourly candles from the hour holding day_ago to now.
+        const uint32_t start{day_ago - day_ago % 3600};
+        const auto candles{Candles(view, market, Interval::H1, start, now, 26)};
         for (const CandleRow& c : candles) {
-            if (c.t + 3600 <= day_ago) {
-                before = c.c;
-                continue;
-            }
-            if (c.t >= day_ago - day_ago % 3600) {
-                w.volume += c.v;
-                w.trades += c.n;
-            }
-            if (!before && c.t <= day_ago) before = c.o;
+            if (c.t < start) continue;
+            w.volume += c.v;
+            w.trades += c.n;
         }
+        // The price 24 hours ago: the close of the last candle before the window, however long before it (up to 30
+        // days back, so that a quiet market is not a scan of its whole history); a market that first traded inside the
+        // window is measured from its first candle's open.
+        std::optional<double> before;
+        if (start > 0) {
+            const uint32_t floor{start > 30 * 86400 ? start - 30 * 86400 : 0};
+            const auto prior{Candles(view, market, Interval::H1, floor, start - 1, 1)};
+            if (!prior.empty()) before = prior.back().c;
+        }
+        if (!before && !candles.empty()) before = candles.front().o;
         if (const auto row{GetMarket(view, market)}) w.price = row->price;
         if (before && w.price && *before > 0) w.change = 100.0 * (*w.price / *before - 1.0);
         return w;
