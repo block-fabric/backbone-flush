@@ -219,6 +219,8 @@ message LaunchSummary {
   // the creator's part of its fees goes (creator, burn, split).
   bool mintable = 28;
   string fee_destination = 29;
+  // What this launch graduates at (its own: 100 ECX for launches made from slot 99's upgrade v6, 500 before).
+  double graduation_ecx = 30;
 }
 
 message LaunchDetail {
@@ -282,6 +284,8 @@ message LaunchDetail {
   double buyback_pending_ecx = 51;
   double creator_tokens_owed = 52;
   string pool_kind = 53;
+  // What this launch graduates at (its own, as made).
+  double graduation_ecx = 54;
 }
 
 message ListLaunchesRequest {

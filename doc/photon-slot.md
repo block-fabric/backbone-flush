@@ -136,3 +136,11 @@ Branch `photon-v5` (photon-v4-gap and the fee-flow release): from block `SLOT99_
 A node of v4 forks off at the first block after H with a trade in a pool of ECX, a graduation, or a launch with the new
 options. The anchorer's "Fees + prevent stalling" bids max(564 sat, the fee share), and under stall pressure a flat boost:
 max(4 × 564, the fee share), capped by the maximum (not consensus; `flatboost`, `boost` in setanchorbidpolicy).
+
+## Upgrade v6 (graduation at 100 ECX)
+
+Branch `photon-v6`, from block `SLOT99_V6_HEIGHT` (`graduation100_height`; in the fingerprint: a node of v6 rebuilds its
+sidechain state once): a launch made from it graduates at 100 ECX instead of 500, its curve scaled with it (virtual coin
+50 ECX: the whole supply starts at about 44 ECX and graduates at about 400). A launch made before keeps 500: its record
+says what it graduates at (`getlaunch` `graduation`, the API's `graduation_ecx`), and the pages read it per launch. A node
+of v5 forks off at the first block with a launch made at or after the height.

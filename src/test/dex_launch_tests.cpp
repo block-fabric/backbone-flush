@@ -991,4 +991,35 @@ BOOST_AUTO_TEST_CASE(existing_asset_with_a_pool_refused)
                                            {Token{Token::Kind::CONTROL, SILVER, 1}, Token{Token::Kind::ASSET, SILVER, supply - 1'000'000'000 - curve.amount}})), "bad-ba-launch-pooled");
 }
 
+BOOST_AUTO_TEST_CASE(graduation_at_100)
+{
+    // From graduation100_height a launch graduates at 100 coins, its curve scaled (virtual coin 50); one made before keeps 500.
+    Consensus::SidechainParams rules{Params().GetConsensus().sidechain};
+    rules.graduation100_height = 1000;
+    BOOST_CHECK_EQUAL(rules.LaunchGraduation(999), rules.launch_graduation);
+    BOOST_CHECK_EQUAL(rules.LaunchGraduation(1000), int64_t{100} * COIN_UNITS);
+    // The curve at G = 100: a buy of the whole raises exactly G (the curve's end), the price rises with every buy, and the
+    // coin is conserved: what comes in is the curve's coin plus its fee.
+    const uint64_t g{100 * COIN_UNITS};
+    LaunchCurve curve{10'000, LAUNCH_CURVE_END, 0, 0, true, LAUNCH_SUPPLY / 8 * 9};
+    uint64_t x{g / 2}, y{LAUNCH_SUPPLY / 8 * 9};
+    double last_price{static_cast<double>(x) / static_cast<double>(y)};
+    uint64_t raised{0};
+    for (int i{0}; i < 40; ++i) {
+        const auto c{ClearLaunch(curve, x, y, {dex::HopIn{true, 3 * COIN_UNITS}}, {true})};
+        BOOST_REQUIRE(c);
+        BOOST_CHECK_EQUAL(c->reserve0 - x + c->fees + c->refunds[0], 3 * COIN_UNITS);
+        raised += c->reserve0 - x;
+        x = c->reserve0;
+        y = c->reserve1;
+        const double price{static_cast<double>(x) / static_cast<double>(y)};
+        BOOST_CHECK_GT(price, last_price);
+        last_price = price;
+        if (c->reached_end) break;
+    }
+    BOOST_CHECK_EQUAL(y, LAUNCH_CURVE_END);
+    BOOST_CHECK_GE(raised, g);
+    BOOST_CHECK_LT(raised, g + 100);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -2297,12 +2297,12 @@ void CheckLaunchSupply(uint64_t supply, uint8_t decimals)
 }
 
 /** What a first buy gets alone in its block on a new curve of `supply` units at `fee`: never signed for less than the least asked. */
-void CheckFirstBuy(uint64_t supply, uint32_t fee, uint64_t first_buy, uint64_t first_min_out, uint64_t min_buy, uint64_t max_buy, uint8_t decimals)
+void CheckFirstBuy(uint64_t supply, uint32_t fee, uint64_t first_buy, uint64_t first_min_out, uint64_t min_buy, uint64_t max_buy, uint8_t decimals, int height)
 {
     if (first_min_out == 0) return;
     if (first_buy == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "first_min_out goes with a first buy");
     const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
-    const auto quote{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee, supply / 8 * 3, max_buy, min_buy}, static_cast<uint64_t>(rules.launch_graduation) / 2, supply / 8 * 9,
+    const auto quote{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee, supply / 8 * 3, max_buy, min_buy}, static_cast<uint64_t>(rules.LaunchGraduation(height)) / 2, supply / 8 * 9,
                                                     {bitassets::dex::HopIn{true, first_buy}}, {true})};
     if (!quote || quote->outs[0] < first_min_out) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy gets %s alone in its block, less than first_min_out", bitassets::FormatUnits(quote ? quote->outs[0] : 0, decimals)));
@@ -2440,7 +2440,7 @@ RPCMethod launchtoken()
     if (launch.max_buy != 0 && launch.max_buy < launch.min_buy) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_buy is less than min_buy");
     launch.first_buy = coin("first_buy");
     if (options.exists("first_min_out")) launch.first_min_out = bitassets::ParseUnits(options["first_min_out"], static_cast<uint8_t>(decimals), /*allow_zero=*/true);
-    CheckFirstBuy(supply, fee, launch.first_buy, launch.first_min_out, launch.min_buy, launch.max_buy, static_cast<uint8_t>(decimals));
+    CheckFirstBuy(supply, fee, launch.first_buy, launch.first_min_out, launch.min_buy, launch.max_buy, static_cast<uint8_t>(decimals), pwallet->chain().getBitAssetsHeight());
     // The fee-flow release's options (the node refuses them before its height: bad-ba-marker).
     if (options.exists("fee_destination")) {
         const std::string destination{options["fee_destination"].get_str()};
@@ -2544,7 +2544,7 @@ RPCMethod curveasset()
     if (curve.max_buy != 0 && curve.max_buy < curve.min_buy) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_buy is less than min_buy");
     curve.first_buy = coin("first_buy");
     if (options.exists("first_min_out")) curve.first_min_out = bitassets::ParseUnits(options["first_min_out"], asset.decimals, /*allow_zero=*/true);
-    CheckFirstBuy(amount, curve.fee, curve.first_buy, curve.first_min_out, curve.min_buy, curve.max_buy, asset.decimals);
+    CheckFirstBuy(amount, curve.fee, curve.first_buy, curve.first_min_out, curve.min_buy, curve.max_buy, asset.decimals, pwallet->chain().getBitAssetsHeight());
     // The control coin goes with it (the supply fixed for good); the amount, from its coins (the change back).
     const auto [control, one]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
     std::vector<COutPoint> inputs{control};

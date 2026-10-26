@@ -2466,7 +2466,8 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
         return false;
     }};
     const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
-    if (rules.launch_graduation <= 0 || rules.launch_graduation % 2 != 0 || rules.launch_graduation > MAX_MONEY) return invalid("bad-ba-launch-rules");
+    const int64_t graduation{rules.LaunchGraduation(height)};
+    if (graduation <= 0 || graduation % 2 != 0 || graduation > MAX_MONEY) return invalid("bad-ba-launch-rules");
     const AssetId& token{launch.reg.name};
     LaunchRecord record;
     record.txid = tx.GetHash();
@@ -2485,7 +2486,8 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
     record.protocol_share = rules.NoTreasury(height) ? 0 : rules.launch_protocol_share;
     record.security_share = rules.launch_security_share;
     if (uint64_t{rules.launch_creator_share} + rules.launch_protocol_share + rules.launch_security_share > FEE_DENOMINATOR) return invalid("bad-ba-launch-rules");
-    record.graduation = static_cast<uint64_t>(rules.launch_graduation);
+    // What it graduates at, as made (100 coins from graduation100_height, launch_graduation before): its curve with it.
+    record.graduation = static_cast<uint64_t>(graduation);
     record.virtual_coin = record.graduation / 2;
     // From fee_flow_height: its fee destination, vesting (the network's default if not given) and control.
     if (rules.FeeFlowActive(height)) {

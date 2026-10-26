@@ -703,6 +703,8 @@ public:
             consensus.sidechain.no_treasury_height = opts.dep_opts.no_treasury_height.value_or(0);
             // The fee-flow release only if a test asks (-testactivationheight=feeflow@<height>): the tests of before keep their rules.
             consensus.sidechain.fee_flow_height = opts.dep_opts.fee_flow_height.value_or(std::numeric_limits<int>::max());
+            // Graduation at 100 coins only if a test asks (-testactivationheight=graduation100@<height>).
+            consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -962,6 +964,10 @@ public:
                 // block (which it builds on), with the long-gap rule (below) in force before it. In the fingerprint.
                 static constexpr int SLOT99_V5_HEIGHT{9100};
                 consensus.sidechain.fee_flow_height = SLOT99_V5_HEIGHT;
+                // Upgrade v6 (doc/photon-slot.md, "Upgrade v6"), from block SLOT99_V6_HEIGHT: launches made from it graduate at 100
+                // ECX (500 before), their curve scaled with it; a launch keeps what it was made under. In the fingerprint.
+                static constexpr int SLOT99_V6_HEIGHT{18100};
+                consensus.sidechain.graduation100_height = SLOT99_V6_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
                 // four hours without a block and its median time lagged by 5 h 20 min). Its epochs before keep their seeds
