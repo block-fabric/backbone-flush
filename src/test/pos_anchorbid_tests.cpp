@@ -409,15 +409,22 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     auto other{script};
     other[3] = 0xbe;
     BOOST_CHECK(!BmmRequestSlot(other, prev));
-    // A crafted flood of one slot counts as one rate a block; blocks with one request alone are left out; the median.
+    // Active slots other than ours only; one vote a sender; 3 slots at least a block; the median.
+    const std::set<uint8_t> active{1, 2, 3, 4, 9};
     std::vector<std::vector<BmmRequestSeen>> blocks;
-    blocks.push_back({{1, 2000}, {2, 3000}, {9, 1}, {9, 1}, {9, 1}, {9, 1}});
-    blocks.push_back({{1, 2100}, {2, 2900}});
-    blocks.push_back({{9, 500'000'000}});
-    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks), 2100);
-    blocks.push_back({{9, 900'000'000}, {9, 900'000'000}, {8, 900'000'000}});
-    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks), 2900);
-    BOOST_CHECK(!RobustIncludedRate({{{1, 1000}}}));
+    blocks.push_back({{1, 2000, "a"}, {2, 3000, "b"}, {3, 2500, "c"}, {9, 1, "x"}, {9, 1, "x"}, {9, 1, "x"}});
+    blocks.push_back({{1, 2100, "a"}, {2, 2900, "b"}, {4, 2200, "d"}});
+    // One sender across many slots (active or not, ours included): one vote, so this block has one slot and counts not.
+    std::vector<BmmRequestSeen> flood;
+    for (int slot{0}; slot < 200; ++slot) flood.push_back({static_cast<uint8_t>(slot), 900'000'000, "x"});
+    blocks.push_back(flood);
+    // A block with our slot and inactive ones only: nothing.
+    blocks.push_back({{7, 1, "e"}, {100, 1, "f"}, {101, 1, "g"}});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks, active, uint8_t{7}), 2200);
+    // Two blocks of fakes that do count (three senders each): they can only move the median by their share.
+    blocks.push_back({{1, 900'000'000, "p"}, {2, 900'000'000, "q"}, {3, 900'000'000, "r"}});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks, active, uint8_t{7}), 2500);
+    BOOST_CHECK(!RobustIncludedRate({{{1, 1000, "a"}, {2, 1000, "b"}}}, active, std::nullopt));
     // In the bid: clamped to 10 x the network's least, never above the max.
     AnchorBidPolicy policy;
     BidInputs in{At(0)};

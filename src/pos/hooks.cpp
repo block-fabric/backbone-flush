@@ -2335,7 +2335,7 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     try {
         UniValue args{UniValue::VARR};
         args.push_back(main_tip.GetHex());
-        args.push_back(2);
+        args.push_back(3);
         const UniValue block{client.Call("getblock", args)};
         const auto prev{uint256::FromHex(block.find_value("previousblockhash").isStr() ? block.find_value("previousblockhash").get_str() : "")};
         const UniValue& txs{block.find_value("tx")};
@@ -2351,9 +2351,22 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
                 }
                 const auto fee{amount(tx.find_value("fee"))};
                 const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
-                if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
-                seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>()});
+                const UniValue& vin{tx.find_value("vin")};
+                const UniValue& sender{vin.isArray() && !vin.empty() ? vin[0].find_value("prevout").find_value("scriptPubKey").find_value("hex") : NullUniValue};
+                if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0 || !sender.isStr()) continue;
+                seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>(), sender.get_str()});
             }
+        }
+    } catch (const std::exception&) {
+    } catch (const UniValue&) {
+    }
+    // The sidechains active on the mainchain (their slots alone count).
+    std::set<uint8_t> active;
+    try {
+        const UniValue list{client.Call("listactivesidechains", UniValue{UniValue::VARR})};
+        for (size_t i{0}; list.isArray() && i < list.size(); ++i) {
+            const UniValue& slot{list[i].find_value("slot")};
+            if (slot.isNum() && slot.getInt<int>() >= 0 && slot.getInt<int>() <= 255) active.insert(static_cast<uint8_t>(slot.getInt<int>()));
         }
     } catch (const std::exception&) {
     } catch (const UniValue&) {
@@ -2364,7 +2377,8 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
         m_bid_seen.push_back(std::move(*seen));
         while (m_bid_seen.size() > 6) m_bid_seen.pop_front();
     }
-    m_bid_inputs.included_rate_per_kvb = RobustIncludedRate({m_bid_seen.begin(), m_bid_seen.end()});
+    const uint32_t own_slot{::Params().GetConsensus().sidechain.slot};
+    m_bid_inputs.included_rate_per_kvb = RobustIncludedRate({m_bid_seen.begin(), m_bid_seen.end()}, active, own_slot <= 255 ? std::optional<uint8_t>{static_cast<uint8_t>(own_slot)} : std::nullopt);
     m_bid_inputs.relay_rate_per_kvb = relay_rate;
     m_bid_fee_source = source;
     m_bid_balance = balance;

@@ -297,17 +297,24 @@ std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, con
     return script[5];
 }
 
-std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, size_t min_requests)
+std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, const std::set<uint8_t>& active, std::optional<uint8_t> own,
+                                          size_t min_slots)
 {
     std::vector<CAmount> lowest;
     for (const auto& block : blocks) {
-        if (block.size() < min_requests) continue;
-        std::map<uint8_t, CAmount> by_slot;
+        // One vote a sender: its lowest request, of an active slot that is not ours.
+        std::map<std::string, BmmRequestSeen> by_sender;
         for (const BmmRequestSeen& r : block) {
-            if (r.rate_per_kvb <= 0) continue;
+            if (r.rate_per_kvb <= 0 || !active.contains(r.slot) || (own && r.slot == *own) || r.sender.empty()) continue;
+            auto [it, fresh]{by_sender.emplace(r.sender, r)};
+            if (!fresh && r.rate_per_kvb < it->second.rate_per_kvb) it->second = r;
+        }
+        std::map<uint8_t, CAmount> by_slot;
+        for (const auto& [sender, r] : by_sender) {
             auto [it, fresh]{by_slot.emplace(r.slot, r.rate_per_kvb)};
             if (!fresh) it->second = std::min(it->second, r.rate_per_kvb);
         }
+        if (by_slot.size() < min_slots) continue;
         for (const auto& [slot, rate] : by_slot) lowest.push_back(rate);
     }
     if (lowest.empty()) return std::nullopt;
