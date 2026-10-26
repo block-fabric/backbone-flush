@@ -54,7 +54,7 @@
   });
 
   /** An amount of an asset by id when the order was read whole (else as the node wrote it). */
-  const amountOf = (value: Amount | undefined, id: string | undefined) => (value === undefined ? '–' : id ? formatAmount(value, decimalsOf(id), { max: 8 }) : String(value));
+  const amountOf = (value: Amount | undefined, id: string | undefined) => (value === undefined ? '–' : id ? formatAmount(value, decimalsOf(id), { max: 8 }) : formatAmount(value, 8));
   const anyEvicted = $derived((list ?? []).some((o) => o.evicted));
 
   async function settle(o: WalletOrder, cancel: boolean) {

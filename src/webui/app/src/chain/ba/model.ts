@@ -348,6 +348,23 @@ export function numberText(value: number | string, decimals: number): string {
   return text;
 }
 
+/**
+ * A number as its shortest exact decimal text (the digits JSON gave: 0.29 is "0.29", not 0.2899...), the exponent
+ * written out ("1e-7" is "0.0000001"): cut to an asset's decimals, it rounds down, never up to more than was given.
+ */
+export function shortestText(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const s = String(Math.abs(value));
+  const m = /^(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(s);
+  let out = s;
+  if (m) {
+    const digits = m[1] + (m[2] ?? '');
+    const point = m[1].length + Number(m[3]);
+    out = point <= 0 ? `0.${'0'.repeat(-point)}${digits}` : point >= digits.length ? digits + '0'.repeat(point - digits.length) : `${digits.slice(0, point)}.${digits.slice(point)}`;
+  }
+  return value < 0 ? `-${out}` : out;
+}
+
 /** The units (the smallest amounts) of an amount, with the decimals of its asset. */
 export function unitsOf(value: number | string, decimals: number): bigint {
   const text = numberText(value, decimals).trim();
@@ -374,7 +391,7 @@ export function unitsError(value: number | string, decimals: number): bigint {
 
 /** The units of an amount, never more than the node meant (a balance: "Max"). */
 export function unitsAtMost(value: number | string, decimals: number): bigint {
-  const units = unitsOf(value, decimals) - unitsError(value, decimals);
+  const units = unitsOf(typeof value === 'number' ? shortestText(value) : value, decimals) - unitsError(value, decimals);
   return units < 0n ? 0n : units;
 }
 
