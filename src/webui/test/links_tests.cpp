@@ -205,7 +205,11 @@ BOOST_AUTO_TEST_CASE(ids_amounts_and_texts_are_exact)
     BOOST_CHECK_EQUAL(launch("&logo=sha256%3A" + std::string(64, 'a')), "");
     BOOST_CHECK_NE(launch("&ecx=1"), "");   // a first buy without its floor
     BOOST_CHECK_NE(launch("&min_tokens=1"), "");
-    BOOST_CHECK_NE(launch("&slippage_bps=1"), "");
+    // A slippage without a first buy binds nothing: ignored, so that the links of the public API of 7.0.0 (which wrote
+    // slippage_bps=100 on every launch) still run; a bad one is still refused.
+    BOOST_CHECK_EQUAL(launch("&slippage_bps=100"), "");
+    BOOST_CHECK(!Parse("flush:launch?v=1&network=regtest&exp=" + Exp() + "&ticker=LUMEN&name=Lumen&supply=1000000000&decimals=6&fee_bps=115&slippage_bps=100", NET, NOW).slippage_bps);
+    BOOST_CHECK_NE(launch("&slippage_bps=99999"), "");
     std::string links;
     for (int i{0}; i < 5; ++i) links += "&link=https%3A%2F%2Fa.example";
     BOOST_CHECK_NE(launch(links), "");

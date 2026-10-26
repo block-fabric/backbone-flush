@@ -355,7 +355,7 @@ void CheckLaunch(const Request& r)
     if (!r.description.empty() && !r.links.empty()) ++info;
     if (info > bitassets::MAX_INFO_SIZE) throw LinkError(strprintf("The description and the links take %u bytes: the chain keeps %u", info, bitassets::MAX_INFO_SIZE));
     if (r.amount.empty() != r.floor.empty()) throw LinkError("A first buy has both ecx and min_tokens, or neither");
-    if (r.amount.empty() && r.slippage_bps) throw LinkError("slippage_bps goes with a first buy");
+    if (r.amount.empty() && r.slippage_bps) throw LinkError("slippage_bps is the slippage of a first buy: this link has no first buy (ecx and min_tokens)");
     if (r.verb == Verb::LAUNCH && r.decimals && r.supply.empty()) throw LinkError("decimals go with a supply");
 }
 } // namespace
@@ -473,6 +473,8 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         if (auto d{take("decimals")}) r.decimals = Int(*d, "decimals", 0, bitassets::MAX_DECIMALS);
         if (auto fee{take("fee_bps")}) r.fee_bps = Int(*fee, "fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
         if (auto a{take("allocation_bps")}) r.allocation_bps = Int(*a, "allocation_bps", 0, bitassets::MAX_LAUNCH_ALLOCATION);
+        // A slippage without a first buy binds nothing: ignored (the public API of 7.0.0 wrote one on every launch).
+        if (r.amount.empty() && r.floor.empty()) r.slippage_bps.reset();
         CheckLaunch(r);
         break;
     }
