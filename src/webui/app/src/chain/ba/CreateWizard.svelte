@@ -600,7 +600,7 @@
                 <div class="field">
                   <label class="check"><input type="checkbox" bind:checked={keepControl} /> <span>Keep control coin</span></label>
                   {#if keepControl}
-                    <label class="check ba-problems bad" data-testid="mintable-confirm"><input type="checkbox" bind:checked={mintableConfirmed} /> <span>Mintable: you can create more units at any time. Buyers will see this warning.</span></label>
+                    <label class="check ba-problems bad" data-testid="mintable-confirm"><input type="checkbox" bind:checked={mintableConfirmed} /> <span>Unlocked Supply: you can create more units at any time. Its pages and its buyers' confirmations show the tag Unlocked Supply.</span></label>
                   {:else}
                     <span class="hint">Off: the supply is fixed for good.</span>
                   {/if}
@@ -649,7 +649,7 @@
                   {:else}
                     <dt>Creator fees</dt><dd>{feeDestinationText({ fee_destination: feeDestination, burn_percent: burnPercent })}</dd>
                   {/if}
-                  <dt>Control coin</dt><dd>{#if keepControl}<span class="ba-tag danger">Mintable: the creator can create more</span>{:else}Not kept: the supply is fixed{/if}</dd>
+                  <dt>Control coin</dt><dd>{#if keepControl}<span class="ba-tag" title="The creator can still mint more">Unlocked Supply</span>{:else}Not kept: the supply is fixed{/if}</dd>
                   <dt>After graduation</dt><dd data-testid="launch-graduation-review">{splitOn && feeSplitOptions(feeSplit).fee_split ? t('A locked full-range position at %1 %: its fees go %2 % to the split above and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER) : t('A locked full-range position at %1 %: its fees go %2 % to the creator and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER)}</dd>
                 {/if}
                 {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} {TICKER}</dd>{/if}

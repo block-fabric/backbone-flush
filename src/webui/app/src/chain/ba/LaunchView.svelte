@@ -18,7 +18,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
-  import MintableBadge from './MintableBadge.svelte';
+  import UnlockedSupplyBadge from './UnlockedSupplyBadge.svelte';
   import Chart from './Chart.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
@@ -206,6 +206,7 @@
       message: sSide === 'buy' ? t('Pay %1 %4 for about %2 %3?', formatUnits(sAmount, sIn), formatUnits(sOut, sOutD), label, TICKER) : t('Sell %1 %2 for about %3 %4?', formatUnits(sAmount, sIn), label, formatUnits(sOut, sOutD), TICKER),
       informative: t('At least %1, should the curve move first (slippage %2%). The order clears at the end of its block, at one price for all of the block. %3', formatUnits(sLeast, sOutD), String(sSlip), sBack > 0n ? t('It passes the curve\'s end: about %1 %2 comes back, and the launch graduates.', formatUnits(sBack, 8), TICKER) : sGraduates ? t('It takes the launch to graduation.') : ''),
       level: 'question',
+      ...(sSide === 'buy' && launch.mintable === true ? { tags: [{ label: t('Unlocked Supply'), title: t('The creator can still mint more') }] } : {}),
       choices: [
         { id: 'no', label: 'Cancel' },
         { id: 'yes', label: sSide === 'buy' ? 'Buy' : 'Sell', kind: 'primary' },
@@ -275,7 +276,7 @@
     <header class="panel head">
       <AssetBadge id={token} label={launch.ticker} display={launch.display_name ?? ''} size="l" />
       {#if graduated}<span class="ba-tag accent">Graduated</span>{:else}<span class="ba-tag">On its curve</span>{/if}
-      <MintableBadge mintable={launch.mintable === true} />
+      <UnlockedSupplyBadge mintable={launch.mintable === true} />
       {#if launch.allocation > 0}<span class="ba-tag warn" title={t('Minted to the creator at graduation, on top of the supply')}>Creator allocation {launch.allocation}%</span>{/if}
       <span class="grow"></span>
       {#if graduated}

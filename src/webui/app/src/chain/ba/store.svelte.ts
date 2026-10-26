@@ -257,17 +257,20 @@ export const openMarketIntent = $state({ asset: '' });
 /**
  * The launches whose creator kept the control coin (v5 keep_control: mintable, more can be made), by token, from every
  * listlaunches and getlaunch the pages read (noteLaunches), and once per block for the pages that list assets
- * (loadLaunchFlags): the loud marker of ba/MintableBadge.svelte.
+ * (loadLaunchFlags): the tag of ba/UnlockedSupplyBadge.svelte on an asset's own pages and in the buy and swap confirmations.
  */
 export const mintableLaunch = $state<Record<string, boolean>>({});
 /** Each launch's own graduation (CHN raised; v6: 100 from its height, 500 before), from the same reads: the registry's progress. */
 export const launchGraduation = $state<Record<string, number>>({});
-export function noteLaunches(list: readonly { token: string; mintable?: boolean; graduation?: Amount }[] | null | undefined): void {
+/** Each launch's creator allocation (percent of the supply, minted at graduation), from the same reads: its pool's tag. */
+export const launchAllocation = $state<Record<string, number>>({});
+export function noteLaunches(list: readonly { token: string; mintable?: boolean; graduation?: Amount; allocation?: number }[] | null | undefined): void {
   for (const l of list ?? []) {
     if (!l || typeof l.token !== 'string') continue;
     if ((l.mintable === true) !== (mintableLaunch[l.token] === true)) mintableLaunch[l.token] = l.mintable === true;
     const g = l.graduation === undefined ? NaN : Number(l.graduation);
     if (Number.isFinite(g) && g > 0 && launchGraduation[l.token] !== g) launchGraduation[l.token] = g;
+    if (typeof l.allocation === 'number' && launchAllocation[l.token] !== l.allocation) launchAllocation[l.token] = l.allocation;
   }
 }
 let flagsAt = -1;
@@ -275,7 +278,7 @@ export function loadLaunchFlags(): void {
   if (flagsAt === ba.version) return;
   flagsAt = ba.version;
   void rpc
-    .raw<{ launches?: { token: string; mintable?: boolean; graduation?: Amount }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
+    .raw<{ launches?: { token: string; mintable?: boolean; graduation?: Amount; allocation?: number }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
     .then((page) => noteLaunches(page?.launches))
     .catch(() => undefined);
 }
