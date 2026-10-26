@@ -49,7 +49,66 @@
   const shown = $derived(filterAndSort(rows, columns, filter, sortKey, sortDir));
   const range = $derived(visibleRange(scrollTop, viewport, rowHeight, shown.length));
   const slice = $derived(shown.slice(range.start, range.end));
-  const template = $derived(columns.map((c) => c.width ?? 'minmax(6rem, 1fr)').join(' '));
+  // Columns resized by the user (drag a header's edge, ←/→ on it, double-click to reset), kept per table in this
+  // app's storage by its label; none in a fitted table (a narrow window keeps its shares, never a sideways scroll).
+  const widthsKey = $derived(`table-widths:${label}`);
+  let widths = $state<Record<string, number>>({});
+  $effect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(widthsKey) ?? '{}');
+      widths = saved && typeof saved === 'object' ? saved : {};
+    } catch {
+      widths = {};
+    }
+  });
+  function saveWidths() {
+    try {
+      localStorage.setItem(widthsKey, JSON.stringify(widths));
+    } catch {
+      /* not kept */
+    }
+  }
+  const MIN_WIDTH = 40;
+  function setWidth(key: string, px: number | null) {
+    const next = { ...widths };
+    if (px === null) delete next[key];
+    else next[key] = Math.max(MIN_WIDTH, Math.round(px));
+    widths = next;
+  }
+  function startResize(ev: PointerEvent, key: string) {
+    const head = (ev.currentTarget as HTMLElement).parentElement;
+    if (!head) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const grip = ev.currentTarget as HTMLElement;
+    grip.setPointerCapture(ev.pointerId);
+    const startX = ev.clientX;
+    const startW = head.getBoundingClientRect().width;
+    const move = (e: PointerEvent) => setWidth(key, startW + e.clientX - startX);
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      saveWidths();
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  }
+  function resizeKey(ev: KeyboardEvent, key: string) {
+    if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const head = (ev.currentTarget as HTMLElement).parentElement;
+    const now = widths[key] ?? head?.getBoundingClientRect().width ?? 100;
+    setWidth(key, now + (ev.key === 'ArrowRight' ? 16 : -16));
+    saveWidths();
+  }
+  function resetWidth(key: string) {
+    setWidth(key, null);
+    saveWidths();
+  }
+  const template = $derived(columns.map((c) => (!fit && widths[c.key] ? `${widths[c.key]}px` : (c.width ?? 'minmax(6rem, 1fr)'))).join(' '));
   const selectedIndex = $derived(selected === null ? -1 : shown.findIndex((r) => key(r) === selected));
 
   $effect(() => {
@@ -132,6 +191,24 @@
             <span class="arrow" aria-hidden="true">{sortKey === column.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}</span>
           </button>
         {/if}
+        {#if !fit}
+          <!-- A focusable separator is WAI-ARIA's resizer (window splitter): it takes the keys and the pointer. -->
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+          <span
+            class="grip"
+            role="separator"
+            aria-valuenow={widths[column.key] ?? 0}
+            aria-valuemin={MIN_WIDTH}
+            aria-orientation="vertical"
+            aria-label="Resize the column {column.label || 'status'}"
+            title="Drag to resize; double-click to reset"
+            tabindex="0"
+            onpointerdown={(ev) => startResize(ev, column.key)}
+            ondblclick={(ev) => { ev.stopPropagation(); resetWidth(column.key); }}
+            onkeydown={(ev) => resizeKey(ev, column.key)}
+            onclick={(ev) => ev.stopPropagation()}
+          ></span>
+        {/if}
       </div>
     {/each}
   </div>
@@ -176,6 +253,37 @@
 </div>
 
 <style>
+  .head [role='columnheader'] {
+    position: relative;
+  }
+  .grip {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    bottom: 0;
+    width: 7px;
+    cursor: col-resize;
+    z-index: 2;
+    touch-action: none;
+  }
+  .grip::after {
+    content: '';
+    position: absolute;
+    top: 25%;
+    bottom: 25%;
+    left: 3px;
+    width: 1px;
+    background: var(--line);
+  }
+  .grip:hover::after,
+  .grip:focus-visible::after {
+    background: var(--accent);
+    top: 0;
+    bottom: 0;
+  }
+  .grip:focus-visible {
+    outline: none;
+  }
   .table {
     position: relative;
     height: 100%;
