@@ -77,11 +77,9 @@
     max-width: 100%;
     align-items: baseline;
     gap: 0.3em;
-    padding: 0 0.35em;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-s, 4px);
-    background: var(--surface-2);
-    font-size: 0.8em;
+    /* No box (user feedback 2026-10-26): the mark is told from a name by its own monospaced, muted type. */
+    font-family: var(--font-mono);
+    font-size: 0.78em;
     font-weight: 500;
     color: var(--text-muted);
     line-height: 1.35;
