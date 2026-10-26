@@ -1920,13 +1920,14 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     }
     const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
     // These reads precede m_anchor_mutex: never acquire cs_main while holding the anchor lock.
-    // A quiet chain still anchors once an epoch to refresh validator sets; payouts and peg work do not wait.
+    // A quiet chain needs no anchor of its own (user decision 2026-10-26): leaders and seeds come from the mainchain record
+    // and the newest anchor's set, however old (SetFor), so epochs go on; only what changes the state's set (a bond, an
+    // unbond, a jail: Staking::SetChanged) waits for an anchor, with the peg actions and fees (HasPendingAnchorActions).
     const bool stalled{Stalled(fast, main_block->time, PosActiveNow())};
     const bool needs_anchor{WITH_LOCK(::cs_main, {
         const sidechain::State side{chainman->ActiveChainstate().SideState()};
         if (stalled || HasPendingAnchorActions(side, record)) return true;
-        const CBlockIndex* point{chainman->m_blockman.LookupBlockIndex(fast.anchor_point)};
-        return !point || slot - SlotOf(point->nTime, m_params) >= m_params.slots_per_epoch;
+        return m_staking.SetChanged(side.View(), EpochOf(slot, m_params));
     })};
     // The mainchain's next-block fee estimate and the bid wallet's balance (once per mainchain block), the bids
     // made settled with the record; and the bid of the policy for a pot.
@@ -1935,6 +1936,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         SettleBids(record);
         m_bid_inputs.pot = pot;
         m_bid_inputs.pending_actions = needs_anchor;
+        m_bid_inputs.min_rate_per_kvb = m_params.min_bid_rate_per_kvb;
         m_bid_inputs.slot = slot;
         m_bid_inputs.first_unanchored_slot = fast.first_unanchored_slot;
         m_bid_inputs.max_unanchored_slots = m_params.MaxUnanchoredSlots(slot);
@@ -2327,8 +2329,35 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     } catch (const UniValue&) {
         balance_error = "the mainchain wallet could not be read";
     }
+    // What the last mainchain block took for a BMM request (any slot: an output 6a4400bf00...), the lowest feerate, for a
+    // node whose mainchain node answers getblock (not through the enforcer's interface alone).
+    std::optional<CAmount> included;
+    try {
+        UniValue args{UniValue::VARR};
+        args.push_back(main_tip.GetHex());
+        args.push_back(2);
+        const UniValue block{client.Call("getblock", args)};
+        const UniValue& txs{block.find_value("tx")};
+        for (size_t i{0}; txs.isArray() && i < txs.size(); ++i) {
+            const UniValue& tx{txs[i]};
+            const UniValue& vouts{tx.find_value("vout")};
+            bool bmm{false};
+            for (size_t j{0}; vouts.isArray() && j < vouts.size() && !bmm; ++j) {
+                const UniValue& spk{vouts[j].find_value("scriptPubKey").find_value("hex")};
+                bmm = spk.isStr() && spk.get_str().starts_with("6a4400bf00");
+            }
+            const auto fee{amount(tx.find_value("fee"))};
+            const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
+            if (!bmm || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
+            const CAmount per_kvb{*fee * 1000 / vsize.getInt<int64_t>()};
+            if (!included || per_kvb < *included) included = per_kvb;
+        }
+    } catch (const std::exception&) {
+    } catch (const UniValue&) {
+    }
     LOCK(m_anchor_mutex);
     m_bid_inputs.fee_rate_per_kvb = rate;
+    m_bid_inputs.included_rate_per_kvb = included;
     m_bid_inputs.relay_rate_per_kvb = relay_rate;
     m_bid_fee_source = source;
     m_bid_balance = balance;

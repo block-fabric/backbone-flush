@@ -124,6 +124,10 @@ struct BidInputs {
     CAmount relay_rate_per_kvb{1000};
     //! Peg work or staking/validator-set maintenance needs an anchor. Unknown means bid conservatively.
     bool pending_actions{true};
+    //! The least feerate of a BMM request recent mainchain blocks took (any slot), per 1000 vbytes, if seen.
+    std::optional<CAmount> included_rate_per_kvb;
+    //! The network's least competitive rate for a bid, per 1000 vbytes (PosParams::min_bid_rate_per_kvb).
+    CAmount min_rate_per_kvb{0};
     //! Mainchain blocks in a row that came without this anchorer's commitment while it bid.
     int missed{0};
     //! What landed bids cost in the current period.

@@ -196,6 +196,8 @@ public:
 
     /** The validator set the state makes now, for epochs `epoch` on (jailed validators left out). */
     ValidatorSet MakeSet(const sidechain::StoreView& view, int64_t epoch) const;
+    /** Whether the set the state makes now differs from the last set an anchor made (a bond, an unbond or a jail waits for one). */
+    bool SetChanged(const sidechain::StoreView& view, int64_t epoch) const;
     /** Put the genesis validators in the table, once. */
     void LoadGenesis(sidechain::StoreOverlay& out) const;
 
