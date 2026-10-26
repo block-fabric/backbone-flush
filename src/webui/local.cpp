@@ -763,7 +763,7 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
             if (!value.isNum()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: decimals is a number");
             dialog->rows.push_back(confirm::Text("Decimals", confirm::ValueText(value)));
         } else if (key == "fee") {
-            dialog->rows.push_back(confirm::Text("Curve's fee", confirm::ValueText(value) + " % of each trade (its parts as the network's: creator, treasury, security)"));
+            dialog->rows.push_back(confirm::Text("Curve's fee", confirm::ValueText(value) + " % of each trade (its parts as the network's: creator and security)"));
         } else if (key == "allocation") {
             dialog->rows.push_back(confirm::Text("Creator's allocation", confirm::ValueText(value) + " % of the supply, minted to you at graduation (shown to everyone)"));
         } else if (key == "first_buy") {
@@ -776,6 +776,30 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
             auto row{coins(key.c_str())};
             row.label = key == "min_buy" ? "Least a buy pays" : "Most a buy pays";
             dialog->rows.push_back(std::move(row));
+        } else if (key == "fee_destination") {
+            if (!value.isStr()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: fee_destination is text");
+            const std::string& d{value.get_str()};
+            if (d == "creator") {
+                dialog->rows.push_back(confirm::Text("Creator's fees", "To you (claimed with Claim), fixed for good"));
+            } else if (d == "burn") {
+                dialog->rows.push_back(confirm::Text("Creator's fees", "Bought back in its own market each block and burned, fixed for good"));
+            } else if (d == "split") {
+                dialog->rows.push_back(confirm::Text("Creator's fees", "Split between you and buyback and burn (below), fixed for good"));
+            } else {
+                throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: fee_destination is creator, burn or split");
+            }
+        } else if (key == "burn_percent") {
+            if (!value.isNum()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: burn_percent is a number");
+            dialog->rows.push_back(confirm::Text("Bought back and burned", confirm::ValueText(value) + " % of the creator's fees (the rest yours)"));
+        } else if (key == "keep_control") {
+            if (!value.isBool()) throw HostError(BRIDGE_INVALID_REQUEST, "launchtoken: keep_control is true or false");
+            if (value.get_bool()) {
+                dialog::Row head;
+                head.kind = dialog::Row::Kind::HEADING;
+                head.label = "Mintable: you keep control";
+                dialog->rows.push_back(std::move(head));
+                dialog->rows.push_back(confirm::Text("Control coin", "Kept by you: you can create more units at any time. Every page marks this launch \"Mintable: the creator can create more\""));
+            }
         } else {
             throw HostError(BRIDGE_INVALID_REQUEST, strprintf("launchtoken has no option %s", key.substr(0, 40)));
         }
