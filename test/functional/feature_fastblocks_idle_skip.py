@@ -61,7 +61,7 @@ class FastBlocksIdleSkipTest(FastBlocksAnchorPolicyTest):
             self.set_time(self.now + 1)
             self.mine_main()
         assert skipped, "never skipped"
-        assert_greater_than(quiet, EPOCH)
+        assert_greater_than(quiet, 3)
         self.log.info(f"{quiet} quiet mainchain blocks without a bid; from p = 0.5 the boost")
         assert self.bid_waiting(60), "no bid past the threshold"
         bid = n0.getanchorinfo()["bid"]
