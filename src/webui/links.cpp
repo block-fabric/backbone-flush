@@ -381,7 +381,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
 
     // The parameters, each once (link: up to MAX_LINKS times).
     std::map<std::string, std::string> params;
-    std::vector<std::string> links;
+    std::vector<std::string> links, splits;
     const std::string_view query{rest.substr(q + 1)};
     size_t pos{0};
     while (pos <= query.size()) {
@@ -401,6 +401,11 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         if (key == "link") {
             if (links.size() >= MAX_LINKS) throw LinkError(strprintf("At most %u links", MAX_LINKS));
             links.push_back(std::move(value));
+            continue;
+        }
+        if (key == "split") {
+            if (splits.size() >= bitassets::MAX_FEE_SHARES) throw LinkError(strprintf("At most %u fee shares (split)", bitassets::MAX_FEE_SHARES));
+            splits.push_back(std::move(value));
             continue;
         }
         if (!params.emplace(key, std::move(value)).second) throw LinkError(strprintf("%s is given twice", key));
@@ -435,6 +440,14 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     if (r.expires > now + MAX_LIFETIME + CLOCK_SKEW) throw LinkError("This link would be good for more than a day: refused (check the computer's clock)");
 
     if (!links.empty() && r.verb != Verb::LAUNCH && r.verb != Verb::REGISTER) throw LinkError("link is a parameter of launch and register only");
+    if (!splits.empty() && r.verb != Verb::LAUNCH) throw LinkError("split is a parameter of launch only");
+    for (const std::string& s : splits) {
+        const size_t colon{s.rfind(':')};
+        if (colon == std::string::npos || colon == 0 || colon + 1 == s.size()) throw LinkError("split: <creator | burn | address>:<basis points>");
+        const std::string to{s.substr(0, colon)};
+        if (to.size() > 128 || !std::all_of(to.begin(), to.end(), [](char c) { return Lower(c) || Digit(c); })) throw LinkError("split: the recipient is creator, burn or an address");
+        r.split.emplace_back(to, Int(s.substr(colon + 1), "split", 1, bitassets::FEE_SPLIT_BPS));
+    }
     switch (r.verb) {
     case Verb::CONNECT:
         r.origin = need("origin");

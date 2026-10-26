@@ -54,7 +54,9 @@ void WriteOperation(DataStream& s, const Register& op)
 /** A launch with its own parameters is a marker of its own kind: the launch, then its curve's fee. */
 void WriteOperation(DataStream& s, const LaunchToken& op)
 {
-    if (op.V5()) {
+    if (op.V7()) {
+        s << LAUNCH_V7_KIND << op << VARINT(op.fee) << op.keep_control << op.split;
+    } else if (op.V5()) {
         s << LAUNCH_V5_KIND << op << VARINT(op.fee) << op.destination << op.burn_bps << op.keep_control;
     } else if (op.WithParams()) {
         s << LAUNCH_WITH_PARAMS_KIND << op << VARINT(op.fee);
@@ -184,7 +186,87 @@ std::optional<uint64_t> Add(uint64_t a, uint64_t b)
 
 bool LaunchToken::V5() const
 {
-    return destination != 0 || burn_bps != 0 || keep_control;
+    return destination != 0 || burn_bps != 0 || keep_control || !split.empty();
+}
+
+bool CheckFeeSplit(const std::vector<FeeShare>& split)
+{
+    if (split.empty() || split.size() > MAX_FEE_SHARES) return false;
+    uint32_t total{0};
+    size_t creators{0}, burns{0}, addresses{0};
+    for (size_t i{0}; i < split.size(); ++i) {
+        const FeeShare& share{split[i]};
+        if (share.bps == 0 || share.bps > FEE_SPLIT_BPS) return false;
+        total += share.bps;
+        switch (share.kind) {
+        case FeeShare::CREATOR: ++creators; break;
+        case FeeShare::BURN: ++burns; break;
+        case FeeShare::ADDRESS: {
+            ++addresses;
+            if (share.script.empty() || share.script.size() > MAX_FEE_SHARE_SCRIPT_SIZE || !Spendable(share.script)) return false;
+            for (size_t j{0}; j < i; ++j) {
+                if (split[j].kind == FeeShare::ADDRESS && split[j].script == share.script) return false;
+            }
+            break;
+        }
+        default: return false;
+        }
+        if (share.kind != FeeShare::ADDRESS && !share.script.empty()) return false;
+    }
+    return total == FEE_SPLIT_BPS && creators <= 1 && burns <= 1 && addresses <= MAX_FEE_ADDRESSES;
+}
+
+std::vector<uint64_t> SplitCoin(const std::vector<FeeShare>& split, uint64_t coin)
+{
+    std::vector<uint64_t> part(split.size());
+    if (split.empty()) return part;
+    uint64_t given{0};
+    std::optional<size_t> creator, burn;
+    for (size_t i{0}; i < split.size(); ++i) {
+        part[i] = static_cast<uint64_t>(static_cast<unsigned __int128>(coin) * split[i].bps / FEE_SPLIT_BPS);
+        given += part[i];
+        if (split[i].kind == FeeShare::CREATOR) creator = i;
+        if (split[i].kind == FeeShare::BURN) burn = i;
+    }
+    part[creator.value_or(burn.value_or(0))] += coin - given;
+    return part;
+}
+
+std::vector<FeeShareView> FeeSplitView(const LaunchRecord& record)
+{
+    std::vector<FeeShareView> view;
+    if (!record.v5) return view;
+    const std::vector<FeeShare> split{record.v7 ? record.split : SplitOfDestination(record.destination, record.burn_bps)};
+    for (size_t i{0}; i < split.size(); ++i) {
+        FeeShareView v;
+        v.bps = split[i].bps;
+        const uint64_t given{record.v7 && i < record.share_given.size() ? record.share_given[i] : 0};
+        if (split[i].kind == FeeShare::CREATOR) {
+            v.kind = "creator";
+            v.paid = record.creator_paid;
+            v.owed = record.creator_fees;
+        } else if (split[i].kind == FeeShare::BURN) {
+            v.kind = "burn";
+            v.owed = record.buyback;
+            v.paid = given - std::min(given, record.buyback);
+        } else {
+            v.kind = "address";
+            v.script = split[i].script;
+            v.owed = i < record.share_owed.size() ? record.share_owed[i] : 0;
+            v.paid = given - std::min(given, v.owed);
+        }
+        view.push_back(std::move(v));
+    }
+    return view;
+}
+
+std::vector<FeeShare> SplitOfDestination(uint8_t destination, uint16_t burn_bps)
+{
+    if (destination == static_cast<uint8_t>(FeeDestination::BURN)) return {FeeShare{FeeShare::BURN, {}, FEE_SPLIT_BPS}};
+    if (destination == static_cast<uint8_t>(FeeDestination::SPLIT) && burn_bps > 0 && burn_bps < FEE_SPLIT_BPS) {
+        return {FeeShare{FeeShare::BURN, {}, burn_bps}, FeeShare{FeeShare::CREATOR, {}, static_cast<uint16_t>(FEE_SPLIT_BPS - burn_bps)}};
+    }
+    return {FeeShare{FeeShare::CREATOR, {}, FEE_SPLIT_BPS}};
 }
 
 
@@ -269,6 +351,14 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
             break;
         }
         case CurveAsset::KIND: ReadOperation<CurveAsset>(s, marker.operation); break;
+        case LAUNCH_V7_KIND: {
+            LaunchToken launch;
+            s >> launch >> VARINT(launch.fee) >> launch.keep_control >> launch.split;
+            // One way to write a marker: one without a split is of the kinds before.
+            if (launch.split.empty()) return std::nullopt;
+            marker.operation = std::move(launch);
+            break;
+        }
         case LAUNCH_V5_KIND: {
             LaunchToken launch;
             s >> launch >> VARINT(launch.fee) >> launch.destination >> launch.burn_bps >> launch.keep_control;
@@ -729,6 +819,18 @@ bool CheckFeeFlowActivation(const CTransaction& tx, bool active, std::string& re
     return true;
 }
 
+bool CheckFeeSplitActivation(const CTransaction& tx, bool active, std::string& reject_reason)
+{
+    if (active) return true;
+    const auto marker{GetMarker(tx)};
+    if (!marker || !marker->operation) return true;
+    if (const auto* launch{std::get_if<LaunchToken>(&*marker->operation)}; launch && launch->V7()) {
+        reject_reason = "bad-ba-marker";
+        return false;
+    }
+    return true;
+}
+
 bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason)
 {
     if (active) return true;
@@ -836,6 +938,8 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
             // The fee-flow release's parameters: a destination, a split's burn part (1 to 99.99 %, none otherwise), a vesting.
             if (launch->destination > MAX_FEE_DESTINATION) return invalid("bad-ba-launch");
             if ((launch->destination == static_cast<uint8_t>(FeeDestination::SPLIT)) != (launch->burn_bps > 0) || launch->burn_bps >= 10'000) return invalid("bad-ba-launch");
+            // v7's split (a destination of v5's or a split, not both: the marker of a split has no destination).
+            if (launch->V7() && (launch->destination != 0 || launch->burn_bps != 0 || !CheckFeeSplit(launch->split))) return invalid("bad-ba-launch-split");
         }
         if (!GoodData(reg->data)) return invalid("bad-ba-data");
         if (reg->text && (!IsAssetName(*reg->text) || HashName(*reg->text) != reg->name)) return invalid("bad-ba-name-text");
@@ -1141,6 +1245,8 @@ const sidechain::Cell<bool> COIN_SIDE{0xa1, false};
 const sidechain::Table<AssetId, bool> BUYBACKS{0xa2};
 //! From fee_flow_height: the pools a launch graduated into with its locked position, by pool: the launch's token.
 const sidechain::Table<uint256, AssetId> GRAD_POOLS{0xa3};
+//! From v7_height: the launches whose split owes an address some coin (LaunchRecord::share_owed), by token (FinishBlock pays them).
+const sidechain::Table<AssetId, bool> FEE_PAYEES{0xa4};
 //! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent).
 const sidechain::Cell<uint32_t> BOOKS_LAYOUT{0x9d, 0};
 constexpr uint32_t BOOKS_LAYOUT_CURRENT{1};
@@ -2486,6 +2592,13 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
     record.protocol_share = rules.NoTreasury(height) ? 0 : rules.launch_protocol_share;
     record.security_share = rules.launch_security_share;
     if (uint64_t{rules.launch_creator_share} + rules.launch_protocol_share + rules.launch_security_share > FEE_DENOMINATOR) return invalid("bad-ba-launch-rules");
+    // From v7_height: 25 % the chain's security, the rest (75 %) the split's.
+    if (rules.FeeSplitActive(height)) {
+        record.security_share = rules.LaunchSecurityShare(height);
+        record.creator_share = rules.LaunchCreatorShare(height);
+        record.protocol_share = 0;
+        if (uint64_t{record.creator_share} + record.security_share > FEE_DENOMINATOR) return invalid("bad-ba-launch-rules");
+    }
     // What it graduates at, as made (100 coins from graduation100_height, launch_graduation before): its curve with it.
     record.graduation = static_cast<uint64_t>(graduation);
     record.virtual_coin = record.graduation / 2;
@@ -2496,6 +2609,19 @@ bool State::PlanLaunch(const CTransaction& tx, const LaunchToken& launch, uint64
         record.burn_bps = launch.burn_bps;
         record.vesting = 0;
         record.keep_control = launch.keep_control;
+    }
+    // From v7_height: its split, its own or its destination's (v5's modes map onto it).
+    if (rules.FeeSplitActive(height)) {
+        record.v7 = true;
+        record.split = launch.V7() ? launch.split : SplitOfDestination(launch.destination, launch.burn_bps);
+        record.share_given.assign(record.split.size(), 0);
+        record.share_owed.assign(record.split.size(), 0);
+        // v5's fields, for what reads them: the burn's part, and the destination it amounts to.
+        record.burn_bps = 0;
+        for (const FeeShare& share : record.split) {
+            if (share.kind == FeeShare::BURN) record.burn_bps = share.bps;
+        }
+        record.destination = static_cast<uint8_t>(record.burn_bps == FEE_SPLIT_BPS ? FeeDestination::BURN : record.burn_bps > 0 ? FeeDestination::SPLIT : FeeDestination::CREATOR);
     }
     // Its curve: a pool of the coin (asset0: the null id) and the token, of the launch's kind, on the virtual reserves.
     PoolParams params;
@@ -3042,7 +3168,7 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     return true;
 }
 
-void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
+void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts, uint64_t queued)
 {
     m_dex = true;
     sidechain::StoreOverlay& out{Writable()};
@@ -3100,6 +3226,12 @@ void State::FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts)
     // Books with orders placed in the block: those that cross trade. Then the orders that expired out of their books.
     CrossBooks(height);
     SweepBooks(height);
+    // v7: the splits' addresses owed enough, within the room the block's payouts leave (MAX_TX_PAYOUTS_PER_BLOCK, with
+    // what still waits: `queued`); the others wait for the next blocks.
+    if (Params().GetConsensus().sidechain.FeeSplitActive(height)) {
+        const uint64_t used{queued + payouts.size()};
+        PayFeeShares(height, used >= MAX_TX_PAYOUTS_PER_BLOCK ? 0 : MAX_TX_PAYOUTS_PER_BLOCK - used, payouts);
+    }
     // The price accumulators of every pool the block changed (Uniswap v2): the price it had since its
     // last change, as the block found it, times the seconds since; then an observation of the block.
     std::vector<std::pair<uint256, PoolSnapshot>> changed;
@@ -4238,6 +4370,7 @@ bool State::GraduateLocked(const AssetId& token, LaunchRecord& record, uint64_t 
 
 void State::CreditCreator(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units)
 {
+    if (record.v7) return CreditSplit(token, record, coin, units);
     // The burn's part (in basis points): none to the creator alone, all for BURN, burn_bps of a SPLIT.
     const uint64_t bps{record.destination == static_cast<uint8_t>(FeeDestination::BURN)    ? 10'000
                        : record.destination == static_cast<uint8_t>(FeeDestination::SPLIT) ? record.burn_bps
@@ -4255,6 +4388,71 @@ void State::CreditCreator(const AssetId& token, LaunchRecord& record, uint64_t c
         asset.burned = Add(asset.burned, units_burn).value_or(MAX_AMOUNT);
         ASSETS.Put(Writable(), token, asset);
         record.burned = Add(record.burned, units_burn).value_or(MAX_AMOUNT);
+    }
+}
+
+void State::CreditSplit(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units)
+{
+    // The coin by the split (SplitCoin: none is lost or made).
+    const size_t n{record.split.size()};
+    if (n == 0 || record.share_given.size() != n || record.share_owed.size() != n) return;
+    const std::vector<uint64_t> part{SplitCoin(record.split, coin)};
+    bool owes{false};
+    for (size_t i{0}; i < n; ++i) {
+        if (part[i] == 0) continue;
+        record.share_given[i] = Add(record.share_given[i], part[i]).value_or(MAX_AMOUNT);
+        switch (record.split[i].kind) {
+        case FeeShare::CREATOR: record.creator_fees = Add(record.creator_fees, part[i]).value_or(MAX_AMOUNT); break;
+        case FeeShare::BURN: record.buyback = Add(record.buyback, part[i]).value_or(MAX_AMOUNT); break;
+        default:
+            record.share_owed[i] = Add(record.share_owed[i], part[i]).value_or(MAX_AMOUNT);
+            owes = true;
+        }
+    }
+    if (record.buyback > 0 && !BUYBACKS.Contains(Writable(), token)) BUYBACKS.Put(Writable(), token, true);
+    if (owes && !FEE_PAYEES.Contains(Writable(), token)) FEE_PAYEES.Put(Writable(), token, true);
+    // The token (a locked position's fees on its side: none since fee_flow_height, its pool's fees are in the coin): the
+    // burn's part burned, the rest the creator's.
+    const uint64_t units_burn{static_cast<uint64_t>(static_cast<unsigned __int128>(units) * record.burn_bps / FEE_SPLIT_BPS)};
+    record.creator_tokens = Add(record.creator_tokens, units - units_burn).value_or(MAX_AMOUNT);
+    if (units_burn > 0) {
+        AssetRecord asset{*Assert(GetAsset(token))};
+        asset.supply -= std::min(asset.supply, units_burn);
+        asset.burned = Add(asset.burned, units_burn).value_or(MAX_AMOUNT);
+        ASSETS.Put(Writable(), token, asset);
+        record.burned = Add(record.burned, units_burn).value_or(MAX_AMOUNT);
+    }
+}
+
+void State::PayFeeShares(int height, size_t room, std::vector<CTxOut>& payouts)
+{
+    (void)height;
+    sidechain::StoreOverlay& out{Writable()};
+    std::vector<AssetId> tokens;
+    FEE_PAYEES.ForEach(out, [&](const AssetId& token, const bool&) {
+        tokens.push_back(token);
+        return true;
+    });
+    for (const AssetId& token : tokens) {
+        auto record{GetLaunch(token)};
+        if (!record || !record->v7) {
+            FEE_PAYEES.Erase(out, token);
+            continue;
+        }
+        bool changed{false}, owes{false};
+        for (size_t i{0}; i < record->split.size() && i < record->share_owed.size(); ++i) {
+            if (record->split[i].kind != FeeShare::ADDRESS || record->share_owed[i] == 0) continue;
+            if (record->share_owed[i] < MIN_FEE_SHARE_PAYOUT || room == 0) {
+                owes = true;
+                continue;
+            }
+            payouts.emplace_back(static_cast<CAmount>(record->share_owed[i]), record->split[i].script);
+            record->share_owed[i] = 0;
+            --room;
+            changed = true;
+        }
+        if (changed) LAUNCHES.Put(out, token, *record);
+        if (!owes) FEE_PAYEES.Erase(out, token);
     }
 }
 
@@ -4603,6 +4801,8 @@ CAmount State::HeldChn() const
     LAUNCHES.ForEach(*m_view, [&](const uint256&, const LaunchRecord& launch) {
         // From fee_flow_height, also the coin waiting to buy its token back (none before).
         held += static_cast<CAmount>(launch.pool_fees + launch.creator_fees + launch.buyback);
+        // From v7_height, also what its split owes its addresses (paid by the coinbase once enough).
+        for (const uint64_t owed : launch.share_owed) held += static_cast<CAmount>(owed);
         return true;
     });
     ForEachAuction([&](const Txid&, const Auction& auction) {

@@ -103,6 +103,9 @@ public:
     virtual uint64_t QuoteFirstBuy(uint64_t ecx, uint64_t supply = 0, uint32_t fee = 0) = 0;
     //! Whether the next block takes launches with parameters (a supply, decimals, a fee; an existing asset on a curve).
     virtual bool LaunchParamsActive() = 0;
+    //! Whether the next block takes a launch's fee split (upgrade v7), and the security part of a launch's fee then (millionths).
+    virtual bool FeeSplitActive() { return false; }
+    virtual uint32_t LaunchSecurityShare() { return 200'000; }
     //! The network's fee of a launch's curve (millionths).
     virtual uint32_t LaunchFee() = 0;
     virtual std::optional<Pool> PoolById(const uint256& id) = 0;

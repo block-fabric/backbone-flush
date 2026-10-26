@@ -41,7 +41,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // BitAssets' own rules (the reveal depth) count as well.
     // (Not asset_volume_window: no rule, only the search index of the assets, which has a layout of its own.)
     // (refund_grace_blocks, main_behind_margin and bundle_handoff_depth are policy, and not in it.)
-    static_assert(sizeof(Consensus::SidechainParams) == 144, "a new sidechain parameter goes into the fingerprint");
+    static_assert(sizeof(Consensus::SidechainParams) == 152, "a new sidechain parameter goes into the fingerprint");
     HashWriter hasher{};
     hasher << std::string{"Sidechain parameters"} << ParamsFingerprint(params) << sidechain.slot << sidechain.min_withdrawal
            << sidechain.max_bundle_withdrawals << sidechain.bundle_retry_delay << sidechain.main_activation_height
@@ -77,6 +77,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // The fee-flow release, the same way.
     if (sidechain.fee_flow_height != std::numeric_limits<int>::max()) hasher << std::string{"feeflow"} << sidechain.fee_flow_height;
     if (sidechain.graduation100_height != std::numeric_limits<int>::max()) hasher << std::string{"graduation100"} << sidechain.graduation100_height << sidechain.launch_graduation_v6;
+    if (sidechain.v7_height != std::numeric_limits<int>::max()) hasher << std::string{"v7"} << sidechain.v7_height << sidechain.launch_security_share_v7;
     return hasher.GetHash();
 }
 

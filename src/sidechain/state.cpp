@@ -536,6 +536,7 @@ bool State::ApplyTxSteps(const CTransaction& tx, int height, const Consensus::Si
     if (!bitassets::CheckLaunchParamsActivation(tx, params.LaunchParamsActive(height), reject_reason)) return false;
     if (!bitassets::CheckAllocationActivation(tx, params.Allocation10Active(height), reject_reason)) return false;
     if (!bitassets::CheckFeeFlowActivation(tx, params.FeeFlowActive(height), reject_reason)) return false;
+    if (!bitassets::CheckFeeSplitActivation(tx, params.FeeSplitActive(height), reject_reason)) return false;
     // Layers: with the payouts of transactions that still wait (blocks of stake pay none), so that what waits
     // never outgrows what the next block with the peg actions is sure to pay.
     if (!assets.ApplyTx(tx, height, payouts, reject_reason, &released, params.bitassets_reveal_depth, AssetPayoutsQueued(), params.DexActive(height))) return false;
@@ -590,9 +591,9 @@ bool State::ConnectBlock(const CBlock& block, int height, const Consensus::Sidec
     // The coinbase pays the deposits and the refunds, right after its first output, as many as a block
     // can; a block without the peg actions pays none, and what it gave rise to waits for one that has them.
     // Refunds wait with the deposits, apart from what pools and auctions pay out.
+    // From v7 the assets' payouts are the block's own (PayBlock).
     payouts.insert(payouts.end(), refunds.begin(), refunds.end());
-    peg_owed.insert(peg_owed.end(), tx_payouts.begin(), tx_payouts.end());
-    payouts = TakePayouts(std::move(payouts), std::move(peg_owed), step ? MAX_PAYOUTS_PER_BLOCK : 0, tx_payouts.size());
+    payouts = PayBlock(height, params, step.has_value(), std::move(payouts), std::move(peg_owed), std::move(tx_payouts));
     const std::vector<CTxOut>& coinbase{block.vtx[0]->vout};
     if (coinbase.size() < 1 + payouts.size()) {
         reject_reason = "bad-sc-payouts-missing";
@@ -667,7 +668,8 @@ bool State::ApplyTxs(const CBlock& block, int height, const Consensus::Sidechain
 void State::FinishTxs(int height, uint32_t time, const Consensus::SidechainParams& params, std::vector<CTxOut>& tx_payouts)
 {
     if (!params.DexActive(height)) return;
-    bitassets::State{Writable()}.FinishBlock(height, time, tx_payouts);
+    const uint64_t queued{AssetPayoutsQueued()};
+    bitassets::State{Writable()}.FinishBlock(height, time, tx_payouts, queued);
 }
 
 int32_t State::BundleMainHeight() const { return BUNDLE_MAIN_HEIGHT.Get(*m_view); }
@@ -687,7 +689,25 @@ bool RecordIndependent(const std::string& reject_reason)
 // (but what a sidechain's own peg actions owe, which goes ahead of it: ChainHooks::BeforePegStep).
 static_assert(bitassets::MAX_TX_PAYOUTS_PER_BLOCK <= MAX_PAYOUTS_PER_BLOCK - MAX_PAYOUTS_PER_BLOCK / 2);
 
-std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts, size_t owed_tx_assets)
+std::vector<CTxOut> State::PayBlock(int height, const Consensus::SidechainParams& params, bool peg_step, std::vector<CTxOut> owed, std::vector<CTxOut> peg_owed,
+                                    std::vector<CTxOut> tx_payouts)
+{
+    const uint64_t max_payouts{peg_step ? MAX_PAYOUTS_PER_BLOCK : 0};
+    if (!params.InstantPayoutsActive(height)) {
+        const size_t assets{tx_payouts.size()};
+        peg_owed.insert(peg_owed.end(), tx_payouts.begin(), tx_payouts.end());
+        return TakePayouts(std::move(owed), std::move(peg_owed), max_payouts, assets);
+    }
+    // Upgrade v7: the block pays the assets' payouts itself (none of them waits for the peg actions). The bound of its
+    // transactions (bitassets::MAX_TX_PAYOUTS_PER_BLOCK, with what still waits: AssetPayoutsQueued) keeps them within
+    // it; should any be beyond, they would wait in the queue, as before v7.
+    const size_t now{std::min<size_t>(tx_payouts.size(), bitassets::MAX_TX_PAYOUTS_PER_BLOCK)};
+    std::vector<CTxOut> paid_now(tx_payouts.begin(), tx_payouts.begin() + now);
+    peg_owed.insert(peg_owed.end(), tx_payouts.begin() + now, tx_payouts.end());
+    return TakePayouts(std::move(owed), std::move(peg_owed), max_payouts, tx_payouts.size() - now, std::move(paid_now));
+}
+
+std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTxOut> owed_tx, uint64_t max_payouts, size_t owed_tx_assets, std::vector<CTxOut> paid_now)
 {
     Assume(owed_tx_assets <= owed_tx.size());
     StoreOverlay& out{Writable()};
@@ -717,11 +737,13 @@ std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTx
         const uint64_t tail{TX_QUEUE_ENDS.Get(*m_view).tail};
         ranges.push_back({tail - owed_tx_assets, tail});
     }
-    // Half each; what one queue leaves of its half, the other may take.
-    const uint64_t half{max_payouts / 2};
+    // Half each; what one queue leaves of its half, the other may take. What the block pays now (v7) comes out of the
+    // half of the transactions' queue: the queue of the mainchain keeps its half.
+    const uint64_t room{max_payouts - std::min<uint64_t>(max_payouts, paid_now.size())};
+    const uint64_t half{std::min<uint64_t>(max_payouts / 2, room)};
     uint64_t count{std::min<uint64_t>(queued, half)};
-    uint64_t count_tx{std::min<uint64_t>(queued_tx, max_payouts - half)};
-    const uint64_t left{max_payouts - count - count_tx};
+    uint64_t count_tx{std::min<uint64_t>(queued_tx, room - half)};
+    const uint64_t left{room - count - count_tx};
     const uint64_t more{std::min<uint64_t>(queued - count, left)};
     count += more;
     count_tx += std::min<uint64_t>(queued_tx - count_tx, left - more);
@@ -738,6 +760,7 @@ std::vector<CTxOut> State::TakePayouts(std::vector<CTxOut> owed, std::vector<CTx
         }
         ASSET_RANGES.Put(out, ranges);
     }
+    paid.insert(paid.end(), paid_now.begin(), paid_now.end());
     return paid;
 }
 

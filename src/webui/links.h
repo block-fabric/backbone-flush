@@ -113,6 +113,9 @@ struct Request {
     //! launch, curve: the curve's fee in basis points (MIN_FEE_BPS..MAX_FEE_BPS); launch: the creator's allocation (basis points).
     std::optional<int> fee_bps;
     std::optional<int> allocation_bps;
+    //! launch (upgrade v7): the split of the tunable part of its fees, as the link gives it (split=<to>:<bps>, up to 5):
+    //! "creator", "burn" or an address (checked by the host), and its basis points. Empty: all to the creator.
+    std::vector<std::pair<std::string, int>> split;
     //! curve: the bounds of a buy on the curve, in the coin (empty: none).
     std::string min_buy;
     std::string max_buy;

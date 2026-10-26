@@ -144,3 +144,35 @@ sidechain state once): a launch made from it graduates at 100 ECX instead of 500
 50 ECX: the whole supply starts at about 44 ECX and graduates at about 400). A launch made before keeps 500: its record
 says what it graduates at (`getlaunch` `graduation`, the API's `graduation_ecx`), and the pages read it per launch. A node
 of v5 forks off at the first block with a launch made at or after the height.
+
+## Upgrade v7 (instant DEX payouts, the launch fee split)
+
+Branch `photon-v7`, from block `SLOT99_V7_HEIGHT` (`v7_height`; in the fingerprint: a node of v7 rebuilds its sidechain
+state once).
+
+- **Instant DEX payouts.** Before v7 the ECX the assets pay out (swaps, curve sales, pools, auctions) waited in the
+  coinbase's queue for a block with the peg actions (an anchor's acknowledgement). From v7 the block pays them itself,
+  every block (`sidechain::State::PayBlock`): they are in the coinbase of the block with the trade. The bound is
+  re-derived for it: a block's transactions (and its DEX's end, the split's addresses included) give rise to at most
+  `MAX_TX_PAYOUTS_PER_BLOCK` (500) such payouts with what still waits (`AssetPayoutsQueued`), and all of them are paid in
+  the block; a block with the peg actions pays at most `MAX_PAYOUTS_PER_BLOCK` (1000) in all, the mainchain's queue
+  (deposits, refunds) keeping its half, the block's own payouts out of the other half with the queue of the peg actions'
+  owed (unbonds, rewards), which keeps the anchor rule; a block without them pays the 500 at most. (Any payout beyond
+  the bound would wait in the queue as before; none can be, by the transactions' bound.) The coinbase's sigops are
+  reserved for 1000 as before. **Finality**: such a payout is as soft as the trade until an anchor covers its block; a
+  reorganisation before then takes both back. Real peg actions (deposits, withdrawals, unbond refunds, validator
+  rewards, the pot) keep FastBlocks' anchor rule.
+- **The launch fee split.** A launch made from v7 has a curve fee 25 % security (`launch_security_share_v7`), 75 %
+  tunable, split as its launch transaction says (`FeeShare`, marker `LAUNCH_V7_KIND`): the creator, up to 3 addresses,
+  a buyback and burn, in basis points of the 75 % summing to 10000 (default: all to the creator). The same split takes
+  the creator's 60 % of the locked graduated position's fees. Each share gets the floor of its part, the roundings'
+  remainder to the creator (else the burn, else the first): no satoshi lost or made (`SplitCoin`). The creator's share
+  is claimed (`claimlaunch`, as before: simplest and safe, it was already the creator's flow); the burn's as v5's;
+  an address's is paid by the coinbase once 0.001 ECX is owed (`MIN_FEE_SHARE_PAYOUT`), within the block's room for the
+  assets' payouts (what does not fit waits for the next block). v5's destinations map onto a split
+  (`SplitOfDestination`). A launch made before v7 keeps its terms.
+- **Interfaces**: `launchtoken` `fee_split`; `getlaunch`/API `fee_split` (with `paid`/`owed`); `getlaunchstats`
+  `rules.fee_split_active`, `instant_payouts_active`, `v7_height`; the API's `BuildActionRequest.split` and the link's
+  `split=`; the app's confirmation shows every recipient in full (doc/dex-guide.md "Launchpads").
+- A node of v6 forks off at the first block of stake without the peg actions that pays an asset's ECX, or at the first
+  launch with a split (`bad-ba-marker` for it).

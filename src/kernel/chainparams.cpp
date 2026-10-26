@@ -705,6 +705,8 @@ public:
             consensus.sidechain.fee_flow_height = opts.dep_opts.fee_flow_height.value_or(std::numeric_limits<int>::max());
             // Graduation at 100 coins only if a test asks (-testactivationheight=graduation100@<height>).
             consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v7 only if a test asks (-testactivationheight=v7@<height>).
+            consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -929,6 +931,9 @@ public:
                 MakeSidechain({.slot = 99, .genesis_message = "TEMPORARY Flush on eCash betanet slot 99 (Photon) 22/Oct/2026", .genesis_time = 1792627200,
                                .message_start = {0x66, 0x6c, 0x78, 0x99}, .default_port = 38995, .bech32_hrp = "bflx"});
                 consensus.sidechain.main_activation_height = 968998;
+                // A DNS seed (A records of the lab, 5.78 and the pool servers, at this network's P2P port 38995; not
+                // consensus). The addnode lines of doc/slot99-testnet.md stay the fallback.
+                vSeeds.emplace_back("seed.mainnet.flush.markets.");
                 // Its bootstrap: three genesis validators (each key made on its own machine: the lab node server, the
                 // server 5.78.75.193 and the UI PC), so blocks of stake start without 4 ECX bonded first; at least 3
                 // of them active, and a bond of 0.1 ECX makes another validator (the pool server's, anyone's).
@@ -968,6 +973,11 @@ public:
                 // ECX (500 before), their curve scaled with it; a launch keeps what it was made under. In the fingerprint.
                 static constexpr int SLOT99_V6_HEIGHT{18177};
                 consensus.sidechain.graduation100_height = SLOT99_V6_HEIGHT;
+                // Upgrade v7 (doc/photon-slot.md, "Upgrade v7"), from block SLOT99_V7_HEIGHT: the DEX's ECX payouts in every block
+                // (not only in those that take the peg actions); a launch's curve fee 25 % security, 75 % split as its launch
+                // says. In the fingerprint.
+                static constexpr int SLOT99_V7_HEIGHT{std::numeric_limits<int>::max()};
+                consensus.sidechain.v7_height = SLOT99_V7_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
                 // four hours without a block and its median time lagged by 5 h 20 min). Its epochs before keep their seeds

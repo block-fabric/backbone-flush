@@ -13,6 +13,7 @@
 #include <crypto/sha256.h>
 #include <interfaces/chain.h>
 #include <interfaces/node.h>
+#include <key_io.h>
 #include <logging.h>
 #include <node/context.h>
 #include <rpc/request.h>
@@ -358,6 +359,44 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const uint32_t fee{r.fee_bps ? static_cast<uint32_t>(*r.fee_bps) * 100 : 0};
         if (r.fee_bps) options.pushKV("fee", Percent(*r.fee_bps));
         if (r.allocation_bps && *r.allocation_bps > 0) options.pushKV("allocation", Percent(*r.allocation_bps));
+        // Upgrade v7: the link's split of the tunable part of the fees (a launchpad's share): every recipient shown in full,
+        // accepted or declined with the whole launch (the app does not edit it).
+        std::vector<dialog::Row> split_rows;
+        if (!r.split.empty()) {
+            if (!reader.FeeSplitActive()) throw LinkError("This chain takes no fee split yet (upgrade v7): nothing was done");
+            std::vector<bitassets::FeeShare> shares;
+            UniValue split(UniValue::VARR);
+            const uint32_t tunable{(bitassets::FEE_DENOMINATOR - reader.LaunchSecurityShare()) / 10'000};
+            const uint32_t fee_bps{r.fee_bps ? static_cast<uint32_t>(*r.fee_bps) : reader.LaunchFee() / 100};
+            for (const auto& [to, bps] : r.split) {
+                bitassets::FeeShare share;
+                share.bps = static_cast<uint16_t>(bps);
+                std::string label;
+                if (to == "creator") {
+                    share.kind = bitassets::FeeShare::CREATOR;
+                    label = "Creator (this wallet, claimed with claimlaunch)";
+                } else if (to == "burn") {
+                    share.kind = bitassets::FeeShare::BURN;
+                    label = "Buyback and burn";
+                } else {
+                    const CTxDestination dest{DecodeDestination(to)};
+                    if (!IsValidDestination(dest)) throw LinkError("split: " + to.substr(0, 128) + " is not an address of this chain");
+                    share.kind = bitassets::FeeShare::ADDRESS;
+                    share.script = GetScriptForDestination(dest);
+                    label = "Paid to " + EncodeDestination(dest) + " (not this wallet's: the link's, e.g. the site's fee)";
+                }
+                shares.push_back(share);
+                UniValue entry(UniValue::VOBJ);
+                entry.pushKV("to", to);
+                entry.pushKV("bps", bps);
+                split.push_back(std::move(entry));
+                // Its share of the tunable part, and of every trade's fee on the curve (fee_bps x tunable % x share).
+                const double of_trade{fee_bps / 100.0 * tunable / 100.0 * bps / 10'000.0};
+                split_rows.push_back(confirm::Text("Fee share", strprintf("%s: %s of the creator's %u %% of the fees (%.4f %% of each trade)", label, Bps(bps), tunable, of_trade)));
+            }
+            if (!bitassets::CheckFeeSplit(shares)) throw LinkError("split: the shares sum to 10000 basis points, creator and burn at most once each, up to 3 different addresses");
+            options.pushKV("fee_split", std::move(split));
+        }
         std::string quoted, floored;
         if (!r.amount.empty()) {
             const uint64_t ecx{Exact(r.amount, bitassets::CHN_DECIMALS, "ecx")};
@@ -377,6 +416,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
         if (!r.supply.empty()) rows.push_back(confirm::Text("Supply", strprintf("%s %s (%d decimals): 3/4 sold on the curve, 1/4 into the locked pool at graduation", r.supply, r.ticker, decimals)));
         if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator and security parts as the network's)"));
+        rows.insert(rows.end(), split_rows.begin(), split_rows.end());
         if (!quoted.empty()) QuoteRows(rows, quoted, floored, r.slippage_bps);
         plan.method = "reserveasset";
         plan.params.push_back(r.ticker);
@@ -840,6 +880,8 @@ public:
         return cleared ? cleared->outs[0] : 0;
     }
     bool LaunchParamsActive() override { return m_chain.getBitAssetsLaunchParamsActive(); }
+    bool FeeSplitActive() override { return Params().GetConsensus().sidechain.FeeSplitActive(m_chain.getBitAssetsHeight()); }
+    uint32_t LaunchSecurityShare() override { return Params().GetConsensus().sidechain.LaunchSecurityShare(m_chain.getBitAssetsHeight()); }
     uint32_t LaunchFee() override { return Params().GetConsensus().sidechain.launch_fee; }
     std::optional<Pool> PoolById(const uint256& id) override
     {

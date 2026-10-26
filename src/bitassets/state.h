@@ -648,6 +648,45 @@ struct SwapPools {
 };
 
 /**
+ * Upgrade v7 (SidechainParams::v7_height): one recipient of the tunable part of a launch's fees (the curve's fee but the
+ * chain's security part, 75 %; and the creator's part of its locked position's fees, 60 %), in basis points of that part.
+ * A split has 1 to MAX_FEE_SHARES of them, each of 1 bps at least, 10 000 in all: the creator at most once, a buyback and
+ * burn at most once, and up to MAX_FEE_ADDRESSES other scripts, all different (CheckFeeSplit). The creator's part is
+ * claimed (ClaimLaunch), as before; the burn's buys the token back in its venue each block and burns it, as v5's; an
+ * address's is paid by the coinbase, without a claim, once MIN_FEE_SHARE_PAYOUT is owed it (State::FinishBlock).
+ */
+struct FeeShare {
+    enum Kind : uint8_t { CREATOR = 0, BURN = 1, ADDRESS = 2 };
+    uint8_t kind{CREATOR};
+    //! ADDRESS: the script paid (spendable); empty for the others.
+    CScript script;
+    uint16_t bps{0};
+    SERIALIZE_METHODS(FeeShare, obj) { READWRITE(obj.kind, obj.script, obj.bps); }
+    friend bool operator==(const FeeShare&, const FeeShare&) = default;
+};
+inline constexpr size_t MAX_FEE_SHARES{5};
+inline constexpr size_t MAX_FEE_ADDRESSES{3};
+inline constexpr uint16_t FEE_SPLIT_BPS{10'000};
+/** Longest script a split pays (a standard one: P2WSH and P2TR are 34 bytes). */
+inline constexpr size_t MAX_FEE_SHARE_SCRIPT_SIZE{80};
+/** The least an address of a split is paid at once (0.001 ECX): what it is owed waits until it is this much. */
+inline constexpr uint64_t MIN_FEE_SHARE_PAYOUT{100'000};
+/** Whether `split` is one a launch may have (FeeShare). */
+bool CheckFeeSplit(const std::vector<FeeShare>& split);
+/**
+ * `coin` by `split` (CheckFeeSplit): each share the floor of its part, the roundings' remainder (less than a satoshi a
+ * share) to the creator's share, else the burn's, else the first: the parts sum to `coin` exactly.
+ */
+std::vector<uint64_t> SplitCoin(const std::vector<FeeShare>& split, uint64_t coin);
+/** The split of v5's destinations (FeeDestination, the burn's part of a split): what a launch made from v7 with them has. */
+std::vector<FeeShare> SplitOfDestination(uint8_t destination, uint16_t burn_bps);
+/**
+ * The kind of the marker of a LaunchToken with a split (upgrade v7): its fields, `fee` (VARINT, as LAUNCH_V5_KIND),
+ * `keep_control` and `split` (CheckFeeSplit); `destination` and `burn_bps` are v5's and not in it (0).
+ */
+inline constexpr uint8_t LAUNCH_V7_KIND{38};
+
+/**
  * Launch an asset on a bonding curve (doc/layers.md "Launches"): register an asset (`reg`: the name revealed from
  * its reservation, as Register, its ticker, logo, display name and description) whose supply sits on a launch curve
  * priced in the chain's coin, fixed, with no control coin. Of the kind KIND (`fee` 0): supply 0 and LAUNCH_DECIMALS
@@ -680,6 +719,8 @@ struct LaunchToken {
     uint8_t destination{0};
     uint16_t burn_bps{0};
     bool keep_control{false};
+    //! From SidechainParams::v7_height (a marker of LAUNCH_V7_KIND): the split of its fees' tunable part (empty: v5's destination).
+    std::vector<FeeShare> split;
     SERIALIZE_METHODS(LaunchToken, obj)
     {
         READWRITE(obj.reg, obj.reg.logo, obj.reg.display_name, obj.creator, obj.allocation, VARINT(obj.min_buy), VARINT(obj.max_buy), VARINT(obj.first_buy), VARINT(obj.first_min_out),
@@ -689,6 +730,8 @@ struct LaunchToken {
     bool WithParams() const { return fee != 0; }
     /** Whether it is a launch of the fee-flow release's kind (LAUNCH_V5_KIND): any of its fields other than the network's defaults. */
     bool V5() const;
+    /** Whether it has a split (LAUNCH_V7_KIND). */
+    bool V7() const { return !split.empty(); }
 };
 /** The kind of the marker of a LaunchToken with its own parameters: its fields, then `fee` (VARINT). */
 inline constexpr uint8_t LAUNCH_WITH_PARAMS_KIND{36};
@@ -868,6 +911,8 @@ bool IsLaunchParamsOperation(const Operation& op);
 [[nodiscard]] bool CheckAllocationActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 /** Whether a transaction may be in a block where the fee-flow release is `active` or not: a launch of LAUNCH_V5_KIND not before (bad-ba-marker). */
 [[nodiscard]] bool CheckFeeFlowActivation(const CTransaction& tx, bool active, std::string& reject_reason);
+/** Before v7_height (`active` false), a launch with a split (LAUNCH_V7_KIND) is not valid. */
+[[nodiscard]] bool CheckFeeSplitActivation(const CTransaction& tx, bool active, std::string& reject_reason);
 
 /** Whether an operation sets a logo (SetLogo, or a Register with one): valid from SidechainParams::logo_height only. */
 bool IsLogoOperation(const Operation& op);
@@ -1158,6 +1203,13 @@ struct LaunchRecord {
     uint256 position;
     //! The creator's part of its locked position's fees in its own token, not paid yet (claimlaunch pays it).
     uint64_t creator_tokens{0};
+    //! From v7_height (`v7`; records before end before it; v7 implies v5): the split of its fees' tunable part (its
+    //! launch's, or its v5 destination's: SplitOfDestination), and by share the coin it was given in all and, of an
+    //! address, what it is owed and not paid yet (so paid: given less owed; the creator's paid is creator_paid).
+    bool v7{false};
+    std::vector<FeeShare> split;
+    std::vector<uint64_t> share_given;
+    std::vector<uint64_t> share_owed;
     template <typename Stream>
     void Serialize(Stream& s) const
     {
@@ -1166,6 +1218,7 @@ struct LaunchRecord {
         // A launch of before (supply 0, not from an asset) is written as it was.
         if (supply != 0 || from_asset || v5) s << VARINT(supply) << from_asset;
         if (v5) s << destination << burn_bps << VARINT(static_cast<uint32_t>(vesting)) << keep_control << VARINT(allocation_paid) << VARINT(burned) << VARINT(buyback) << position << VARINT(creator_tokens);
+        if (v7) s << split << share_given << share_owed;
     }
     template <typename Stream>
     void Unserialize(Stream& s)
@@ -1181,6 +1234,14 @@ struct LaunchRecord {
             s >> destination >> burn_bps >> VARINT(blocks) >> keep_control >> VARINT(allocation_paid) >> VARINT(burned) >> VARINT(buyback) >> position >> VARINT(creator_tokens);
             vesting = static_cast<int32_t>(blocks);
             v5 = true;
+        }
+        v7 = false;
+        split.clear();
+        share_given.clear();
+        share_owed.clear();
+        if (!s.empty()) {
+            s >> split >> share_given >> share_owed;
+            v7 = true;
         }
     }
     /** The part of its allocation vested at `height` (units): all of it at graduation without vesting (or before v5), else linearly over `vesting` blocks from it. */
@@ -1208,6 +1269,17 @@ struct LaunchRecord {
     /** Its allocation in units: ⌊S·allocation/10000⌋ (exact for LAUNCH_SUPPLY). */
     uint64_t AllocationUnits() const { return LaunchAllocationUnits(Supply(), allocation); }
 };
+
+/** What the pages show of a launch's split (getlaunch, the public API): v5's destination mapped onto one before v7. */
+struct FeeShareView {
+    const char* kind{"creator"}; //!< "creator", "burn" or "address"
+    CScript script;              //!< "address" only
+    uint16_t bps{0};
+    uint64_t paid{0};            //!< creator: claimed; burn: bought back (or on its way); address: paid by the coinbase
+    uint64_t owed{0};            //!< creator: to claim; burn: waiting to buy back; address: owed, paid once MIN_FEE_SHARE_PAYOUT
+};
+/** None for a launch before the fee-flow release (v5). */
+std::vector<FeeShareView> FeeSplitView(const LaunchRecord& record);
 
 /** What a block did on a launch's curve (State::GetLaunchLog): the coin and tokens in and out, the fees, the price after, whether it graduated. */
 struct LaunchLogEntry {
@@ -1653,7 +1725,7 @@ public:
      * and updates the price accumulators of every pool the block changed, at the block's `time`. Never
      * fails: an order that cannot fill is refunded.
      */
-    void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts);
+    void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts, uint64_t queued = 0);
     /** Policy (the mempool): whether a transaction's order, alone against the pools as they are, gives its min_out (true if it has none). */
     bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const;
     /** Whether an asset is dead and can be retired; if not, why (`why`). */
@@ -1836,6 +1908,10 @@ public:
 private:
     /** A launch's creator's part of its fees by its destination (v5): the coin to creator_fees or buyback, the token to creator_tokens or burned. */
     void CreditCreator(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units);
+    /** v7: the same by the launch's split (FeeShare): the creator's claimed, the burn's bought back, an address's owed. */
+    void CreditSplit(const AssetId& token, LaunchRecord& record, uint64_t coin, uint64_t units);
+    /** v7: pay the addresses of the splits owed MIN_FEE_SHARE_PAYOUT or more, `room` of them at most (by token, then share). */
+    void PayFeeShares(int height, size_t room, std::vector<CTxOut>& payouts);
     /** The DEX's pool kinds' part of MakePlan: CreatePool, PoolDeposit, PoolWithdraw. */
     bool PlanPools(const CTransaction& tx, const Operation& op, int height, Plan& plan, const std::function<void(const AssetId&, uint64_t)>& take,
                    const std::function<void(Token::Kind, const uint256&, uint64_t)>& debit, std::string& reject_reason) const;

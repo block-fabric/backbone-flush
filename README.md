@@ -1,6 +1,10 @@
 # Flush
 
-> **Branch `photon-slot`: a TEMPORARY Flush test network on eCash betanet slot 99. See [doc/slot99-testnet.md](doc/slot99-testnet.md).**
+> **Branch `flush-betanet`: the TEMPORARY Flush test network on eCash betanet slot 99 (from upgrade v7; the `photon-*`
+> branches before it are its history). See [doc/slot99-testnet.md](doc/slot99-testnet.md) and its upgrades in
+> [doc/photon-slot.md](doc/photon-slot.md).** Branches of block-fabric/backbone-flush: `flush-betanet`, the slot-99 line
+> (its work goes there); `main`, the mainnet code (slot 46, every rule from the first block). DNS seed of both:
+> `seed.mainnet.flush.markets` (slot 99 at P2P 38995, RPC 38994).
 
 Flush is a sidechain of **eCash** (ECX): **tokens, assets and a DEX on a fast chain**. Anyone can create
 tokens and assets (shares, points, tickets, stablecoins) and trade them on a decentralized exchange (pools,

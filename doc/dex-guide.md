@@ -109,6 +109,15 @@ auction made from it). flush.markets has the same wizard; it writes a `flush:` l
   Flush by default, adjustable per launch from 0.3 % to 5 % with the launch parameters (80 % to the creator, 20 % to the
   chain's security). The creator claims theirs any time. The creator's optional allocation (at most
   5 %) is created only at graduation, and every launch shows it.
+- **The fee split (upgrade v7)**: from v7 a curve's fee is **25 % to the chain's security and 75 % tunable**, split
+  as the launch says, fixed for good in its transaction: the creator, up to 3 more addresses, and a buyback and burn, in
+  basis points of the 75 % summing to 10000 (by default all to the creator). The same split governs the creator's 60 %
+  of the graduated locked position's fees (the network's 40 % unchanged). The creator's share is claimed as before
+  (`claimlaunch`); the burn's buys the token back in its own market each block and burns it; **an address's share is
+  paid by the chain itself**, in the coinbase, as soon as 0.001 ECX is owed to it (no claim). v5's `fee_destination`
+  (creator, burn, split with `burn_percent`) still works: it is the split [creator], [burn] or [burn p, creator rest].
+  CLI: `launchtoken MOON '{"fee_split":[{"to":"creator","bps":7500},{"to":"bflx1q...","bps":2500}]}'`; `getlaunch` lists
+  `fee_split` with what each recipient was `paid` and is `owed`.
 - **An existing asset on a curve**: its controller can put part of its supply on a curve (an asset's page → Open a market
   → Bonding curve; `curveasset`), if it was never launched and has no pool with CHN yet. Its control coin goes with it:
   the supply is fixed for good. The units it keeps trade in the pool once it graduates (the curve buys back only what it
@@ -135,7 +144,31 @@ verification back. CLI: `getverifications GOLD`; a curator: `verifyasset <oracle
 
 A swap fee goes 85 % to the pool's liquidity providers and 15 % to the chain's security (the miners who anchor it and
 the validators, paid with each block's fees). A fee paid in an asset rather than ECX cannot pay them: its security part
-stays in the pool, so on that side the providers keep the whole fee. A launch curve's fee goes 80 % to the creator and 20 % to the chain's security.
+stays in the pool, so on that side the providers keep the whole fee. A launch curve's fee goes 80 % to the creator and 20 % to the chain's security; from upgrade v7, 25 % to the chain's
+security and 75 % split as the launch says (above).
+
+**When the ECX comes**: from upgrade v7 the ECX a swap, a curve sale, a pool withdrawal or an auction pays is in the
+coinbase of the block with the trade itself, every block (about every 15 s), not at the next anchor. That payout is
+exactly as final as the trade: soft until an anchor covers its block (a reorganisation before then could take both
+back), final after. Deposits, withdrawals, unbond refunds and validator rewards keep the anchor rule.
+
+## Launchpads: a platform's share of a launch
+
+A site that helps people launch (a launchpad) can take a share of the launch's fees by putting an address in its split.
+The share is fixed in the launch transaction, and every page shows it with what it was paid.
+
+- **Through the public API**: `GET /build/launch?ticker=MOON&name=Moon&split=creator:7500&split=bflx1q...:2500` (or
+  `split=creator:7500,bflx1q...:2500`; gRPC `BuildActionRequest.split`, repeated `"<to>:<bps>"`, `to` being
+  `creator`, `burn` or an address). The answer's link carries the split; `status.launch_params.fee_split_active` says
+  whether the chain takes it yet (before v7 the API refuses a split).
+- **In a hand-written link**: `flush:launch?v=1&network=...&exp=...&ticker=MOON&name=Moon&split=creator:7500&split=bflx1q...:2500`.
+  Up to 5 `split=` entries summing to 10000; `creator` and `burn` at most once each, up to 3 addresses.
+- **What the user sees**: the app's confirmation lists every recipient with its share of the 75 % and of each trade, and
+  every address in full; the user accepts or declines the whole launch. The app never edits a link's split, and refuses
+  a link with a split before v7. **Anyone who does not want a platform's fee launches from the app directly** (Assets →
+  Create an asset), whose default is all of the 75 % to the creator.
+- flush.markets takes 25 % of the 75 % (2500 bps) to `bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke` on every launch made
+  through it, shown on its review step ("Flush.markets fee: 25 % of the creator's share").
 
 ## Prices over time
 

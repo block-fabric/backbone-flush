@@ -2820,6 +2820,17 @@ std::vector<RPCResult> LaunchResults()
         {RPCResult::Type::BOOL, "fee_flow", "Whether it was made under the fee-flow release (its graduation into a locked position, its fee destination, its control coin)"},
         {RPCResult::Type::STR, "fee_destination", "Where the creator's part of its fees goes: creator, burn (bought back and burned each block) or split"},
         {RPCResult::Type::NUM, "burn_percent", "With split: the part burned, in percent"},
+        {RPCResult::Type::ARR, "fee_split", "The split of the tunable part of its fees (v5's destination mapped onto one; empty before v5): the curve's fee but the security part, and the creator's part of its locked position's fees",
+            {
+                {RPCResult::Type::OBJ, "", "",
+                    {
+                        {RPCResult::Type::STR, "to", "\"creator\", \"burn\" or the address paid"},
+                        {RPCResult::Type::STR, "kind", "creator (claimlaunch), burn (bought back and burned each block) or address (paid by the chain once 0.001 is owed)"},
+                        {RPCResult::Type::NUM, "bps", "Its share, in basis points of the tunable part"},
+                        {RPCResult::Type::STR_AMOUNT, "paid", "What it was paid: the creator claimed, the burn bought back, the address got"},
+                        {RPCResult::Type::STR_AMOUNT, "owed", "What it is owed and not paid yet"},
+                    }},
+            }},
         {RPCResult::Type::BOOL, "mintable", "Whether its creator kept the control coin: the creator can create more units (a risk to buyers)"},
         {RPCResult::Type::NUM, "burned", "Whole units bought back and burned"},
         {RPCResult::Type::STR_AMOUNT, "buyback_pending", CURRENCY_UNIT + " waiting to buy it back"},
@@ -2891,6 +2902,18 @@ UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const
     obj.pushKV("fee_flow", launch.v5);
     obj.pushKV("fee_destination", launch.destination == static_cast<uint8_t>(bitassets::FeeDestination::BURN) ? "burn" : launch.destination == static_cast<uint8_t>(bitassets::FeeDestination::SPLIT) ? "split" : "creator");
     obj.pushKV("burn_percent", DecimalToJSON(launch.burn_bps / 100.0));
+    UniValue split(UniValue::VARR);
+    for (const bitassets::FeeShareView& share : bitassets::FeeSplitView(launch)) {
+        UniValue entry(UniValue::VOBJ);
+        CTxDestination dest;
+        entry.pushKV("to", std::string_view{share.kind} == "address" ? (ExtractDestination(share.script, dest) ? EncodeDestination(dest) : HexStr(share.script)) : std::string{share.kind});
+        entry.pushKV("kind", share.kind);
+        entry.pushKV("bps", share.bps);
+        entry.pushKV("paid", ValueFromAmount(static_cast<CAmount>(share.paid)));
+        entry.pushKV("owed", ValueFromAmount(static_cast<CAmount>(share.owed)));
+        split.push_back(std::move(entry));
+    }
+    obj.pushKV("fee_split", std::move(split));
     obj.pushKV("mintable", launch.keep_control);
     obj.pushKV("burned", AmountToJSON(launch.burned, decimals));
     obj.pushKV("buyback_pending", ValueFromAmount(static_cast<CAmount>(launch.buyback)));
@@ -3104,6 +3127,9 @@ RPCMethod getlaunchstats()
                 {RPCResult::Type::BOOL, "params_active", "Whether the next block takes launches with parameters (supply, decimals, fee; an existing asset on a curve: curveasset)"},
                 {RPCResult::Type::NUM, "params_height", "Their first block (-1: never on this network)"},
                 {RPCResult::Type::BOOL, "fee_flow_active", "Whether the next block is under the fee-flow release: launches made then graduate into a locked full-range position of a concentrated pool, take a fee destination and may keep their control coin"},
+                {RPCResult::Type::BOOL, "fee_split_active", "Whether the next block is under upgrade v7: a launch's fee 25 % security, 75 % split as it says (launchtoken's fee_split)"},
+                {RPCResult::Type::BOOL, "instant_payouts_active", "Whether the next block is under upgrade v7: the DEX's payouts in the chain's coin come in the block itself, not at the next anchor"},
+                {RPCResult::Type::NUM, "v7_height", "The block upgrade v7 applies from (-1: never on this network)"},
                 {RPCResult::Type::NUM, "fee_flow_height", "Its first block (-1: never)"},
                 {RPCResult::Type::NUM, "graduation_fee", "The fee of the pool such a launch graduates into, in percent (1)"},
                 {RPCResult::Type::NUM, "graduated_creator_share", "Its creator's part of its locked position's fees, in percent (60; the rest to the chain's security)"},
@@ -3152,12 +3178,15 @@ RPCMethod getlaunchstats()
         rules.pushKV("graduation", ValueFromAmount(params.LaunchGraduation(next_height)));
         rules.pushKV("fee", DecimalToJSON(params.launch_fee / 10000.0));
         rules.pushKV("creator_share", DecimalToJSON(params.LaunchCreatorShare(next_height) / 10000.0));
-        rules.pushKV("security_share", DecimalToJSON(params.launch_security_share / 10000.0));
+        rules.pushKV("security_share", DecimalToJSON(params.LaunchSecurityShare(next_height) / 10000.0));
         rules.pushKV("supply", AmountToJSON(bitassets::LAUNCH_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("curve_supply", AmountToJSON(bitassets::LAUNCH_CURVE_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("pool_supply", AmountToJSON(bitassets::LAUNCH_POOL_SUPPLY, bitassets::LAUNCH_DECIMALS));
         rules.pushKV("params_active", params.LaunchParamsActive(next_height));
         rules.pushKV("fee_flow_active", params.FeeFlowActive(next_height));
+        rules.pushKV("fee_split_active", params.FeeSplitActive(next_height));
+        rules.pushKV("instant_payouts_active", params.InstantPayoutsActive(next_height));
+        rules.pushKV("v7_height", params.v7_height == std::numeric_limits<int>::max() ? -1 : params.v7_height);
         rules.pushKV("fee_flow_height", params.fee_flow_height == std::numeric_limits<int>::max() ? -1 : params.fee_flow_height);
         rules.pushKV("graduation_fee", DecimalToJSON(bitassets::GRADUATION_FEE / 10000.0));
         rules.pushKV("graduated_creator_share", DecimalToJSON(bitassets::GRADUATED_CREATOR_SHARE / 10000.0));

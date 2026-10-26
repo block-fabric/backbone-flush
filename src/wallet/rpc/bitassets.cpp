@@ -2330,6 +2330,37 @@ uint256 LaunchPoolId(const AssetId& asset, uint32_t fee)
 }
 } // namespace
 
+/** launchtoken's fee_split: [{"to": "creator" | "burn" | address, "bps": n}] (bitassets::CheckFeeSplit). */
+static std::vector<bitassets::FeeShare> ParseFeeSplit(const UniValue& value)
+{
+    if (!value.isArray()) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: an array of {\"to\", \"bps\"}");
+    if (value.size() == 0 || value.size() > bitassets::MAX_FEE_SHARES) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("fee_split: 1 to %u entries", bitassets::MAX_FEE_SHARES));
+    std::vector<bitassets::FeeShare> split;
+    for (const UniValue& entry : value.getValues()) {
+        if (!entry.isObject() || !entry["to"].isStr() || !entry["bps"].isNum()) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: each entry is {\"to\": \"creator\" | \"burn\" | address, \"bps\": 1 to 10000}");
+        const int64_t bps{entry["bps"].getInt<int64_t>()};
+        if (bps < 1 || bps > bitassets::FEE_SPLIT_BPS) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: a share is 1 to 10000 basis points");
+        bitassets::FeeShare share;
+        share.bps = static_cast<uint16_t>(bps);
+        const std::string& to{entry["to"].get_str()};
+        if (to == "creator") {
+            share.kind = bitassets::FeeShare::CREATOR;
+        } else if (to == "burn") {
+            share.kind = bitassets::FeeShare::BURN;
+        } else {
+            const CTxDestination dest{DecodeDestination(to)};
+            if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "fee_split: not an address of this chain: " + to);
+            share.kind = bitassets::FeeShare::ADDRESS;
+            share.script = GetScriptForDestination(dest);
+        }
+        split.push_back(std::move(share));
+    }
+    if (!bitassets::CheckFeeSplit(split)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: the shares sum to 10000 basis points, with the creator and the burn at most once each and up to 3 different addresses");
+    }
+    return split;
+}
+
 RPCMethod launchtoken()
 {
     return RPCMethod{
@@ -2357,6 +2388,14 @@ RPCMethod launchtoken()
                 {"max_buy", RPCArg::Type::AMOUNT, RPCArg::Default{0}, "The most " + CURRENCY_UNIT + " a buy on the curve pays (0: any)"},
                 {"fee_destination", RPCArg::Type::STR, RPCArg::Default{"creator"}, "Where the creator's part of its fees goes (from the fee-flow release, getlaunchstats' rules.fee_flow_active), fixed for good: \"creator\" (claimlaunch), \"burn\" (bought back in its own market each block and burned), or \"split\" (burn_percent of it burned, the rest the creator's)"},
                 {"burn_percent", RPCArg::Type::NUM, RPCArg::Default{0}, "With fee_destination \"split\": the part bought back and burned, in percent, above 0 and below 100"},
+                {"fee_split", RPCArg::Type::ARR, RPCArg::DefaultHint{"all to the creator"}, "From upgrade v7 (getlaunchstats' rules.fee_split_active), instead of fee_destination: the split of the tunable part of its fees (75 % of the curve's fee, and the creator's 60 % of its locked position's fees), fixed for good, 1 to 5 entries summing to 10000 basis points: the creator (claimlaunch) at most once, \"burn\" (bought back and burned each block) at most once, up to 3 addresses (paid by the chain once 0.001 owed, no claim)",
+                    {
+                        {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "",
+                            {
+                                {"to", RPCArg::Type::STR, RPCArg::Optional::NO, "\"creator\", \"burn\" or an address"},
+                                {"bps", RPCArg::Type::NUM, RPCArg::Optional::NO, "Its share, in basis points of the tunable part (1 to 10000)"},
+                            }},
+                    }},
                 {"keep_control", RPCArg::Type::BOOL, RPCArg::Default{false}, "Keep the asset's control coin (from the fee-flow release): the creator can then mint more units at any time. Every page marks such a launch \"Mintable: the creator can create more\""},
             }},
         },
@@ -2461,6 +2500,13 @@ RPCMethod launchtoken()
         launch.burn_bps = static_cast<uint16_t>(bps);
     } else if (options.exists("burn_percent") && options["burn_percent"].get_real() != 0) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "burn_percent goes with fee_destination \"split\"");
+    }
+    // Upgrade v7's split (the node refuses it before its height: bad-ba-marker).
+    if (options.exists("fee_split") && !options["fee_split"].isNull()) {
+        if (options.exists("fee_destination") || options.exists("burn_percent")) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split replaces fee_destination and burn_percent: give one or the other");
+        launch.split = ParseFeeSplit(options["fee_split"]);
+        // All to the creator is the default: no split in the marker.
+        if (launch.split.size() == 1 && launch.split[0].kind == bitassets::FeeShare::CREATOR) launch.split.clear();
     }
     launch.keep_control = options.exists("keep_control") && options["keep_control"].get_bool();
     std::vector<Out> outs;
