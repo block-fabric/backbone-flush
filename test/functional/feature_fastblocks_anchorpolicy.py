@@ -116,7 +116,7 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
             assert "anchorbidpolicy" not in json.load(f)
 
         self.log.info("Congested: node 0 the only bidder (the others off), a steep curve from p = 0.5")
-        n0.setanchorbidpolicy({"strategy": "feespreventstall", "curve": "0.5:1,0.6:40", "warnmissed": 2})
+        n0.setanchorbidpolicy({"strategy": "feespreventstall", "curve": "0.5:1,0.6:40", "warnmissed": 2, "flatboost": False})
         for n in self.nodes[1:]:
             info = n.setanchorbidpolicy({"strategy": "off"})
             assert_equal(info["bidding"], False)

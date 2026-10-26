@@ -1862,6 +1862,25 @@ std::vector<CTxOut> FastBlocksHooks::MergeMinedOutputs(const sidechain::StoreVie
     return outputs;
 }
 
+bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Mainchain& record)
+{
+    const auto& view{side.View()};
+    const StakeState stake{GetStakeState(view)};
+    if (stake.unbonding > 0 || stake.rewards_owed > 0 || stake.pot_reserve > 0 || PoolTotal(view) > 0) return true;
+    bool withdrawals{side.Bundle().has_value()};
+    side.ForEachWithdrawal([&](const sidechain::Withdrawal&) { withdrawals = true; return false; });
+    if (withdrawals) return true;
+    const int from{std::max(side.MainHeight() + 1, record.Base())};
+    const int height{record.Height()};
+    // Bound an unexpectedly long catch-up scan by bidding conservatively.
+    if (height - from > 144) return true;
+    for (int at{from}; at <= height; ++at) {
+        const auto block{record.GetBlock(at)};
+        if (!block || !block->deposits.empty() || !block->bundles.empty()) return true;
+    }
+    return false;
+}
+
 bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
 {
     ChainstateManager* chainman{Chainman()};
@@ -1900,12 +1919,22 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         }
     }
     const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
+    // These reads precede m_anchor_mutex: never acquire cs_main while holding the anchor lock.
+    // A quiet chain still anchors once an epoch to refresh validator sets; payouts and peg work do not wait.
+    const bool stalled{Stalled(fast, main_block->time, PosActiveNow())};
+    const bool needs_anchor{WITH_LOCK(::cs_main, {
+        const sidechain::State side{chainman->ActiveChainstate().SideState()};
+        if (stalled || HasPendingAnchorActions(side, record)) return true;
+        const CBlockIndex* point{chainman->m_blockman.LookupBlockIndex(fast.anchor_point)};
+        return !point || slot - SlotOf(point->nTime, m_params) >= m_params.slots_per_epoch;
+    })};
     // The mainchain's next-block fee estimate and the bid wallet's balance (once per mainchain block), the bids
     // made settled with the record; and the bid of the policy for a pot.
     if (validator && !mining.enabled) PollBidSignals(follower, main_tip, validator->policy);
     const auto decide{[&](CAmount pot) EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex) {
         SettleBids(record);
         m_bid_inputs.pot = pot;
+        m_bid_inputs.pending_actions = needs_anchor;
         m_bid_inputs.slot = slot;
         m_bid_inputs.first_unanchored_slot = fast.first_unanchored_slot;
         m_bid_inputs.max_unanchored_slots = m_params.MaxUnanchoredSlots(slot);
@@ -1916,7 +1945,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     // No PoS blocks for a while (or none at all on this chain, or no active validator set): merged mined
     // blocks, as the template's -- by a validator too, for its bid whatever the fees (a BMM block
     // starts blocks of stake again).
-    if (Stalled(fast, main_block->time, PosActiveNow())) {
+    if (stalled) {
         if (mining.enabled || !validator) return false;
         const BidDecision decision{WITH_LOCK(m_anchor_mutex, return decide(0))};
         if (!decision.bid) return false;
@@ -2035,8 +2064,9 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         if (!decision.bid) {
             LOCK(m_anchor_mutex);
             if (!raise && !again) {
-                m_bid = Bid{.main_tip = main_tip, .offer = 0, .after_anchor_point = true, .again = true, .made = true};
-                LogInfo("FastBlocks: no anchor bid for mainchain block %d: %s", main_height + 1, decision.reason);
+                // Retry this mainchain block when new fees or peg actions arrive, or pressure rises.
+                if (m_bid.main_tip != main_tip) LogInfo("FastBlocks: no anchor bid for mainchain block %d: %s", main_height + 1, decision.reason);
+                m_bid = Bid{.main_tip = main_tip, .made = false};
             }
             return true;
         }
@@ -2045,7 +2075,16 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         offer = std::max(offer, validator->policy.floor);
     }
     // (Made again: more than the bid it replaces in the mainchain's mempool.)
-    if (again || raise) offer = std::max(offer, last_offer + sidechain::Follower::MIN_OFFER);
+    if (again || raise) {
+        if (own_bid) {
+            const auto replacement{WITH_LOCK(m_anchor_mutex, return ReplacementBid(validator->policy, offer, last_offer,
+                SpentInPeriod(validator->policy, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()))))};
+            if (!replacement) return true;
+            offer = *replacement;
+        } else {
+            offer = std::max(offer, last_offer + sidechain::Follower::MIN_OFFER);
+        }
+    }
     {
         LOCK(m_anchor_mutex);
         if (again) {
@@ -2230,12 +2269,13 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     // Core), else estimatefee (Bitcoin ABC); none through the enforcer's interface alone (the floor then).
     std::optional<CAmount> rate;
     std::string source{"none: the floor"};
-    if (policy.use_fee_estimate && policy.Escalates()) {
+    if (policy.use_fee_estimate && policy.strategy != BidStrategy::FIXED) {
         try {
             UniValue params{UniValue::VARR};
             params.push_back(1);
             const UniValue estimate{client.Call("estimatesmartfee", params)};
             if (estimate.isObject()) rate = amount(estimate.find_value("feerate"));
+            if (rate && *rate <= 0) rate.reset();
             if (rate) source = "estimatesmartfee";
         } catch (const std::exception&) {
         } catch (const UniValue&) {
@@ -2252,6 +2292,21 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
         }
     } else {
         source = "not used";
+    }
+    CAmount relay_rate{1000}; // 1 sat/vB if the backend exposes no relay policy.
+    try {
+        const UniValue network{client.Call("getnetworkinfo", UniValue{UniValue::VARR})};
+        if (const auto relay{amount(network.find_value("relayfee"))}) relay_rate = *relay;
+    } catch (const std::exception&) {
+    } catch (const UniValue&) {
+    }
+    // The mempool's least fee for entry raises the relay floor (it is no next-block estimate: an escalation never
+    // multiplies it).
+    try {
+        const UniValue mempool{client.Call("getmempoolinfo", UniValue{UniValue::VARR})};
+        if (const auto least{amount(mempool.find_value("mempoolminfee"))}) relay_rate = std::max(relay_rate, *least);
+    } catch (const std::exception&) {
+    } catch (const UniValue&) {
     }
     // The bid wallet: the mainchain node's (or the enforcer's), which pays the requests.
     std::optional<CAmount> balance;
@@ -2274,6 +2329,7 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     }
     LOCK(m_anchor_mutex);
     m_bid_inputs.fee_rate_per_kvb = rate;
+    m_bid_inputs.relay_rate_per_kvb = relay_rate;
     m_bid_fee_source = source;
     m_bid_balance = balance;
     m_bid_balance_error = balance_error;

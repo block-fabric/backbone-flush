@@ -37,15 +37,14 @@ enum class BidStrategy {
 std::string StrategyName(BidStrategy strategy);
 std::optional<BidStrategy> ParseStrategy(const std::string& name);
 
-//! The least a validator's anchorer bids by default on the eCash networks: 0.000005 coins (500 sat, about
-//! 2.6 sat/vB for a ~190 vB request). (Off on regtest unless given.)
-inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{564};
+//! Optional operator floor. Automatic bids also cover the estimated mainchain transaction fee.
+inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{0};
 //! The most it bids by default, whatever the fees, the pressure or the mempool: 0.001 coins (about 526 sat/vB).
 inline constexpr CAmount DEFAULT_ANCHOR_BID_MAX{100'000};
 //! What it spends at most by default in a period (landed bids): 0.01 coins a day.
 inline constexpr CAmount DEFAULT_ANCHOR_BID_PERIOD_CAP{1'000'000};
 //! The size of a BMM request on the mainchain, for a fee rate made a bid.
-inline constexpr int DEFAULT_ANCHOR_REQUEST_VSIZE{190};
+inline constexpr int DEFAULT_ANCHOR_REQUEST_VSIZE{189};
 
 /** A point of the escalation curve: at stall pressure `pressure`, the escalated bid is `multiplier` times its base. */
 struct EscalationPoint {
@@ -56,7 +55,7 @@ struct EscalationPoint {
 
 struct AnchorBidPolicy {
     BidStrategy strategy{BidStrategy::FEES_PREVENT_STALL};
-    //! The least it bids (0 allowed: a request that pays no fee, for a miner that takes it).
+    //! Operator floor; the automatic strategy additionally covers the relay minimum and estimate.
     CAmount floor{DEFAULT_VALIDATOR_ANCHOR_BID};
     //! The most it bids, always.
     CAmount max{DEFAULT_ANCHOR_BID_MAX};
@@ -70,16 +69,14 @@ struct AnchorBidPolicy {
     std::vector<EscalationPoint> curve{{0.5, 1}, {0.75, 2}, {0.9, 4}};
     //! Between the points of the curve: interpolated linearly (true) or in steps (false).
     bool interpolate{true};
-    /**
-     * The flat boost (the default, user decision 2026-10-24): "Fees + prevent stalling" bids max(floor, fee share) (the
-     * fees count toward the floor: only what they miss of it is the validator's), and under stall pressure (from
-     * escalation_start) max(boost x floor, fee share): no curve, no rebid multiplier, no fee estimate, no multiple of a
-     * large fee share. Off: the curve, the rebids and the estimate, as before.
+    /** Flat boost: max(fee share, boost x the estimated base), only under stall pressure.
+     * With use_fee_estimate, the base covers the relay minimum and the next-block estimate rounded up to
+     * whole sat/vB, as well as the operator floor. Idle default-strategy bids are skipped below the threshold.
+     * Off: the legacy curve and rebid strategy.
      */
     bool flat_boost{true};
     double boost{4};
-    //! Under pressure, the base of the escalated bid is the mainchain's next-block fee estimate times the request's
-    //! size (if known); else (or without an estimate) the floor (500 sat at least).
+    //! Use the next-block fee estimate for automatic bids (or under pressure with the legacy curve).
     bool use_fee_estimate{true};
     int request_vsize{DEFAULT_ANCHOR_REQUEST_VSIZE};
     //! After this many mainchain blocks in a row without its commitment, the bid is multiplied by rebid_step for each
@@ -123,6 +120,10 @@ struct BidInputs {
     int64_t max_unanchored_slots{1};
     //! The mainchain's fee estimate for its next block, in satoshis per 1000 vbytes, if known.
     std::optional<CAmount> fee_rate_per_kvb;
+    //! Mainchain relay minimum in satoshis per 1000 vbytes; conservative fallback when unavailable.
+    CAmount relay_rate_per_kvb{1000};
+    //! Peg work or staking/validator-set maintenance needs an anchor. Unknown means bid conservatively.
+    bool pending_actions{true};
     //! Mainchain blocks in a row that came without this anchorer's commitment while it bid.
     int missed{0};
     //! What landed bids cost in the current period.
@@ -140,13 +141,16 @@ struct BidDecision {
     CAmount amount{0};
     //! The strategy's bid before escalation.
     CAmount normal{0};
-    //! "fixed", "floor", "fees", "rebid", "escalation", "max", "periodcap" or "off".
+    //! "fixed", "floor", "fees", "rebid", "escalation", "max", "periodcap", "base", "idle", "boost" or "off".
     std::string kind;
     //! In words, for the log and the pages.
     std::string reason;
     double pressure{0};
     double multiplier{1};
 };
+
+/** Replacement requests need a higher offer; refuse one that would exceed the configured limits. */
+std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent);
 
 /** The bid of `policy` for these inputs. */
 BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs);

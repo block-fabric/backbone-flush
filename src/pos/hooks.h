@@ -108,6 +108,8 @@ struct FastState {
 
 /** The FastBlocks part of a chain's state. */
 FastState GetFastState(const sidechain::StoreView& view);
+/** Peg work and staking payouts that need an anchor, independent of fees and stall pressure. */
+bool HasPendingAnchorActions(const sidechain::State& state, const sidechain::Mainchain& record);
 /** The pot accrued as of the block at `height` on the chain of `view`, at least what was paid. */
 int64_t PotAccruedAt(const sidechain::StoreView& view, int32_t height);
 /**
