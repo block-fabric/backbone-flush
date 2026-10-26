@@ -107,6 +107,8 @@ let tickersOn = false;
 let dexOn = false;
 /** v5, fee flow: getlaunchstats' rules from its height; fields of getlaunch's MOON and STAR besides. */
 let feeFlowOn = false;
+/** v7, fee split: getlaunchstats' rules say fee_split_active (and the fee 75 / 25). */
+let splitOn = false;
 let launchPatch: Record<string, unknown> = {};
 /** Whether previewpool says the pool is there already (someone made it first). */
 let previewExists = false;
@@ -318,7 +320,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
-      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { ...(feeFlowOn ? { fee_flow_active: true, fee_flow_height: 30, graduation_fee: 1, graduated_creator_share: 60 } : {}), graduation: '500.00000000', fee: 1.15, creator_share: 80, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { ...(feeFlowOn ? { fee_flow_active: true, fee_flow_height: 30, graduation_fee: 1, graduated_creator_share: 60 } : {}), graduation: '500.00000000', fee: 1.15, creator_share: splitOn ? 75 : 80, security_share: splitOn ? 25 : 20, ...(splitOn ? { fee_split_active: true } : {}), supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
     case 'searchpools':
       // An older node has none: the pages fall back on the pools they read (ba/search.ts).
       if (!searchSupported) fail('Method not found', -32601);
@@ -467,6 +469,7 @@ beforeEach(() => {
   tickersOn = false;
   dexOn = false;
   feeFlowOn = false;
+  splitOn = false;
   launchPatch = {};
   previewExists = false;
   paramsOn = false;
@@ -2578,6 +2581,59 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
     await answer('yes');
     await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { fee_destination: 'split', burn_percent: 30, keep_control: true }]));
+  });
+
+  it('v7 fee split: all to the creator by default (no fee_split sent); burn and an address, each share in percent of the part and of each trade, reviewed in full, sent in bps', async () => {
+    dexOn = true;
+    tickersOn = true;
+    feeFlowOn = true;
+    splitOn = true;
+    nav.tab = 'launch';
+    render(Trade);
+    render(DialogHost);
+    await loaded();
+    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
+    await waitFor(() => expect(screen.getByText(/Reserved by this wallet/)).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(screen.getByTestId('fee-split-editor')).toBeTruthy());
+    expect(screen.queryByRole('radiogroup', { name: 'Creator fees go to' })).toBeNull();
+    expect(screen.getByTestId('fee-split-creator').textContent).toMatch(/You: 100%/);
+    const next = () => screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement;
+    await fireEvent.input(document.querySelector('#launch-split-burn')!, { target: { value: '10' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Add an address' }));
+    await waitFor(() => expect(next().disabled).toBe(true));
+    await fireEvent.input(document.querySelector('#launch-split-addr-0')!, { target: { value: OTHER } });
+    await fireEvent.input(document.querySelector('#launch-split-pct-0')!, { target: { value: '25' } });
+    await waitFor(() => expect(next().disabled).toBe(false));
+    expect(screen.getByTestId('fee-split-creator').textContent).toMatch(/You: 65%/);
+    await fireEvent.click(next());
+    const review = await screen.findByTestId('launch-split-review');
+    expect(review.textContent).toContain(OTHER);
+    expect(review.textContent).toMatch(/The creator: 65% of the tunable part/);
+    expect(review.textContent).toMatch(/Buyback & burn: 10% of the tunable part/);
+    expect(screen.getByTestId('launch-graduation-review').textContent).toMatch(/to the split above/);
+    await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
+    await answer('yes');
+    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', expect.objectContaining({ fee_split: [{ to: 'creator', bps: 6500 }, { to: OTHER, bps: 2500 }, { to: 'burn', bps: 1000 }] })]));
+    expect((called('launchtoken')[0]?.params as unknown[])[1]).not.toHaveProperty('fee_destination');
+  });
+
+  it('v7 fee split: a launch page lists each share, paid and owed', async () => {
+    dexOn = true;
+    feeFlowOn = true;
+    splitOn = true;
+    launchPatch = { fee_flow: true, creator_share: 75, fee_split: [{ to: 'creator', kind: 'creator', bps: 7500, paid: 0.5, owed: 0.25 }, { to: OTHER, kind: 'address', bps: 2500, paid: 0.125, owed: 0 }] };
+    nav.page = 'pools';
+    nav.tab = `launches/${MOON}/buy`;
+    render(Trade, { props: { page: 'pools' } });
+    await loaded();
+    await waitFor(() => expect(screen.getAllByTestId('launch-fee-share')).toHaveLength(2));
+    const [c, a] = screen.getAllByTestId('launch-fee-share').map((x) => x.textContent ?? '');
+    expect(c).toMatch(/^The creator: 75% of the tunable part \(0\.5625% of each trade\) · 0\.5 ECX paid · 0\.25 ECX owed$/);
+    expect(a).toContain(OTHER);
+    expect(a).toMatch(/25% of the tunable part .* 0\.125 ECX paid$/);
+    expect(screen.queryByTestId('launch-fee-destination')).toBeNull();
   });
 
   it('v5 fee flow: before its height, no fee-flow options', async () => {

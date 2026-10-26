@@ -19,6 +19,7 @@ import { WalletError } from '../../lib/wallet';
 import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo, PoolPreview } from './kinds';
+import type { LaunchOptionValue } from './create';
 import { flipped, turn } from './cl';
 import { assetArg, assetIdentity, assetText, escapeName, shortId, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
@@ -47,7 +48,7 @@ export interface PendingIssue {
    * reservation is deep enough (the host asked both with the reservation: LaunchAfterReserve). The supply and decimals
    * above are then the launch's.
    */
-  launch?: Record<string, string | number | boolean>;
+  launch?: Record<string, LaunchOptionValue>;
   /** The market the wizard opens once it is registered (a pool, an auction): offered then, never sent by itself. */
   follow?: 'pool' | 'auction';
   /** When it was reserved (seconds), and the reservation's transaction. */
@@ -349,15 +350,17 @@ export function sanitizeJournal(raw: unknown): Journal {
 }
 
 /** A launch's options read back from the journal: text and numbers only, the logo bounded; anything else dropped. */
-function launchOf(v: unknown): Record<string, string | number | boolean> | undefined {
+function launchOf(v: unknown): Record<string, LaunchOptionValue> | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
-  const out: Record<string, string | number | boolean> = {};
+  const out: Record<string, LaunchOptionValue> = {};
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
     if (!/^[a-z_]{1,20}$/.test(k)) continue;
     // keep_control (v5): a boolean, kept with the launch that waits for its reservation.
     if (typeof x === 'boolean') out[k] = x;
     else if (typeof x === 'number' && Number.isFinite(x)) out[k] = x;
     else if (typeof x === 'string' && x.length <= (k === 'logo' ? MAX_LOGO_BASE64 : 1024)) out[k] = x;
+    // fee_split (v7): at most 5 shares, each a recipient and whole basis points.
+    else if (k === 'fee_split' && Array.isArray(x) && x.length <= 5 && x.every((s) => s && typeof s.to === 'string' && s.to.length <= 128 && Number.isInteger(s.bps))) out[k] = x.map((s) => ({ to: s.to as string, bps: s.bps as number }));
   }
   return out;
 }

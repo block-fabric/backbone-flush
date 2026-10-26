@@ -156,9 +156,9 @@ export function launchTokenOptions(o: {
   decimals: number;
   feePercent: number;
   /** v5 (getlaunchstats fee_flow_active): where the creator's fees go and whether the control coin is kept (launch.ts feeFlowOptions). */
-  feeFlow?: Record<string, string | number | boolean> | null;
-}): Record<string, string | number | boolean> {
-  const out: Record<string, string | number | boolean> = {};
+  feeFlow?: Record<string, LaunchOptionValue> | null;
+}): Record<string, LaunchOptionValue> {
+  const out: Record<string, LaunchOptionValue> = {};
   if (o.displayName) out.display_name = o.displayName;
   if (o.logo) out.logo = o.logo;
   if (o.info.trim()) out.info = o.info;
@@ -176,6 +176,9 @@ export function launchTokenOptions(o: {
   if (o.feeFlow) Object.assign(out, o.feeFlow);
   return out;
 }
+
+/** A value of launchtoken's options: text, a number, a flag, or (v7) the fee split's shares. */
+export type LaunchOptionValue = string | number | boolean | { to: string; bps: number }[];
 
 /** The parameters of curveasset: the asset by id, the amount it puts on the curve (whole), its options. */
 export function curveAssetParams(assetArg: string, amount: string, o: { feePercent: number; minBuy?: string; maxBuy?: string }): unknown[] {

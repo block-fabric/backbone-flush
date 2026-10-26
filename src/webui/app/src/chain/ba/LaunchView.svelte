@@ -23,7 +23,7 @@
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { claimable, creatorAllocation, curvePointAt, feeDestinationText, poolKindText, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
+  import { claimable, creatorAllocation, curvePointAt, feeDestinationText, shareKind, shareRecipientText, shareText, poolKindText, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, minChnPayout, minChnText, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
   import { ba, nameOf, noteKnownAssets, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
@@ -116,6 +116,8 @@
   const owed = $derived(launch ? claimable(launch) : { fees: false, allocation: false, tokens: false });
   /** v5: the launch's fee flow, as its page says it (launch.ts feeDestinationText, poolKindText). */
   const graduationFee = $derived(Number(stats?.rules?.graduation_fee ?? 1));
+  /** v7: its fee split, as the node says it (getlaunch fee_split: each share with what it was paid and is owed). */
+  const feeSplit = $derived(launch && Array.isArray(launch.fee_split) ? launch.fee_split : []);
   // Shown to every buyer, above the curve: what the creator gets minted at graduation.
   const allocationShown = $derived(launch ? creatorAllocation(launch) : null);
 
@@ -355,7 +357,10 @@
             <dt>Launched</dt><dd>block {formatCount(launch.height)}</dd>
             <dt>Supply</dt><dd>{formatAmount(launch.supply, DEC, { max: 0 })}</dd>
             <dt>Fee</dt><dd data-testid="launch-fee-split">{split}</dd>
-            {#if launch.fee_flow}
+            {#if feeSplit.length}
+              <dt>Fee split</dt><dd data-testid="launch-fee-split-shares"><ul class="split-list">{#each feeSplit as s, i (i)}<li data-testid="launch-fee-share">{#if shareKind(s.to) === 'address'}<SafeText class="mono break" text={s.to} />{:else}{shareRecipientText(s)}{/if}: {shareText(s, Number(launch.creator_share) || 0, Number(launch.fee) || 0)}{#if s.paid !== undefined}{' · '}{t('%1 paid', `${formatAmount(s.paid, 8)} ${TICKER}`)}{/if}{#if approx(s.owed ?? 0) > 0}{' · '}{t('%1 owed', `${formatAmount(s.owed ?? 0, 8)} ${TICKER}`)}{/if}</li>{/each}</ul>{#if approx(launch.burned ?? 0) > 0}<span data-testid="launch-burned">{t('%1 burned', `${formatAmount(launch.burned ?? 0, DEC, { max: 2 })} ${launch.ticker}`)}</span>{/if}</dd>
+              {#if graduated && poolKindText(launch, graduationFee)}<dt>Its pool</dt><dd data-testid="launch-pool-kind">{poolKindText(launch, graduationFee)}</dd>{/if}
+            {:else if launch.fee_flow}
               <dt>Creator fees</dt><dd data-testid="launch-fee-destination">{feeDestinationText(launch)}{#if approx(launch.burned ?? 0) > 0}{' · '}<span data-testid="launch-burned">{t('%1 burned', `${formatAmount(launch.burned ?? 0, DEC, { max: 2 })} ${launch.ticker}`)}</span>{/if}</dd>
               {#if graduated && poolKindText(launch, graduationFee)}<dt>Its pool</dt><dd data-testid="launch-pool-kind">{poolKindText(launch, graduationFee)}</dd>{/if}
             {/if}
@@ -411,6 +416,10 @@
 </div>
 
 <style>
+  .split-list {
+    margin: 0;
+    padding-left: 1.1em;
+  }
   .launch-view {
     display: flex;
     flex-direction: column;
