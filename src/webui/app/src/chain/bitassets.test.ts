@@ -1016,7 +1016,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     // Not listed (a private name): the start and end of its hash.
     expect(nameOf('9'.repeat(60) + 'abcd', 'G0LD')).toBe('$G0LD 0x99999999…9999abcd');
     // A name of another shape, quoted and escaped after the unique part: it reads as text (audit 7 E-BA4).
-    expect(nameOf('9'.repeat(60) + 'abcd', 'gold (#1739-0029)')).toBe('0x99999999…9999abcd ("gold (\\#1739-\\0029)")');
+    expect(nameOf('9'.repeat(60) + 'abcd', 'gold (#1739-0029)')).toBe('0x99999999…9999abcd ("gold (\\#1739-0029)")');
     // A display name that imitates another asset (security review 2026-10-24): after the real ticker and number, escaped.
     assets[0] = { ...assets[0], display_name: 'Bitcoin $ECX #1' };
     await refreshBitAssets();

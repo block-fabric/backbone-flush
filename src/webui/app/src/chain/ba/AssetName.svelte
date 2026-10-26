@@ -12,10 +12,10 @@
   // - The number: the caller's (seq), else the store's (by id), else its id shortened (model.ts shortId: its start and
   //   end, 64 bits); none known: the label.
   // - ECX: its ticker alone, the one name the pages give the coin (config.ts: TICKER).
-  // - A name is shown in NFKC, what is not plain in it boxed and escaped (model.ts nameSegments, the allowlist shared with
-  //   the site: letters, marks on them, space, . , ' - & ( ) ! ? : ; and short digit runs plain; anything else, and runs
-  //   of 4 digits or more, marked), so that its text, copied or read out, is the one assetTitle gives.
-  // The name gives way first (an ellipsis), the identity stays whole; the full text is in the title (assetTitle: the
+  // - A name is shown in NFKC, what is not plain in it boxed and escaped (model.ts nameSegments, the rule shared with the
+  //   site: an allowlist, and on top of it what reads as an id or a number, and bar-like letters), so that its text,
+  //   copied or read out, is the one assetTitle gives. Too long, it is cut at a piece's end, with a fade, not a "…".
+  // The name gives way first (cut, a fade), the identity stays whole; the full text is in the title (assetTitle: the
   // name escaped). All text of the chain: SafeText (translate="no", dir="auto": a bidirectional mark stays inside it).
   // The space between the parts is an expression, which the compiler keeps (user feedback 2026-10-19: "GOLDGold Bar
   // Token"), so that the words are apart when copied and read out.
@@ -51,12 +51,22 @@
   const ticker = $derived(a.ticker ?? '');
   const unique = $derived(uniquePart(number, id));
   const full = $derived(coin ? TICKER : assetTitle(label, display, number, id));
+
+  // A name too long for its place is cut where a word or a marked piece ends (they wrap to a hidden line: a marked piece
+  // is never split), the cut drawn by a fade, never a "…" of text (a name's text could pose as an id's "0x…").
+  function cutMark(node: HTMLElement) {
+    const check = () => node.classList.toggle('cut', node.scrollHeight > node.clientHeight + 1);
+    check();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(check);
+    observer?.observe(node);
+    return { destroy: () => observer?.disconnect() };
+  }
 </script>
 
 <!-- A name, what in it is not plain marked and escaped (model.ts nameSegments, escapePiece). -->
 {#snippet marked(text: string)}{#each nameSegments(text) as seg, i (i)}{#if seg.flag}<mark class="lookalike" title="Part of the name, not of the identity"><SafeText text={escapePiece(seg.text)} /></mark>{:else}<SafeText text={seg.text} />{/if}{/each}{/snippet}
 
-<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<span class="{nameClass} first" translate="no" dir="auto">{@render marked(a.name)}</span>{' '}{/if}{#if a.alias}<span class="alias" translate="no" dir="auto">{@render marked(a.alias)}</span>{' '}{/if}{#if ticker || unique}{#if a.name || a.alias}<span class="sep" aria-hidden="true"></span>{/if}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<span class="vh">$</span><SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
+<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<span class="{nameClass} first name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.name)}</span>{' '}{/if}{#if a.alias}<span class="alias name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.alias)}</span>{' '}{/if}{#if ticker || unique}{#if a.name || a.alias}<span class="sep" aria-hidden="true"></span>{/if}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<span class="vh">$</span><SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 
 <style>
   /* Too narrow for both: the identity goes under the name (never cut: it is what tells the asset apart), the name
@@ -128,8 +138,23 @@
     color: var(--text-muted);
     font-size: 0.85em;
   }
-  /* In a name, what could pass for the identity: boxed, so that it reads as part of the name. */
+  /* A name: one line, cut between words or pieces (the rest wraps to a hidden line), no "…" of text. */
+  .asset-name :global(.name-text) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    line-height: 1.4;
+    max-height: 1.4em;
+    overflow: hidden;
+  }
+  .asset-name :global(.name-text.cut) {
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.5em), transparent);
+  }
+  /* In a name, what is not plain: boxed, so that it reads as part of the name, and never split. */
   .lookalike {
+    display: inline-block;
+    white-space: nowrap;
+    line-height: 1.15;
     padding: 0 0.12em;
     border: 1px dashed var(--warning, var(--line-strong));
     border-radius: 3px;
