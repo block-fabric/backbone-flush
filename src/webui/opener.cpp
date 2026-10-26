@@ -19,19 +19,29 @@ bool IsWsl(const char* distro, const std::string& osrelease)
 
 std::string LoggableUri(const std::string& uri)
 {
-    const size_t end{uri.find_first_of("?#")};
-    const std::string head{uri.substr(0, end)};
-    const size_t sep{head.find("://")};
-    if (sep == std::string::npos) {
-        // No host: the scheme and its opaque part before any query (flush:connect), no path beyond a first segment.
-        const size_t colon{head.find(':')};
-        if (colon == std::string::npos) return "(an address)";
-        const size_t slash{head.find('/', colon + 1)};
-        return head.substr(0, slash);
+    // The scheme: letters, digits, + - . after a letter (RFC 3986), then ':'.
+    size_t colon{0};
+    while (colon < uri.size() && (std::isalnum(static_cast<unsigned char>(uri[colon])) || ((uri[colon] == '+' || uri[colon] == '-' || uri[colon] == '.') && colon > 0))) ++colon;
+    if (colon == 0 || colon >= uri.size() || uri[colon] != ':' || !std::isalpha(static_cast<unsigned char>(uri[0]))) return "(an address)";
+    const std::string scheme{uri.substr(0, colon)};
+    if (uri.compare(colon, 3, "://") == 0) {
+        // Hierarchical: the host alone, ended by the first of / ? # \ ; (no path, query, fragment), without its user
+        // part or its port.
+        const size_t start{colon + 3};
+        const size_t end{uri.find_first_of("/?#\\;", start)};
+        std::string authority{uri.substr(start, end == std::string::npos ? std::string::npos : end - start)};
+        if (const size_t at{authority.rfind('@')}; at != std::string::npos) authority = authority.substr(at + 1);
+        if (!authority.empty() && authority.front() == '[') {
+            authority = authority.substr(0, authority.find(']') == std::string::npos ? std::string::npos : authority.find(']') + 1);
+        } else if (const size_t port{authority.find(':')}; port != std::string::npos) {
+            authority = authority.substr(0, port);
+        }
+        return scheme + "://" + authority;
     }
-    std::string authority{head.substr(sep + 3, head.find('/', sep + 3) == std::string::npos ? std::string::npos : head.find('/', sep + 3) - (sep + 3))};
-    if (const size_t at{authority.rfind('@')}; at != std::string::npos) authority = authority.substr(at + 1);
-    return head.substr(0, sep + 3) + authority;
+    // Opaque (flush:connect?...): the scheme and a leading verb of [A-Za-z0-9_-] alone.
+    size_t verb{colon + 1};
+    while (verb < uri.size() && (std::isalnum(static_cast<unsigned char>(uri[verb])) || uri[verb] == '_' || uri[verb] == '-')) ++verb;
+    return scheme + ":" + uri.substr(colon + 1, verb - colon - 1);
 }
 
 std::string OpenWithFallbacks(const std::string& uri, const OpenSteps& steps)

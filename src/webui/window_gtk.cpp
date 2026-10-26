@@ -34,6 +34,16 @@
 
 namespace webui {
 namespace {
+/** A GError as the log may show it: its domain and code, never its message (GIO's and WebKit's echo the address, a
+ * connect callback's with the address shared and its nonce). */
+std::string ErrorCode(const GError* error)
+{
+    if (!error) return {};
+    const char* domain{g_quark_to_string(error->domain)};
+    return std::string{domain ? domain : "?"} + " " + std::to_string(error->code);
+}
+} // namespace
+namespace {
 
 /** Answer a request of a web view with a file built into the program, if `served` takes its path under `origin`. */
 void Serve(WebKitURISchemeRequest* request, std::string_view origin, bool (*served)(std::string_view), const std::string& policy)
@@ -374,7 +384,7 @@ public:
             GError* error{nullptr};
             const bool ok{g_app_info_launch_default_for_uri(target.c_str(), nullptr, &error) == TRUE};
             if (error) {
-                LogWarning("webui: cannot open %s with GIO: %s", LoggableUri(target), error->message);
+                LogWarning("webui: cannot open %s with GIO: %s", LoggableUri(target), ErrorCode(error));
                 g_error_free(error);
             }
             return ok;
@@ -387,7 +397,7 @@ public:
             const bool ok{g_spawn_async(nullptr, argv.data(), nullptr, static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL),
                                         nullptr, nullptr, nullptr, &error) == TRUE};
             if (error) {
-                LogDebug(BCLog::NET, "webui: %s: %s\n", args.at(0), error->message);
+                LogDebug(BCLog::NET, "webui: %s: %s\n", args.at(0), ErrorCode(error));
                 g_error_free(error);
             }
             return ok;
@@ -800,7 +810,7 @@ private:
         auto* tag2{new DialogTag{this, id}};
         g_signal_connect_data(web, "load-failed", G_CALLBACK(+[](WebKitWebView*, WebKitLoadEvent, gchar* uri, GError* error, gpointer data) -> gboolean {
                                   auto* t{static_cast<DialogTag*>(data)};
-                                  LogWarning("webui: the page of the dialog window did not load (%s): %s", uri ? LoggableUri(uri) : std::string{}, error ? error->message : "");
+                                  LogWarning("webui: the page of the dialog window did not load (%s): %s", uri ? LoggableUri(uri) : std::string{}, error ? ErrorCode(error) : std::string{});
                                   t->self->Fallback(t->id);
                                   return TRUE;
                               }),
