@@ -256,7 +256,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' DEX: its pool kinds (src/rpc/bitassets.cpp), as the node answers them.
     case 'getdexinfo':
       if (!dexOn) fail('Method not found', -32601);
-      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], swap_fee_parts: { liquidity_providers: 89, security: 11, protocol: 0 } };
+      return { dex_height: 0, active: true, max_route_hops: 4, curves_height: 10, curves_active: true, fee_tiers: [0.01, 0.05, 0.3, 1], curves: ['constant_product', 'stable', 'weighted'], min_amp: 1, max_amp: 10000, weights: [2, 5, 10, 20, 25, 40, 60, 75, 80, 90, 95, 98], swap_fee_parts: { liquidity_providers: 85, security: 15 } };
     case 'getswapquote': {
       // [asset_in, amount, asset_out, {max_hops}]: the pair's pools of every kind, best first.
       if (!dexOn) fail('Method not found', -32601);
@@ -318,7 +318,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     // Layers' launches (src/rpc/bitassets.cpp), as the node answers them.
     case 'getlaunchstats':
       if (!dexOn) fail('Method not found', -32601);
-      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { ...(feeFlowOn ? { fee_flow_active: true, fee_flow_height: 30, graduation_fee: 1, graduated_creator_share: 60 } : {}), graduation: '500.00000000', fee: 1.15, creator_share: 50, protocol_share: 30, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
+      return { launches: launchCount, on_curve: launchCount - 1, graduated: 1, volume: '420.00000000', raised: '700.00000003', rules: { ...(feeFlowOn ? { fee_flow_active: true, fee_flow_height: 30, graduation_fee: 1, graduated_creator_share: 60 } : {}), graduation: '500.00000000', fee: 1.15, creator_share: 80, security_share: 20, supply: '1000000000.000000', curve_supply: '750000000.000000', pool_supply: '250000000.000000', max_allocation: 5, log_blocks: 10080, active: true, ...(paramsOn ? { params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' } : { params_active: false, params_height: 40 }) } };
     case 'searchpools':
       // An older node has none: the pages fall back on the pools they read (ba/search.ts).
       if (!searchSupported) fail('Method not found', -32601);
@@ -1243,7 +1243,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     const review = await screen.findByTestId('launch-review');
     expect(review.textContent).toContain('21,000,000, 8 decimals, fixed');
-    expect(review.textContent).toMatch(/2\.5% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
+    expect(review.textContent).toMatch(/2\.5% of each trade: 80% to you, 20% to the chain's security/);
     await fireEvent.click(screen.getByRole('button', { name: /Reserve and launch/ }));
     await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));
     // One question for both steps: the reservation and the launch exactly as it will be sent.
@@ -1648,7 +1648,7 @@ describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
     const review = await screen.findByTestId('launch-review');
     expect(review.textContent).toMatch(/at 500 CHN raised/);
     expect(review.textContent).toMatch(/20M \(2%\), minted at graduation/);
-    expect(review.textContent).toMatch(/1\.15% of each trade: 50% to you, 30% to the treasury, 20% to the chain's security/);
+    expect(review.textContent).toMatch(/1\.15% of each trade: 80% to you, 20% to the chain's security/);
     await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
     await answer('yes');
     await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron asset.', allocation: 2, first_buy: '1' }]));
@@ -2191,12 +2191,12 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await loaded();
     expect(screen.getByRole('heading', { name: 'Swap' })).toBeTruthy();
     expect(screen.queryByRole('tablist')).toBeNull();
-    // Advanced: the markets, the books, the pools of other kinds, the auctions, the treasury, fully there.
+    // Advanced: the markets, the books, the pools of other kinds, the auctions, fully there.
     await fireEvent.click(screen.getByTestId('dex-advanced'));
     expect(nav.tab).toBe('markets');
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Advanced' })).toBeTruthy());
     const tabsOf = (name: string) => within(screen.getByRole('tablist', { name })).getAllByRole('tab').map((x) => x.textContent?.trim());
-    expect(tabsOf('Advanced')).toEqual(['Swap', 'Market index', 'Order book', 'Other pools', 'Add liquidity', 'Create pool', 'Auctions', 'Treasury']);
+    expect(tabsOf('Advanced')).toEqual(['Swap', 'Market index', 'Order book', 'Other pools', 'Add liquidity', 'Create pool', 'Auctions']);
     await fireEvent.click(screen.getByRole('tab', { name: 'Auctions' }));
     await waitFor(() => expect(screen.getByRole('tablist', { name: 'Auctions' })).toBeTruthy());
     await fireEvent.click(within(screen.getByRole('tablist', { name: 'Auctions' })).getByRole('tab', { name: 'Sell by auction' }));

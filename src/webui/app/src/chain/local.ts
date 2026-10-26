@@ -10,7 +10,7 @@
 // The assets of BitAssets, and the DEX in four (user decision, 2026-10-23, "Orca-style"): Swap (the best price over
 // every venue), Pools (concentrated liquidity, the full range by default), Launch (the one create wizard: no market, a
 // bonding curve, or straight into a pool the creator funds) and Portfolio (what the wallet holds and controls; once My
-// assets). The pools of other kinds, the order books, the markets, the treasury and the auctions are behind Swap's
+// assets). The pools of other kinds, the order books, the markets and the auctions are behind Swap's
 // Advanced link (DEX_TABS). Browse assets is an explorer with each asset's supply, markets, auctions and history;
 // sending an asset is in the Send page (LocalSend.svelte), the deposits and withdrawals in the peg's page.
 //
@@ -117,7 +117,6 @@ export const DEX_TABS = {
   liquidity: { page: 'trade', label: 'Add liquidity', advanced: true },
   create: { page: 'trade', label: 'Create pool', advanced: true },
   auctions: { page: 'trade', label: 'Auctions', advanced: true },
-  treasury: { page: 'trade', label: 'Treasury', advanced: true },
   pools: { page: 'pools', label: 'Markets' },
   positions: { page: 'pools', label: 'Positions' },
   new: { page: 'pools', label: 'New pool' },
@@ -157,7 +156,6 @@ export const LOCAL_COMMANDS = [
   { id: 'ba.classic', label: 'Other pools', page: 'trade', tab: 'classic', tip: 'The pools of every kind: constant product, stable, weighted, concentrated (Advanced)', keywords: 'pool constant product stable weighted kinds advanced' },
   { id: 'ba.liquidity', label: 'Add liquidity…', page: 'trade', tab: 'liquidity', tip: 'Put two assets in their constant-product pool for a share of its fees (Advanced)', keywords: 'pool provide constant product advanced' },
   { id: 'ba.createpool', label: 'Create a pool…', page: 'trade', tab: 'create', tip: 'Make a pool of a kind: constant product, stable, weighted or concentrated, at a fee tier (Advanced)', keywords: 'pool curve stable weighted stableswap amplification weights fee tier advanced' },
-  { id: 'ba.treasury', label: 'Treasury', page: 'trade', tab: 'treasury', tip: 'Where the fees go, and what the treasury holds per asset (Advanced)', keywords: 'treasury fees protocol security providers split advanced' },
   { id: 'ba.sell', label: 'Sell by auction…', page: 'auctions', tab: 'sell', tip: 'Start a Dutch auction of an asset (Advanced)', keywords: 'dutch auction advanced' },
   { id: 'ba.activity', label: 'Asset activity', page: 'my-assets', tab: 'activity', tip: 'The asset transactions of this wallet', keywords: 'history transactions' },
 ] as const satisfies readonly LocalCommand[];

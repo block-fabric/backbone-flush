@@ -137,7 +137,7 @@ export function curveSplit(units: bigint): { curve: bigint; pool: bigint } {
   return { curve: units - pool, pool };
 }
 
-/** The fee's parts on a trade of `amount` coins: creator, treasury, security (percent of the fee each). */
+/** The fee of a trade of `amount` coins, at `feePercent`. */
 export function feeOf(amount: number, feePercent: number): number {
   return (amount * feePercent) / 100;
 }

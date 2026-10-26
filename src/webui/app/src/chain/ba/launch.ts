@@ -20,8 +20,7 @@ export interface LaunchRules extends LaunchParamRules {
   /** A trade's fee on a curve, in percent, and the creator's part of it, in percent of the fee. */
   fee: number;
   creator_share: number;
-  /** The treasury's and the chain's security's parts of it, in percent of the fee (newer nodes; ba/fees.ts). */
-  protocol_share?: number;
+  /** The chain's security's part of it, in percent of the fee (newer nodes; ba/fees.ts). */
   security_share?: number;
   /** Whole tokens of a launch, of which the curve sells, and go into the pool at graduation. */
   supply: Amount;
@@ -76,10 +75,8 @@ export interface Launch {
   curve_tokens_left: Amount;
   fee: number;
   creator_share: number;
-  /** The treasury's and the chain's security's parts of the fee, in percent of it, and what they were paid so far (CHN; newer nodes). */
-  protocol_share?: number;
+  /** The chain's security's part of the fee, in percent of it, and what it was paid so far (CHN; newer nodes). */
   security_share?: number;
-  protocol_fees?: Amount;
   security_fees?: Amount;
   creator_fees_owed: Amount;
   creator_fees_paid: Amount;

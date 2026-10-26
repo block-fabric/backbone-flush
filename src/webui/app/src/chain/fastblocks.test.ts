@@ -691,7 +691,7 @@ describe('the host side of the pages (local.cpp)', () => {
     // Layers: FastBlocks' eleven, then those of the assets and of the DEX (getdexinfo, simulateclearing), of the launches, of the positions of concentrated liquidity, of the order books and the verified issuers (bitassets.test.ts checks them).
     const fbs = ['getanchorbidpolicy', 'getanchorinfo', 'getanchorticket', 'getleaderschedule', 'getposinfo', 'getstakinginfo', 'getvalidator', 'getvalidators', 'listbonds', 'listevidence', 'submitevidence'];
     expect(allowed.filter((m) => fbs.includes(m)).sort()).toEqual(fbs);
-    expect(allowed.filter((m) => !fbs.includes(m)).every((m) => /asset|pool|auction|quote|dex|clearing|launch|position|book|order|verification|oracle|treasury/.test(m))).toBe(true);
+    expect(allowed.filter((m) => !fbs.includes(m)).every((m) => /asset|pool|auction|quote|dex|clearing|launch|position|book|order|verification|oracle/.test(m))).toBe(true);
     for (const m of ['createbond', 'createunbond', 'setstaking', 'signbondpop', 'setanchorbidpolicy']) expect(allowed).not.toContain(m);
   });
 

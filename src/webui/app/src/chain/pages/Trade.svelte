@@ -12,8 +12,8 @@
   //    straight into a funded pool).
   // Behind the Advanced links of Swap and Markets, fully there: the market index (ba/Markets.svelte), the order books (ba/OrderBook.svelte),
   // the pools of every kind (constant product, stable, weighted), adding to a constant-product pool
-  // (ba/LiquidityPanel.svelte) and making a pool of a kind (ba/CreatePool.svelte), the Dutch auctions (pages/Auctions),
-  // the treasury and the parts of the fees (ba/Treasury.svelte). Portfolio is pages/MyAssets.svelte.
+  // (ba/LiquidityPanel.svelte) and making a pool of a kind (ba/CreatePool.svelte), the Dutch auctions (pages/Auctions).
+  // Portfolio is pages/MyAssets.svelte.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import TabRow from '../../components/TabRow.svelte';
@@ -32,7 +32,6 @@
   import Markets from '../ba/Markets.svelte';
   import NewPool from '../ba/NewPool.svelte';
   import OrderBook from '../ba/OrderBook.svelte';
-  import Treasury from '../ba/Treasury.svelte';
   import PoolsPanel from '../ba/PoolsPanel.svelte';
   import SwapPanel from '../ba/SwapPanel.svelte';
   import { swapFeeSplit } from '../ba/fees';
@@ -118,8 +117,6 @@
     <CreatePool />
   {:else if tab === 'positions'}
     <Positions />
-  {:else if tab === 'treasury'}
-    <Treasury />
   {:else if tab === 'auctions'}
     <Auctions embedded />
   {:else if tab === 'launch'}

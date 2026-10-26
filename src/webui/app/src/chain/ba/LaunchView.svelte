@@ -371,7 +371,6 @@
             <dt>Fees owed</dt><dd>{formatAmount(launch.creator_fees_owed, 8)} {TICKER}</dd>
             {#if approx(launch.creator_tokens_owed ?? 0) > 0}<dt>Tokens owed</dt><dd data-testid="launch-tokens-owed">{formatAmount(launch.creator_tokens_owed ?? 0, DEC, { max: 2 })} <SafeText text={launch.ticker} /></dd>{/if}
             <dt>Fees paid</dt><dd>{formatAmount(launch.creator_fees_paid, 8)} {TICKER}</dd>
-            {#if launch.protocol_fees !== undefined}<dt>To the treasury</dt><dd>{formatAmount(launch.protocol_fees, 8)} {TICKER}</dd>{/if}
             {#if launch.security_fees !== undefined}<dt>To the chain's security</dt><dd>{formatAmount(launch.security_fees, 8)} {TICKER}</dd>{/if}
           </dl>
           {#if owed.fees || owed.allocation || owed.tokens}
