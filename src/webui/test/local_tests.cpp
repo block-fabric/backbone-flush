@@ -145,7 +145,8 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     // And getpoolcandles (the order book's price chart).
     // And getanchorbidpolicy (the validator's anchor bid policy, read; setanchorbidpolicy is confirmed by the host) and
     // getanchorticket (the block a mainchain commitment anchors).
-    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U + 1U + 2U);
+    // Less gettreasury, removed with the treasury.
+    BOOST_CHECK_EQUAL(methods.size(), 9U + 17U + 7U + 1U + 5U + 4U + 6U + 1U + 2U - 1U);
     BOOST_CHECK(methods.contains("getpoolcandles"));
     BOOST_CHECK(methods.contains("getanchorbidpolicy"));
     BOOST_CHECK(methods.contains("getanchorticket"));

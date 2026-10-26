@@ -1007,7 +1007,7 @@ BOOST_AUTO_TEST_CASE(app_values)
 }
 
 // A prune size saved below the least of the chain (an older version offered 2 GB) is raised before the node
-// starts, which would refuse it: on the main network of a sidechain, 10000 MiB, so 11 GB (10490 MiB).
+// starts, which would refuse it: on the main network of a sidechain, 24000 MiB (the 24 h unanchored run's undo depth), so 26 GB (24795 MiB).
 BOOST_AUTO_TEST_CASE(prune_raised_to_the_least_of_the_chain)
 {
     ArgsManager main;
@@ -1016,10 +1016,10 @@ BOOST_AUTO_TEST_CASE(prune_raised_to_the_least_of_the_chain)
     auto node{interfaces::MakeNode(m_node)};
     node->updateRwSetting("prune", common::SettingsValue{"1907"});
     BOOST_CHECK_EQUAL(webui::NodeOptions::RaiseLowPrune(*node, main).value_or(-1), 1907);
-    BOOST_CHECK_EQUAL(node->getPersistentSetting("prune").getInt<int64_t>(), 10490);
+    BOOST_CHECK_EQUAL(node->getPersistentSetting("prune").getInt<int64_t>(), 24795);
     // At or above it, off, or manual: left alone.
     BOOST_CHECK(!webui::NodeOptions::RaiseLowPrune(*node, main));
-    for (const char* value : {"12000", "0", "1"}) {
+    for (const char* value : {"30000", "0", "1"}) {
         node->updateRwSetting("prune", common::SettingsValue{value});
         BOOST_CHECK(!webui::NodeOptions::RaiseLowPrune(*node, main));
         BOOST_CHECK_EQUAL(node->getPersistentSetting("prune").get_str(), value);
