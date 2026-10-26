@@ -11,8 +11,11 @@
 
 #include <consensus/amount.h>
 
+#include <uint256.h>
+
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -133,6 +136,23 @@ struct BidInputs {
     //! What landed bids cost in the current period.
     CAmount spent_in_period{0};
 };
+
+/** A BMM request a mainchain block took: its slot and its feerate (per 1000 vbytes). */
+struct BmmRequestSeen {
+    uint8_t slot{0};
+    CAmount rate_per_kvb{0};
+};
+/**
+ * The slot of a well-formed BMM request output (OP_RETURN, a push of 68 bytes: 00 bf 00, the slot, the commitment, the
+ * mainchain block it follows), for a request of a block that follows `prev`; nothing for anything else.
+ */
+std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, const uint256& prev);
+/**
+ * What recent mainchain blocks took for a BMM request, robustly (security review 2026-10-26): of each block with at least
+ * `min_requests` well-formed requests, the lowest rate of each slot; the median of those over the window. Nothing if no
+ * block qualifies. One bidder's crafted requests count as one slot of one block.
+ */
+std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, size_t min_requests = 2);
 
 /** (slot - first_unanchored_slot) / max_unanchored_slots: 0 without a run, 1 at the halt. */
 double StallPressure(int64_t slot, int64_t first_unanchored_slot, int64_t max_unanchored_slots);

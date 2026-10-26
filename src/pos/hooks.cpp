@@ -2329,35 +2329,42 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     } catch (const UniValue&) {
         balance_error = "the mainchain wallet could not be read";
     }
-    // What the last mainchain block took for a BMM request (any slot: an output 6a4400bf00...), the lowest feerate, for a
-    // node whose mainchain node answers getblock (not through the enforcer's interface alone).
-    std::optional<CAmount> included;
+    // What the last mainchain block took for well-formed BMM requests (any slot), for a node whose mainchain node
+    // answers getblock (not through the enforcer's interface alone): kept for the last blocks, robustly (RobustIncludedRate).
+    std::optional<std::vector<BmmRequestSeen>> seen;
     try {
         UniValue args{UniValue::VARR};
         args.push_back(main_tip.GetHex());
         args.push_back(2);
         const UniValue block{client.Call("getblock", args)};
+        const auto prev{uint256::FromHex(block.find_value("previousblockhash").isStr() ? block.find_value("previousblockhash").get_str() : "")};
         const UniValue& txs{block.find_value("tx")};
-        for (size_t i{0}; txs.isArray() && i < txs.size(); ++i) {
-            const UniValue& tx{txs[i]};
-            const UniValue& vouts{tx.find_value("vout")};
-            bool bmm{false};
-            for (size_t j{0}; vouts.isArray() && j < vouts.size() && !bmm; ++j) {
-                const UniValue& spk{vouts[j].find_value("scriptPubKey").find_value("hex")};
-                bmm = spk.isStr() && spk.get_str().starts_with("6a4400bf00");
+        if (prev && txs.isArray()) {
+            seen.emplace();
+            for (size_t i{0}; i < txs.size(); ++i) {
+                const UniValue& tx{txs[i]};
+                const UniValue& vouts{tx.find_value("vout")};
+                std::optional<uint8_t> slot;
+                for (size_t j{0}; vouts.isArray() && j < vouts.size() && !slot; ++j) {
+                    const UniValue& spk{vouts[j].find_value("scriptPubKey").find_value("hex")};
+                    if (spk.isStr()) slot = BmmRequestSlot(ParseHex(spk.get_str()), *prev);
+                }
+                const auto fee{amount(tx.find_value("fee"))};
+                const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
+                if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
+                seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>()});
             }
-            const auto fee{amount(tx.find_value("fee"))};
-            const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
-            if (!bmm || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
-            const CAmount per_kvb{*fee * 1000 / vsize.getInt<int64_t>()};
-            if (!included || per_kvb < *included) included = per_kvb;
         }
     } catch (const std::exception&) {
     } catch (const UniValue&) {
     }
     LOCK(m_anchor_mutex);
     m_bid_inputs.fee_rate_per_kvb = rate;
-    m_bid_inputs.included_rate_per_kvb = included;
+    if (seen) {
+        m_bid_seen.push_back(std::move(*seen));
+        while (m_bid_seen.size() > 6) m_bid_seen.pop_front();
+    }
+    m_bid_inputs.included_rate_per_kvb = RobustIncludedRate({m_bid_seen.begin(), m_bid_seen.end()});
     m_bid_inputs.relay_rate_per_kvb = relay_rate;
     m_bid_fee_source = source;
     m_bid_balance = balance;

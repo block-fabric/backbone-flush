@@ -4,6 +4,9 @@
 
 #include <pos/anchorbid.h>
 
+#include <algorithm>
+#include <map>
+
 #include <core_io.h>
 #include <tinyformat.h>
 #include <univalue.h>
@@ -287,6 +290,31 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
     return true;
 }
 
+std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, const uint256& prev)
+{
+    if (script.size() != 70 || script[0] != 0x6a || script[1] != 0x44 || script[2] != 0x00 || script[3] != 0xbf || script[4] != 0x00) return std::nullopt;
+    if (!std::equal(prev.begin(), prev.end(), script.begin() + 38)) return std::nullopt;
+    return script[5];
+}
+
+std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, size_t min_requests)
+{
+    std::vector<CAmount> lowest;
+    for (const auto& block : blocks) {
+        if (block.size() < min_requests) continue;
+        std::map<uint8_t, CAmount> by_slot;
+        for (const BmmRequestSeen& r : block) {
+            if (r.rate_per_kvb <= 0) continue;
+            auto [it, fresh]{by_slot.emplace(r.slot, r.rate_per_kvb)};
+            if (!fresh) it->second = std::min(it->second, r.rate_per_kvb);
+        }
+        for (const auto& [slot, rate] : by_slot) lowest.push_back(rate);
+    }
+    if (lowest.empty()) return std::nullopt;
+    std::sort(lowest.begin(), lowest.end());
+    return lowest[(lowest.size() - 1) / 2];
+}
+
 double StallPressure(int64_t slot, int64_t first_unanchored_slot, int64_t max_unanchored_slots)
 {
     if (first_unanchored_slot < 0 || max_unanchored_slots <= 0 || slot <= first_unanchored_slot) return 0;
@@ -341,7 +369,10 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         // bid of the relay floor stayed in the mempool while other slots' requests of 2-3 sat/vB got in, 2026-10-26).
         std::optional<CAmount> rate;
         if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) rate = inputs.fee_rate_per_kvb;
-        if (!rate && inputs.included_rate_per_kvb && *inputs.included_rate_per_kvb > 0) rate = inputs.included_rate_per_kvb;
+        // What blocks took (RobustIncludedRate), clamped to 10 x the least of the relay floor and the network's rate.
+        if (!rate && inputs.included_rate_per_kvb && *inputs.included_rate_per_kvb > 0) {
+            rate = std::min<CAmount>(*inputs.included_rate_per_kvb, 10 * std::max<CAmount>({inputs.relay_rate_per_kvb, inputs.min_rate_per_kvb, 1000}));
+        }
         const CAmount per_kvb{std::max(rate.value_or(0), inputs.min_rate_per_kvb)};
         if (per_kvb > 0) base = std::max(base, Clamp(std::ceil(static_cast<double>(per_kvb) / 1000.0) * policy.request_vsize));
         // Missed mainchain blocks: the base itself goes up, twice for every two missed (at most the boost's factor); the
