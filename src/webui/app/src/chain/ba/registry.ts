@@ -19,17 +19,23 @@ export interface AssetMarket {
 
 export const MARKET_LABELS: Record<MarketStatus, string> = { none: 'No market', curve: 'On curve', pool: 'Pool', book: 'Book', auction: 'Auction' };
 
-/** The market of `asset` from the pools (a launch's curve is a pool of the kind "launch"), books and auctions known. */
-export function marketOf(asset: string, pools: readonly Pool[], auctions: readonly Auction[], graduation = 500): AssetMarket {
+/**
+ * The market of `asset` from the pools (a launch's curve is a pool of the kind "launch"), books and auctions known.
+ * graduation: its launch's own (v6: 100 CHN from its height, 500 before: listlaunches, getlaunch); unknown, its progress
+ * is not guessed (null) though it is on its curve.
+ */
+export function marketOf(asset: string, pools: readonly Pool[], auctions: readonly Auction[], graduation?: number): AssetMarket {
   let progress: number | null = null;
+  let onCurve = false;
   let poolCount = 0;
   let books = 0;
   for (const p of pools) {
     if (p.asset_a_id !== asset && p.asset_b_id !== asset) continue;
     if (p.curve === 'launch') {
       // Its coin less the virtual half of the graduation, of the graduation.
+      onCurve = true;
       const coin = approx(isChn(p.asset_a_id) ? p.reserve_a : p.reserve_b);
-      progress = graduation > 0 ? Math.min(1, Math.max(0, (coin - graduation / 2) / graduation)) : 0;
+      progress = graduation !== undefined && graduation > 0 ? Math.min(1, Math.max(0, (coin - graduation / 2) / graduation)) : null;
     } else if (p.curve === 'book') {
       books += 1;
     } else if (!p.abandoned) {
@@ -38,7 +44,7 @@ export function marketOf(asset: string, pools: readonly Pool[], auctions: readon
   }
   const live = auctions.filter((a) => a.base_id === asset && (a.status === 'open' || a.status === 'upcoming')).length;
   const kinds: MarketStatus[] = [];
-  if (progress !== null) kinds.push('curve');
+  if (onCurve) kinds.push('curve');
   if (poolCount > 0) kinds.push('pool');
   if (books > 0) kinds.push('book');
   if (live > 0) kinds.push('auction');
@@ -47,7 +53,7 @@ export function marketOf(asset: string, pools: readonly Pool[], auctions: readon
 
 /** The badge of a market: "On curve 42%", "3 pools", "Book", "Auction", "No market". */
 export function marketBadge(m: AssetMarket): string {
-  if (m.status === 'curve') return `On curve ${Math.round((m.progress ?? 0) * 100)}%`;
+  if (m.status === 'curve') return m.progress === null ? MARKET_LABELS.curve : `On curve ${Math.round(m.progress * 100)}%`;
   if (m.status === 'pool') return m.pools === 1 ? '1 pool' : `${m.pools} pools`;
   return MARKET_LABELS[m.status];
 }

@@ -18,7 +18,7 @@
   import AssetView from '../ba/AssetView.svelte';
   import { untrack } from 'svelte';
   import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
-  import { assetById, ba, chnPrice, hasPool, loadLaunchFlags, noteKnownAssets, startBitAssets } from '../ba/store.svelte';
+  import { assetById, ba, chnPrice, hasPool, launchGraduation, loadLaunchFlags, noteKnownAssets, startBitAssets } from '../ba/store.svelte';
   import { PAGE, searchAssets, searchMyAssets, type AssetSort } from '../ba/search';
   import { hiding, searchFiltersOf } from '../ba/hide.svelte';
   import { hiddenAsset } from '../ba/visible.svelte';
@@ -244,7 +244,7 @@
       <ul class="grid" aria-label="Assets">
         {#each list as a (a.asset)}
           {@const price = chnPrice(a.asset)}
-          {@const market = marketOf(a.asset, ba.pools, ba.auctions)}
+          {@const market = marketOf(a.asset, ba.pools, ba.auctions, launchGraduation[a.asset])}
           <li class="tile-item">
             <button type="button" class="panel tile" onclick={() => (shown = a.asset)}>
               <span class="top">
@@ -257,7 +257,7 @@
                 <span><span class="faint">Price</span> <strong class="num">{#if price !== undefined}{formatPrice(price)} {TICKER}{:else}–{/if}</strong></span>
               </span>
               <span class="tags">
-                <span class="ba-tag market {market.status}" data-testid="market-badge" title={market.kinds.length > 1 ? market.kinds.map((k) => t(k === 'none' ? 'No market' : k)).join(', ') : undefined}>{#if market.status === 'curve'}{t('On curve %1%', String(Math.round((market.progress ?? 0) * 100)))}{:else if market.status === 'pool'}{tn('%n pool(s)', market.pools)}{:else}{t(MARKET_LABELS[market.status])}{/if}</span>
+                <span class="ba-tag market {market.status}" data-testid="market-badge" title={market.kinds.length > 1 ? market.kinds.map((k) => t(k === 'none' ? 'No market' : k)).join(', ') : undefined}>{#if market.status === 'curve' && market.progress !== null}{t('On curve %1%', String(Math.round(market.progress * 100)))}{:else if market.status === 'pool'}{tn('%n pool(s)', market.pools)}{:else}{t(MARKET_LABELS[market.status])}{/if}</span>
                 <MintableBadge id={a.asset} />
                 {#if a.fixed}<span class="ba-tag">Fixed supply</span>{/if}
                 {#if mineIds.has(a.asset)}<span class="ba-tag accent">Yours</span>{/if}

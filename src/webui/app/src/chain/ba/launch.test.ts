@@ -43,7 +43,8 @@ describe('the bonding curve', () => {
   });
 
   it('reads the rules as numbers, those of every network until the node answers', () => {
-    expect(rulesOf(null)).toEqual({ graduation: 500, supply: 1_000_000_000, fee: 1, creatorShare: 30, maxAllocation: 5, active: false });
+    // v6: a new launch graduates at 100 (a node that did not answer yet).
+    expect(rulesOf(null)).toEqual({ graduation: 100, supply: 1_000_000_000, fee: 1, creatorShare: 30, maxAllocation: 5, active: false });
     expect(rulesOf({ graduation: '500.00000000', fee: 1, creator_share: 30, supply: '1000000000.000000', curve_supply: 0, pool_supply: 0, max_allocation: 5, log_blocks: 1, active: true })).toMatchObject({ graduation: 500, supply: 1e9, active: true });
   });
 });
@@ -123,5 +124,20 @@ describe('v5 fee flow (launch.ts)', () => {
     expect(poolKindText({ pool_kind: 'concentrated' })).toBe('Locked full-range position, 1 %');
     expect(poolKindText({ pool_kind: undefined })).toBe('');
     expect(claimable({ creator_fees_owed: 0, status: 'curve', allocation: 0, allocation_claimed: false, creator_tokens_owed: '5' }, 0.0005)).toEqual({ fees: false, allocation: false, tokens: true });
+  });
+});
+
+describe('v6: each launch its own graduation', () => {
+  it('a launch of 100 and one of 500, side by side: the curve, the start and end prices of each', () => {
+    const small = curveShape(100, 1e9);
+    const big = curveShape(500, 1e9);
+    expect(small.virtualCoin).toBe(50);
+    expect(big.virtualCoin).toBe(250);
+    expect(small.startPrice).toBeCloseTo(50 / 1.125e9, 18);
+    expect(big.startPrice).toBeCloseTo(250 / 1.125e9, 18);
+    expect(big.startPrice / small.startPrice).toBeCloseTo(5);
+    expect(small.endPrice).toBeCloseTo(150 / 3.75e8, 15);
+    // Halfway: 50 of 100 raised, and 250 of 500.
+    expect(curvePointAt(small, 50).price).toBeCloseTo(curvePointAt(big, 250).price / 5, 15);
   });
 });

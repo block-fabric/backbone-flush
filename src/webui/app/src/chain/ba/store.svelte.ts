@@ -259,15 +259,22 @@ export const openMarketIntent = $state({ asset: '' });
  * (loadLaunchFlags): the loud marker of ba/MintableBadge.svelte.
  */
 export const mintableLaunch = $state<Record<string, boolean>>({});
-export function noteLaunches(list: readonly { token: string; mintable?: boolean }[] | null | undefined): void {
-  for (const l of list ?? []) if (l && typeof l.token === 'string' && (l.mintable === true) !== (mintableLaunch[l.token] === true)) mintableLaunch[l.token] = l.mintable === true;
+/** Each launch's own graduation (CHN raised; v6: 100 from its height, 500 before), from the same reads: the registry's progress. */
+export const launchGraduation = $state<Record<string, number>>({});
+export function noteLaunches(list: readonly { token: string; mintable?: boolean; graduation?: Amount }[] | null | undefined): void {
+  for (const l of list ?? []) {
+    if (!l || typeof l.token !== 'string') continue;
+    if ((l.mintable === true) !== (mintableLaunch[l.token] === true)) mintableLaunch[l.token] = l.mintable === true;
+    const g = l.graduation === undefined ? NaN : Number(l.graduation);
+    if (Number.isFinite(g) && g > 0 && launchGraduation[l.token] !== g) launchGraduation[l.token] = g;
+  }
 }
 let flagsAt = -1;
 export function loadLaunchFlags(): void {
   if (flagsAt === ba.version) return;
   flagsAt = ba.version;
   void rpc
-    .raw<{ launches?: { token: string; mintable?: boolean }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
+    .raw<{ launches?: { token: string; mintable?: boolean; graduation?: Amount }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
     .then((page) => noteLaunches(page?.launches))
     .catch(() => undefined);
 }

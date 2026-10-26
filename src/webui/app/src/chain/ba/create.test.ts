@@ -60,10 +60,17 @@ describe('the registry: the market of each asset', () => {
   const pool = (extra: Partial<Pool>): Pool => ({ pool: 'p', asset_a: 'ECX', asset_b: 'A', asset_a_id: CHN, asset_b_id: A, reserve_a: 0, reserve_b: 0, shares: 0, volume_a: 0, volume_b: 0, swaps: 0, created: 1, abandoned: false, ...extra });
   it('curve first, then pools, books, auctions', () => {
     expect(marketOf(A, [], []).status).toBe('none');
-    const curve = marketOf(A, [pool({ curve: 'launch', reserve_a: 450 }), pool({ curve: 'book' })], []);
+    const curve = marketOf(A, [pool({ curve: 'launch', reserve_a: 450 }), pool({ curve: 'book' })], [], 500);
     expect(curve).toMatchObject({ status: 'curve', kinds: ['curve', 'book'], books: 1 });
     expect(curve.progress).toBeCloseTo(0.4);
     expect(marketBadge(curve)).toBe('On curve 40%');
+    // v6: each launch's own graduation. 70 CHN in a curve of 100 (virtual 50): 20%; the same coin of one of 500 reads as none raised.
+    expect(marketOf(A, [pool({ curve: 'launch', reserve_a: 70 })], [], 100).progress).toBeCloseTo(0.2);
+    expect(marketOf(A, [pool({ curve: 'launch', reserve_a: 70 })], [], 500).progress).toBe(0);
+    // Not known: on its curve, its progress not guessed.
+    const unknown = marketOf(A, [pool({ curve: 'launch', reserve_a: 70 })], []);
+    expect(unknown).toMatchObject({ status: 'curve', progress: null });
+    expect(marketBadge(unknown)).toBe('On curve');
     expect(marketBadge(marketOf(A, [pool({}), pool({ curve: 'stable' }), pool({ abandoned: true })], []))).toBe('2 pools');
     const auction = { base_id: A, status: 'open' } as Auction;
     expect(marketOf(A, [], [auction]).status).toBe('auction');
