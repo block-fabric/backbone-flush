@@ -487,8 +487,8 @@ satoshis of rounding (the chord's ceiling); `getlaunch` says it exactly.
 
 **Fees** (consensus parameters, kept by each launch as made; see "Fees of the DEX"): `launch_fee` of every trade on the
 curve, split between the creator (`ClaimLaunch`, kind 23, sent by anyone: the coin by the coinbase to the creator's
-script), the protocol (the treasury) and the chain's security (the block's BMM bidder and validators), the remainder into
-the pool at graduation. No protocol token, no buybacks (the treasury has no spending rule yet). A creator's allocation is
+script) and the chain's security (the block's BMM bidder and validators), the remainder into the pool at graduation.
+No protocol token. A creator's allocation is
 optional, at most `MAX_LAUNCH_ALLOCATION` (10 % from `SidechainParams::allocation10_height`, 5 % before it;
 the supply and its allocation together within `MAX_AMOUNT`), minted only at graduation (to the creator, by a claim): until
 then no token exists but those the curve sold, so the curve always holds the coin to buy them back; the
@@ -596,7 +596,7 @@ goes to a party named below, so that the parts add up to the fee, exactly.
 
 | | Layers (CHN) | Flush (ECX) |
 |---|---|---|
-| Swap fees (every pool kind and tier; order books charge none) | providers 89 %, security 11 %, protocol 0 | providers 85 %, security 15 % from `no_treasury_height` (before: security 11 %, protocol 4 %); a security part paid in an asset stays in its pool |
+| Swap fees (every pool kind and tier; order books charge none) | providers 89 %, security 11 % | providers 85 %, security 15 %; from the fee-flow release all in ECX in a pool of ECX; otherwise a security part paid in an asset stays in its pool |
 | Launch curves: the fee of a trade | 1 % | 1.15 % |
 | … its parts | creator 80 %, security 20 %, protocol 0 | creator 50 %, protocol 30 %, security 20 % |
 | Network fees of transactions | the BMM bidder and the validators, by the fee curve; peg fees the bidder's | the same |
@@ -619,32 +619,21 @@ bidder and the validators share them by the same curve as network fees (50/50 at
 into the pot or kept by the merged miner, and into the validator pool (`CheckFees`, `bad-pos-fee-split`). The coinbase
 may pay them beyond its transactions' fees (they are counted with what it mints: the DEX's coin, which the state held,
 paid out); a block of stake's `AfterBlock` counts them in the pot and pool outputs. Security parts of fees paid in an
-asset (not the chain's coin) cannot be paid by a coinbase: before `no_treasury_height` the treasury held them per asset
-(`security_held`); from it they stay in their pool, for its providers.
+asset (not the chain's coin) cannot be paid by a coinbase: they stay in their pool, for its providers.
 
-**No treasury, from `no_treasury_height`** (`SidechainParams::NoTreasury`; never on the eCash networks until decided,
-regtest from the DEX's height, slot 99 at its upgrade v4). Before it, the treasury (table `0x9e`, `TreasuryEntry` per
-asset) took the protocol's parts (swaps 4 %, launches 30 % on Flush) and the assets' security parts, held by the chain
-itself, never spent (no rule ever spent from it). From it: a swap fee is 85 % to the providers and 15 % to the chain's
-security (the protocol's 4 % joins the security part); a security part paid in an asset stays in its pool, so on that
-side of a pool the providers keep the whole fee; a launch's
-curve fee is 80 % to its creator and 20 % to security (a launch made before keeps its own parts, its protocol's going to
-its creator). At that block, once, what the treasury held of the chain's coin is paid with the block's fees as their
-security part (`SecurityFees`: the BMM bidder and the validators); its entries stay as a record, and what it held of
-assets stays held, unspendable (it came out of many pools: none is the one to give it back to). `gettreasury` and the
-public API's `treasury` give that record, `active` false and `removed_height`; the parts in force in the next block are
-`getdexinfo`'s `swap_fee_parts`, `getlaunch`/`getlaunchstats`' shares and the API's `fees`.
+**History (slot 99 only).** Before slot 99's block 9000 a protocol part of the fees was held back by the chain
+(`no_treasury_height`; internal, exposed by no RPC or API); at that block it was paid with the block's fees as their
+security part. Every other network never had it.
 
 **Conservation, reorganisations.** Every part is an integer: the parts and the remainder add up to the fee charged
-(`fee_parts_exact`); a block's pools, treasury and security parts add up to what its orders paid in and got
-(`fee_parts_conserved_and_undone`, launches: `launch_trade_graduate_claim`); a block taken back takes the treasury's
-accruals and its security parts back with the rest of its changes (the store's journal). The bidder/validators split of
+(`fee_parts_exact`); a block's pools and security parts add up to what its orders paid in and got
+(`fee_parts_conserved_and_undone`, launches: `launch_trade_graduate_claim`); a block taken back takes its security parts back with the rest of its changes (the store's journal). The bidder/validators split of
 the security parts is the fee split's, to the satoshi (`security_parts_split_as_fees`). What a round takes out of a pool is what it credits:
 the parts are clamped to what was taken (at most what the pool holds; a concentrated pool: what it kept beyond its
 walk), the security part first, in every branch; launches' parts come out of fees already taken out of the curve, and
 books charge none. Random blocks of orders against small pools of every kind at the highest tier (one with a dynamic
-fee) conserve every asset exactly: what orders paid in less what they got equals what the pools gained plus what the
-treasury took (`fee_parts_conserve_every_kind`, a block taken back included).
+fee) conserve every asset exactly: what orders paid in less what they got equals what the pools gained plus the
+security parts (`fee_parts_conserve_every_kind`, a block taken back included).
 
 ## Logos of assets
 

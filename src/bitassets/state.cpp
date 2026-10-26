@@ -1130,6 +1130,9 @@ constexpr uint8_t BOOK_EXPIRY{0x9b};
 //! The entries of each side of each book's index (book, side).
 constexpr uint8_t BOOK_COUNTS{0x9c};
 //! The treasury (TreasuryEntry, by asset) and the security parts of the fees of the last block that had some (SecurityFees).
+//! SLOT-99 HISTORY ONLY: the protocol's parts of the fees before slot 99's no_treasury_height (9000), and the one payout of its
+//! ECX at that block (FinishBlock). Unreachable on every other network (no_treasury_height 0: NoTreasury from the first block);
+//! internal, exposed by no RPC or API.
 const sidechain::Table<uint256, TreasuryEntry> TREASURY{0x9e};
 const sidechain::Cell<SecurityFees> SECURITY_FEES{0x9f, SecurityFees{}};
 //! From fee_flow_height: the pools of the chain's coin take their fees on its side (State::CoinSideFees), set once.

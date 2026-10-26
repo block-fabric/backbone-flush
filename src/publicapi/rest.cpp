@@ -40,7 +40,6 @@ const std::vector<RouteDef>& Routes()
         {"GET", {"status"}, "GetStatus", {}},
         {"GET", {"stats"}, "GetStats", {}},
         {"GET", {"fees"}, "GetFees", {}},
-        {"GET", {"treasury"}, "GetTreasury", {}},
         {"GET", {"launches"}, "ListLaunches", {}},
         {"GET", {"launches", "stats"}, "GetLaunchStats", {}},
         {"GET", {"launches", "log"}, "GetLaunchLog", {}},

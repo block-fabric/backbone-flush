@@ -895,9 +895,8 @@ public:
         consensus.sidechain.allocation10_height = std::numeric_limits<int>::max();
         // Payouts of 0.00005 ECX at least (0.0005 until then): never on the eCash networks until a height is decided.
         consensus.sidechain.small_payout_height = std::numeric_limits<int>::max();
-        // No treasury (swap fees 85 % providers / 15 % security, launches 80 % creator / 20 % security): never on the eCash
-        // networks until a height is decided.
-        consensus.sidechain.no_treasury_height = std::numeric_limits<int>::max();
+        // No treasury on Flush's eCash networks, ever (from the first block); slot 99 alone had one before its v4 (below).
+        consensus.sidechain.no_treasury_height = 0;
         // The fee-flow release (graduation into a locked concentrated position, assets' security parts sold for ECX,
         // launches' fee destinations, vesting, control): never on the eCash networks until a height is decided.
         consensus.sidechain.fee_flow_height = std::numeric_limits<int>::max();
