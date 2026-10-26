@@ -1266,7 +1266,8 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByLabelText(/Trade fee on the curve: 2\.50%/)).toBeTruthy());
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     const review = await screen.findByTestId('launch-review');
-    expect(review.textContent).toContain('21,000,000, 8 decimals, fixed');
+    expect(review.textContent).toContain('21,000,000, fixed');
+    expect(review.textContent).toContain('Decimals8 (set for good');
     expect(review.textContent).toMatch(/2\.5% of each trade: 80% to you, 20% to the chain's security/);
     await fireEvent.click(screen.getByRole('button', { name: /Reserve and launch/ }));
     await waitFor(() => expect(called('reserveasset')[0]?.params).toEqual(['COPPER']));

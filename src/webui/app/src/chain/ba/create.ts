@@ -123,6 +123,17 @@ export function curveSupplyProblem(units: bigint | null, decimals: number, p: La
 }
 
 /** Units as whole text (no grouping), exact. */
+/**
+ * The decimals a curve launch takes when its market is picked: the rules' fixed 6 before the launch parameters; from
+ * them the creator's own choice if they moved the slider (only brought down to the most a curve allows), else the
+ * rules' default.
+ */
+export function curveDecimals(current: number, touched: boolean, p: LaunchParams): number {
+  if (!p.active) return p.decimalsDefault;
+  if (!touched) return p.decimalsDefault;
+  return Math.min(current, p.decimalsMax);
+}
+
 export function unitsText(units: bigint, decimals: number): string {
   if (decimals <= 0) return units.toString();
   const s = units.toString().padStart(decimals + 1, '0');
