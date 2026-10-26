@@ -29,9 +29,10 @@
   import FundCard from './FundCard.svelte';
   import { FEE_TIERS } from './kinds';
   import { compactNumber } from './axis';
-  import { bpsOf, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
+  import { bpsOf, type LaunchOptionValue, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
   import { launchFeeParts, launchFeeSplit } from './fees';
-  import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, launchProblems, rulesOf, type FeeDestination, type LaunchStats } from './launch';
+  import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, feeSplitOf, feeSplitOptions, feeSplitProblems, formatBps, launchProblems, MAX_SPLIT_ADDRESSES, rulesOf, shareKind, shareRecipientText, shareText, type FeeDestination, type LaunchStats } from './launch';
+  import AddressInput from '../../components/AddressInput.svelte';
   import { amountParam, CHN_ID, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
   import { ba, fundingOf, noteFunding, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
@@ -213,10 +214,24 @@
   $effect(() => {
     if (!keepControl) mintableConfirmed = false;
   });
-  const feeFlow = $derived(curve && feeFlowOn ? { destination: feeDestination, burnPercent, keepControl, mintableConfirmed } : null);
+  // v7, fee split (getlaunchstats fee_split_active): the tunable part of the fee split between the creator (what the
+  // others leave), buyback & burn and up to 3 addresses; all to the creator by default (no fee_split sent).
+  const splitOn = $derived(feeFlowOn && stats?.rules?.fee_split_active === true);
+  let splitBurn = $state(0);
+  let splitAddrs = $state<{ address: string; percent: number; valid: boolean }[]>([]);
+  const splitCreator = $derived(Number((100 - (Number(splitBurn) || 0) - splitAddrs.reduce((a, x) => a + (Number(x.percent) || 0), 0)).toFixed(2)));
+  const feeSplit = $derived(feeSplitOf({ creator: Math.max(0, splitCreator), burn: Number(splitBurn) || 0, addresses: splitAddrs }));
+  const splitIssues = $derived.by(() => {
+    if (splitCreator < 0) return ['The shares add up to more than 100%.'];
+    const out = feeSplitProblems(feeSplit);
+    if (splitAddrs.some((a) => a.address.trim() && !a.valid) && !out.length) out.push('Enter each address of the split.');
+    return out;
+  });
+  const tunableShare = $derived(Number(stats?.rules?.creator_share ?? 75));
+  const feeFlow = $derived(curve && feeFlowOn ? { destination: splitOn ? ('creator' as FeeDestination) : feeDestination, burnPercent, keepControl, mintableConfirmed } : null);
   const graduationFee = $derived(Number(stats?.rules?.graduation_fee ?? 1));
   const graduatedShare = $derived(Number(stats?.rules?.graduated_creator_share ?? 60));
-  const launchIssues = $derived(curve ? [...launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: minChnPayout() }), ...(feeFlow ? feeFlowProblems(feeFlow) : [])] : []);
+  const launchIssues = $derived(curve ? [...launchProblems({ allocation, maxAllocation: rules.maxAllocation, firstBuy: firstBuyText.trim() ? firstBuy : 0n, minBuy: minBuyText.trim() ? minBuy : 0n, maxBuy: maxBuyText.trim() ? maxBuy : 0n, infoBytes, maxInfo: MAX_INFO, minChn: minChnPayout() }), ...(feeFlow ? feeFlowProblems(feeFlow) : []), ...(feeFlow && splitOn ? splitIssues : [])] : []);
   const wholeSupply = $derived(supplyValue !== null ? Number(supplyValue) / 10 ** decimals : 0);
   const shape = $derived(curveShape(rules.graduation, wholeSupply || 1));
   const split = $derived(curveSplit(supplyValue ?? 0n));
@@ -281,7 +296,7 @@
   });
 
   /** launchtoken's options, as shown: taken when the user confirms. */
-  function launchOptionsNow(): Record<string, string | number | boolean> {
+  function launchOptionsNow(): Record<string, LaunchOptionValue> {
     return launchTokenOptions({
       displayName: display,
       logo: logo && logosSoon ? logo.base64 : '',
@@ -294,7 +309,7 @@
       supply: unitsText(supplyValue ?? 0n, decimals),
       decimals,
       feePercent,
-      feeFlow: feeFlow ? feeFlowOptions(feeFlow) : null,
+      feeFlow: feeFlow ? { ...feeFlowOptions(feeFlow), ...(splitOn ? feeSplitOptions(feeSplit) : {}) } : null,
     });
   }
 
@@ -399,6 +414,8 @@
     allocation = 0;
     feeDestination = 'creator';
     burnPercent = 50;
+    splitBurn = 0;
+    splitAddrs = [];
     keepControl = false;
     firstBuyText = minBuyText = maxBuyText = '';
     poolTokensText = poolChnText = '';
@@ -551,8 +568,26 @@
                   <span class="hint">None: all of it is the curve's and the pool's. At most {rules.maxAllocation}%.</span>
                 {/if}
               </div>
+              {#if splitOn}
+                <div class="field fee-split" data-testid="fee-split-editor">
+                  <span class="label" id="fee-split-label">{t('Your part of the fee (%1% of it): who gets it', formatBps(tunableShare * 100))}</span>
+                  <span class="hint">{t('The rest, %1%, goes to network security. The same split takes the creator part of the fees after graduation.', formatBps((100 - tunableShare) * 100))}</span>
+                  <p class="split-line" data-testid="fee-split-creator">{t('You: %1%', String(Math.max(0, splitCreator)))} <span class="faint small">{shareText({ bps: Math.round(Math.max(0, splitCreator) * 100) }, tunableShare, feePercent)}</span></p>
+                  <label for="launch-split-burn">Buyback &amp; burn (%)</label>
+                  <input id="launch-split-burn" type="number" min="0" max="100" step="0.01" bind:value={splitBurn} />
+                  {#each splitAddrs as a, i (i)}
+                    <div class="split-addr">
+                      <AddressInput id={`launch-split-addr-${i}`} label={t('Address %1', String(i + 1))} bind:value={a.address} bind:valid={a.valid} hint={t('Paid by the chain itself once it is owed %1 or more: no claim', `0.001 ${TICKER}`)} />
+                      <label for={`launch-split-pct-${i}`}>Its share (%)</label>
+                      <input id={`launch-split-pct-${i}`} type="number" min="0.01" max="100" step="0.01" bind:value={a.percent} />
+                      <button type="button" class="btn small ghost" onclick={() => (splitAddrs = splitAddrs.filter((_, j) => j !== i))}>Remove the address</button>
+                    </div>
+                  {/each}
+                  {#if splitAddrs.length < MAX_SPLIT_ADDRESSES}<button type="button" class="btn small" onclick={() => (splitAddrs = [...splitAddrs, { address: '', percent: 10, valid: false }])}>Add an address</button>{/if}
+                </div>
+              {/if}
               {#if feeFlowOn}
-                <div class="field">
+                {#if !splitOn}<div class="field">
                   <span class="label" id="fee-dest-label">Creator fees go to</span>
                   <div class="ba-chips" role="radiogroup" aria-labelledby="fee-dest-label">
                     {#each FEE_DESTINATIONS as d (d.id)}<button type="button" class="ba-chip" role="radio" aria-checked={feeDestination === d.id} onclick={() => (feeDestination = d.id)}>{t(d.label)}</button>{/each}
@@ -561,7 +596,7 @@
                     <label for="launch-burn">Burned: {burnPercent}% (the rest to you)</label>
                     <input id="launch-burn" type="number" min="1" max="99" step="1" bind:value={burnPercent} />
                   {/if}
-                </div>
+                </div>{/if}
                 <div class="field">
                   <label class="check"><input type="checkbox" bind:checked={keepControl} /> <span>Keep control coin</span></label>
                   {#if keepControl}
@@ -609,9 +644,13 @@
                 <dt>Market value</dt><dd>from {formatPrice(shape.startCap)} to {formatPrice(shape.endCap)} {TICKER}</dd>
                 <dt>Fee</dt><dd data-testid="launch-fee-split">{launchFeeSplit(feeParts, true)}</dd>
                 {#if feeFlow}
-                  <dt>Creator fees</dt><dd>{feeDestinationText({ fee_destination: feeDestination, burn_percent: burnPercent })}</dd>
+                  {#if splitOn}
+                    <dt>Fee split</dt><dd data-testid="launch-split-review"><ul class="split-list">{#each feeSplit as s (s.to)}<li>{#if shareKind(s.to) === 'address'}<SafeText class="ba-mono break" text={s.to} />{:else}{shareRecipientText(s)}{/if}: {shareText(s, tunableShare, feePercent)}</li>{/each}</ul></dd>
+                  {:else}
+                    <dt>Creator fees</dt><dd>{feeDestinationText({ fee_destination: feeDestination, burn_percent: burnPercent })}</dd>
+                  {/if}
                   <dt>Control coin</dt><dd>{#if keepControl}<span class="ba-tag danger">Mintable: the creator can create more</span>{:else}Not kept: the supply is fixed{/if}</dd>
-                  <dt>After graduation</dt><dd data-testid="launch-graduation-review">{t('A locked full-range position at %1 %: its fees go %2 % to the creator and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER)}</dd>
+                  <dt>After graduation</dt><dd data-testid="launch-graduation-review">{splitOn && feeSplitOptions(feeSplit).fee_split ? t('A locked full-range position at %1 %: its fees go %2 % to the split above and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER) : t('A locked full-range position at %1 %: its fees go %2 % to the creator and %3 % to network security. All fees are taken in %4.', String(graduationFee), String(graduatedShare), String(100 - graduatedShare), TICKER)}</dd>
                 {/if}
                 {#if firstBuyText.trim() && firstBuy}<dt>First buy</dt><dd>{formatUnits(firstBuy, 8)} {TICKER}</dd>{/if}
                 {#if minBuyText.trim() && minBuy}<dt>Least a buy</dt><dd>{formatUnits(minBuy, 8)} {TICKER}</dd>{/if}
@@ -771,6 +810,19 @@
     display: flex;
     align-items: center;
     gap: 0.6rem;
+  }
+  .split-addr {
+    display: grid;
+    gap: 4px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+  }
+  .split-line {
+    margin: 4px 0;
+  }
+  .split-list {
+    margin: 0;
+    padding-left: 1.1em;
   }
   .logo-review {
     width: 3rem;

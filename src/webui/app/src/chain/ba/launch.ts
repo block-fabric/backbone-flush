@@ -38,6 +38,9 @@ export interface LaunchRules extends LaunchParamRules {
   fee_flow_height?: number;
   graduation_fee?: number;
   graduated_creator_share?: number;
+  /** v7, launch fee split (newer nodes): whether the next block takes a launch's fee_split (the tunable part of the
+   *  fee, creator_share percent of it, split between the creator, up to 3 addresses and buyback & burn). */
+  fee_split_active?: boolean;
 }
 
 export interface LaunchStats {
@@ -93,6 +96,9 @@ export interface Launch {
   fee_flow?: boolean;
   fee_destination?: FeeDestination;
   burn_percent?: number;
+  /** v7: the split of its tunable fee part (and of the creator's part of its graduated position's fees), each share in
+   *  basis points of it, with what it was paid and is owed (CHN); a v5 launch's mapped from its fee_destination. */
+  fee_split?: FeeShare[];
   mintable?: boolean;
   burned?: Amount;
   buyback_pending?: Amount;
@@ -349,4 +355,122 @@ export function creatorAllocation(l: Pick<Launch, 'supply' | 'decimals' | 'alloc
   const units = (supply * BigInt(Math.round(l.allocation * 100))) / 10_000n;
   const state = l.status !== 'graduated' ? 'at-graduation' : l.allocation_claimed ? 'claimed' : 'claimable';
   return { percent: l.allocation, units, decimals, progress: Math.max(0, Math.min(100, Number(l.progress) || 0)), state };
+}
+
+// --- v7, launch fee split ---
+
+/** A share of a launch's tunable fee part (launchtoken fee_split, getlaunch fee_split): its recipient, its basis points
+ *  of the part; from getlaunch also its kind and what it was paid and is owed. */
+export interface FeeShare {
+  to: string;
+  bps: number;
+  kind?: 'creator' | 'burn' | 'address';
+  paid?: Amount;
+  owed?: Amount;
+}
+
+/** A split as the wizard edits it: percents of the tunable part (creator, burn, each extra address). */
+export interface FeeSplitDraft {
+  creator: number;
+  burn: number;
+  addresses: { address: string; percent: number }[];
+}
+
+/** The most a split has: 5 recipients, of which 3 addresses (consensus, v7). */
+export const MAX_SPLIT_ENTRIES = 5;
+export const MAX_SPLIT_ADDRESSES = 3;
+export const SPLIT_BPS = 10_000;
+
+/** The kind of a recipient. */
+export function shareKind(to: string): 'creator' | 'burn' | 'address' {
+  return to === 'creator' ? 'creator' : to === 'burn' ? 'burn' : 'address';
+}
+
+/**
+ * A draft's shares in basis points: creator first, then the addresses, then burn; a 0% creator or burn left out (an
+ * address is kept, so that its 0 is a problem). Percents that sum to 100 (to within 0.01) round to bps that sum to
+ * 10000 exactly (largest remainders); else as they round, for feeSplitProblems to say.
+ */
+export function feeSplitOf(d: FeeSplitDraft): FeeShare[] {
+  const raw: { to: string; p: number }[] = [];
+  const pct = (x: number) => (Number.isFinite(x) ? Math.max(0, x) : 0);
+  if (pct(d.creator) > 0) raw.push({ to: 'creator', p: pct(d.creator) });
+  for (const a of d.addresses) raw.push({ to: a.address.trim(), p: pct(a.percent) });
+  if (pct(d.burn) > 0) raw.push({ to: 'burn', p: pct(d.burn) });
+  const exact = raw.map((r) => (r.p * SPLIT_BPS) / 100);
+  const out = exact.map((x, i) => ({ to: raw[i].to, bps: Math.floor(x + 1e-9) }));
+  const total = exact.reduce((a, b) => a + b, 0);
+  if (Math.abs(total - SPLIT_BPS) <= 1 + 1e-9) {
+    let rest = SPLIT_BPS - out.reduce((a, b) => a + b.bps, 0);
+    const order = exact.map((x, i) => ({ i, r: x - out[i].bps })).sort((a, b) => b.r - a.r || a.i - b.i);
+    for (let k = 0; rest > 0 && order.length; k = (k + 1) % order.length, rest--) out[order[k].i].bps++;
+    for (let k = order.length - 1; rest < 0 && k >= 0; k--) if (out[order[k].i].bps > 1) { out[order[k].i].bps--; rest++; }
+  } else {
+    for (let i = 0; i < out.length; i++) out[i].bps = Math.round(exact[i]);
+  }
+  return out;
+}
+
+/** Text that is a recipient address (lowercased when bech32), to compare. */
+function addressKey(to: string): string {
+  const t = to.trim();
+  return /^[a-z0-9]+1/i.test(t) && (t === t.toLowerCase() || t === t.toUpperCase()) ? t.toLowerCase() : t;
+}
+
+/** What is wrong with a split (the chain's rules, v7): at most 5 shares and 3 addresses, each of a whole 1 bps or
+ *  more, creator and burn at most once each, addresses given and distinct, summing to 10000 bps (100%). */
+export function feeSplitProblems(split: readonly FeeShare[]): string[] {
+  const out: string[] = [];
+  if (split.length === 0) return ['Give the fees at least one recipient.'];
+  if (split.length > MAX_SPLIT_ENTRIES) out.push(t('A split has at most %1 recipients.', String(MAX_SPLIT_ENTRIES)));
+  const addrs = split.filter((s) => shareKind(s.to) === 'address');
+  if (addrs.length > MAX_SPLIT_ADDRESSES) out.push(t('A split has at most %1 addresses.', String(MAX_SPLIT_ADDRESSES)));
+  if (split.filter((s) => s.to === 'creator').length > 1) out.push('The creator is in the split once at most.');
+  if (split.filter((s) => s.to === 'burn').length > 1) out.push('Buyback & burn is in the split once at most.');
+  if (addrs.some((s) => !s.to.trim())) out.push('Enter each address of the split.');
+  const keys = addrs.map((s) => addressKey(s.to)).filter(Boolean);
+  if (new Set(keys).size !== keys.length) out.push('Each address of the split is a different one.');
+  if (split.some((s) => !Number.isInteger(s.bps) || s.bps < 1)) out.push('Each share of the split is at least 0.01%.');
+  const sum = split.reduce((a, s) => a + (Number.isFinite(s.bps) ? s.bps : 0), 0);
+  if (sum !== SPLIT_BPS) out.push(t('The shares add up to %1%, not 100%.', formatBps(sum)));
+  return out;
+}
+
+/** launchtoken's fee_split option: none when all goes to the creator (the default). */
+export function feeSplitOptions(split: readonly FeeShare[]): { fee_split?: { to: string; bps: number }[] } {
+  if (split.length === 1 && split[0].to === 'creator' && split[0].bps === SPLIT_BPS) return {};
+  return { fee_split: split.map((s) => ({ to: s.kind === 'address' || shareKind(s.to) === 'address' ? s.to.trim() : s.to, bps: s.bps })) };
+}
+
+/** Basis points as a percent, at most 2 decimals ("75", "33.33"). */
+export function formatBps(bps: number): string {
+  return String(Number((bps / 100).toFixed(2)));
+}
+
+/** A share's part of each trade, in percent: bps of the tunable part (tunable percent of the fee, fee percent of a trade). */
+export function shareOfTrade(bps: number, tunable: number, fee: number): number {
+  return (bps / SPLIT_BPS) * (tunable / 100) * fee;
+}
+
+/** A launch's split: its fee_split, else (a node from before v7) its fee_destination mapped as v7 maps it; [] before v5. */
+export function feeSplitOfLaunch(l: Pick<Launch, 'fee_split' | 'fee_flow' | 'fee_destination' | 'burn_percent'>): FeeShare[] {
+  if (Array.isArray(l.fee_split) && l.fee_split.length) return l.fee_split.map((s) => ({ ...s, bps: Number(s.bps) || 0, kind: s.kind ?? shareKind(s.to) }));
+  if (!l.fee_flow) return [];
+  if (l.fee_destination === 'burn') return [{ to: 'burn', kind: 'burn', bps: SPLIT_BPS }];
+  if (l.fee_destination === 'split') {
+    const b = Math.round(Math.max(0, Math.min(100, Number(l.burn_percent) || 0)) * 100);
+    return ([{ to: 'burn', kind: 'burn', bps: b }, { to: 'creator', kind: 'creator', bps: SPLIT_BPS - b }] as FeeShare[]).filter((s) => s.bps > 0);
+  }
+  return [{ to: 'creator', kind: 'creator', bps: SPLIT_BPS }];
+}
+
+/** Who a share goes to, in the words of the app (made with t()): "The creator", "Buyback & burn", or its address. */
+export function shareRecipientText(s: Pick<FeeShare, 'to'>): string {
+  const k = shareKind(s.to);
+  return k === 'creator' ? t('The creator') : k === 'burn' ? t('Buyback & burn') : s.to;
+}
+
+/** A share in words (made with t()): "75% of the creator part (0.5625% of each trade)". */
+export function shareText(s: Pick<FeeShare, 'bps'>, tunable: number, fee: number): string {
+  return t('%1% of the tunable part (%2% of each trade)', formatBps(s.bps), String(Number(shareOfTrade(s.bps, tunable, fee).toFixed(4))));
 }
