@@ -149,12 +149,13 @@ struct BmmRequestSeen {
  */
 std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, const uint256& prev);
 /**
- * What recent mainchain blocks took for a BMM request (the fallback base when no estimate comes). Each block gives at most
- * one value, the median rate of its requests of active sidechains' slots other than `own`, and only with requests of
- * `min_slots` distinct such slots; the result is the median of those values over the window. This is no Sybil resistance:
- * a miner or a bidder can make well-formed requests of many slots from many scripts. A party must fill most of the
- * window's blocks to move the median; the real bounds are the caller's clamp (the network's least rate, ten times it) and
- * the policy's max.
+ * What recent mainchain blocks took for a BMM request (the fallback base when no estimate comes). In each block, one value
+ * an active sidechain's slot other than `own`: the lowest rate of that slot's requests (a real bidder needs one landed
+ * request); the block's value is the median of those, given `min_slots` such slots at least; the result is the median of
+ * the blocks' values over the window. So one party moves a block's value only through the slots whose requests it
+ * controls (at most the active slots, about 8 on betanet), not by the number of its requests, and must do so in most of
+ * the window's blocks to move the result. No Sybil resistance is claimed beyond that: the real bounds are the caller's
+ * clamp (the network's least rate, ten times it) and the policy's max.
  */
 std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, const std::set<uint8_t>& active, std::optional<uint8_t> own,
                                           size_t min_slots = 3);
