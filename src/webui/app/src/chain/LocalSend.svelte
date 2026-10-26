@@ -52,7 +52,7 @@
   // The filters of Browse assets.
   const sendChips: PickChip[] = [
     { id: 'market', label: 'With a market', test: (c) => c.id === CHN_ID || hasPool(c.id) },
-    { id: 'mintable', label: 'Mintable', test: (c) => c.id === CHN_ID || assetById(c.id)?.fixed === false },
+    { id: 'mintable', label: 'Unlocked Supply', test: (c) => c.id === CHN_ID || assetById(c.id)?.fixed === false },
     { id: 'fixed', label: 'Fixed supply', test: (c) => c.id === CHN_ID || assetById(c.id)?.fixed === true },
     { id: 'controlled', label: 'Controlled', test: (c) => c.id === CHN_ID || !!holdings.find((h) => h.asset === c.id)?.control },
   ];

@@ -24,7 +24,7 @@
   import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, minChnPayout, minChnText, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
   import { compactNumber } from './axis';
   import { hiddenAsset } from './visible.svelte';
-  import { assetById, ba, decimalsOf, labelOf, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, decimalsOf, labelOf, mintableLaunch, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
   import { liquidityState } from './liquidity';
   import { nav } from '../../lib/nav.svelte';
   import { parseDexRoute } from './assetactions';
@@ -294,6 +294,7 @@
         ? t('At least %1 %2, should the pool move first (slippage %3%). The pool keeps %4 %5 as its fee. %6', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), formatAmount(sFee, sPayDecimals), payLabel, isChn(sGet) ? t('%1 comes by the coinbase of the next block.', TICKER) : '')
         : t('At least %1 %2, should the pools move first (slippage %3%). Along: %4. The order clears at the end of its block; should it give less, what went in comes back. %5', formatUnits(sLeast, sGetDecimals), getLabel, String(sSlip), along, isChn(sGet) ? t('%1 comes by the coinbase of the next block.', TICKER) : ''),
       level: 'question',
+      ...(mintableLaunch[sGet] === true ? { tags: [{ label: t('Unlocked Supply'), title: t('The creator can still mint more') }] } : {}),
       choices: [
         { id: 'no', label: 'Cancel' },
         { id: 'yes', label: 'Swap', kind: 'primary' },

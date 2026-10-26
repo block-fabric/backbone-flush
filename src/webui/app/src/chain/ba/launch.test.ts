@@ -116,7 +116,7 @@ describe('v5 fee flow (launch.ts)', () => {
     expect(feeFlowOptions({ destination: 'split', burnPercent: 25, keepControl: true })).toEqual({ fee_destination: 'split', burn_percent: 25, keep_control: true });
     expect(feeFlowProblems({ destination: 'split', burnPercent: 0, keepControl: false, mintableConfirmed: false })).toHaveLength(1);
     expect(feeFlowProblems({ destination: 'split', burnPercent: 100, keepControl: false, mintableConfirmed: false })).toHaveLength(1);
-    expect(feeFlowProblems({ destination: 'creator', burnPercent: 0, keepControl: true, mintableConfirmed: false })).toEqual(['Confirm that the asset stays mintable.']);
+    expect(feeFlowProblems({ destination: 'creator', burnPercent: 0, keepControl: true, mintableConfirmed: false })).toEqual(['Confirm that the asset keeps an unlocked supply.']);
     expect(feeFlowProblems({ destination: 'split', burnPercent: 40, keepControl: true, mintableConfirmed: true })).toEqual([]);
     expect(feeDestinationText({ fee_destination: 'creator' })).toBe('To the creator');
     expect(feeDestinationText({ fee_destination: 'burn' })).toBe('Bought back and burned');

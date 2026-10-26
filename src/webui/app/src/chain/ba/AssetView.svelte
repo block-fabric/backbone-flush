@@ -14,7 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
-  import MintableBadge from './MintableBadge.svelte';
+  import UnlockedSupplyBadge from './UnlockedSupplyBadge.svelte';
   import AssetName from './AssetName.svelte';
   import AssetActions from './AssetActions.svelte';
   import VerifiedBadge from './VerifiedBadge.svelte';
@@ -165,9 +165,9 @@
         <div class="tags">
           <span class="ba-tag" translate="no">#{asset.seq}</span>
           <VerifiedBadge {id} />
-          {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<span class="ba-tag">Mintable</span>{/if}
+          {#if asset.fixed && launched?.mintable !== true}<span class="ba-tag accent">Fixed supply</span>{:else}<UnlockedSupplyBadge mintable />{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
-          <MintableBadge mintable={launched ? launched.mintable === true : false} />
+          {#if launched && launched.allocation > 0}<span class="ba-tag warn" title="Minted to the creator at graduation, on top of the supply">Creator allocation {launched.allocation}%</span>{/if}
           {#if controlled}<span class="ba-tag accent"><Icon name="crown" size={12} /> You control it</span>{/if}
           {#if asset.releasable}<span class="ba-tag danger">Dead</span>{/if}
         </div>

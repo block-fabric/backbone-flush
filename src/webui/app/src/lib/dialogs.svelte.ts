@@ -27,6 +27,8 @@ export interface Question {
   checkbox?: { label: string; checked: boolean; tip?: string };
   /** Monospaced text in a box, to read or copy (a PSBT, a signature). */
   code?: string;
+  /** Small tags under the message, each with its explanation in its title (an asset's Unlocked Supply). */
+  tags?: { label: string; title?: string }[];
 }
 
 export interface Prompt {

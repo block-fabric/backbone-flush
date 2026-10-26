@@ -12,13 +12,12 @@
   import { rpc } from '../../lib/rpc';
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
-  import MintableBadge from '../ba/MintableBadge.svelte';
   import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetActions from '../ba/AssetActions.svelte';
   import AssetView from '../ba/AssetView.svelte';
   import { untrack } from 'svelte';
   import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
-  import { assetById, ba, chnPrice, hasPool, launchGraduation, loadLaunchFlags, noteKnownAssets, startBitAssets } from '../ba/store.svelte';
+  import { assetById, ba, chnPrice, hasPool, launchGraduation, noteKnownAssets, startBitAssets } from '../ba/store.svelte';
   import { PAGE, searchAssets, searchMyAssets, type AssetSort } from '../ba/search';
   import { hiding, searchFiltersOf } from '../ba/hide.svelte';
   import { hiddenAsset } from '../ba/visible.svelte';
@@ -28,11 +27,6 @@
   import { MARKET_LABELS, marketOf } from '../ba/registry';
 
   $effect(() => startBitAssets());
-  // The launches kept mintable (v5 keep_control), for their marker: once per block.
-  $effect(() => {
-    void ba.version;
-    loadLaunchFlags();
-  });
 
   type Filter = 'all' | 'mine' | 'market' | 'mintable' | 'fixed' | 'dead';
   type Sort = 'newest' | 'oldest' | 'name' | 'supply' | 'value' | 'traded';
@@ -152,7 +146,7 @@
     { id: 'all', label: 'All' },
     { id: 'mine', label: 'Held or controlled' },
     { id: 'market', label: 'With a market' },
-    { id: 'mintable', label: 'Mintable' },
+    { id: 'mintable', label: 'Unlocked Supply' },
     { id: 'fixed', label: 'Fixed supply' },
     { id: 'dead', label: 'Dead' },
   ];
@@ -258,7 +252,6 @@
               </span>
               <span class="tags">
                 <span class="ba-tag market {market.status}" data-testid="market-badge" title={market.kinds.length > 1 ? market.kinds.map((k) => t(k === 'none' ? 'No market' : k)).join(', ') : undefined}>{#if market.status === 'curve' && market.progress !== null}{t('On curve %1%', String(Math.round(market.progress * 100)))}{:else if market.status === 'pool'}{tn('%n pool(s)', market.pools)}{:else}{t(MARKET_LABELS[market.status])}{/if}</span>
-                <MintableBadge id={a.asset} />
                 {#if a.fixed}<span class="ba-tag">Fixed supply</span>{/if}
                 {#if mineIds.has(a.asset)}<span class="ba-tag accent">Yours</span>{/if}
                 {#if a.releasable}<span class="ba-tag danger">Dead</span>{/if}

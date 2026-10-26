@@ -15,7 +15,6 @@
   import SafeText from '../../components/SafeText.svelte';
   import { barWidth } from './actions';
   import AssetBadge from './AssetBadge.svelte';
-  import MintableBadge from './MintableBadge.svelte';
   import HiddenToggle from './HiddenToggle.svelte';
   import LaunchView from './LaunchView.svelte';
   import PoolKind from './PoolKind.svelte';
@@ -265,7 +264,7 @@
           <tbody>
             {#each list as r (r.key)}
               <tr class="pick" data-testid="market-row" data-kind={r.kind} onclick={() => open(r)} use:selectable={() => open(r)}>
-                <td><span class="pair"><AssetBadge id={r.base.id} label={r.base.label} display={r.launch?.display_name} size="s" /><MintableBadge mintable={r.launch ? r.launch.mintable === true : undefined} id={r.base.id} compact /> <span class="faint">/</span> <AssetBadge id={r.quote.id} label={r.quote.label} size="s" /></span></td>
+                <td><span class="pair"><AssetBadge id={r.base.id} label={r.base.label} display={r.launch?.display_name} size="s" /><span class="faint">/</span> <AssetBadge id={r.quote.id} label={r.quote.label} size="s" /></span></td>
                 <td>
                   {#if r.pool}<PoolKind kind={kindOf(r.pool)} />
                   {:else if r.kind === 'graduated'}<span class="ba-tag accent">Graduated</span>
