@@ -105,17 +105,17 @@
        the asset and Claim on top, then each value beside its word. -->
   <section class="panel my-launches" aria-labelledby="my-launches-title" data-testid="my-launches">
     <div class="panel-head"><h3 id="my-launches-title">My launches</h3><span class="muted small">{t('Your allocation and fees, claimable once each graduates')}</span></div>
-    <div class="ml-grid ml-head" aria-hidden="true"><span>Asset</span><span>Allocation</span><span>Curve</span><span>Claimable</span><span></span></div>
+    <div class="ml-grid ml-head" aria-hidden="true"><span>Asset</span><span>Allocation</span><span>Curve</span><span class="c-claim">Claimable</span><span></span></div>
     <ul class="ba-list" aria-label="My launches">
       {#each launches as l (l.token)}
         {@const a = creatorAllocation(l)}
         {@const owed = claimable(l)}
         {@const curve = launchCurveFacts(l)}
         <li class="ml-grid ml-row" data-testid="my-launch">
-          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} /></button><MintableBadge mintable={l.mintable === true} compact /></span>
+          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} stacked /></button><MintableBadge mintable={l.mintable === true} compact /></span>
           <span class="c-alloc" data-testid="allocation-line">
             <span class="cell-label">Allocation</span>
-            {#if a}<span><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}
+            {#if a}<span class="alloc"><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}
           </span>
           <span class="c-curve">
             <span class="cell-label">Curve</span>
@@ -150,7 +150,7 @@
   /* The columns of the rows and of their words above them (the holdings' row: .ba-row, ba.css). */
   .ml-grid {
     display: grid;
-    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1.4fr) 10rem;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.1fr) minmax(0, 1.8fr) minmax(0, 0.9fr) 10rem;
     align-items: center;
     gap: 0.75rem;
     padding: 0.7rem 1rem;
@@ -200,6 +200,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* The percent and the amount apart. */
+  .alloc {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+  /* Claimable: narrow, against the right edge (the actions after it). */
+  .c-claim {
+    text-align: end;
   }
   .curve-cell {
     display: flex;

@@ -22,6 +22,7 @@
     logo,
     preview = '',
     display,
+    stacked = false,
   }: {
     id: string;
     /** Text of the chain. */
@@ -35,6 +36,8 @@
     preview?: string;
     /** Its display name (text of the chain); undefined: the one the store knows; '': none shown. */
     display?: string;
+    /** The identity under the name, without the bar before it (AssetName stacked: My launches). */
+    stacked?: boolean;
   } = $props();
 
   const shownDisplay = $derived(display ?? displayNameOf(id) ?? '');
@@ -50,7 +53,7 @@
     <span class="mark" class:chn={isChn(id)} use:css={{ '--ba-h': assetHue(id) }} aria-hidden="true"><span translate="no">{isChn(id) ? TICKER.charAt(0) : initials(parts.ticker || parts.name || label)}</span></span>
   {/if}
   {#if showLabel}
-    <span class="words"><AssetName {label} display={shownDisplay} {seq} {id} nameClass="label" /></span>
+    <span class="words"><AssetName {label} display={shownDisplay} {seq} {id} {stacked} nameClass="label" /></span>
   {/if}
 </span>
 

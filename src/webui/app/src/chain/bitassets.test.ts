@@ -1152,6 +1152,8 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
       expect(r.querySelector('.c-asset .badge-asset .asset-name .ident')).not.toBeNull();
       expect(r.classList.contains('ml-row')).toBe(true);
     }
+    // Stacked: the ticker and number under the name, no bar before them.
+    expect(row('CORN').querySelector('.asset-name')?.classList.contains('stacked')).toBe(true);
     expect(row('CORN').querySelector('.asset-name')?.textContent).toMatch(/^ECASHCORN \$CORN /);
     // Never traded: the allocation compact, an empty bar, "No trades yet", the curve's start price.
     // Its allocation kept (0.2% of 210M), compact; its start price as the node has it, about 1.06e-06 ECX.
