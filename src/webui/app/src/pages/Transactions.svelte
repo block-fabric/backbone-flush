@@ -20,7 +20,7 @@
   import type { Column } from '../lib/table';
   import { abandon, bumpFee } from '../lib/txactions';
   import { isDropped, makeDepositAgain } from '../lib/deposits.svelte';
-  import { formatAmount, parseAmount } from '../lib/units';
+  import { formatAmount, parseAmount, unitInfo } from '../lib/units';
   import {
     addressText,
     amountText,
@@ -171,7 +171,7 @@
           { key: 'status', label: '', value: (r) => r.sortKey, width: '2.2rem', align: 'center', noFilter: true },
           { key: 'date', label: 'Date', value: (r) => r.time, width: '8.6rem' },
           { key: 'label', label: 'Label', value: (r) => addressText(r, true), width: 'minmax(0, 1fr)' },
-          { key: 'amount', label: `Amount (${prefs.unit})`, value: (r) => r.amount, width: '9.5rem', align: 'end' },
+          { key: 'amount', label: `Amount (${unitInfo(prefs.unit).short})`, value: (r) => r.amount, width: '9.5rem', align: 'end' },
         ]
       : [
           // Simple mode: the status in plain words beside its ring (waiting for the next block, confirmed, final).
@@ -182,7 +182,7 @@
           { key: 'type', label: 'Type', value: (r) => chainTxOf(r.txid)?.type ?? typeText(r.type, r.role), width: '10rem' },
           // What the chain knows of a transaction (an asset moved, with the other side) takes the place of its label (LocalTxCell).
           { key: 'label', label: 'Label', value: (r) => chainTxOf(r.txid)?.search ?? addressText(r, true), width: 'minmax(22rem, 2fr)' },
-          { key: 'amount', label: `Amount (${prefs.unit})`, value: (r) => r.amount, width: '12rem', align: 'end' },
+          { key: 'amount', label: `Amount (${unitInfo(prefs.unit).short})`, value: (r) => r.amount, width: '12rem', align: 'end' },
         ],
   );
 

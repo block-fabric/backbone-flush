@@ -18,7 +18,7 @@
   import { host } from '../lib/rpc';
   import { prefs, toast, wallets } from '../lib/state.svelte';
   import type { Column } from '../lib/table';
-  import { formatAmount } from '../lib/units';
+  import { formatAmount, unitInfo } from '../lib/units';
   import { formatPaymentUri } from '../lib/uri';
   import { ADDRESS_TYPES, walletApi, type ReceiveRequest } from '../lib/wallet';
   import { current, refreshInfo } from '../lib/walletdata.svelte';
@@ -107,7 +107,7 @@
     { key: 'date', label: 'Date', value: (r) => r.time, width: '10rem' },
     { key: 'label', label: 'Label', value: (r) => r.label || '(no label)', width: 'minmax(9rem, 1fr)' },
     { key: 'message', label: 'Message', value: (r) => r.message || '(no message)', width: 'minmax(9rem, 1fr)' },
-    { key: 'amount', label: `Requested (${prefs.unit})`, value: (r) => r.amount, width: '11rem', align: 'end' },
+    { key: 'amount', label: `Requested (${unitInfo(prefs.unit).short})`, value: (r) => r.amount, width: '11rem', align: 'end' },
   ]);
 
   async function remove() {

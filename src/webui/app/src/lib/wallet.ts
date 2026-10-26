@@ -3,7 +3,7 @@
 import { BridgeError, request } from './bridge';
 import type { AddressActivity } from './explorer';
 import { t, tn } from './i18n.svelte';
-import { formatAmount, type Unit } from './units';
+import { formatAmount, unitInfo, type Unit } from './units';
 import { COINBASE_ROLES } from '../chain/roles';
 import { simpleMode } from './uimode.svelte';
 
@@ -806,7 +806,7 @@ export function transactionsCsv(records: readonly TxRecord[], unit: Unit, extra?
     // The chain's own columns (chain/txinfo.svelte.ts CHAIN_TX_CSV), empty where it knows nothing more.
     ...(extra ? (extra.values(r) ?? extra.header.map(() => '')) : []),
   ]);
-  return toCsv(['Confirmed', 'Date', 'Type', 'Label', 'Address', `Amount (${unit})`, 'ID', ...(extra?.header ?? [])], rows);
+  return toCsv(['Confirmed', 'Date', 'Type', 'Label', 'Address', `Amount (${unitInfo(unit).short})`, 'ID', ...(extra?.header ?? [])], rows);
 }
 
 /** The address list as chains-qt exports it: Label, Address. */

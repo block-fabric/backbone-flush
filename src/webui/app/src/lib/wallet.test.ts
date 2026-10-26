@@ -133,7 +133,7 @@ describe('transaction records', () => {
     expect(csvCell("'=cmd")).toBe('=cmd');
     expect(csvCell("'plain")).toBe("'plain");
     const csv = transactionsCsv([records[5], records[1]], 'CHN').split('\n');
-    expect(csv[0]).toBe('"Confirmed","Date","Type","Label","Address","Amount (CHN)","ID"');
+    expect(csv[0]).toBe('"Confirmed","Date","Type","Label","Address","Amount (ECX)","ID"');
     expect(csv[1]).toBe(`"false","${isoLocal(1_700_500_000)}","Sent to","Carol ""C""","rchn1qcarol","-0.00020000","${'ff'.repeat(32)}"`);
     expect(csv[2].startsWith('"true",')).toBe(true);
     expect(csv[3]).toBe('');
