@@ -18,6 +18,7 @@ add_executable(test_chains-app
   $<$<BOOL:${ENABLE_WALLET}>:links_tests.cpp>
   nodeapi_tests.cpp
   nodeevents_tests.cpp
+  opener_tests.cpp
   quitguard_tests.cpp
   remotehost_tests.cpp
   singleinstance_tests.cpp

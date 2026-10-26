@@ -1085,8 +1085,26 @@ UniValue LinkHost::Connect(const Request& request, Source source, const std::str
         m_nonces.insert(request.nonce);
     }
     LogInfo("webui: an address was shared with %s, as the user accepted", request.origin);
-    if (!m_deps.open || !m_deps.open(answer)) throw HostError("The browser could not be opened");
     UniValue out{UniValue::VOBJ};
+    if (!m_deps.open || !m_deps.open(answer)) {
+        // No browser could be opened (WSL without a handler of https, 7.0.1): the user takes the answer to the site,
+        // the address to paste there, or the link to open; never a bare "failed".
+        LogWarning("webui: the browser could not be opened for %s: the address is shown to copy", request.origin);
+        Window::ConfirmDialog copy;
+        copy.title = "Paste it on the site";
+        copy.message = "The browser could not be opened. Copy your address and paste it on the site (Connect), or copy the link below and open it in your browser.";
+        copy.details = answer;
+        copy.level = dialog::Level::INFO;
+        copy.rows = {confirm::Destination("Your address", address)};
+        copy.accept = "Copy the address";
+        copy.cancel = "Close";
+        copy.kind = "connect-copy";
+        if (m_deps.ask && m_deps.ask(copy).accepted && m_deps.copy) m_deps.copy(address);
+        out.pushKV("opened", "");
+        out.pushKV("link", answer);
+        out.pushKV("address", address);
+        return out;
+    }
     out.pushKV("opened", answer);
     out.pushKV("address", address);
     return out;

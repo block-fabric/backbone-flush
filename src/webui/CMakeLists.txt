@@ -145,6 +145,7 @@ add_library(chains_webui_core STATIC EXCLUDE_FROM_ALL
   i18n.cpp
   icontint.cpp
   linkhost.cpp
+  opener.cpp
   links.cpp
   local.cpp
   nodeapi.cpp

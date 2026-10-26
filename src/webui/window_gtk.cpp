@@ -6,6 +6,7 @@
 // The interface is served from the files built into the program, under the
 // scheme chains-app://, with its content security policy as a header.
 
+#include <webui/opener.h>
 #include <webui/assets.h>
 #include <webui/chainconfig.h>
 #include <webui/dialog.h>
@@ -25,8 +26,11 @@
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace webui {
 namespace {
@@ -363,13 +367,41 @@ public:
 
     bool OpenExternal(const std::string& uri) override
     {
-        GError* error{nullptr};
-        const bool ok{g_app_info_launch_default_for_uri(uri.c_str(), nullptr, &error) == TRUE};
-        if (error) {
-            LogWarning("webui: cannot open %s: %s", uri, error->message);
-            g_error_free(error);
+        // GIO's handler first; then wslview, Windows' own handler under WSL, xdg-open (opener.h): WSL has no Linux
+        // handler of https as a rule, and the site never got its answer (7.0.1).
+        OpenSteps steps;
+        steps.gio = [](const std::string& target) {
+            GError* error{nullptr};
+            const bool ok{g_app_info_launch_default_for_uri(target.c_str(), nullptr, &error) == TRUE};
+            if (error) {
+                LogWarning("webui: cannot open %s with GIO: %s", target, error->message);
+                g_error_free(error);
+            }
+            return ok;
+        };
+        steps.spawn = [](const std::vector<std::string>& args) {
+            std::vector<gchar*> argv;
+            for (const std::string& a : args) argv.push_back(const_cast<gchar*>(a.c_str()));
+            argv.push_back(nullptr);
+            GError* error{nullptr};
+            const bool ok{g_spawn_async(nullptr, argv.data(), nullptr, static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL),
+                                        nullptr, nullptr, nullptr, &error) == TRUE};
+            if (error) {
+                LogDebug(BCLog::NET, "webui: %s: %s\n", args.at(0), error->message);
+                g_error_free(error);
+            }
+            return ok;
+        };
+        std::string osrelease;
+        if (std::ifstream file{"/proc/sys/kernel/osrelease"}) std::getline(file, osrelease);
+        steps.wsl = IsWsl(std::getenv("WSL_DISTRO_NAME"), osrelease);
+        const std::string how{OpenWithFallbacks(uri, steps)};
+        if (how.empty()) {
+            LogWarning("webui: cannot open %s: no browser (GIO, wslview%s, xdg-open)", uri, steps.wsl ? ", rundll32" : "");
+            return false;
         }
-        return ok;
+        if (how != "gio") LogInfo("webui: opened %s with %s", uri, how);
+        return true;
     }
 
     void SetClipboard(const std::string& text) override

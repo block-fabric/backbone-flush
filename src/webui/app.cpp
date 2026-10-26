@@ -1622,6 +1622,18 @@ void App::RegisterHostMethods()
         if (future.wait_for(10s) != std::future_status::ready) return UniValue{false};
         const bool ok{future.get()};
         if (!ok && what == "config") throw HostError("The configuration file could not be opened.");
+        if (!ok && what == "url") {
+            // No browser (WSL without a handler of https, 7.0.1): the link to copy, not a bare failure.
+            Window::ConfirmDialog copy;
+            copy.title = "Open it in your browser";
+            copy.message = "The browser could not be opened. Copy the link and open it in your browser.";
+            copy.details = uri;
+            copy.level = dialog::Level::INFO;
+            copy.accept = "Copy the link";
+            copy.cancel = "Close";
+            copy.kind = "url-copy";
+            if (Confirm(copy)) m_window->Post([this, uri] { m_window->SetClipboard(uri); });
+        }
         return UniValue{ok};
     }, Bridge::Thread::LONG);
 
@@ -1701,6 +1713,7 @@ void App::RegisterHostMethods()
             return future.wait_for(10s) == std::future_status::ready && future.get();
         };
         deps.choose = [this](const Window::FileDialog& dialog) { return Choose(dialog); };
+        deps.copy = [this](const std::string& text) { m_window->Post([this, text] { m_window->SetClipboard(text); }); };
         deps.inform = [this](const std::string& title, const std::string& message, bool error) {
             UniValue dialog{UniValue::VOBJ};
             dialog.pushKV("kind", "message");
