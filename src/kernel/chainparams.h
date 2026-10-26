@@ -164,6 +164,8 @@ public:
         std::optional<int> no_treasury_height{};
         //! The fee-flow release: Consensus::SidechainParams::fee_flow_height (-testactivationheight=feeflow@<height>; regtest only).
         std::optional<int> fee_flow_height{};
+        //! Graduation at 100 coins: Consensus::SidechainParams::graduation100_height (-testactivationheight=graduation100@<height>; regtest only).
+        std::optional<int> graduation100_height{};
     };
 
     /**

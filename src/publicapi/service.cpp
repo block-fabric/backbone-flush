@@ -567,6 +567,7 @@ private:
         m.SetBool("from_asset", l.rec.from_asset);
         m.SetBool("mintable", l.rec.keep_control);
         m.SetString("fee_destination", DestinationName(l.rec.destination));
+        m.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
         m.SetDouble("fee_bps", l.rec.fee / 100.0);
         (void)state;
     }
@@ -1023,7 +1024,7 @@ private:
     std::pair<uint64_t, uint64_t> FirstBuy(uint64_t ecx, uint64_t supply = 0, uint32_t fee = 0) const
     {
         const Consensus::SidechainParams& params{Params().GetConsensus().sidechain};
-        const uint64_t graduation{static_cast<uint64_t>(params.launch_graduation)};
+        const uint64_t graduation{static_cast<uint64_t>(params.LaunchGraduation(WITH_LOCK(::cs_main, return m_node.chainman->ActiveChain().Height()) + 1))};
         const uint64_t units{supply == 0 ? bitassets::LAUNCH_SUPPLY : supply};
         const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee == 0 ? params.launch_fee : fee, units / 8 * 3, 0, 0, true}, graduation / 2,
                                                           units / 8 * 9, {bitassets::dex::HopIn{true, ecx}}, {true})};
@@ -1872,9 +1873,9 @@ private:
             s.SetUInt("graduated", graduated);
             s.SetDouble("volume_24h", volume_24h);
             s.SetDouble("volume_total", volume_total);
-            s.SetDouble("graduation_ecx", static_cast<double>(params.launch_graduation) / COIN);
+            s.SetDouble("graduation_ecx", static_cast<double>(params.LaunchGraduation(tip.height + 1)) / COIN);
             s.Mutable("fees") = RulesFees(tip.height + 1);
-            s.Mutable("curve") = CurveOf(params.launch_graduation, params.launch_fee);
+            s.Mutable("curve") = CurveOf(params.LaunchGraduation(tip.height + 1), params.launch_fee);
             s.SetDouble("raised_total", raised);
             s.SetUInt("pools", bitassets::index::GetInfo(*tip.view).pools);
             s.SetDouble("liquidity_ecx", liquidity);
@@ -1895,7 +1896,7 @@ private:
             f.SetUInt("launch_fee_ppm", params.launch_fee);
             Message fees{RulesFees(tip.height + 1)};
             for (size_t i{0}; i < fees.Count("split"); ++i) f.Add("launch_split") = fees.At("split", i);
-            f.SetDouble("launch_graduation_ecx", static_cast<double>(params.launch_graduation) / COIN);
+            f.SetDouble("launch_graduation_ecx", static_cast<double>(params.LaunchGraduation(tip.height + 1)) / COIN);
             // The parts in force in the next block (a protocol part of before is the providers': slot-99 history only).
             const uint32_t protocol_share{params.SwapProtocolShare(tip.height + 1)};
             const auto swap_part{[&](const char* to, uint32_t share) {
@@ -1997,6 +1998,7 @@ private:
             d.SetDouble("buyback_pending_ecx", static_cast<double>(l.rec.buyback) / COIN);
             d.SetDouble("creator_tokens_owed", Whole(l.rec.creator_tokens, l.decimals));
             d.SetString("pool_kind", l.rec.v5 ? "concentrated" : "constant_product");
+            d.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
             (void)launch;
             return d;
         });
@@ -2089,7 +2091,7 @@ private:
             m.SetDouble("graduation_ecx", rules["graduation"].get_real());
             m.SetDouble("fee_percent", rules["fee"].get_real());
             m.SetDouble("creator_share_percent", rules["creator_share"].get_real());
-            m.Mutable("curve") = CurveOf(params.launch_graduation, params.launch_fee);
+            m.Mutable("curve") = CurveOf(params.LaunchGraduation(tip.height + 1), params.launch_fee);
             m.SetBool("active", rules["active"].get_bool());
             uint32_t made{0}, graduated{0};
             double volume{0};

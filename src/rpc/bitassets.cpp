@@ -3149,7 +3149,7 @@ RPCMethod getlaunchstats()
         result.pushKV("volume", ValueFromAmount(static_cast<CAmount>(volume)));
         result.pushKV("raised", ValueFromAmount(static_cast<CAmount>(raised)));
         UniValue rules(UniValue::VOBJ);
-        rules.pushKV("graduation", ValueFromAmount(params.launch_graduation));
+        rules.pushKV("graduation", ValueFromAmount(params.LaunchGraduation(next_height)));
         rules.pushKV("fee", DecimalToJSON(params.launch_fee / 10000.0));
         rules.pushKV("creator_share", DecimalToJSON(params.LaunchCreatorShare(next_height) / 10000.0));
         rules.pushKV("security_share", DecimalToJSON(params.launch_security_share / 10000.0));

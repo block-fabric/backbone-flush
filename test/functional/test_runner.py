@@ -196,6 +196,7 @@ BASE_SCRIPTS = [
     'feature_layers_launch.py',
     'feature_layers_v4.py',
     'feature_layers_v5.py',
+    'feature_layers_v6.py',
     'feature_layers_cl.py',
     'feature_layers_book.py',
     'interface_publicapi.py',

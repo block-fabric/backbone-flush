@@ -174,6 +174,15 @@ struct SidechainParams {
      */
     int fee_flow_height{std::numeric_limits<int>::max()};
     bool FeeFlowActive(int height) const { return DexActive(height) && height >= fee_flow_height; }
+    /**
+     * Graduation at launch_graduation_v6 (100 coins; user decision 2026-10-26) for launches made from this block on, the
+     * curve scaled with it (its virtual coin is half of it); a launch keeps the graduation it was made under (its record).
+     * Never (the maximum) unless a network sets it; regtest unless -testactivationheight=graduation100@<height>.
+     */
+    int graduation100_height{std::numeric_limits<int>::max()};
+    int64_t launch_graduation_v6{int64_t{100} * 100'000'000};
+    /** What a launch made at `height` graduates at. */
+    int64_t LaunchGraduation(int height) const { return height >= graduation100_height ? launch_graduation_v6 : launch_graduation; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
     uint32_t SwapProtocolShare(int height) const { return NoTreasury(height) ? 0 : dex_fee_protocol_share; }
     //! A swap fee's security part in force: from no_treasury_height the protocol's part joins it (Flush: 11 % + 4 % = 15 %).

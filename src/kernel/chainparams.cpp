@@ -703,6 +703,8 @@ public:
             consensus.sidechain.no_treasury_height = opts.dep_opts.no_treasury_height.value_or(0);
             // The fee-flow release only if a test asks (-testactivationheight=feeflow@<height>): the tests of before keep their rules.
             consensus.sidechain.fee_flow_height = opts.dep_opts.fee_flow_height.value_or(std::numeric_limits<int>::max());
+            // Graduation at 100 coins only if a test asks (-testactivationheight=graduation100@<height>).
+            consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -874,8 +876,9 @@ public:
         // Flush has not launched on any eCash network: the DEX's pool kinds and launches are its rules from the first
         // block, on every one (Layers' test network takes them at a height of its own: kernel/testnet_activation.h).
         consensus.sidechain.dex_curves_height = 0;
-        // Launches graduate at 500 ECX (a consensus parameter; doc/layers.md "Launches").
-        consensus.sidechain.launch_graduation = 500 * COIN;
+        // Launches graduate at 100 ECX from the first block (upgrade v6's value; user decision 2026-10-26; a consensus
+        // parameter, doc/layers.md "Launches").
+        consensus.sidechain.launch_graduation = 100 * COIN;
         // A fresh chain with the final rules only (doc/mainnet-readiness.md): every release's rule from the first block.
         // The liveness fix (PosParams::jail_fix_height).
         consensus.pos.jail_fix_height = 0;

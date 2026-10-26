@@ -833,7 +833,7 @@ public:
     uint64_t QuoteFirstBuy(uint64_t ecx, uint64_t supply, uint32_t fee) override
     {
         const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
-        const uint64_t graduation{static_cast<uint64_t>(rules.launch_graduation)};
+        const uint64_t graduation{static_cast<uint64_t>(rules.LaunchGraduation(m_chain.getBitAssetsHeight()))};
         const uint64_t s{supply == 0 ? bitassets::LAUNCH_SUPPLY : supply};
         const auto cleared{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee == 0 ? rules.launch_fee : fee, s / 8 * 3, 0, 0}, graduation / 2,
                                                           s / 8 * 9, {bitassets::dex::HopIn{true, ecx}}, {true})};
