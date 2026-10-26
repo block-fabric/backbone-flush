@@ -4406,7 +4406,8 @@ void State::CreditSplit(const AssetId& token, LaunchRecord& record, uint64_t coi
         case FeeShare::BURN: record.buyback = Add(record.buyback, part[i]).value_or(MAX_AMOUNT); break;
         default:
             record.share_owed[i] = Add(record.share_owed[i], part[i]).value_or(MAX_AMOUNT);
-            owes = true;
+            // Indexed (FEE_PAYEES) only once it can be paid: less waits in the record alone, scanned by no block.
+            if (record.share_owed[i] >= MIN_FEE_SHARE_PAYOUT) owes = true;
         }
     }
     if (record.buyback > 0 && !BUYBACKS.Contains(Writable(), token)) BUYBACKS.Put(Writable(), token, true);
@@ -4428,12 +4429,17 @@ void State::PayFeeShares(int height, size_t room, std::vector<CTxOut>& payouts)
 {
     (void)height;
     sidechain::StoreOverlay& out{Writable()};
+    // Every token indexed owes MIN_FEE_SHARE_PAYOUT at least to one address (CreditSplit indexes it only then, and this
+    // unindexes it once none is): each one taken pays one payout at least. So a block takes `room` of them at most, in
+    // the index's order (by token), and stops there: its work is bounded by the room, whatever the count of launches.
     std::vector<AssetId> tokens;
+    if (room == 0) return;
     FEE_PAYEES.ForEach(out, [&](const AssetId& token, const bool&) {
         tokens.push_back(token);
-        return true;
+        return tokens.size() < room;
     });
     for (const AssetId& token : tokens) {
+        if (room == 0) break;
         auto record{GetLaunch(token)};
         if (!record || !record->v7) {
             FEE_PAYEES.Erase(out, token);
@@ -4442,7 +4448,8 @@ void State::PayFeeShares(int height, size_t room, std::vector<CTxOut>& payouts)
         bool changed{false}, owes{false};
         for (size_t i{0}; i < record->split.size() && i < record->share_owed.size(); ++i) {
             if (record->split[i].kind != FeeShare::ADDRESS || record->share_owed[i] == 0) continue;
-            if (record->share_owed[i] < MIN_FEE_SHARE_PAYOUT || room == 0) {
+            if (record->share_owed[i] < MIN_FEE_SHARE_PAYOUT) continue;
+            if (room == 0) {
                 owes = true;
                 continue;
             }

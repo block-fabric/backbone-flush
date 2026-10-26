@@ -444,4 +444,38 @@ BOOST_AUTO_TEST_CASE(instant_payouts_bound)
     // The transactions' bound counts it: the next block takes MAX_TX_PAYOUTS_PER_BLOCK - 1 of its own.
 }
 
+BOOST_AUTO_TEST_CASE(sub_minimum_payees_cost_no_block_work)
+{
+    // Many launches whose split owes an address less than MIN_FEE_SHARE_PAYOUT: kept in their records, not in the index
+    // of payees (FEE_PAYEES), which a block scans only for what it pays (at most its room): the per-block work does not
+    // grow with them. Conservation holds (HeldChn counts what they are owed).
+    Chain chain;
+    const sidechain::Table<AssetId, bool> payees{0xa4};
+    std::vector<AssetId> tokens;
+    for (int i{0}; i < 60; ++i) {
+        const std::string name{"DUST" + std::to_string(i)};
+        V5Options opts;
+        opts.split = {CreatorShare(5'000), To(ADDR_A, 5'000)};
+        chain.Launch(name, 0, 100'000, opts);
+        tokens.push_back(HashName(name));
+    }
+    chain.EndBlock();
+    for (int b{0}; b < 3; ++b) chain.EndBlock();
+    for (const AssetId& token : tokens) {
+        const auto record{*chain.Assets().GetLaunch(token)};
+        BOOST_CHECK_GT(record.share_owed[1], 0U);
+        BOOST_CHECK_LT(record.share_owed[1], MIN_FEE_SHARE_PAYOUT);
+        BOOST_CHECK(!payees.Contains(chain.store, token));
+    }
+    BOOST_CHECK_EQUAL(PaidTo(chain.paid, ADDR_A), 0U);
+    // One of them trades enough: indexed, paid in its block, unindexed again.
+    const auto record{*chain.Assets().GetLaunch(tokens[7])};
+    chain.Buy(record.pool, 5 * COIN_UNITS);
+    chain.EndBlock();
+    const auto after{*chain.Assets().GetLaunch(tokens[7])};
+    BOOST_CHECK_EQUAL(after.share_owed[1], 0U);
+    BOOST_CHECK_EQUAL(PaidTo(chain.paid, ADDR_A), after.share_given[1]);
+    BOOST_CHECK(!payees.Contains(chain.store, tokens[7]));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
