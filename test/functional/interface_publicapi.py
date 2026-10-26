@@ -21,6 +21,7 @@
   - a node that turns -dexindex on derives the market index again from the blocks: the same trades and candles.
 """
 
+import json
 import os
 import time
 from decimal import Decimal
@@ -604,6 +605,13 @@ class PublicApiTest(LayersTest):
         assert set(params) - {"network", "exp"} <= URI_PARAMS["launch"]
         assert_equal(links, ["https://new.example"])
         assert_equal(params["ecx"], "2")
+        assert_equal(params["slippage_bps"], "100")
+        # Without a first buy: no slippage in the link or the payload (the app refuses one there: 7.0.1).
+        bare = api.rest("build/launch", {"ticker": "NEW3", "name": "No buy", "supply": "1000000000", "decimals": "6", "fee_bps": "115"})
+        verb, params, _ = parse_uri(bare["uri"])
+        assert_equal(verb, "launch")
+        assert "slippage_bps" not in params, params
+        assert "slippage_bps" not in json.loads(bare["payload"]), bare["payload"]
         assert_equal(api.get("build/launch", {"ticker": "MOON", "name": "x"}).status, 409)
         assert_equal(api.get("build/launch", {"ticker": "NEW2", "name": "x", "links": "http://insecure.example"}).status, 400)
 

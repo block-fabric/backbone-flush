@@ -1453,7 +1453,8 @@ private:
                 if (!bitassets::CheckFeeSplit(split)) Fail(Code::INVALID_ARGUMENT, "split: the shares sum to 10000 basis points, \"creator\" and \"burn\" at most once each, up to 3 different addresses");
                 payload["fee_split"] = shares;
             }
-            uri.emplace_back("slippage_bps", util::ToString(slippage));
+            // A slippage only with a first buy: the app refuses one without (7.0.1: every launch without a first buy failed).
+            if (!req.GetString("first_buy_ecx").empty()) uri.emplace_back("slippage_bps", util::ToString(slippage));
             built.SetBool("app_ready", true);
         } else if (verb == "register") {
             const std::string ticker{ToUpper(req.GetString("ticker"))};
@@ -1698,6 +1699,9 @@ private:
         } else {
             Fail(Code::INVALID_ARGUMENT, "verb: buy, sell, swap, deposit, withdraw, launch, register, curve, pool, auction, order, position, reposition, settle, bid, collect, claim, pegin or pegout");
         }
+        // The payload says a slippage only where the link carries one (a trade, a first buy): none for a launch without a
+        // first buy, a registration, a curve, a pool, an auction.
+        if (std::none_of(uri.begin(), uri.end(), [](const auto& kv) { return kv.first == "slippage_bps"; })) payload.erase("slippage_bps");
         const std::string payload_text{CanonicalJson(payload)};
         const std::string hash{ActionHash(payload_text)};
         built.SetString("uri", ActionUri(built.GetString("verb"), m_options.network, expires, uri));
