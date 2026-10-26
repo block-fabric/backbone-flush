@@ -583,7 +583,33 @@ export function uniquePart(seq?: string, id?: string): string {
  * invisible character (bidirectional, zero-width) written as its code point ("\u{202E}").
  */
 export function escapeName(text: string): string {
-  return text.replace(/[\\"$#]/g, (c) => `\\${c}`).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`);
+  return text
+    .replace(/[\\"$#]/g, (c) => `\\${c}`)
+    .replace(new RegExp(`[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}${BARS}]`, 'gu'), (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`)
+    // A number or an id, unless an escaped "#" already marks it.
+    .replace(/(?<!\\#)(?:\d{4}-\d{4}(?:-\d{4})?|0x[0-9a-f]+)/gi, (m) => `\\${m}`);
+}
+
+/**
+ * What in a name could pass for a part of the identity drawn after it (security review 2026-10-26): a "$" or "#", a bar or
+ * one of its look-alikes (| │ ǀ ⏐ ｜ ∣ ┃ ❘ and the like: the identity's bars are drawn, never text), an asset's number
+ * (1739-0029) or an id ("0x1a2b…", "0x1a2b…5e6f"). AssetName.svelte marks each; escapeName escapes them in text.
+ */
+export const BARS = '|¦ǀ׀│┃┆┇┊┋╎╏╽╿⏐⎸⎹∣❘❙❚｜￨‖';
+const LOOKALIKE = new RegExp(`[$#${BARS}]|\\d{4}-\\d{4}(?:-\\d{4})?|0x[0-9a-f]+(?:…[0-9a-f]*)?`, 'giu');
+
+/** A name in pieces, those that could pass for the identity flagged (marked where it is shown). */
+export function nameSegments(text: string): { text: string; flag: boolean }[] {
+  const out: { text: string; flag: boolean }[] = [];
+  let at = 0;
+  for (const m of text.matchAll(LOOKALIKE)) {
+    const i = m.index ?? 0;
+    if (i > at) out.push({ text: text.slice(at, i), flag: false });
+    out.push({ text: m[0], flag: true });
+    at = i + m[0].length;
+  }
+  if (at < text.length || out.length === 0) out.push({ text: text.slice(at), flag: false });
+  return out;
 }
 
 /**
