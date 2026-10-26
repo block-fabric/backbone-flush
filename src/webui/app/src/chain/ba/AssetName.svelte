@@ -30,6 +30,7 @@
     seq = '',
     id = '',
     nameClass = 'name',
+    stacked = false,
   }: {
     /** The label of the chain (a ticker, an older name, or "0x" and a hash). */
     label: string;
@@ -40,6 +41,8 @@
     /** Its id (hex), for its number from the store, else its id shortened. */
     id?: string;
     nameClass?: string;
+    /** The identity under the name (My launches): no bar before it, the bar between ticker and number kept. */
+    stacked?: boolean;
   } = $props();
 
   const coin = $derived((label === TICKER && !display) || (id !== '' && /^0+$/.test(id)));
@@ -66,23 +69,31 @@
 <!-- A name, what in it is not plain marked and escaped (model.ts nameSegments, escapePiece). -->
 {#snippet marked(text: string)}{#each nameSegments(text) as seg, i (i)}{#if seg.flag}<mark class="lookalike" title="Part of the name, not of the identity"><SafeText text={escapePiece(seg.text)} /></mark>{:else}<SafeText text={seg.text} />{/if}{/each}{/snippet}
 
-<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<span class="{nameClass} first name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.name)}</span>{' '}{/if}{#if a.alias}<span class="alias name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.alias)}</span>{' '}{/if}{#if ticker || unique}{#if a.name || a.alias}<span class="sep" aria-hidden="true"></span>{/if}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<span class="vh">$</span><SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
+<span class="asset-name" class:stacked title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<span class="{nameClass} first name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.name)}</span>{' '}{/if}{#if a.alias}<span class="alias name-text" translate="no" dir="auto" use:cutMark>{@render marked(a.alias)}</span>{' '}{/if}{#if ticker || unique}<span class="ident" class:alone={!a.name} class:first={!a.name} class:after-name={!!(a.name || a.alias)}>{#if ticker}<span class="vh">$</span><SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 
 <style>
-  /* Too narrow for both: the identity goes under the name (never cut: it is what tells the asset apart), the name
-     keeping a few letters before it does. */
+  /* Name, 0.4em, the bar, 0.4em, ticker. Too narrow for both: the identity goes under the name (never cut: it is what
+     tells the asset apart). Clipped at its left edge only: the bar before an identity that wrapped to a line of its own
+     falls outside it and is not drawn. */
   .asset-name {
     display: inline-flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 0 0.4em;
+    gap: 0 0.8em;
     min-width: 0;
     max-width: 100%;
     white-space: nowrap;
+    clip-path: inset(-1em -100vw -1em 0);
+  }
+  /* Stacked (My launches): the identity under the name, no bar before it. */
+  .asset-name.stacked {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1em;
   }
   .asset-name :global(.first) {
     flex: 0 1 auto;
-    min-width: min(6em, 100%);
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -108,6 +119,7 @@
     background: var(--line-strong);
   }
   .ident {
+    position: relative;
     flex: none;
     display: inline-flex;
     flex-wrap: wrap;
@@ -120,6 +132,21 @@
     font-weight: 500;
     color: var(--text-muted);
     line-height: 1.35;
+  }
+  /* The bar between the name and the identity: drawn in the gap before it (0.8em of the name, the identity's type being
+     0.78 of it), so that it goes with the identity and is clipped when the identity starts a line. */
+  .ident.after-name::before {
+    content: '';
+    position: absolute;
+    left: calc(-0.4em / 0.78 - 0.5px);
+    top: 50%;
+    width: 1px;
+    height: 1.2em;
+    transform: translateY(-50%);
+    background: var(--line-strong);
+  }
+  .asset-name.stacked .ident.after-name::before {
+    display: none;
   }
   /* No name: the identity is the asset's words, in their place. */
   .ident.alone {

@@ -50,7 +50,8 @@ describe('an asset\'s identity', () => {
     expect(r.container.querySelector('.asset-name')!.getAttribute('title')).toBe(`${long} $LONG #1739-0029`);
     expect(shown(r.container).name).toBe(long);
     const css = readFileSync(join(__dirname, 'AssetName.svelte'), 'utf8');
-    expect(css).toMatch(/\.first\) \{[^}]*min-width: min\(6em, 100%\);[^}]*text-overflow: ellipsis/);
+    // A short name is not padded out (user report 2026-10-26: a gap before the bar): min-width 0.
+    expect(css).toMatch(/\.first\) \{[^}]*min-width: 0;[^}]*text-overflow: ellipsis/);
     expect(css).toMatch(/\.ident \{[^}]*flex: none;/);
   });
 
@@ -195,5 +196,22 @@ describe('an asset\'s identity', () => {
     expect(css).toMatch(/\.name-text\) \{[^}]*white-space: normal;[^}]*text-overflow: clip;[^}]*overflow: hidden;/);
     expect(css).toMatch(/\.lookalike \{[^}]*display: inline-block;[^}]*white-space: nowrap;/);
     expect(css).toMatch(/\.name-text\.cut\) \{[^}]*mask-image/);
+  });
+
+  it('name, bar, ticker evenly apart; the bar goes with the identity (clipped when it starts a line); stacked: no bar before it', () => {
+    const r = render(AssetName, { label: 'GOLD', display: 'Gold', seq: '1739-0029' });
+    const ident = r.container.querySelector('.ident')!;
+    // No bar of its own between the name and the identity: the identity draws it, in the gap before it.
+    expect(ident.classList.contains('after-name')).toBe(true);
+    expect(ident.previousElementSibling?.classList.contains('sep')).toBe(false);
+    // The bar between ticker and number stays.
+    expect(ident.querySelectorAll('.sep')).toHaveLength(1);
+    const css = readFileSync(join(__dirname, 'AssetName.svelte'), 'utf8');
+    expect(css).toMatch(/\.asset-name \{[^}]*gap: 0 0\.8em;[^}]*clip-path: inset\(-1em -100vw -1em 0\);/);
+    expect(css).toMatch(/\.ident\.after-name::before \{[^}]*left: calc\(-0\.4em \/ 0\.78 - 0\.5px\);/);
+    expect(css).toMatch(/\.asset-name\.stacked \.ident\.after-name::before \{\s*display: none;/);
+    const st = render(AssetBadge, { id: ID, label: 'GOLD', display: 'Gold', seq: '1739-0029', stacked: true });
+    expect(st.container.querySelector('.asset-name')!.classList.contains('stacked')).toBe(true);
+    expect(st.container.querySelector('.asset-name')!.textContent).toBe('Gold $GOLD #1739-0029');
   });
 });
