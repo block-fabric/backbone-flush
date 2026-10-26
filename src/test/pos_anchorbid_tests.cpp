@@ -394,4 +394,42 @@ BOOST_AUTO_TEST_CASE(competitive_base)
     BOOST_CHECK(DecideBid(policy, in).bid);
 }
 
+BOOST_AUTO_TEST_CASE(included_rate_robust)
+{
+    // Only well-formed requests: OP_RETURN, a push of 68 bytes (00 bf 00, the slot, the commitment, the block before).
+    const uint256 prev{uint256::FromHex("11" + std::string(62, '2')).value()};
+    std::vector<unsigned char> script{0x6a, 0x44, 0x00, 0xbf, 0x00, 7};
+    script.resize(38, 0x33);
+    script.insert(script.end(), prev.begin(), prev.end());
+    BOOST_CHECK(BmmRequestSlot(script, prev) == std::optional<uint8_t>{7});
+    BOOST_CHECK(!BmmRequestSlot(script, uint256{}));
+    auto shorter{script};
+    shorter.pop_back();
+    BOOST_CHECK(!BmmRequestSlot(shorter, prev));
+    auto other{script};
+    other[3] = 0xbe;
+    BOOST_CHECK(!BmmRequestSlot(other, prev));
+    // A crafted flood of one slot counts as one rate a block; blocks with one request alone are left out; the median.
+    std::vector<std::vector<BmmRequestSeen>> blocks;
+    blocks.push_back({{1, 2000}, {2, 3000}, {9, 1}, {9, 1}, {9, 1}, {9, 1}});
+    blocks.push_back({{1, 2100}, {2, 2900}});
+    blocks.push_back({{9, 500'000'000}});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks), 2100);
+    blocks.push_back({{9, 900'000'000}, {9, 900'000'000}, {8, 900'000'000}});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks), 2900);
+    BOOST_CHECK(!RobustIncludedRate({{{1, 1000}}}));
+    // In the bid: clamped to 10 x the network's least, never above the max.
+    AnchorBidPolicy policy;
+    BidInputs in{At(0)};
+    in.pending_actions = true;
+    in.min_rate_per_kvb = 2000;
+    in.included_rate_per_kvb = 900'000'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 20 * 189);
+    in.included_rate_per_kvb = 1;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
+    policy.max = 1000;
+    in.included_rate_per_kvb = 900'000'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
