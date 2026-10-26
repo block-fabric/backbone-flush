@@ -94,6 +94,7 @@
       <span class="mark" aria-hidden="true"><Icon name={q.level === 'error' || q.level === 'warning' ? 'alert' : q.level === 'question' ? 'info' : 'info'} size={26} /></span>
       <div class="grow">
         <p class="message break"><SafeText text={q.message} /></p>
+        {#if q.tags?.length}<p class="tags">{#each q.tags as tag (tag.label)}<span class="tag" data-testid="dialog-tag" title={tag.title}><SafeText text={tag.label} /></span>{/each}</p>{/if}
         {#if q.informative}<p class="informative break"><SafeText text={q.informative} /></p>{/if}
         {#if q.code}
           <div class="code">
@@ -227,6 +228,22 @@
   }
   .message {
     font-weight: 550;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.35rem 0 0;
+  }
+  .tag {
+    padding: 0.05rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--text-muted);
+    font-size: 0.74rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
   }
   .informative {
     color: var(--text-muted);

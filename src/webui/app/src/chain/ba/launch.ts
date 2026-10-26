@@ -323,7 +323,7 @@ export function feeFlowOptions(o: { destination: FeeDestination; burnPercent: nu
 export function feeFlowProblems(o: { destination: FeeDestination; burnPercent: number; keepControl: boolean; mintableConfirmed: boolean }): string[] {
   const out: string[] = [];
   if (o.destination === 'split' && !(o.burnPercent > 0 && o.burnPercent < 100)) out.push('A split burns more than 0% and less than 100% of the fees.');
-  if (o.keepControl && !o.mintableConfirmed) out.push('Confirm that the asset stays mintable.');
+  if (o.keepControl && !o.mintableConfirmed) out.push('Confirm that the asset keeps an unlocked supply.');
   return out;
 }
 

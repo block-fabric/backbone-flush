@@ -15,7 +15,6 @@
   import { barWidth } from './actions';
   import AssetActions from './AssetActions.svelte';
   import AssetBadge from './AssetBadge.svelte';
-  import MintableBadge from './MintableBadge.svelte';
   import { compactNumber } from './axis';
   import { claimable, creatorAllocation, launchCurveFacts, type Launch, type LaunchPage } from './launch';
   import { approx, assetArg, assetText, formatAmount, formatPercent, formatPrice, formatUnits, type Amount } from './model';
@@ -112,7 +111,7 @@
         {@const owed = claimable(l)}
         {@const curve = launchCurveFacts(l)}
         <li class="ml-grid ml-row" data-testid="my-launch">
-          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} stacked /></button><MintableBadge mintable={l.mintable === true} compact /></span>
+          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} stacked /></button></span>
           <span class="c-alloc" data-testid="allocation-line">
             <span class="cell-label">Allocation</span>
             {#if a}<span class="alloc"><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}

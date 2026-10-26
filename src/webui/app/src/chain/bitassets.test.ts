@@ -63,7 +63,7 @@ import { pendingList } from '../lib/pending.svelte';
 import { resetSearchSupport } from './ba/search';
 import { assetHidden, assetIgnored, filtersOf, ignoreAsset, ignoreName, loadHiding, resetHiding, searchFiltersOf, setFilters, unignoreAsset, unignoreName } from './ba/hide.svelte';
 import HeldAssets from './ba/HeldAssets.svelte';
-import MintableBadge from './ba/MintableBadge.svelte';
+import UnlockedSupplyBadge from './ba/UnlockedSupplyBadge.svelte';
 import Transactions from '../pages/Transactions.svelte';
 import LocalSettings from './LocalSettings.svelte';
 import { LOCAL_SETTINGS_TABS } from './settings';
@@ -2569,14 +2569,14 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     const keep = screen.getByRole('checkbox', { name: 'Keep control coin' }) as HTMLInputElement;
     expect(keep.checked).toBe(false);
     await fireEvent.click(keep);
-    const confirm = await screen.findByRole('checkbox', { name: 'Mintable: you can create more units at any time. Buyers will see this warning.' });
+    const confirm = await screen.findByRole('checkbox', { name: "Unlocked Supply: you can create more units at any time. Its pages and its buyers' confirmations show the tag Unlocked Supply." });
     await waitFor(() => expect(next().disabled).toBe(true));
     await fireEvent.click(confirm);
     await waitFor(() => expect(next().disabled).toBe(false));
     await fireEvent.click(next());
     const review = await screen.findByTestId('launch-review');
     expect(review.textContent).toMatch(/30% bought back and burned, 70% to the creator/);
-    expect(review.textContent).toMatch(/Mintable: the creator can create more/);
+    expect(review.textContent).toMatch(/Unlocked Supply/);
     expect(screen.getByTestId('launch-graduation-review').textContent).toBe('A locked full-range position at 1 %: its fees go 60 % to the creator and 40 % to network security. All fees are taken in ECX.');
     await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
     await answer('yes');
@@ -2650,7 +2650,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(screen.queryByRole('checkbox', { name: 'Keep control coin' })).toBeNull();
   });
 
-  it('v5 fee flow: a launch page says where the fees go, what was burned, the tokens owed in Claim, its pool once graduated; Mintable, loud, everywhere', async () => {
+  it('v5 fee flow: a launch page says where the fees go, what was burned, the tokens owed in Claim, its pool once graduated; Unlocked Supply on its own pages and in the buy confirmation', async () => {
     dexOn = true;
     feeFlowOn = true;
     launchPatch = { fee_flow: true, fee_destination: 'split', burn_percent: 40, mintable: true, burned: '1234.5', creator_tokens_owed: '10', creator_fees_owed: '0', pool_kind: 'concentrated' };
@@ -2660,7 +2660,16 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     render(DialogHost);
     await loaded();
     await waitFor(() => expect(screen.getByTestId('launch-fee-destination').textContent).toBe('40% bought back and burned, 60% to the creator · 1,234.5 MOON burned'));
-    expect(screen.getAllByTestId('mintable')[0].textContent?.trim()).toBe('Mintable: the creator can create more');
+    const tag = screen.getAllByTestId('unlocked-supply')[0];
+    expect(tag.textContent?.trim()).toBe('Unlocked Supply');
+    expect(tag.getAttribute('title')).toBe('The creator can still mint more');
+    expect(tag.className).not.toMatch(/danger|warn/);
+    // Buying it: the confirmation carries the tag.
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toBeTruthy());
+    await fireEvent.click(screen.getByRole('form', { name: 'Trade on the curve' }).querySelector('button[type="submit"]')!);
+    await waitFor(() => expect(screen.getByTestId('dialog-tag').textContent).toBe('Unlocked Supply'));
+    await answer('no');
     expect(screen.getByTestId('launch-tokens-owed').textContent).toMatch(/^10 MOON/);
     // Not graduated: no pool kind yet. Claim covers the tokens owed (no fees owed).
     expect(screen.queryByTestId('launch-pool-kind')).toBeNull();
@@ -2669,12 +2678,11 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await answer('yes');
     await waitFor(() => expect(called('claimlaunch').length).toBe(1));
     shown.unmount();
-    // The marker by id, where only the asset shows (Browse assets, the pickers): from the launches read.
-    const badge = render(MintableBadge, { id: MOON, compact: true });
-    expect(badge.getByTestId('mintable').textContent?.trim()).toBe('Mintable');
-    expect(badge.getByTestId('mintable').getAttribute('title')).toBe('Mintable: the creator can create more');
+    // The tag by id (its pool's page): from the launches read.
+    const badge = render(UnlockedSupplyBadge, { id: MOON });
+    expect(badge.getByTestId('unlocked-supply').textContent?.trim()).toBe('Unlocked Supply');
     badge.unmount();
-    expect(render(MintableBadge, { id: SILVER }).queryByTestId('mintable')).toBeNull();
+    expect(render(UnlockedSupplyBadge, { id: SILVER }).queryByTestId('unlocked-supply')).toBeNull();
     // Graduated: its pool's kind.
     nav.tab = `launches/${STAR}/buy`;
     shown = render(Trade, { props: { page: 'pools' } });

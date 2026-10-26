@@ -814,9 +814,9 @@ std::optional<Window::ConfirmDialog> DescribeLaunch(const confirm::Call& call)
             if (value.get_bool()) {
                 dialog::Row head;
                 head.kind = dialog::Row::Kind::HEADING;
-                head.label = "Mintable: you keep control";
+                head.label = "Unlocked Supply: you keep control";
                 dialog->rows.push_back(std::move(head));
-                dialog->rows.push_back(confirm::Text("Control coin", "Kept by you: you can create more units at any time. Every page marks this launch \"Mintable: the creator can create more\""));
+                dialog->rows.push_back(confirm::Text("Control coin", "Kept by you: you can create more units at any time. Its pages tag this launch \"Unlocked Supply\""));
             }
         } else {
             throw HostError(BRIDGE_INVALID_REQUEST, strprintf("launchtoken has no option %s", key.substr(0, 40)));

@@ -19,16 +19,22 @@
   import Chart from './Chart.svelte';
   import DepthChart from './DepthChart.svelte';
   import PoolKind from './PoolKind.svelte';
+  import UnlockedSupplyBadge from './UnlockedSupplyBadge.svelte';
   import RangePicker from './RangePicker.svelte';
   import UnitsInput from './UnitsInput.svelte';
   import { compactNumber } from './axis';
   import { alignDepth, CURVE_HELP, DYNAMIC_FEE_HELP, feeNow, feePercent, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
   import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
   import { swapFeeSplit } from './fees';
-  import { ba, decimalsOf, nameOf, priceSeries, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, launchAllocation, loadLaunchFlags, nameOf, priceSeries, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
   import { TICKER } from '../config';
 
   let { pool, back }: { pool: Pool; back: () => void } = $props();
+  // Its assets' launch tags (Unlocked Supply, creator allocation): the launches read once per block.
+  $effect(() => {
+    void ba.version;
+    loadLaunchFlags();
+  });
 
   const kind = $derived(kindOf(pool));
   const da = $derived(decimalsOf(pool.asset_a_id));
@@ -269,6 +275,10 @@
   <header class="panel head">
     <span class="pair"><AssetBadge id={pool.asset_a_id} label={pool.asset_a} /> <span class="faint">/</span> <AssetBadge id={pool.asset_b_id} label={pool.asset_b} /></span>
     <PoolKind {kind} showDefault />
+    {#each [pool.asset_a_id, pool.asset_b_id] as side (side)}
+      <UnlockedSupplyBadge id={side} />
+      {#if (launchAllocation[side] ?? 0) > 0}<span class="ba-tag warn" data-testid="pool-allocation" title="Minted to the creator at graduation, on top of the supply">Creator allocation {launchAllocation[side]}%</span>{/if}
+    {/each}
     {#if pool.abandoned}<span class="ba-tag danger">Closed: no liquidity</span>{/if}
     <span class="grow"></span>
     <button type="button" class="btn primary" disabled={pool.abandoned} onclick={swapIn}><Icon name="swap" size={15} /> Swap</button>

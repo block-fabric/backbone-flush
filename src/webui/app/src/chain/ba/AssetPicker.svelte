@@ -7,7 +7,6 @@
   import { t } from '../../lib/i18n.svelte';
   import Icon from '../../components/Icon.svelte';
   import AssetBadge from './AssetBadge.svelte';
-  import MintableBadge from './MintableBadge.svelte';
   import { pickerRows, type PickChip, type PickChoice, type PickRow } from './picker';
   import { isFavourite, loadPicks, notePicked, picks, toggleFavourite } from './picks.svelte';
   import { displayNameOf, loadLaunchFlags } from './store.svelte';
@@ -207,7 +206,6 @@
                   onclick={() => pick(c)}
                 >
                   <span class="name"><AssetBadge id={c.id} label={c.label} display={c.display ?? ''} seq={c.seq ?? ''} size="s" /></span>
-                  <MintableBadge id={c.id} compact />
                   {#if c.warn}<span class="warn" title={c.warn}><Icon name="alert" size={14} label={c.warn} /></span>{/if}
                   {#if c.held}<span class="held" translate="no">{c.held}</span>{/if}
                   <button
