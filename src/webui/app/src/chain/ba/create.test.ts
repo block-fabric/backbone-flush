@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canCurve, curveAssetParams, curveMaxUnits, curveSplit, curveSupplyProblem, FIXED_PARAMS, launchParamsOf, launchTokenOptions, unitsText, wholeUnits } from './create';
+import { canCurve, curveDecimals, curveAssetParams, curveMaxUnits, curveSplit, curveSupplyProblem, FIXED_PARAMS, launchParamsOf, launchTokenOptions, unitsText, wholeUnits } from './create';
 import { marketBadge, marketOf } from './registry';
 import { candlesOf, depthOf, levelAt, orderMarks } from './bookchart';
 import type { Auction, Pool } from './model';
@@ -97,5 +97,18 @@ describe('the charts of a book', () => {
     expect(candlesOf('nope')).toEqual([]);
     const marks = orderMarks([{ order: 'x', sells_id: 'A', buys_id: 'B', price: 2, remaining: 1 }, { order: 'y', sells_id: 'B', buys_id: 'A', price: 0.5, remaining: 3 }, { order: 'z', sells_id: 'A', buys_id: 'C', price: 1, remaining: 1 }], 'A', 'B');
     expect(marks).toEqual([{ order: 'x', side: 'ask', price: 2, remaining: 1 }, { order: 'y', side: 'bid', price: 2, remaining: 3 }]);
+  });
+});
+
+describe("a curve's decimals", () => {
+  it("keeps the creator's choice when the curve is picked after the supply step", () => {
+    // Set 2 on the supply step, then pick the curve: it stays 2 (it was reset to 6 before).
+    expect(curveDecimals(2, true, ACTIVE)).toBe(2);
+    expect(curveDecimals(4, true, ACTIVE)).toBe(4);
+    // Untouched: the rules' default; above the most a curve allows: brought down to it.
+    expect(curveDecimals(8, false, ACTIVE)).toBe(6);
+    expect(curveDecimals(12, true, { ...ACTIVE, decimalsMax: 8 })).toBe(8);
+    // Before the launch parameters: the rules' fixed 6, whatever was chosen.
+    expect(curveDecimals(2, true, FIXED_PARAMS)).toBe(FIXED_PARAMS.decimalsDefault);
   });
 });

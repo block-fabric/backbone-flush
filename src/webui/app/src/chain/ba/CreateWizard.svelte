@@ -29,7 +29,7 @@
   import FundCard from './FundCard.svelte';
   import { FEE_TIERS } from './kinds';
   import { compactNumber } from './axis';
-  import { bpsOf, type LaunchOptionValue, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
+  import { curveDecimals, bpsOf, type LaunchOptionValue, FIXED_PARAMS, curveSplit, curveSupplyProblem, feeFromBps, launchParamsOf, launchTokenOptions, MARKET_KINDS, unitsText, type MarketKind } from './create';
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, feeSplitOf, feeSplitOptions, feeSplitProblems, formatBps, launchProblems, MAX_SPLIT_ADDRESSES, rulesOf, shareKind, shareRecipientText, shareText, type FeeDestination, type LaunchStats } from './launch';
   import AddressInput from '../../components/AddressInput.svelte';
@@ -174,6 +174,8 @@
   const largest = $derived(formatUnits(MAX_AMOUNT, decimals, { max: decimals }));
   // A curve before the launch parameters: a billion of 6 decimals, fixed. From them: the rules' default at first.
   let curveTouched = false;
+  // Whether the creator moved the decimals slider: their choice then stands when they pick a curve (curveDecimals).
+  let decimalsTouched = false;
   $effect(() => {
     if (!curve) return;
     if (!params.active) {
@@ -181,7 +183,7 @@
       supplyText = params.supplyDefault;
     } else if (!curveTouched) {
       curveTouched = true;
-      decimals = params.decimalsDefault;
+      decimals = curveDecimals(untrack(() => decimals), decimalsTouched, params);
       const typedNow = untrack(() => supplyText.trim());
       if (!typedNow || typedNow === '0') supplyText = params.supplyDefault;
     }
@@ -406,6 +408,7 @@
     supplyText = '';
     decimals = 8;
     curveTouched = false;
+    decimalsTouched = false;
     fields = { info: '', commitment: '', ipv4: '', ipv6: '', encryptionkey: '', signingkey: '' };
     published = true;
     advanced = false;
@@ -527,7 +530,7 @@
               {#if !simple || moreSupply || curve}
                 <div class="field">
                   <label for="issue-decimals">Decimals: {decimals}</label>
-                  <input id="issue-decimals" type="range" min="0" max={curve ? params.decimalsMax : MAX_DECIMALS} step="1" bind:value={decimals} />
+                  <input id="issue-decimals" type="range" min="0" max={curve ? params.decimalsMax : MAX_DECIMALS} step="1" bind:value={decimals} oninput={() => (decimalsTouched = true)} />
                   <span class="hint">They only change how amounts are shown: with {decimals}, the smallest amount is {smallestAmount(decimals)}. They are set for good.</span>
                 </div>
               {/if}
@@ -635,7 +638,8 @@
               <dt>{tickers ? 'Ticker' : 'Name'}</dt><dd><SafeText class="ticker-text" text={name} /></dd>
               {#if tickers}<dt>Display name</dt><dd>{#if display}<SafeText text={display} />{:else}<span class="faint">None</span>{/if}</dd>{/if}
               {#if curve}
-                <dt>Supply</dt><dd>{formatUnits(supplyValue ?? 0n, decimals)}, {decimals} decimals, fixed</dd>
+                <dt>Supply</dt><dd>{formatUnits(supplyValue ?? 0n, decimals)}, fixed</dd>
+                <dt>Decimals</dt><dd><strong class="decimals-row">{decimals}</strong> (set for good: the smallest amount is {smallestAmount(decimals)})</dd>
                 <dt>On the curve</dt><dd>{formatUnits(split.curve, decimals, { max: 2 })} (75%)</dd>
                 <dt>Into the pool</dt><dd>{formatUnits(split.pool, decimals, { max: 2 })} (25%), with the {TICKER} raised, locked for good</dd>
                 {#if allocation > 0}<dt>Your allocation</dt><dd class="ba-warn">{compactNumber(Number(allocationUnits) / 10 ** decimals, 3)} ({allocation}%), minted at graduation: dilution</dd>{/if}
