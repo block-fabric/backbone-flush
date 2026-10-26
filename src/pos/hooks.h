@@ -631,7 +631,7 @@ private:
     mutable int m_bid_missed GUARDED_BY(m_anchor_mutex){0};
     mutable int m_bid_missed_warned GUARDED_BY(m_anchor_mutex){0};
     mutable BidInputs m_bid_inputs GUARDED_BY(m_anchor_mutex);
-    //! The well-formed BMM requests the last mainchain blocks took (the anchor bid's fallback base, robustly).
+    //! The well-formed BMM requests the last 12 mainchain blocks took (the anchor bid's fallback base).
     mutable std::deque<std::vector<BmmRequestSeen>> m_bid_seen GUARDED_BY(m_anchor_mutex);
     mutable std::optional<CAmount> m_bid_balance GUARDED_BY(m_anchor_mutex);
     mutable std::string m_bid_balance_error GUARDED_BY(m_anchor_mutex);

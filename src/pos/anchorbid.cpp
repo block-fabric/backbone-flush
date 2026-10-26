@@ -300,26 +300,21 @@ std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, con
 std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, const std::set<uint8_t>& active, std::optional<uint8_t> own,
                                           size_t min_slots)
 {
-    std::vector<CAmount> lowest;
+    const auto median{[](std::vector<CAmount> v) { std::sort(v.begin(), v.end()); return v[(v.size() - 1) / 2]; }};
+    std::vector<CAmount> per_block;
     for (const auto& block : blocks) {
-        // One vote a sender: its lowest request, of an active slot that is not ours.
-        std::map<std::string, BmmRequestSeen> by_sender;
+        std::vector<CAmount> rates;
+        std::set<uint8_t> slots;
         for (const BmmRequestSeen& r : block) {
-            if (r.rate_per_kvb <= 0 || !active.contains(r.slot) || (own && r.slot == *own) || r.sender.empty()) continue;
-            auto [it, fresh]{by_sender.emplace(r.sender, r)};
-            if (!fresh && r.rate_per_kvb < it->second.rate_per_kvb) it->second = r;
+            if (r.rate_per_kvb <= 0 || !active.contains(r.slot) || (own && r.slot == *own)) continue;
+            rates.push_back(r.rate_per_kvb);
+            slots.insert(r.slot);
         }
-        std::map<uint8_t, CAmount> by_slot;
-        for (const auto& [sender, r] : by_sender) {
-            auto [it, fresh]{by_slot.emplace(r.slot, r.rate_per_kvb)};
-            if (!fresh) it->second = std::min(it->second, r.rate_per_kvb);
-        }
-        if (by_slot.size() < min_slots) continue;
-        for (const auto& [slot, rate] : by_slot) lowest.push_back(rate);
+        if (slots.size() < min_slots) continue;
+        per_block.push_back(median(std::move(rates)));
     }
-    if (lowest.empty()) return std::nullopt;
-    std::sort(lowest.begin(), lowest.end());
-    return lowest[(lowest.size() - 1) / 2];
+    if (per_block.empty()) return std::nullopt;
+    return median(std::move(per_block));
 }
 
 double StallPressure(int64_t slot, int64_t first_unanchored_slot, int64_t max_unanchored_slots)

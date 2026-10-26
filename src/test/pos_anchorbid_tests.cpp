@@ -409,23 +409,26 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     auto other{script};
     other[3] = 0xbe;
     BOOST_CHECK(!BmmRequestSlot(other, prev));
-    // Active slots other than ours only; one vote a sender; 3 slots at least a block; the median.
+    // Active slots other than ours only; a block counts with 3 such slots at least, and gives one value (its median);
+    // the median of those over the window. (No Sybil resistance: crafted requests that look like others' count.)
     const std::set<uint8_t> active{1, 2, 3, 4, 9};
     std::vector<std::vector<BmmRequestSeen>> blocks;
-    blocks.push_back({{1, 2000, "a"}, {2, 3000, "b"}, {3, 2500, "c"}, {9, 1, "x"}, {9, 1, "x"}, {9, 1, "x"}});
-    blocks.push_back({{1, 2100, "a"}, {2, 2900, "b"}, {4, 2200, "d"}});
-    // One sender across many slots (active or not, ours included): one vote, so this block has one slot and counts not.
-    std::vector<BmmRequestSeen> flood;
-    for (int slot{0}; slot < 200; ++slot) flood.push_back({static_cast<uint8_t>(slot), 900'000'000, "x"});
-    blocks.push_back(flood);
-    // A block with our slot and inactive ones only: nothing.
-    blocks.push_back({{7, 1, "e"}, {100, 1, "f"}, {101, 1, "g"}});
-    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks, active, uint8_t{7}), 2200);
-    // Two blocks of fakes that do count (three senders each): they can only move the median by their share.
-    blocks.push_back({{1, 900'000'000, "p"}, {2, 900'000'000, "q"}, {3, 900'000'000, "r"}});
+    for (int i{0}; i < 8; ++i) blocks.push_back({{1, 2000}, {2, 3000}, {3, 2500}});
+    // Ours and inactive slots: nothing; fewer than 3 active slots: nothing.
+    blocks.push_back({{7, 1}, {100, 1}, {101, 1}, {1, 1}});
     BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks, active, uint8_t{7}), 2500);
-    BOOST_CHECK(!RobustIncludedRate({{{1, 1000, "a"}, {2, 1000, "b"}}}, active, std::nullopt));
-    // In the bid: clamped to 10 x the network's least, never above the max.
+    // One party fills a minority of the window (4 of 12 blocks) with requests at extreme rates: the median stays.
+    for (int i{0}; i < 4; ++i) {
+        std::vector<BmmRequestSeen> fake;
+        for (int slot : {1, 2, 3, 4, 9}) for (int k{0}; k < 50; ++k) fake.push_back({static_cast<uint8_t>(slot), 900'000'000});
+        blocks.push_back(fake);
+    }
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(blocks, active, uint8_t{7}), 2500);
+    std::vector<std::vector<BmmRequestSeen>> low{blocks.begin(), blocks.begin() + 8};
+    for (int i{0}; i < 4; ++i) low.push_back({{1, 1}, {2, 1}, {3, 1}});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate(low, active, uint8_t{7}), 2500);
+    BOOST_CHECK(!RobustIncludedRate({{{1, 1000}, {2, 1000}}}, active, std::nullopt));
+    // In the bid, the real bounds: clamped to [the network's least, 10 x it], never above the max.
     AnchorBidPolicy policy;
     BidInputs in{At(0)};
     in.pending_actions = true;

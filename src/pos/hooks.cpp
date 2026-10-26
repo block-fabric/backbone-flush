@@ -2330,12 +2330,12 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
         balance_error = "the mainchain wallet could not be read";
     }
     // What the last mainchain block took for well-formed BMM requests (any slot), for a node whose mainchain node
-    // answers getblock (not through the enforcer's interface alone): kept for the last blocks, robustly (RobustIncludedRate).
+    // answers getblock (not through the enforcer's interface alone): kept for the last 12 blocks (RobustIncludedRate).
     std::optional<std::vector<BmmRequestSeen>> seen;
     try {
         UniValue args{UniValue::VARR};
         args.push_back(main_tip.GetHex());
-        args.push_back(3);
+        args.push_back(2);
         const UniValue block{client.Call("getblock", args)};
         const auto prev{uint256::FromHex(block.find_value("previousblockhash").isStr() ? block.find_value("previousblockhash").get_str() : "")};
         const UniValue& txs{block.find_value("tx")};
@@ -2351,10 +2351,8 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
                 }
                 const auto fee{amount(tx.find_value("fee"))};
                 const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
-                const UniValue& vin{tx.find_value("vin")};
-                const UniValue& sender{vin.isArray() && !vin.empty() ? vin[0].find_value("prevout").find_value("scriptPubKey").find_value("hex") : NullUniValue};
-                if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0 || !sender.isStr()) continue;
-                seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>(), sender.get_str()});
+                if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
+                seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>()});
             }
         }
     } catch (const std::exception&) {
@@ -2375,7 +2373,7 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     m_bid_inputs.fee_rate_per_kvb = rate;
     if (seen) {
         m_bid_seen.push_back(std::move(*seen));
-        while (m_bid_seen.size() > 6) m_bid_seen.pop_front();
+        while (m_bid_seen.size() > 12) m_bid_seen.pop_front();
     }
     const uint32_t own_slot{::Params().GetConsensus().sidechain.slot};
     m_bid_inputs.included_rate_per_kvb = RobustIncludedRate({m_bid_seen.begin(), m_bid_seen.end()}, active, own_slot <= 255 ? std::optional<uint8_t>{static_cast<uint8_t>(own_slot)} : std::nullopt);
