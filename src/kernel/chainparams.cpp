@@ -876,30 +876,27 @@ public:
         consensus.sidechain.dex_curves_height = 0;
         // Launches graduate at 500 ECX (a consensus parameter; doc/layers.md "Launches").
         consensus.sidechain.launch_graduation = 500 * COIN;
-        // The liveness fix (PosParams::jail_fix_height): never on the eCash networks until a height is decided.
-        consensus.pos.jail_fix_height = std::numeric_limits<int>::max();
-        // The fees of the DEX (doc/layers.md "Fees of the DEX"; decided 2026-10-21): swap fees 85 % to the liquidity
-        // providers, 11 % to the chain's security (the BMM bidder and the validators, by the curve of the network fees),
-        // 4 % to the protocol's treasury; a launch's curve charges 1.15 % of a trade: 50 % to its creator, 30 % to the
-        // treasury, 20 % to the chain's security. Network fees: the bidder and the validators only (pos/feesplit.h).
-        consensus.sidechain.dex_fee_security_share = 110'000;
-        consensus.sidechain.dex_fee_protocol_share = 40'000;
+        // A fresh chain with the final rules only (doc/mainnet-readiness.md): every release's rule from the first block.
+        // The liveness fix (PosParams::jail_fix_height).
+        consensus.pos.jail_fix_height = 0;
+        // The fees of the DEX (doc/layers.md "Fees of the DEX"): swap fees 85 % to the liquidity providers, 15 % to the
+        // chain's security (the BMM bidder and the validators, by the curve of the network fees), all in ECX in a pool of
+        // ECX; a launch's curve charges 1.15 % of a trade: 80 % to its creator, 20 % to the chain's security; a graduated
+        // launch's locked position 60 % / 40 %. No treasury, no protocol part.
+        consensus.sidechain.dex_fee_security_share = 150'000;
+        consensus.sidechain.dex_fee_protocol_share = 0;
         consensus.sidechain.launch_fee = 11'500;
-        consensus.sidechain.launch_creator_share = 500'000;
-        consensus.sidechain.launch_protocol_share = 300'000;
+        consensus.sidechain.launch_creator_share = 800'000;
+        consensus.sidechain.launch_protocol_share = 0;
         consensus.sidechain.launch_security_share = 200'000;
-        // Launches with parameters (supply, decimals, the curve's fee; an existing asset on a curve): never on the eCash
-        // networks until a height is decided (a network that takes them sets it; doc/dex-math.md "Launch curve").
-        consensus.sidechain.launch_params_height = std::numeric_limits<int>::max();
-        // Allocations of up to 10 % of a launch's supply: never on the eCash networks until a height is decided (5 % at most until then).
-        consensus.sidechain.allocation10_height = std::numeric_limits<int>::max();
-        // Payouts of 0.00005 ECX at least (0.0005 until then): never on the eCash networks until a height is decided.
-        consensus.sidechain.small_payout_height = std::numeric_limits<int>::max();
-        // No treasury on Flush's eCash networks, ever (from the first block); slot 99 alone had one before its v4 (below).
+        // Launches with parameters (supply, decimals, the curve's fee; an existing asset on a curve), allocations of up to
+        // 10 %, payouts and book orders of 0.00005 ECX at least, no treasury (ever), and the fee-flow release (fees in
+        // ECX, graduation into a locked 1 % position, fee destinations, kept control coins): all from the first block.
+        consensus.sidechain.launch_params_height = 0;
+        consensus.sidechain.allocation10_height = 0;
+        consensus.sidechain.small_payout_height = 0;
         consensus.sidechain.no_treasury_height = 0;
-        // The fee-flow release (graduation into a locked concentrated position, assets' security parts sold for ECX,
-        // launches' fee destinations, vesting, control): never on the eCash networks until a height is decided.
-        consensus.sidechain.fee_flow_height = std::numeric_limits<int>::max();
+        consensus.sidechain.fee_flow_height = 0;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
@@ -976,7 +973,7 @@ public:
         // The long-gap rule (user requirement 2026-10-24: blocks of stake go on for at least 24 hours without BMM, the
         // clock running from the last BMM commitment that landed in an eCash block, whether eCash is silent or our
         // bids are priced out), from gap_epoch: every network of Flush on eCash from its first epoch (the temporary
-        // slot 99 of betanet, branch photon-v4-gap, from the epoch it halted in). The values above stay for the epochs before it. With margin:
+        // slot 99 of betanet, branch photon-v4-gap, from the epoch it halted in; Flush's own slot from its first epoch). With margin:
         // - the unanchored limit, 24 hours (user decision: at most 24 hours without BMM, then the halt), counts from the
         //   first block of stake no anchor covers, which comes about one eCash block interval before the commitment
         //   lands (its BMM block was made before that block was found): 24 hours from just before the landing, ten
