@@ -142,8 +142,6 @@ struct BidInputs {
 struct BmmRequestSeen {
     uint8_t slot{0};
     CAmount rate_per_kvb{0};
-    //! Who paid it: the script of the output its first input spends (one vote a block for each).
-    std::string sender;
 };
 /**
  * The slot of a well-formed BMM request output (OP_RETURN, a push of 68 bytes: 00 bf 00, the slot, the commitment, the
@@ -151,10 +149,12 @@ struct BmmRequestSeen {
  */
 std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, const uint256& prev);
 /**
- * What recent mainchain blocks took for a BMM request, robustly (security reviews 2026-10-26): in each block, the requests
- * of active sidechains' slots other than `own` only, one vote for each sender (its lowest); the lowest of each slot; a
- * block counts only with `min_slots` such slots at least; the median of those over the window. Nothing if no block
- * counts. One party's crafted requests, whatever slots they name, are one vote of one slot of a block.
+ * What recent mainchain blocks took for a BMM request (the fallback base when no estimate comes). Each block gives at most
+ * one value, the median rate of its requests of active sidechains' slots other than `own`, and only with requests of
+ * `min_slots` distinct such slots; the result is the median of those values over the window. This is no Sybil resistance:
+ * a miner or a bidder can make well-formed requests of many slots from many scripts. A party must fill most of the
+ * window's blocks to move the median; the real bounds are the caller's clamp (the network's least rate, ten times it) and
+ * the policy's max.
  */
 std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmRequestSeen>>& blocks, const std::set<uint8_t>& active, std::optional<uint8_t> own,
                                           size_t min_slots = 3);
