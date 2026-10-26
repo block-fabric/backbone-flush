@@ -138,20 +138,30 @@ describe('an asset\'s identity', () => {
     expect(assetText('GOLD', undefined, undefined, one)).not.toBe(assetText('GOLD', undefined, undefined, two));
   });
 
-  it('a name by the allowlist (NFKC): letters, marks, space and . , \' - & ( ) ! ? : ; plain; anything else and 4 digits or more marked', () => {
+  it('a name by the allowlist (NFKC), and on top of it ids, numbers, bar-like letters and marks beyond 2: marked and escaped', () => {
     const marks = (c: HTMLElement) => [...c.querySelectorAll('.asset-name > .first mark.lookalike')].map((m) => m.textContent);
     const name = (display: string) => render(AssetName, { label: 'FAKE', display, seq: '9031-1144' }).container;
     // Fullwidth "＄" and "＃", bars, a double bar, Arabic-Indic digits: marked, escaped as the title writes them.
     expect(marks(name('＄ECX'))).toEqual(['\\$']);
-    expect(marks(name('＃1739-0029'))).toEqual(['\\#1739', '\\0029']);
+    expect(marks(name('＃1739-0029'))).toEqual(['\\#1739-0029']);
     expect(marks(name('Coin ｜ECX'))).toEqual(['\\|']);
     expect(marks(name('A ‖ B'))).toEqual(['\\u{2016}']);
-    expect(marks(name('١٧٣٩-٠٠٢٩'))).toEqual(['\\١٧٣٩', '\\٠٠٢٩']);
-    expect(marks(name('Fake | ECX | #1-1'))).toEqual(['\\|', '\\|', '\\#']);
+    expect(marks(name('١٧٣٩-٠٠٢٩'))).toEqual(['\\١٧٣٩-٠٠٢٩']);
+    expect(marks(name('Fake | ECX | #1-1'))).toEqual(['\\|', '\\|', '\\#1-1']);
+    // Ids and numbers, on top of the allowlist.
+    expect(marks(name('Gold 0x1a2b'))).toEqual(['\\0x1a2b']);
+    expect(marks(name('x 1739-0029'))).toEqual(['\\1739-0029']);
+    // Bar-like letters; I, l, ا, Ι only alone between spaces.
+    expect(marks(name('A ǀ B'))).toEqual(['\\u{1C0}']);
+    expect(marks(name('Fake I ECX l x'))).toEqual(['\\I', '\\l']);
+    expect(marks(name('Ilona'))).toEqual([]);
+    // An overlay mark, and three marks stacked on one letter (the third marked).
+    expect(marks(name('Go\u20D2ld'))).toEqual(['\\u{20D2}']);
+    expect(marks(name('Gq\u0301\u0302\u0303x'))).toEqual(['\\u{303}']);
     // Plain: letters with their accents, short numbers.
     expect(marks(name('Café Crème'))).toEqual([]);
     expect(marks(name('Top 100 (v2)'))).toEqual([]);
-    // Fullwidth letters folded (NFKC): shown as the letters they are, not as a look-alike of a word.
+    // Fullwidth letters folded (NFKC): shown as the letters they are.
     const folded = name('ＥＣＸ Coin');
     expect(folded.querySelector('.asset-name > .first')!.textContent).toBe('ECX Coin');
     expect(marks(folded)).toEqual([]);
@@ -161,6 +171,29 @@ describe('an asset\'s identity', () => {
     expect(fake.querySelector('.asset-name')!.getAttribute('title')).toBe('Fake \\| ECX \\| \\#1-1 $FAKE #9031-1144');
     expect(fake.querySelector('.ident .vh')!.textContent).toBe('$');
     expect([...fake.querySelectorAll('.sep')].every((x) => x.textContent === '' && x.getAttribute('aria-hidden') === 'true')).toBe(true);
-    expect(assetText('FAKE', 'x 1739-0029', '9031-1144')).toBe('x \\1739-\\0029 $FAKE #9031-1144');
+    expect(assetText('FAKE', 'x 1739-0029', '9031-1144')).toBe('x \\1739-0029 $FAKE #9031-1144');
+  });
+
+  it('a long name is cut at the end of a piece, never inside a marked one, with a fade and no "…" of text', () => {
+    const proto = HTMLElement.prototype;
+    const sh = Object.getOwnPropertyDescriptor(proto, 'scrollHeight');
+    const ch = Object.getOwnPropertyDescriptor(proto, 'clientHeight');
+    Object.defineProperty(proto, 'scrollHeight', { configurable: true, get: () => 40 });
+    Object.defineProperty(proto, 'clientHeight', { configurable: true, get: () => 20 });
+    try {
+      const r = render(AssetName, { label: 'FAKE', display: 'A very long name of a token that goes on 0x1a2b3c4d5e6f and on', seq: '9031-1144' });
+      const first = r.container.querySelector<HTMLElement>('.asset-name > .first')!;
+      expect(first.classList.contains('cut')).toBe(true);
+      expect(first.textContent).not.toContain('…');
+      // The hex run is one marked piece, kept whole (an inline block that wraps as a whole).
+      expect([...first.querySelectorAll('mark.lookalike')].map((m) => m.textContent)).toEqual(['\\0x1a2b3c4d5e6f']);
+    } finally {
+      if (sh) Object.defineProperty(proto, 'scrollHeight', sh);
+      if (ch) Object.defineProperty(proto, 'clientHeight', ch);
+    }
+    const css = readFileSync(join(__dirname, 'AssetName.svelte'), 'utf8');
+    expect(css).toMatch(/\.name-text\) \{[^}]*white-space: normal;[^}]*text-overflow: clip;[^}]*overflow: hidden;/);
+    expect(css).toMatch(/\.lookalike \{[^}]*display: inline-block;[^}]*white-space: nowrap;/);
+    expect(css).toMatch(/\.name-text\.cut\) \{[^}]*mask-image/);
   });
 });

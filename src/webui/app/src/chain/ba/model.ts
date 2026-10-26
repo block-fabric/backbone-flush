@@ -579,12 +579,31 @@ export function uniquePart(seq?: string, id?: string): string {
 
 /**
  * What of a name renders plainly, the rule the site shares (security review 2026-10-26): an allowlist, on the name in
- * NFKC (fullwidth and other compatibility forms folded first). Plain: letters (\p{L}), combining marks on a letter,
- * the space and . , ' - & ( ) ! ? : ; and runs of fewer than 4 digits. Marked (boxed where shown, escaped in text):
- * every other character (symbols, "$", "#", bars, other dashes, quotes, controls) and runs of 4 digits or more (an
- * asset's number, an id). One capturing split: its odd pieces are the marked ones.
+ * NFKC (fullwidth and other compatibility forms folded first). Plain: letters (\p{L}), at most 2 combining marks on a
+ * letter, the space and . , ' - & ( ) ! ? : ; and runs of fewer than 4 digits. Marked (boxed where shown, escaped in
+ * text): every other character (symbols, "$", "#", bars, other dashes, quotes, controls); enclosing and overlay marks
+ * (\p{Me}, U+20D0–20FF, U+0332–0338), U+034F and the variation selectors; a third mark on a letter; on top of the
+ * allowlist, what reads as an id or a number: "0x" and hex, digits joined by dashes (1739-0029), 4 digits or more; the
+ * letters that are bars (ǀ ǁ ׀ ⵏ ꓲ), and ا Ι I l standing alone between spaces. One capturing split, one regex (never
+ * rebuilt with other flags): its odd pieces are the marked ones.
+ * Accepted limitation: skeletons of confusable letters (l or I beside a bar, inside a word) are not checked: the
+ * identity's bars are drawn, never text, and its ticker and number are in their own monospaced, muted type.
  */
-const UNSAFE = /((?:[^\p{L}\p{M}\p{Nd} .,'\-&()!?:;]|(?<![\p{L}\p{M}])\p{M}|\p{Nd}{4,})+)/u;
+const UNSAFE = new RegExp(
+  '((?:' +
+    [
+      '0[xX][0-9a-fA-F]+',
+      '\\p{Nd}+(?:\\p{Pd}\\p{Nd}+)+',
+      '\\p{Nd}{4,}',
+      '[\\u01C0\\u01C1\\u05C0\\u2D4F\\uA4F2]',
+      '(?<=^|\\s)[\\u0627\\u0399Il](?=\\s|$)',
+      '[\\p{Me}\\u20D0-\\u20FF\\u0332-\\u0338\\u034F\\uFE00-\\uFE0F\\u{E0100}-\\u{E01EF}]',
+      '(?<!\\p{L}|\\p{L}\\p{M})\\p{M}',
+      "[^\\p{L}\\p{M}\\p{Nd} .,'\\-&()!?:;]",
+    ].join('|') +
+    ')+)',
+  'u',
+);
 
 /** A name in pieces (NFKC), those that are not plain flagged: AssetName.svelte boxes them, escapeName escapes them. */
 export function nameSegments(text: string): { text: string; flag: boolean }[] {
@@ -594,13 +613,15 @@ export function nameSegments(text: string): { text: string; flag: boolean }[] {
 }
 
 /**
- * A marked piece of a name as text: each character a backslash before it (ASCII) or its code point ("\u{FF04}"); a
- * piece that starts with a digit, a backslash before it ("\1739").
+ * A marked piece of a name as text: digits, ASCII letters and the plain punctuation as they are, a backslash before
+ * any other ASCII character, any other character by its code point ("\u{FF04}", "\u{1C0}"); a backslash first when
+ * the piece starts with one of those kept as they are ("\0x1a2b", "\1739-0029").
  */
 export function escapePiece(piece: string): string {
-  let out = /^\p{Nd}/u.test(piece) ? '\\' : '';
+  const kept = (c: string) => /^(?:\p{Nd}|[A-Za-z .,'\-&()!?:;])$/u.test(c);
+  let out = kept([...piece][0] ?? '') ? '\\' : '';
   for (const c of piece) {
-    if (/\p{Nd}/u.test(c)) out += c;
+    if (kept(c)) out += c;
     else if (/^[\x21-\x7e]$/.test(c)) out += `\\${c}`;
     else out += `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`;
   }
@@ -609,7 +630,7 @@ export function escapePiece(piece: string): string {
 
 /**
  * A name of the chain as text the host draws (toasts, dialogs, tooltips) and the pages' copied text: in NFKC, what is
- * not plain (nameSegments) escaped: "Bitcoin \$ECX \#1", "gold (\#1739-\0029)", "Coin ｜ECX" as "Coin \|ECX". So it
+ * not plain (nameSegments) escaped: "Bitcoin \$ECX \#1", "gold (\#1739-0029)", "Coin ｜ECX" as "Coin \|ECX". So it
  * cannot pass for the app's own words or for an identity beside it.
  */
 export function escapeName(text: string): string {
