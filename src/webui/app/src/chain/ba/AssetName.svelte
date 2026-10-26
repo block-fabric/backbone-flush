@@ -42,12 +42,14 @@
   const coin = $derived((label === TICKER && !display) || (id !== '' && /^0+$/.test(id)));
   const number = $derived(seq || (id ? (assetById(id)?.seq ?? '') : ''));
   const a = $derived(assetIdentity(label, display, number));
-  const ticker = $derived(a.ticker ? `$${a.ticker}` : '');
+  // Shown as "Name | TICKER | #number" (user feedback 2026-10-26): the ticker bare, the bars drawn (CSS), never a
+  // "|" of text, so that a name holding one cannot pass for them. Confirmations keep "$TICKER #number" (assetTitle).
+  const ticker = $derived(a.ticker ?? '');
   const unique = $derived(uniquePart(number, id));
   const full = $derived(coin ? TICKER : assetTitle(label, display, number, id));
 </script>
 
-<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<SafeText class="{nameClass} first" text={a.name} />{' '}{/if}{#if a.alias}<SafeText class="alias" text={a.alias} />{' '}{/if}{#if ticker || unique}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
+<span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<SafeText class="{nameClass} first" text={a.name} />{' '}{/if}{#if a.alias}<SafeText class="alias" text={a.alias} />{' '}{/if}{#if ticker || unique}{#if a.name || a.alias}<span class="sep" aria-hidden="true"></span>{/if}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 
 <style>
   /* Too narrow for both: the identity goes under the name (never cut: it is what tells the asset apart), the name
@@ -70,13 +72,22 @@
   }
   /* The identity: the ticker and the number in a mark of their own, so that a "$" or "#" in a name (plain text) cannot
      pass for them. */
+  /* The bars between name, ticker and number: drawn, not text. */
+  .sep {
+    flex: none;
+    display: inline-block;
+    width: 1px;
+    height: 0.95em;
+    align-self: center;
+    background: var(--line-strong);
+  }
   .ident {
     flex: none;
     display: inline-flex;
     flex-wrap: wrap;
     max-width: 100%;
     align-items: baseline;
-    gap: 0.3em;
+    gap: 0.4em;
     /* No box (user feedback 2026-10-26): the mark is told from a name by its own monospaced, muted type. */
     font-family: var(--font-mono);
     font-size: 0.78em;

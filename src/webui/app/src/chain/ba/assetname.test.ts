@@ -25,14 +25,14 @@ describe('an asset\'s identity', () => {
   it('the logo, the name, then $TICKER and its number in their mark; copied as "Name $TICKER #number"', () => {
     const r = render(AssetBadge, { id: ID, label: 'BROSEVELT', display: 'Theodore Brosevelt', seq: '1739-0029', preview: PNG });
     expect(r.container.querySelector('img.mark')!.getAttribute('src')).toBe(PNG);
-    expect(shown(r.container)).toEqual({ name: 'Theodore Brosevelt', ident: '$BROSEVELT #1739-0029' });
+    expect(shown(r.container)).toEqual({ name: 'Theodore Brosevelt', ident: 'BROSEVELT #1739-0029' });
     expect(r.container.querySelector('.ticker')!.getAttribute('translate')).toBe('no');
-    expect(r.container.querySelector('.asset-name')!.textContent).toBe('Theodore Brosevelt $BROSEVELT #1739-0029');
+    expect(r.container.querySelector('.asset-name')!.textContent).toBe('Theodore Brosevelt BROSEVELT #1739-0029');
   });
 
   it('without a number, its id shortened: the unique part is always there', () => {
     const r = render(AssetBadge, { id: ID, label: 'GOLD', display: 'Gold Bar' });
-    expect(shown(r.container)).toEqual({ name: 'Gold Bar', ident: '$GOLD 0xbbbbbbbb…bbbbbbbb' });
+    expect(shown(r.container)).toEqual({ name: 'Gold Bar', ident: 'GOLD 0xbbbbbbbb…bbbbbbbb' });
   });
 
   it('without a logo, the generated mark with the ticker\'s initials', () => {
@@ -62,7 +62,7 @@ describe('an asset\'s identity', () => {
 
   it('no name: $TICKER and its number alone, in the place of the name', () => {
     const r = render(AssetName, { label: 'GOLD', seq: '1739-0029' });
-    expect(shown(r.container)).toEqual({ name: null, ident: '$GOLD #1739-0029' });
+    expect(shown(r.container)).toEqual({ name: null, ident: 'GOLD #1739-0029' });
     expect(r.container.querySelector('.ident.alone')).not.toBeNull();
   });
 
@@ -76,7 +76,7 @@ describe('an asset\'s identity', () => {
 
   it('a display name that imitates a ticker or a number stays plain text, the real ones in their mark after it', () => {
     const r = render(AssetBadge, { id: ID, label: 'FAKE', display: 'Bitcoin $ECX #1', seq: '9031-1144' });
-    expect(shown(r.container)).toEqual({ name: 'Bitcoin $ECX #1', ident: '$FAKE #9031-1144' });
+    expect(shown(r.container)).toEqual({ name: 'Bitcoin $ECX #1', ident: 'FAKE #9031-1144' });
     // The name is one text node of SafeText: never in the mark.
     expect(r.container.querySelector('.ident')!.textContent).not.toContain('ECX');
     // In the title (text, no mark): escaped.
@@ -123,7 +123,7 @@ describe('an asset\'s identity', () => {
     }
     expect(assetText('ECX"', 'Bitcoin', '9031-1144')).toBe('Bitcoin ECX\\" #9031-1144');
     expect(assetText('ЕCX', undefined, '9031-1144')).toBe('ЕCX #9031-1144');
-    expect(shown(render(AssetName, { label: 'GOLD2', seq: '9031-1144' }).container).ident).toBe('$GOLD2 #9031-1144');
+    expect(shown(render(AssetName, { label: 'GOLD2', seq: '9031-1144' }).container).ident).toBe('GOLD2 #9031-1144');
   });
 
   it('two ids that share their first 8 hex characters look different (64 bits of the id shown)', () => {
@@ -131,8 +131,8 @@ describe('an asset\'s identity', () => {
     const two = '1a2b3c4d' + '0'.repeat(48) + '22222222';
     const a = shown(render(AssetName, { label: 'GOLD', id: one }).container).ident;
     const b = shown(render(AssetName, { label: 'GOLD', id: two }).container).ident;
-    expect(a).toBe('$GOLD 0x1a2b3c4d…11111111');
-    expect(b).toBe('$GOLD 0x1a2b3c4d…22222222');
+    expect(a).toBe('GOLD 0x1a2b3c4d…11111111');
+    expect(b).toBe('GOLD 0x1a2b3c4d…22222222');
     expect(assetText('GOLD', undefined, undefined, one)).not.toBe(assetText('GOLD', undefined, undefined, two));
   });
 });
