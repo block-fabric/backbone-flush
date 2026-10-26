@@ -135,4 +135,23 @@ describe('an asset\'s identity', () => {
     expect(b).toBe('$GOLD 0x1a2b3c4d…22222222');
     expect(assetText('GOLD', undefined, undefined, one)).not.toBe(assetText('GOLD', undefined, undefined, two));
   });
+
+  it('what in a name could pass for the identity is marked: bars and look-alikes, "$", "#", numbers, ids; the text kept', () => {
+    const marks = (c: HTMLElement) => [...c.querySelectorAll('.asset-name > .first mark.lookalike')].map((m) => m.textContent);
+    const fake = render(AssetName, { label: 'FAKE', display: 'Fake | ECX | #1-1', seq: '9031-1144' });
+    expect(marks(fake.container)).toEqual(['|', '|', '#']);
+    expect(shown(fake.container)).toEqual({ name: 'Fake | ECX | #1-1', ident: '$FAKE #9031-1144' });
+    // The identity's "$" stays in the text (hidden from the eye), its bars drawn (none of text).
+    expect(fake.container.querySelector('.asset-name')!.textContent).toBe('Fake | ECX | #1-1 $FAKE #9031-1144');
+    expect(fake.container.querySelector('.ident .vh')!.textContent).toBe('$');
+    expect([...fake.container.querySelectorAll('.sep')].every((x) => x.textContent === '' && x.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(marks(render(AssetName, { label: 'FAKE', display: 'Coin ｜ECX', seq: '9031-1144' }).container)).toEqual(['｜']);
+    expect(marks(render(AssetName, { label: 'FAKE', display: 'x 1739-0029', seq: '9031-1144' }).container)).toEqual(['1739-0029']);
+    expect(marks(render(AssetName, { label: 'FAKE', display: '0x1a2b…', seq: '9031-1144' }).container)).toEqual(['0x1a2b…']);
+    for (const bar of ['│', 'ǀ', '⏐', '∣', '┃', '❘']) expect(marks(render(AssetName, { label: 'FAKE', display: `A ${bar} B`, seq: '9031-1144' }).container), bar).toEqual([bar]);
+    // A plain name: nothing marked.
+    expect(marks(render(AssetName, { label: 'GOLD', display: 'Gold Bar', seq: '1739-0029' }).container)).toEqual([]);
+    // In text (titles, toasts): escaped.
+    expect(assetText('FAKE', 'Coin ｜ECX x 1739-0029 0x1a2b', '9031-1144')).toBe('Coin \\u{FF5C}ECX x \\1739-0029 \\0x1a2b $FAKE #9031-1144');
+  });
 });
