@@ -976,7 +976,7 @@ public:
                 // Upgrade v7 (doc/photon-slot.md, "Upgrade v7"), from block SLOT99_V7_HEIGHT: the DEX's ECX payouts in every block
                 // (not only in those that take the peg actions); a launch's curve fee 25 % security, 75 % split as its launch
                 // says. In the fingerprint.
-                static constexpr int SLOT99_V7_HEIGHT{std::numeric_limits<int>::max()};
+                static constexpr int SLOT99_V7_HEIGHT{18781};
                 consensus.sidechain.v7_height = SLOT99_V7_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
