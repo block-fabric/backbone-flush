@@ -9,7 +9,7 @@ from the same height H:
     its ECX side (getbitassetsinfo's min_chn_payout, min_book_chn); an order of 0.0001 ECX is refused;
   - from it: 0.00005 ECX for both; an order of 0.0001 ECX is placed, crosses another, and pays its 0.0001 out;
   - no treasury: before H the protocol's parts of the fees accrue to the treasury; at H what it held of ECX is paid with
-    block H's fees (gettreasury: active false, its ECX 0), and nothing accrues after;
+    block H's fees as security (getdexinfo security_paid), and nothing accrues after;
   - a node without the rules (FLUSHD_OLD: a flushd of v3; else this one with both never) follows the chain until block
     H, whose coinbase pays the treasury's ECX with the fees, and forks off there.
 """
@@ -18,7 +18,7 @@ from decimal import Decimal
 import os
 
 from feature_layers import LayersTest
-from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
 
 DEX_HEIGHT = 10
 CURVES_HEIGHT = 15
@@ -77,15 +77,12 @@ class LayersV4Test(LayersTest):
         n0.addliquidity("GOLD", 10000, "ECX", 5)
         self.bmm()
 
-        self.log.info("Before H: the protocol's parts of the swap fees go to the treasury")
+        self.log.info("Before H (slot-99 history): a protocol part of the swap fees is held back internally")
         n1.swapasset("ECX", Decimal("0.2"), "GOLD")
         self.bmm()
-        treasury = n0.gettreasury()
-        assert treasury["active"]
-        assert_equal(treasury["removed_height"], SMALL_HEIGHT)
-        held = next(b for b in treasury["balances"] if b["asset"] == "ECX")["balance"]
-        assert held > 0, held
-        assert_equal(treasury["fee_parts"]["swap_protocol"], Decimal("4"))
+        parts = n0.getdexinfo()["swap_fee_parts"]
+        assert "protocol" not in parts
+        assert_equal(parts["liquidity_providers"] + parts["security"], Decimal("96"))
 
         self.log.info("Before small_payout_height: 0.0005 ECX paid out at least, an order worth 0.01 ECX at least")
         assert n0.getblockcount() + 1 < SMALL_HEIGHT
@@ -104,23 +101,17 @@ class LayersV4Test(LayersTest):
         self.connect_nodes(2, 1)
         self.bmm()
 
-        self.log.info("At H: the treasury's ECX paid with block H's fees; the old node forks off at that block")
+        self.log.info("At H: what was held back of ECX paid with block H's fees as security; the old node forks off at that block")
         self.bmm_to(SMALL_HEIGHT - 1)
+        paid_before = n0.getdexinfo()["security_paid"]
         fork = self.bmm_on([n0, n1])
         assert_equal(n0.getblockheader(fork)["height"], SMALL_HEIGHT)
         self.wait_until(lambda: any(t["hash"] == fork and t["status"] == "invalid" for t in n2.getchaintips()))
         assert_equal(n2.getblockcount(), SMALL_HEIGHT - 1)
-        treasury = n0.gettreasury()
-        assert not treasury["active"]
-        assert_equal(next(b for b in treasury["balances"] if b["asset"] == "ECX")["balance"], 0)
-        assert_equal(treasury["fee_parts"]["swap_protocol"], 0)
-        # 85 % providers, 15 % security (the treasury's 4 % joins security); a fee in an asset keeps its security part in its pool.
-        assert_equal((treasury["fee_parts"]["swap_liquidity_providers"], treasury["fee_parts"]["swap_security"]), (Decimal("85"), Decimal("15")))
-        assert_equal(n0.getdexinfo()["swap_fee_parts"]["protocol"], 0)
-        # After H a swap gives the treasury nothing.
-        n1.swapasset("ECX", Decimal("0.2"), "GOLD")
-        self.bmm_on([n0, n1])
-        assert_equal(next(b for b in n0.gettreasury()["balances"] if b["asset"] == "ECX")["balance"], 0)
+        assert_greater_than(n0.getdexinfo()["security_paid"], paid_before)
+        # 85 % providers, 15 % security; a fee in an asset keeps its security part in its pool.
+        parts = n0.getdexinfo()["swap_fee_parts"]
+        assert_equal((parts["liquidity_providers"], parts["security"]), (Decimal("85"), Decimal("15")))
 
         self.log.info("From H: 0.00005 ECX for payouts and orders; an order of 0.0001 ECX")
         info = n0.getbitassetsinfo()

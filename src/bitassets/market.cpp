@@ -28,7 +28,6 @@ std::atomic<bool> g_enabled{false};
 //! The tables of the state the index reads the journal of (bitassets/state.cpp).
 constexpr uint8_t ST_TOKENS{0x30};
 constexpr uint8_t ST_POOLS{0x34};
-constexpr uint8_t ST_TREASURY{0x9e};
 
 //! After DERIVED_TABLE: the market index's letter, then its own.
 constexpr unsigned char MARKET{'X'};
@@ -45,7 +44,6 @@ constexpr unsigned char K_CANDLE_POOL{'k'};
 constexpr unsigned char K_CANDLE_LAUNCH{'K'};
 constexpr unsigned char K_MARKET_POOL{'p'};
 constexpr unsigned char K_MARKET_LAUNCH{'P'};
-constexpr unsigned char K_INFLOW{'y'};
 
 Bytes K(unsigned char sub) { return Bytes{sidechain::DERIVED_TABLE, MARKET, sub}; }
 void Put32(Bytes& out, uint32_t v) { sidechain::KeyCodec<uint32_t>::Encode(out, v); }
@@ -304,13 +302,8 @@ void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int heigh
     // What the journal says is read whole first: writing to the overlay notes more in it.
     std::map<uint256, std::optional<Pool>> old_pools;
     std::vector<std::pair<COutPoint, std::optional<Token>>> token_changes;
-    std::vector<std::pair<AssetId, std::optional<TreasuryEntry>>> treasury_changes;
     for (const auto& [key, old] : store.Journal().entries) {
         if (key.empty()) continue;
-        if (key[0] == ST_TREASURY && key.size() == 33) {
-            treasury_changes.emplace_back(AssetId{std::span{key}.subspan(1, 32)}, old ? std::optional{sidechain::DecodeValue<TreasuryEntry>(*old)} : std::nullopt);
-            continue;
-        }
         if (key[0] == ST_POOLS && key.size() >= 33) {
             const uint256 id{std::span{key}.subspan(1, 32)};
             old_pools.emplace(id, old ? std::optional{sidechain::DecodeValue<Pool>(*old)} : std::nullopt);
@@ -335,21 +328,6 @@ void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int heigh
             AddBalance(store, script, *now, /*add=*/true);
             store.Put(okey, sidechain::EncodeValue(OutRow{script, *now}));
         }
-    }
-
-    // The treasury's inflows: what each asset's entry gained in the block.
-    for (const auto& [asset, before] : treasury_changes) {
-        Bytes key{ST_TREASURY};
-        PutHash(key, asset);
-        const auto now{GetValue<TreasuryEntry>(store, key)};
-        const TreasuryEntry was{before.value_or(TreasuryEntry{})}, is{now.value_or(TreasuryEntry{})};
-        InflowRow row{height, time, asset, is.from_swaps > was.from_swaps ? is.from_swaps - was.from_swaps : 0, is.from_launches > was.from_launches ? is.from_launches - was.from_launches : 0,
-                      is.security_held > was.security_held ? is.security_held - was.security_held : 0};
-        if (row.from_swaps == 0 && row.from_launches == 0 && row.security_held == 0) continue;
-        Bytes k{K(K_INFLOW)};
-        Put32(k, ~static_cast<uint32_t>(height));
-        PutHash(k, asset);
-        store.Put(k, sidechain::EncodeValue(row));
     }
 
     // Trades: the batch's orders that filled, a row per pool they went through.
@@ -516,16 +494,6 @@ std::vector<CandleRow> Candles(const sidechain::StoreView& view, const Market& m
         at = entry->first;
         at.push_back(0);
     }
-    return rows;
-}
-
-std::vector<InflowRow> TreasuryInflows(const sidechain::StoreView& view, size_t limit)
-{
-    std::vector<InflowRow> rows;
-    view.ForEach(K(K_INFLOW), [&](const Bytes&, const Bytes& value) {
-        rows.push_back(sidechain::DecodeValue<InflowRow>(value));
-        return rows.size() < limit;
-    });
     return rows;
 }
 

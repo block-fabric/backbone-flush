@@ -99,7 +99,7 @@ Parameters, for a launch of supply S units (on the curve and in its pool), G = g
   floor of 10^6 units bounds the rounding: a unit costs at most 4G/S ≤ 0.02 coin at the end. S + the allocation
   (⌊S·a/10^4⌋, a ≤ 500 basis points) < 2^63 − 1.
 - **Fee.** f ∈ [3000, 50000] millionths (0.3 % to 5 %), `MIN_LAUNCH_FEE`..`MAX_LAUNCH_FEE`; its parts as the network's
-  (Flush: creator 50 %, treasury 30 %, security 20 %; the roundings' remainder into the pool at graduation).
+  (Flush: creator 80 %, security 20 %; the roundings' remainder into the pool at graduation).
 - **Never below the virtual coin** (`LaunchCurve::start` = Tv, launches from `launch_params_height`): the curve takes back no
   more units than it sold. A round that would leave y > Tv (so x < V: coin it never took in) clears its buys with the sales
   that fit, taken in the round's order while their units B stay within the room (y + B)·x ≤ (Tv − n)·(x + A) (A the buys'

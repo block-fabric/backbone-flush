@@ -195,7 +195,7 @@ class LayersDexTest(LayersTest):
         # What came in and went out, less the security and protocol parts of each side's 0.3 % fee (which left the pool:
         # the coin's security part paid with the block's fees, GOLD's held by the treasury).
         assert_equal(self.reserves(n0, "GOLD", "ECX"), (r_g + 5000 - gold_out - taken(n0, 5000, 3000), r_c + units("0.2", 8) - chn_out - taken(n0, units("0.2", 8), 3000)))
-        assert_greater_than(n0.gettreasury()["security_paid"], 0)
+        assert_greater_than(n0.getdexinfo()["security_paid"], 0)
 
         self.log.info("Batch: an order whose min_out the batch misses is refunded; the other fills as alone")
         alone = n1.quoteswap("GOLD", 50, "ECX")["amount_out"]
@@ -286,8 +286,7 @@ class LayersDexTest(LayersTest):
         # The contracts' CHN are in the state, with the pools': the peg balance's "assets".
         pools_chn = sum(p["reserve_a"] if p["asset_a"] == "ECX" else p["reserve_b"] if p["asset_b"] == "ECX" else 0 for p in n0.listpools())
         # The coin the treasury holds (the protocol's parts of the fees) counts too.
-        treasury_chn = sum(b["balance"] for b in n0.gettreasury()["balances"] if b["asset_id"] == "00" * 32)
-        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2 + treasury_chn)
+        assert_equal(assert_peg_balance(main, self.nodes)["assets"], pools_chn + 2)
 
         n0.publishoracle(prices, "E1", 150)
         # The squatter's key cannot attest for the honest oracle; its own attestation is its own oracle's.
@@ -375,13 +374,13 @@ class LayersDexTest(LayersTest):
         assert_peg_balance(main, self.nodes)
 
         self.log.info("A swap paying the coin in a block of stake: the security part of its fee joins the block's fees (pot and pool)")
-        paid_before = n0.gettreasury()["security_paid"]
+        paid_before = n0.getdexinfo()["security_paid"]
         for n in self.nodes:
             n.setstaking(True)
         c = n1.swapasset("ECX", "0.5", "GOLD")["txid"]
         block_c = self.mined(n1, c)
         assert self.is_pos(n0, block_c)
-        self.wait_until(lambda: n0.gettreasury()["security_paid"] > paid_before)
+        self.wait_until(lambda: n0.getdexinfo()["security_paid"] > paid_before)
         for n in self.nodes:
             n.setstaking(False)
         time.sleep(2)

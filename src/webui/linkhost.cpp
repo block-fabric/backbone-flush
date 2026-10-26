@@ -376,7 +376,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         rows = Head(r, source, plan.summary, now);
         if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
         if (!r.supply.empty()) rows.push_back(confirm::Text("Supply", strprintf("%s %s (%d decimals): 3/4 sold on the curve, 1/4 into the locked pool at graduation", r.supply, r.ticker, decimals)));
-        if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator, treasury and security parts as the network's)"));
+        if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator and security parts as the network's)"));
         if (!quoted.empty()) QuoteRows(rows, quoted, floored, r.slippage_bps);
         plan.method = "reserveasset";
         plan.params.push_back(r.ticker);

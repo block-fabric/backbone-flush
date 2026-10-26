@@ -84,12 +84,9 @@ Branch `photon-v4` (photon-v3 and smaller payouts): from block `SLOT99_V4_HEIGHT
 side (0.01 before): an order of about $0.50 at $10 000 an ECX. The payout cap per block is unchanged (500). The height is
 in the fingerprint: a node of v4 rebuilds its sidechain state once on its first start.
 
-From the same block, `no_treasury_height`: there is no treasury. Swap fees go 89 % to the liquidity providers and 11 % to
-the chain's security (the 4 % protocol part stays in the pool; a fee's security part in an asset stays in its pool too),
-launch curve fees 80 % to the creator and 20 % to security. At that block what the treasury held of ECX (0.00007559 ECX
-on 2026-10-24) is paid with its fees as their security part; its entries stay as a record, and what it held of assets
-(none from swaps of assets so far, or what accrued) stays held, unspendable. A node of v3 forks off at that very block
-(its coinbase pays the treasury's ECX: bad-cb-amount on v3), or at the first order or payout under the old minimums.
+Changelog: until block 9000 a protocol part of the fees was held back by the chain; at that block it was paid with the
+block's fees as security, and from the patch after v5 nothing of it is exposed (no RPC, API or page). A node of v3 forks
+off at block 9000, or at the first order or payout under the old minimums.
 
 ## The halt of 2026-10-24 (the long-gap rule)
 

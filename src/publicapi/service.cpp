@@ -613,8 +613,8 @@ private:
         return c;
     }
 
-    /** A launch's fee and its parts (millionths of the fee): the creator's, the treasury's (none from no_treasury_height), the chain's security, the rest to the pool. */
-    Message FeesOf(uint32_t launch_fee, uint32_t creator_share, uint32_t protocol_share, uint32_t security_share) const
+    /** A launch's fee and its parts (millionths of the fee): the creator's, the chain's security, the rest to the pool. */
+    Message FeesOf(uint32_t launch_fee, uint32_t creator_share, uint32_t security_share) const
     {
         Message f{New("Fees")};
         f.SetDouble("trade_bps", launch_fee / 100.0);
@@ -625,9 +625,8 @@ private:
             m.SetDouble("bps", share / 100.0);
         }};
         part("creator", creator_share);
-        part("treasury", protocol_share);
         part("security", security_share);
-        const uint32_t used{creator_share + protocol_share + security_share};
+        const uint32_t used{creator_share + security_share};
         part("pool", used < bitassets::FEE_DENOMINATOR ? bitassets::FEE_DENOMINATOR - used : 0);
         f.SetDouble("pool_fee_bps", bitassets::LEGACY_FEE / 100.0);
         f.SetDouble("launch_fee_ecx", 0);
@@ -637,7 +636,8 @@ private:
     Message RulesFees(int height) const
     {
         const Consensus::SidechainParams& p{Params().GetConsensus().sidechain};
-        return FeesOf(p.launch_fee, p.LaunchCreatorShare(height), p.LaunchProtocolShare(height), p.launch_security_share);
+        // (A protocol part of before is the creator's: slot-99 history only.)
+        return FeesOf(p.launch_fee, p.LaunchCreatorShare(height) + p.LaunchProtocolShare(height), p.launch_security_share);
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -1896,9 +1896,8 @@ private:
             Message fees{RulesFees(tip.height + 1)};
             for (size_t i{0}; i < fees.Count("split"); ++i) f.Add("launch_split") = fees.At("split", i);
             f.SetDouble("launch_graduation_ecx", static_cast<double>(params.launch_graduation) / COIN);
-            // The parts in force in the next block: no treasury from no_treasury_height (its part the providers').
+            // The parts in force in the next block (a protocol part of before is the providers': slot-99 history only).
             const uint32_t protocol_share{params.SwapProtocolShare(tip.height + 1)};
-            f.SetUInt("protocol_fee_share_ppm", protocol_share);
             const auto swap_part{[&](const char* to, uint32_t share) {
                 Message& m{f.Add("swap_split")};
                 m.SetString("to", to);
@@ -1907,54 +1906,8 @@ private:
             const uint32_t security_share{params.SwapSecurityShare(tip.height + 1)};
             swap_part("liquidity_providers", bitassets::FEE_DENOMINATOR - security_share - protocol_share);
             swap_part("security", security_share);
-            if (protocol_share) swap_part("treasury", protocol_share);
             if (m_node.mempool) f.SetDouble("min_relay_fee_ecx_per_kvb", static_cast<double>(m_node.mempool->m_opts.min_relay_feerate.GetFeePerK()) / COIN);
             return f;
-        });
-
-        Serve(server, "GetTreasury", read, [this](const Message&, const Tip& tip) {
-            const bitassets::State state{tip.State()};
-            Message t{New("Treasury")};
-            const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
-            const bool gone{rules.NoTreasury(tip.height + 1)};
-            t.SetBool("available", !gone);
-            t.SetString("reason", gone ? "removed at block " + util::ToString(rules.no_treasury_height) + ": the protocol's parts of the fees go to the liquidity providers and to the launches' creators; "
-                                         "what it held of ECX was paid with that block's fees as their security part; this is its record"
-                                       : "the protocol's parts of the fees, held by the chain itself and never spent");
-            t.SetInt("removed_height", rules.no_treasury_height == std::numeric_limits<int>::max() ? -1 : rules.no_treasury_height);
-            state.ForEachTreasury([&](const AssetId& asset, const bitassets::TreasuryEntry& e) {
-                const uint8_t d{DecimalsOf(state, asset)};
-                Message& b{t.Add("balances")};
-                b.SetString("asset", Label(state, asset));
-                if (!asset.IsNull()) b.SetString("asset_id", Hex(asset));
-                b.SetDouble("balance", Whole(e.balance, d));
-                b.SetDouble("from_swaps", Whole(e.from_swaps, d));
-                b.SetDouble("from_launches", Whole(e.from_launches, d));
-                b.SetDouble("security_held", Whole(e.security_held, d));
-                if (asset.IsNull()) t.SetDouble("balance_ecx", Whole(e.balance, 8));
-                return t.Count("balances") < 200;
-            });
-            t.SetDouble("security_paid_ecx", Whole(state.GetSecurityFees().total, 8));
-            t.SetBool("spending_rule", false);
-            if (bitassets::market::Enabled()) {
-                double day{0};
-                for (const auto& row : bitassets::market::TreasuryInflows(*tip.view, 100)) {
-                    const uint8_t d{DecimalsOf(state, row.asset)};
-                    if (row.asset.IsNull() && row.time + 86400 >= tip.time) day += Whole(row.from_swaps + row.from_launches, 8);
-                    if (t.Count("inflows") >= 50) continue;
-                    Message& in{t.Add("inflows")};
-                    in.SetUInt("height", static_cast<uint32_t>(row.height));
-                    in.SetUInt("time", row.time);
-                    in.SetString("asset", Label(state, row.asset));
-                    in.SetDouble("amount_ecx", row.asset.IsNull() ? Whole(row.from_swaps + row.from_launches, 8) : 0);
-                    in.SetString("source", row.from_launches > row.from_swaps ? "launches" : "swaps");
-                    in.SetDouble("from_swaps", Whole(row.from_swaps, d));
-                    in.SetDouble("from_launches", Whole(row.from_launches, d));
-                    in.SetDouble("security_held", Whole(row.security_held, d));
-                }
-                t.SetDouble("inflow_24h_ecx", day);
-            }
-            return t;
         });
 
         Serve(server, "ListLaunches", read, [this](const Message& req, const Tip& tip) {
@@ -2028,7 +1981,6 @@ private:
             }
             // The creator's part in force (from no_treasury_height it takes the protocol's).
             d.SetDouble("creator_share_percent", (Params().GetConsensus().sidechain.NoTreasury(tip.height + 1) ? l.rec.creator_share + l.rec.protocol_share : l.rec.creator_share) / 10000.0);
-            d.SetDouble("protocol_share_percent", l.rec.protocol_share / 10000.0);
             d.SetDouble("security_share_percent", l.rec.security_share / 10000.0);
             d.SetDouble("creator_fees_owed_ecx", static_cast<double>(l.rec.creator_fees) / COIN);
             d.SetDouble("creator_fees_paid_ecx", static_cast<double>(l.rec.creator_paid) / COIN);
