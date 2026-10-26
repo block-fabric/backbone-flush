@@ -17,7 +17,7 @@
   import { host } from '../lib/rpc';
   import { node, prefs, toast, wallets } from '../lib/state.svelte';
   import { filterAndSort, type Column } from '../lib/table';
-  import { formatAmount } from '../lib/units';
+  import { formatAmount, unitInfo } from '../lib/units';
   import { walletApi, type Coin, type CoinSummary as Summary, type FeeChoice, type Outpoint } from '../lib/wallet';
 
   let {
@@ -102,7 +102,7 @@
 
   const columns: Column<Row>[] = $derived([
     { key: 'pick', label: '', value: (c) => chosen.has(c.key), width: '2.6rem', sortable: false, noFilter: true },
-    { key: 'amount', label: `Amount (${prefs.unit})`, value: (c) => c.sats, width: '9.5rem', align: 'end', noFilter: true },
+    { key: 'amount', label: `Amount (${unitInfo(prefs.unit).short})`, value: (c) => c.sats, width: '9.5rem', align: 'end', noFilter: true },
     { key: 'address', label: 'Address', value: (c) => c.address, width: 'minmax(11rem, 2fr)', mono: true },
     { key: 'label', label: 'Label', value: (c) => c.label, width: 'minmax(5rem, 1fr)' },
     { key: 'depth', label: 'Confirmations', value: (c) => c.depth, width: '7.5rem', align: 'end', noFilter: true },
