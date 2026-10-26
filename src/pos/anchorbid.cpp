@@ -303,14 +303,17 @@ std::optional<CAmount> RobustIncludedRate(const std::vector<std::vector<BmmReque
     const auto median{[](std::vector<CAmount> v) { std::sort(v.begin(), v.end()); return v[(v.size() - 1) / 2]; }};
     std::vector<CAmount> per_block;
     for (const auto& block : blocks) {
-        std::vector<CAmount> rates;
-        std::set<uint8_t> slots;
+        // One value an active slot: the lowest rate of its requests in the block (a real bidder needs one landed request;
+        // stuffing a block with many requests of a few slots adds nothing but those slots' lowest).
+        std::map<uint8_t, CAmount> by_slot;
         for (const BmmRequestSeen& r : block) {
             if (r.rate_per_kvb <= 0 || !active.contains(r.slot) || (own && r.slot == *own)) continue;
-            rates.push_back(r.rate_per_kvb);
-            slots.insert(r.slot);
+            auto [it, fresh]{by_slot.emplace(r.slot, r.rate_per_kvb)};
+            if (!fresh) it->second = std::min(it->second, r.rate_per_kvb);
         }
-        if (slots.size() < min_slots) continue;
+        if (by_slot.size() < min_slots) continue;
+        std::vector<CAmount> rates;
+        for (const auto& [slot, rate] : by_slot) rates.push_back(rate);
         per_block.push_back(median(std::move(rates)));
     }
     if (per_block.empty()) return std::nullopt;

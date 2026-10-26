@@ -409,8 +409,8 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     auto other{script};
     other[3] = 0xbe;
     BOOST_CHECK(!BmmRequestSlot(other, prev));
-    // Active slots other than ours only; a block counts with 3 such slots at least, and gives one value (its median);
-    // the median of those over the window. (No Sybil resistance: crafted requests that look like others' count.)
+    // Active slots other than ours only, one value a slot (its lowest); a block counts with 3 such slots at least, and
+    // gives one value (their median); the median of those over the window.
     const std::set<uint8_t> active{1, 2, 3, 4, 9};
     std::vector<std::vector<BmmRequestSeen>> blocks;
     for (int i{0}; i < 8; ++i) blocks.push_back({{1, 2000}, {2, 3000}, {3, 2500}});
@@ -428,6 +428,14 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     for (int i{0}; i < 4; ++i) low.push_back({{1, 1}, {2, 1}, {3, 1}});
     BOOST_CHECK_EQUAL(*RobustIncludedRate(low, active, uint8_t{7}), 2500);
     BOOST_CHECK(!RobustIncludedRate({{{1, 1000}, {2, 1000}}}, active, std::nullopt));
+    // Stuffing: 100 requests of 2 active slots at an extreme rate among 3 real slots: the block's value is the median of
+    // its 5 slots' lowest, the real ones' median when the stuffed slots' lowest are high (or low).
+    std::vector<BmmRequestSeen> stuffed{{1, 2000}, {2, 3000}, {3, 2500}};
+    for (int k{0}; k < 100; ++k) stuffed.push_back({static_cast<uint8_t>(k % 2 ? 4 : 9), 900'000'000});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate({stuffed}, active, uint8_t{7}), 3000);
+    std::vector<BmmRequestSeen> stuffed_low{{1, 2000}, {2, 3000}, {3, 2500}};
+    for (int k{0}; k < 100; ++k) stuffed_low.push_back({static_cast<uint8_t>(k % 2 ? 4 : 9), 1});
+    BOOST_CHECK_EQUAL(*RobustIncludedRate({stuffed_low}, active, uint8_t{7}), 2000);
     // In the bid, the real bounds: clamped to [the network's least, 10 x it], never above the max.
     AnchorBidPolicy policy;
     BidInputs in{At(0)};
