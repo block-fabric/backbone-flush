@@ -25,7 +25,7 @@
     {#each moves as e, i (i)}
       {@const side = counterparty(e)}
       <span class="move">
-        {#if e.asset}<span class="badge" title={e.seq ? `${e.label ?? ''} #${e.seq}` : (e.label ?? '')}><AssetBadge id={e.asset} label={e.label ?? ''} seq={full ? (e.seq ?? '') : ''} size="s" /></span>{/if}
+        {#if e.asset}<span class="badge" title={e.seq ? `${e.label ?? ''} #${e.seq}` : (e.label ?? '')}><AssetBadge id={e.asset} label={e.label ?? ''} seq={e.seq ?? ''} size="s" /></span>{/if}
         {#if e.amount !== undefined}<span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no">{signedAmount(e)}</span>{/if}
         {#if side.dir && (side.parties.length || side.self)}
           <span class="party faint" title={side.parties.map((p) => p.address).join(' ')}>{side.dir === 'to' ? 'to' : 'from'}
@@ -72,8 +72,7 @@
   /* The asset before the addresses: its name shown up to a width, the addresses shrink first. */
   .badge {
     flex: 0 1 auto;
-    min-width: 4.5rem;
-    max-width: 11rem;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
