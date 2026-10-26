@@ -11,6 +11,7 @@
 #include <vector>
 
 using webui::IsWsl;
+using webui::LoggableUri;
 using webui::OpenSteps;
 using webui::OpenWithFallbacks;
 
@@ -97,6 +98,23 @@ BOOST_AUTO_TEST_CASE(detects_wsl)
     BOOST_CHECK(IsWsl(nullptr, "4.4.0-19041-Microsoft"));
     BOOST_CHECK(!IsWsl(nullptr, "6.8.0-45-generic"));
     BOOST_CHECK(!IsWsl("", "6.8.0-45-generic"));
+}
+
+BOOST_AUTO_TEST_CASE(logs_the_origin_only)
+{
+    // A connect callback: no address, nonce or network in the log; an action link: its verb alone.
+    for (const std::string& uri : {URI, std::string{"https://user:pw@flush.markets/connect?x=1#address=bflx1q&nonce=n"}, std::string{"flush:connect?v=1&nonce=abc#x"}}) {
+        const std::string logged{LoggableUri(uri)};
+        BOOST_CHECK_EQUAL(logged.find('#'), std::string::npos);
+        BOOST_CHECK_EQUAL(logged.find('?'), std::string::npos);
+        BOOST_CHECK_EQUAL(logged.find("nonce"), std::string::npos);
+        BOOST_CHECK_EQUAL(logged.find("bflx1q"), std::string::npos);
+    }
+    BOOST_CHECK_EQUAL(LoggableUri(URI), "https://flush.markets");
+    BOOST_CHECK_EQUAL(LoggableUri("https://user:pw@flush.markets/connect#a"), "https://flush.markets");
+    BOOST_CHECK_EQUAL(LoggableUri("flush:connect?v=1&nonce=abc"), "flush:connect");
+    BOOST_CHECK_EQUAL(LoggableUri("file:///home/me/.flush/debug.log"), "file://");
+    BOOST_CHECK_EQUAL(LoggableUri("nothing"), "(an address)");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

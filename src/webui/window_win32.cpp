@@ -11,6 +11,7 @@
 // (see Window in window.h): no caption of the system, the frame kept for the resizing borders,
 // the shadow, the rounded corners and snapping.
 
+#include <webui/opener.h>
 #include <webui/assets.h>
 #include <webui/chainconfig.h>
 #include <webui/dialog.h>
@@ -488,7 +489,7 @@ public:
             // Only the text files the app opens (the debug log, the configuration file): never a program.
             const std::wstring ext{PathFindExtensionW(path->c_str())};
             if (_wcsicmp(ext.c_str(), L".log") != 0 && _wcsicmp(ext.c_str(), L".conf") != 0 && _wcsicmp(ext.c_str(), L".txt") != 0) {
-                LogWarning("webui: not opening %s", uri);
+                LogWarning("webui: not opening %s", LoggableUri(uri));
                 return false;
             }
             target = *path;
@@ -497,11 +498,11 @@ public:
             // A file type without an application (.conf): Notepad, as chains-qt does.
             return reinterpret_cast<INT_PTR>(ShellExecuteW(m_hwnd, L"open", L"notepad.exe", (L"\"" + target + L"\"").c_str(), nullptr, SW_SHOWNORMAL)) > 32;
         } else {
-            LogWarning("webui: not opening %s", uri);
+            LogWarning("webui: not opening %s", LoggableUri(uri));
             return false;
         }
         const auto result{reinterpret_cast<INT_PTR>(ShellExecuteW(m_hwnd, L"open", target.c_str(), nullptr, nullptr, SW_SHOWNORMAL))};
-        if (result <= 32) LogWarning("webui: cannot open %s (%d)", uri, int(result));
+        if (result <= 32) LogWarning("webui: cannot open %s (%d)", LoggableUri(uri), int(result));
         return result > 32;
     }
 

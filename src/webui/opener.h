@@ -36,6 +36,14 @@ bool IsWsl(const char* distro, const std::string& osrelease);
  */
 std::string OpenWithFallbacks(const std::string& uri, const OpenSteps& steps);
 
+/**
+ * What the log may say of an address the app opens or is given: its origin alone (scheme and host, no user, path,
+ * query or fragment: "https://flush.markets"), or for an address without a host its scheme and what comes before
+ * any ? or # ("flush:connect"). A connect callback carries the address shared and its nonce in its fragment, and an
+ * action link its parameters: none of that goes into debug.log.
+ */
+std::string LoggableUri(const std::string& uri);
+
 } // namespace webui
 
 #endif // BITCOIN_WEBUI_OPENER_H

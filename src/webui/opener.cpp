@@ -17,6 +17,23 @@ bool IsWsl(const char* distro, const std::string& osrelease)
     return lower.find("microsoft") != std::string::npos;
 }
 
+std::string LoggableUri(const std::string& uri)
+{
+    const size_t end{uri.find_first_of("?#")};
+    const std::string head{uri.substr(0, end)};
+    const size_t sep{head.find("://")};
+    if (sep == std::string::npos) {
+        // No host: the scheme and its opaque part before any query (flush:connect), no path beyond a first segment.
+        const size_t colon{head.find(':')};
+        if (colon == std::string::npos) return "(an address)";
+        const size_t slash{head.find('/', colon + 1)};
+        return head.substr(0, slash);
+    }
+    std::string authority{head.substr(sep + 3, head.find('/', sep + 3) == std::string::npos ? std::string::npos : head.find('/', sep + 3) - (sep + 3))};
+    if (const size_t at{authority.rfind('@')}; at != std::string::npos) authority = authority.substr(at + 1);
+    return head.substr(0, sep + 3) + authority;
+}
+
 std::string OpenWithFallbacks(const std::string& uri, const OpenSteps& steps)
 {
     if (steps.gio && steps.gio(uri)) return "gio";
