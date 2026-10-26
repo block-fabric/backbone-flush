@@ -578,38 +578,44 @@ export function uniquePart(seq?: string, id?: string): string {
 }
 
 /**
- * A name of the chain as text the host draws (toasts, dialogs, tooltips), so that it cannot pass for the app's own
- * words around it: a "$", "#", quote or backslash escaped with a backslash ("Bitcoin \$ECX \#1"), a control or
- * invisible character (bidirectional, zero-width) written as its code point ("\u{202E}").
+ * What of a name renders plainly, the rule the site shares (security review 2026-10-26): an allowlist, on the name in
+ * NFKC (fullwidth and other compatibility forms folded first). Plain: letters (\p{L}), combining marks on a letter,
+ * the space and . , ' - & ( ) ! ? : ; and runs of fewer than 4 digits. Marked (boxed where shown, escaped in text):
+ * every other character (symbols, "$", "#", bars, other dashes, quotes, controls) and runs of 4 digits or more (an
+ * asset's number, an id). One capturing split: its odd pieces are the marked ones.
  */
-export function escapeName(text: string): string {
-  return text
-    .replace(/[\\"$#]/g, (c) => `\\${c}`)
-    .replace(new RegExp(`[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}${BARS}]`, 'gu'), (c) => `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`)
-    // A number or an id, unless an escaped "#" already marks it.
-    .replace(/(?<!\\#)(?:\d{4}-\d{4}(?:-\d{4})?|0x[0-9a-f]+)/gi, (m) => `\\${m}`);
+const UNSAFE = /((?:[^\p{L}\p{M}\p{Nd} .,'\-&()!?:;]|(?<![\p{L}\p{M}])\p{M}|\p{Nd}{4,})+)/u;
+
+/** A name in pieces (NFKC), those that are not plain flagged: AssetName.svelte boxes them, escapeName escapes them. */
+export function nameSegments(text: string): { text: string; flag: boolean }[] {
+  const parts = text.normalize('NFKC').split(UNSAFE);
+  const out = parts.map((piece, i) => ({ text: piece, flag: i % 2 === 1 })).filter((x) => x.text !== '');
+  return out.length ? out : [{ text: '', flag: false }];
 }
 
 /**
- * What in a name could pass for a part of the identity drawn after it (security review 2026-10-26): a "$" or "#", a bar or
- * one of its look-alikes (| │ ǀ ⏐ ｜ ∣ ┃ ❘ and the like: the identity's bars are drawn, never text), an asset's number
- * (1739-0029) or an id ("0x1a2b…", "0x1a2b…5e6f"). AssetName.svelte marks each; escapeName escapes them in text.
+ * A marked piece of a name as text: each character a backslash before it (ASCII) or its code point ("\u{FF04}"); a
+ * piece that starts with a digit, a backslash before it ("\1739").
  */
-export const BARS = '|¦ǀ׀│┃┆┇┊┋╎╏╽╿⏐⎸⎹∣❘❙❚｜￨‖';
-const LOOKALIKE = new RegExp(`[$#${BARS}]|\\d{4}-\\d{4}(?:-\\d{4})?|0x[0-9a-f]+(?:…[0-9a-f]*)?`, 'giu');
-
-/** A name in pieces, those that could pass for the identity flagged (marked where it is shown). */
-export function nameSegments(text: string): { text: string; flag: boolean }[] {
-  const out: { text: string; flag: boolean }[] = [];
-  let at = 0;
-  for (const m of text.matchAll(LOOKALIKE)) {
-    const i = m.index ?? 0;
-    if (i > at) out.push({ text: text.slice(at, i), flag: false });
-    out.push({ text: m[0], flag: true });
-    at = i + m[0].length;
+export function escapePiece(piece: string): string {
+  let out = /^\p{Nd}/u.test(piece) ? '\\' : '';
+  for (const c of piece) {
+    if (/\p{Nd}/u.test(c)) out += c;
+    else if (/^[\x21-\x7e]$/.test(c)) out += `\\${c}`;
+    else out += `\\u{${c.codePointAt(0)!.toString(16).toUpperCase()}}`;
   }
-  if (at < text.length || out.length === 0) out.push({ text: text.slice(at), flag: false });
   return out;
+}
+
+/**
+ * A name of the chain as text the host draws (toasts, dialogs, tooltips) and the pages' copied text: in NFKC, what is
+ * not plain (nameSegments) escaped: "Bitcoin \$ECX \#1", "gold (\#1739-\0029)", "Coin ｜ECX" as "Coin \|ECX". So it
+ * cannot pass for the app's own words or for an identity beside it.
+ */
+export function escapeName(text: string): string {
+  return nameSegments(text)
+    .map((s) => (s.flag ? escapePiece(s.text) : s.text))
+    .join('');
 }
 
 /**
