@@ -167,7 +167,7 @@ public:
                                  const char* uri{webkit_uri_request_get_uri(webkit_navigation_action_get_request(action))};
                                  const bool own{uri && std::string_view{uri}.starts_with(std::string{ORIGIN} + "/")};
                                  if (type == WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION || !own) {
-                                     LogDebug(BCLog::RPC, "webui: navigation to %s refused\n", uri ? uri : "(none)");
+                                     LogDebug(BCLog::RPC, "webui: navigation to %s refused\n", uri ? LoggableUri(uri) : std::string{"(none)"});
                                      webkit_policy_decision_ignore(decision);
                                      return TRUE;
                                  }
@@ -374,7 +374,7 @@ public:
             GError* error{nullptr};
             const bool ok{g_app_info_launch_default_for_uri(target.c_str(), nullptr, &error) == TRUE};
             if (error) {
-                LogWarning("webui: cannot open %s with GIO: %s", target, error->message);
+                LogWarning("webui: cannot open %s with GIO: %s", LoggableUri(target), error->message);
                 g_error_free(error);
             }
             return ok;
@@ -397,10 +397,10 @@ public:
         steps.wsl = IsWsl(std::getenv("WSL_DISTRO_NAME"), osrelease);
         const std::string how{OpenWithFallbacks(uri, steps)};
         if (how.empty()) {
-            LogWarning("webui: cannot open %s: no browser (GIO, wslview%s, xdg-open)", uri, steps.wsl ? ", rundll32" : "");
+            LogWarning("webui: cannot open %s: no browser (GIO, wslview%s, xdg-open)", LoggableUri(uri), steps.wsl ? ", rundll32" : "");
             return false;
         }
-        if (how != "gio") LogInfo("webui: opened %s with %s", uri, how);
+        if (how != "gio") LogInfo("webui: opened %s with %s", LoggableUri(uri), how);
         return true;
     }
 
@@ -800,7 +800,7 @@ private:
         auto* tag2{new DialogTag{this, id}};
         g_signal_connect_data(web, "load-failed", G_CALLBACK(+[](WebKitWebView*, WebKitLoadEvent, gchar* uri, GError* error, gpointer data) -> gboolean {
                                   auto* t{static_cast<DialogTag*>(data)};
-                                  LogWarning("webui: the page of the dialog window did not load (%s): %s", uri ? uri : "", error ? error->message : "");
+                                  LogWarning("webui: the page of the dialog window did not load (%s): %s", uri ? LoggableUri(uri) : std::string{}, error ? error->message : "");
                                   t->self->Fallback(t->id);
                                   return TRUE;
                               }),
