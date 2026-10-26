@@ -171,6 +171,8 @@ public:
         std::function<std::optional<std::string>(const Window::FileDialog&)> choose;
         //! Tell the user (a message of the app): a link refused, a launch done.
         std::function<void(const std::string& title, const std::string& message, bool error)> inform;
+        //! Put text on the clipboard (Window::SetClipboard): what the user copies when the browser could not be opened.
+        std::function<void(const std::string& text)> copy;
         //! The wallet the app shows (its preferences); empty if none chosen.
         std::function<std::string()> wallet;
         //! The network of the app ("ecashbeta").

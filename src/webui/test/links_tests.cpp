@@ -528,7 +528,10 @@ struct LinkHostSetup : TestChain100Setup {
     std::vector<std::string> ran;
     std::vector<std::string> opened;
     std::vector<std::string> informed;
+    std::vector<std::string> copied;
     bool accept{true};
+    //! Whether the browser opens (none under WSL without a handler, 7.0.1).
+    bool open_ok{true};
     //! While set, the host waits for the node (a link being handled for a long time).
     std::atomic<bool> hold{false};
     std::unique_ptr<webui::confirm::ConfirmedRpc> confirmed;
@@ -569,8 +572,9 @@ struct LinkHostSetup : TestChain100Setup {
         };
         deps.open = [this](const std::string& url) {
             opened.push_back(url);
-            return true;
+            return open_ok;
         };
+        deps.copy = [this](const std::string& text) { copied.push_back(text); };
         deps.inform = [this](const std::string& title, const std::string& message, bool) { informed.push_back(title + ": " + message); };
         deps.wallet = [] { return std::string{}; };
         deps.network = [] { return NET; };
@@ -685,6 +689,25 @@ BOOST_FIXTURE_TEST_CASE(connect_shares_one_address_with_the_one_callback_once, L
     host->Handle("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=1123456789abcdef01234567", Source::BROWSER);
     BOOST_REQUIRE_EQUAL(opened.size(), 2U);
     BOOST_CHECK_NE(opened[1].find("address=" + address->value + "&"), std::string::npos);
+}
+
+BOOST_FIXTURE_TEST_CASE(connect_without_a_browser_shows_what_to_copy, LinkHostSetup)
+{
+    // No browser could be opened (7.0.1, WSL): the user is shown the address to paste on the site and the link, and
+    // copies the address; not a bare failure.
+    CreateWallet();
+    open_ok = false;
+    const UniValue result{host->Handle("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=2123456789abcdef01234567", Source::BROWSER)};
+    BOOST_REQUIRE_EQUAL(opened.size(), 1U);
+    BOOST_REQUIRE_EQUAL(asked.size(), 2U);
+    const auto& copy{asked.back()};
+    BOOST_CHECK_EQUAL(copy.title, "Paste it on the site");
+    BOOST_CHECK_EQUAL(copy.details, opened[0]);
+    BOOST_REQUIRE_EQUAL(copy.rows.size(), 1U);
+    BOOST_CHECK(copy.rows[0].kind == webui::dialog::Row::Kind::ADDRESS);
+    BOOST_REQUIRE_EQUAL(copied.size(), 1U);
+    BOOST_CHECK_EQUAL(copied[0], copy.rows[0].value);
+    BOOST_CHECK_NE(opened[0].find("address=" + copied[0] + "&"), std::string::npos);
 }
 
 BOOST_FIXTURE_TEST_CASE(a_flood_of_links_is_bounded, LinkHostSetup)
