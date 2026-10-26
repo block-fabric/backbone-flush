@@ -6,8 +6,9 @@
 
   - a launch made before H keeps 500 (its terms as made): getlaunch says graduation 500 after H too;
   - a launch made from H graduates at 100, its curve scaled: past 100 ECX raised it graduates;
-  - a node without the rule (FLUSHD_OLD: a flushd of v5; else this one with graduation100 never) follows the chain until
-    the first launch made at or after H, and forks off at that block.
+  - a node without the rule (FLUSHD_OLD: a flushd of v5; else this one with graduation100 never) follows the chain past
+    the first launch made at or after H (a block's validity does not depend on its curve), and forks off at the first
+    block whose coinbase pays out from that curve (a sale: its ECX differs).
 """
 
 from decimal import Decimal
@@ -78,8 +79,10 @@ class LayersV6Test(LayersTest):
         self.sync_blocks()
         assert_equal(n0.getlaunchstats()["rules"]["graduation"], 100)
 
-        self.log.info("From H: a launch at 100 ECX; the old node forks off at its block")
-        n0.launchtoken("NEW")
+        self.log.info("From H: a launch at 100 ECX; the old node forks off at the first block its scaled curve pays out from")
+        n0.launchtoken("NEW", {"first_buy": 1})
+        self.bmm_on([n0, n1])
+        n0.selltolaunch("NEW", 10000000)
         fork = self.bmm_on([n0, n1])
         self.wait_until(lambda: any(t["hash"] == fork and t["status"] == "invalid" for t in n2.getchaintips()), timeout=60)
         assert_equal(n0.getlaunch("NEW")["graduation"], 100)
