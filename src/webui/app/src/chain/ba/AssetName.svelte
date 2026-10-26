@@ -12,15 +12,16 @@
   // - The number: the caller's (seq), else the store's (by id), else its id shortened (model.ts shortId: its start and
   //   end, 64 bits); none known: the label.
   // - ECX: its ticker alone, the one name the pages give the coin (config.ts: TICKER).
-  // - In a name, what could pass for the identity is boxed (model.ts nameSegments, security review 2026-10-26): "$", "#",
-  //   a bar or a look-alike (| │ ǀ ⏐ ｜ ∣ ┃ ❘…), a number (1739-0029), an id (0x1a2b…).
+  // - A name is shown in NFKC, what is not plain in it boxed and escaped (model.ts nameSegments, the allowlist shared with
+  //   the site: letters, marks on them, space, . , ' - & ( ) ! ? : ; and short digit runs plain; anything else, and runs
+  //   of 4 digits or more, marked), so that its text, copied or read out, is the one assetTitle gives.
   // The name gives way first (an ellipsis), the identity stays whole; the full text is in the title (assetTitle: the
   // name escaped). All text of the chain: SafeText (translate="no", dir="auto": a bidirectional mark stays inside it).
   // The space between the parts is an expression, which the compiler keeps (user feedback 2026-10-19: "GOLDGold Bar
   // Token"), so that the words are apart when copied and read out.
   import SafeText from '../../components/SafeText.svelte';
   import { TICKER } from '../config';
-  import { assetIdentity, assetTitle, nameSegments, uniquePart } from './model';
+  import { assetIdentity, assetTitle, escapePiece, nameSegments, uniquePart } from './model';
   import { assetById } from './store.svelte';
 
   let {
@@ -52,9 +53,8 @@
   const full = $derived(coin ? TICKER : assetTitle(label, display, number, id));
 </script>
 
-<!-- A name, what in it could pass for the identity marked (model.ts nameSegments): "$", "#", bars and their
-     look-alikes, numbers, ids. -->
-{#snippet marked(text: string)}{#each nameSegments(text) as seg, i (i)}{#if seg.flag}<mark class="lookalike" title="Part of the name, not of the identity"><SafeText text={seg.text} /></mark>{:else}<SafeText text={seg.text} />{/if}{/each}{/snippet}
+<!-- A name, what in it is not plain marked and escaped (model.ts nameSegments, escapePiece). -->
+{#snippet marked(text: string)}{#each nameSegments(text) as seg, i (i)}{#if seg.flag}<mark class="lookalike" title="Part of the name, not of the identity"><SafeText text={escapePiece(seg.text)} /></mark>{:else}<SafeText text={seg.text} />{/if}{/each}{/snippet}
 
 <span class="asset-name" title={full} data-testid="asset-name">{#if coin}<SafeText class="{nameClass} first" text={TICKER} />{:else}{#if a.name}<span class="{nameClass} first" translate="no" dir="auto">{@render marked(a.name)}</span>{' '}{/if}{#if a.alias}<span class="alias" translate="no" dir="auto">{@render marked(a.alias)}</span>{' '}{/if}{#if ticker || unique}{#if a.name || a.alias}<span class="sep" aria-hidden="true"></span>{/if}<span class="ident" class:alone={!a.name} class:first={!a.name}>{#if ticker}<span class="vh">$</span><SafeText class="ticker {a.name ? '' : nameClass}" text={ticker} />{/if}{#if ticker && unique}<span class="sep" aria-hidden="true"></span>{' '}{/if}{#if unique}<span class="unique" translate="no">{unique}</span>{/if}</span>{:else if !a.name}<SafeText class="{nameClass} first" text={label} />{/if}{/if}</span>
 

@@ -76,13 +76,13 @@ describe('an asset\'s identity', () => {
 
   it('a display name that imitates a ticker or a number stays plain text, the real ones in their mark after it', () => {
     const r = render(AssetBadge, { id: ID, label: 'FAKE', display: 'Bitcoin $ECX #1', seq: '9031-1144' });
-    expect(shown(r.container)).toEqual({ name: 'Bitcoin $ECX #1', ident: '$FAKE #9031-1144' });
-    // The name is one text node of SafeText: never in the mark.
+    // Its "$" and "#" boxed and escaped, as the title writes them: never in the mark.
+    expect(shown(r.container)).toEqual({ name: 'Bitcoin \\$ECX \\#1', ident: '$FAKE #9031-1144' });
     expect(r.container.querySelector('.ident')!.textContent).not.toContain('ECX');
     // In the title (text, no mark): escaped.
     expect(r.container.querySelector('.asset-name')!.getAttribute('title')).toBe('Bitcoin \\$ECX \\#1 $FAKE #9031-1144');
     const quoted = render(AssetName, { label: 'FAKE', display: '"FLUSH"', seq: '9031-1144' });
-    expect(shown(quoted.container).name).toBe('"FLUSH"');
+    expect(shown(quoted.container).name).toBe('\\"FLUSH\\"');
     expect(quoted.container.querySelector('.asset-name')!.getAttribute('title')).toBe('\\"FLUSH\\" $FAKE #9031-1144');
   });
 
@@ -90,7 +90,9 @@ describe('an asset\'s identity', () => {
     const name = 'Gold‮raw​';
     const r = render(AssetName, { label: 'FAKE', display: name, seq: '9031-1144' });
     const first = r.container.querySelector('.asset-name > .first')!;
-    expect(first.textContent).toBe(name);
+    // Written out and boxed, never applied.
+    expect(first.textContent).toBe('Gold\\u{202E}raw\\u{200B}');
+    expect(first.querySelectorAll('mark.lookalike')).toHaveLength(2);
     expect(first.getAttribute('dir')).toBe('auto');
     expect(first.getAttribute('translate')).toBe('no');
     expect(r.container.querySelector('.ticker')!.getAttribute('dir')).toBe('auto');
@@ -114,11 +116,11 @@ describe('an asset\'s identity', () => {
     for (const label of ['EC X', 'ECX"', 'ЕCX', 'gold']) {
       const r = render(AssetName, { label, seq: '9031-1144' });
       expect(r.container.querySelector('.ticker'), label).toBeNull();
-      expect(shown(r.container), label).toEqual({ name: label, ident: '#9031-1144' });
+      expect(shown(r.container), label).toEqual({ name: label === 'ECX"' ? 'ECX\\"' : label, ident: '#9031-1144' });
       expect(assetText(label, undefined, '9031-1144')).not.toContain('$');
       // Beside a display name: after it, outside the mark.
       const d = render(AssetName, { label, display: 'Bitcoin', seq: '9031-1144' });
-      expect(d.container.querySelector('.alias')?.textContent, label).toBe(label);
+      expect(d.container.querySelector('.alias')?.textContent, label).toBe(label === 'ECX"' ? 'ECX\\"' : label);
       expect(d.container.querySelector('.ident')?.textContent, label).toBe('#9031-1144');
     }
     expect(assetText('ECX"', 'Bitcoin', '9031-1144')).toBe('Bitcoin ECX\\" #9031-1144');
@@ -136,22 +138,29 @@ describe('an asset\'s identity', () => {
     expect(assetText('GOLD', undefined, undefined, one)).not.toBe(assetText('GOLD', undefined, undefined, two));
   });
 
-  it('what in a name could pass for the identity is marked: bars and look-alikes, "$", "#", numbers, ids; the text kept', () => {
+  it('a name by the allowlist (NFKC): letters, marks, space and . , \' - & ( ) ! ? : ; plain; anything else and 4 digits or more marked', () => {
     const marks = (c: HTMLElement) => [...c.querySelectorAll('.asset-name > .first mark.lookalike')].map((m) => m.textContent);
-    const fake = render(AssetName, { label: 'FAKE', display: 'Fake | ECX | #1-1', seq: '9031-1144' });
-    expect(marks(fake.container)).toEqual(['|', '|', '#']);
-    expect(shown(fake.container)).toEqual({ name: 'Fake | ECX | #1-1', ident: '$FAKE #9031-1144' });
-    // The identity's "$" stays in the text (hidden from the eye), its bars drawn (none of text).
-    expect(fake.container.querySelector('.asset-name')!.textContent).toBe('Fake | ECX | #1-1 $FAKE #9031-1144');
-    expect(fake.container.querySelector('.ident .vh')!.textContent).toBe('$');
-    expect([...fake.container.querySelectorAll('.sep')].every((x) => x.textContent === '' && x.getAttribute('aria-hidden') === 'true')).toBe(true);
-    expect(marks(render(AssetName, { label: 'FAKE', display: 'Coin ｜ECX', seq: '9031-1144' }).container)).toEqual(['｜']);
-    expect(marks(render(AssetName, { label: 'FAKE', display: 'x 1739-0029', seq: '9031-1144' }).container)).toEqual(['1739-0029']);
-    expect(marks(render(AssetName, { label: 'FAKE', display: '0x1a2b…', seq: '9031-1144' }).container)).toEqual(['0x1a2b…']);
-    for (const bar of ['│', 'ǀ', '⏐', '∣', '┃', '❘']) expect(marks(render(AssetName, { label: 'FAKE', display: `A ${bar} B`, seq: '9031-1144' }).container), bar).toEqual([bar]);
-    // A plain name: nothing marked.
-    expect(marks(render(AssetName, { label: 'GOLD', display: 'Gold Bar', seq: '1739-0029' }).container)).toEqual([]);
-    // In text (titles, toasts): escaped.
-    expect(assetText('FAKE', 'Coin ｜ECX x 1739-0029 0x1a2b', '9031-1144')).toBe('Coin \\u{FF5C}ECX x \\1739-0029 \\0x1a2b $FAKE #9031-1144');
+    const name = (display: string) => render(AssetName, { label: 'FAKE', display, seq: '9031-1144' }).container;
+    // Fullwidth "＄" and "＃", bars, a double bar, Arabic-Indic digits: marked, escaped as the title writes them.
+    expect(marks(name('＄ECX'))).toEqual(['\\$']);
+    expect(marks(name('＃1739-0029'))).toEqual(['\\#1739', '\\0029']);
+    expect(marks(name('Coin ｜ECX'))).toEqual(['\\|']);
+    expect(marks(name('A ‖ B'))).toEqual(['\\u{2016}']);
+    expect(marks(name('١٧٣٩-٠٠٢٩'))).toEqual(['\\١٧٣٩', '\\٠٠٢٩']);
+    expect(marks(name('Fake | ECX | #1-1'))).toEqual(['\\|', '\\|', '\\#']);
+    // Plain: letters with their accents, short numbers.
+    expect(marks(name('Café Crème'))).toEqual([]);
+    expect(marks(name('Top 100 (v2)'))).toEqual([]);
+    // Fullwidth letters folded (NFKC): shown as the letters they are, not as a look-alike of a word.
+    const folded = name('ＥＣＸ Coin');
+    expect(folded.querySelector('.asset-name > .first')!.textContent).toBe('ECX Coin');
+    expect(marks(folded)).toEqual([]);
+    // The text, copied or read out: the name as assetTitle escapes it, then $TICKER #number.
+    const fake = name('Fake | ECX | #1-1');
+    expect(fake.querySelector('.asset-name')!.textContent).toBe('Fake \\| ECX \\| \\#1-1 $FAKE #9031-1144');
+    expect(fake.querySelector('.asset-name')!.getAttribute('title')).toBe('Fake \\| ECX \\| \\#1-1 $FAKE #9031-1144');
+    expect(fake.querySelector('.ident .vh')!.textContent).toBe('$');
+    expect([...fake.querySelectorAll('.sep')].every((x) => x.textContent === '' && x.getAttribute('aria-hidden') === 'true')).toBe(true);
+    expect(assetText('FAKE', 'x 1739-0029', '9031-1144')).toBe('x \\1739-\\0029 $FAKE #9031-1144');
   });
 });
