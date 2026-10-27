@@ -30,9 +30,8 @@ that eCash miners vote on. It follows its mainchain either through [Backbone](ht
 None of these networks is launched yet: slot 46 has to be proposed and activated on eCash first (below). The
 main network refuses to start until this release names the height of the block that activated slot 46.
 
-Flush is the eCash edition of [Layers](https://github.com/block-fabric/layers) (FastBlocks' blocks of stake
-with every feature of BitAssets): the same rules, with an identity of its own and the parameters tied to
-mainchain blocks scaled for eCash's ten-minute blocks. What comes from where: [doc/layers.md](doc/layers.md),
+Flush is a sidechain of eCash only: FastBlocks' blocks of stake with every feature of BitAssets, its
+parameters tied to mainchain blocks set for eCash's ten-minute blocks. What comes from where: [doc/layers.md](doc/layers.md),
 [doc/fastblocks.md](doc/fastblocks.md), [doc/bitassets.md](doc/bitassets.md); everything specific to eCash:
 [doc/ecash-sidechains.md](doc/ecash-sidechains.md) and [doc/ecash-enforcer.md](doc/ecash-enforcer.md).
 
@@ -190,7 +189,7 @@ network (`src/kernel/chainparams.cpp`, `CEcashSidechainParams`).
 - **Creating an asset** takes two steps, a hidden reservation then the registration, so that nobody can see
   the name coming and take it first. Its name is a unique **ticker** (2 to 12 letters and digits) with an
   optional display name and logo. The asset comes with a **control coin**: its holder can mint more, until the
-  supply is fixed for good. No ticker reads as the coin (`ECX`, or `CHN`).
+  supply is fixed for good. No ticker reads as the coin (`ECX`).
 - Assets are sent like coins, and can be burned.
 - **Pools** pair an asset with ECX or another asset (constant product, 0.3% fee); **routes** trade through
   several pools in one transaction, the orders of a block clear together (**batch clearing**), and every pool
@@ -198,7 +197,7 @@ network (`src/kernel/chainparams.cpp`, `CEcashSidechainParams`).
 - **Dutch auctions** sell an amount of an asset at a price that falls from a start to an end price.
 - An asset nobody holds any more can be **retired**: what is left in its pools goes to the miners.
 
-The node and the RPCs name eCash's coin `ECX` (`CHN`, Layers' name for it, is still accepted). How assets
+The node and the RPCs name eCash's coin `ECX`. How assets
 and the DEX work: [doc/bitassets.md](doc/bitassets.md), [doc/layers.md](doc/layers.md).
 
 ## Staking
@@ -235,23 +234,13 @@ wallet: `createbond`, `createunbond`, `listbonds`.
 
 `flush-cli help` lists them all with their arguments.
 
-## The Chains networks (development only)
-
-Flush keeps the networks of Layers on Chains (CHN: `main`, `test`, `signet`) for development, and `regtest`
-for the tests. `main`, `test` and `signet` need `-chainsnetworks` (with `-chain=main|test|signet`, `-testnet`
-or `-signet`), and keep their data in `~/.flush/chains`. They are the identities of Layers on Chains
-(slot 7, `ly1…`/`tly1…`): a node there joins Layers' networks.
-
 ## Following the sidechain template
 
-The history of this repository continues that of Layers' `ecash-enforcer` branch, itself the sidechain
-template's eCash branch with Layers' commits on it. Updates of the template are merged as before:
+Flush is built on the sidechain template's eCash branch. Updates of the template are merged as before:
 
 ```sh
 git remote add template https://github.com/block-fabric/sidechain-template.git   # locally: ~/skydoge/sidechain-template
-git remote add layers https://github.com/block-fabric/layers.git                 # locally: ~/skydoge/layers
 git fetch template && git merge template/ecash-enforcer     # shared fixes of the eCash template
-git fetch layers && git merge layers/ecash-enforcer          # Layers' fixes on eCash
 ```
 
 The renaming to Flush is a few commits on top (`CLIENT_NAME`, `chain.json`, the eCash identities, the
@@ -259,7 +248,7 @@ default network); a merge brings the template's changes beside them.
 
 ## Credits
 
-Flush is Layers on eCash: Layers joins FastBlocks and BitAssets. BitAssets is inspired by **BitAssets by
+Flush joins FastBlocks and BitAssets. BitAssets is inspired by **BitAssets by
 LayerTwo Labs** (plain-bitassets); FastBlocks' fee pot by sol-drivechain (no code of it used). The eCash link
 follows LayerTwo Labs' `bip300301_enforcer` interface. All are built on our sidechain template, which is based
 on [Bitcoin Core](https://github.com/bitcoin/bitcoin) v32; its README is in
