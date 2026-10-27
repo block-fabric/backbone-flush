@@ -142,6 +142,7 @@ add_library(chains_webui_core STATIC EXCLUDE_FROM_ALL
   guard.cpp
   quitguard.cpp
   events.cpp
+  fetchaddress.cpp
   i18n.cpp
   icontint.cpp
   linkhost.cpp

@@ -5,7 +5,9 @@
 // The download of a link's logo on Linux (webui/fetch.h): libsoup 3, the HTTP library WebKitGTK links already. A
 // session of its own for each download, made and used on the calling thread (the links' thread, never the UI's), with
 // its synchronous API: no redirect, no content decoder (the bytes hashed are the bytes served), the system's TLS
-// certificates, a timeout of each step and a deadline for the whole (a cancellable cancelled by a watchdog).
+// certificates, a timeout of each step and a deadline for the whole (a cancellable cancelled by a watchdog), no proxy,
+// and the connection's own remote address checked as it connects, before TLS or HTTP (IsPublicAddress, at
+// G_SOCKET_CLIENT_CONNECTED: the address the socket reached, not a lookup of its own, so no DNS rebinding race).
 
 #include <webui/fetch.h>
 
@@ -32,6 +34,40 @@ std::string Why(GError* error, bool timed_out)
     return why;
 }
 
+/** The check of the connection's own address (IsPublicAddress), made as it connects (SoupMessage::network-event). */
+struct AddressGuard {
+    GCancellable* cancellable{nullptr};
+    //! Whether a connection's address was checked, and why it was refused (empty: not refused).
+    bool checked{false};
+    std::string refused;
+};
+
+void OnNetworkEvent(SoupMessage*, GSocketClientEvent event, GIOStream* connection, gpointer data)
+{
+    auto& guard{*static_cast<AddressGuard*>(data)};
+    // CONNECTED: the TCP connection is up, before TLS or HTTP: nothing of the request has been sent yet.
+    if (event != G_SOCKET_CLIENT_CONNECTED || !G_IS_SOCKET_CONNECTION(connection)) return;
+    GSocketConnection* socket{G_SOCKET_CONNECTION(connection)};
+    std::string why{"its address could not be read"};
+    bool ok{false};
+    if (GSocketAddress* remote{g_socket_connection_get_remote_address(socket, nullptr)}) {
+        if (G_IS_INET_SOCKET_ADDRESS(remote)) {
+            gchar* text{g_inet_address_to_string(g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(remote)))};
+            ok = IsPublicAddress(text ? text : "", why);
+            g_free(text);
+        }
+        g_object_unref(remote);
+    }
+    if (ok) {
+        guard.checked = true;
+        return;
+    }
+    if (guard.refused.empty()) guard.refused = why;
+    // The download cancelled here, in the event: its next step (the TLS handshake) does not start, so nothing is sent
+    // to that address (tested: a listener there receives 0 bytes). The socket is not closed by hand: libsoup owns it.
+    g_cancellable_cancel(guard.cancellable);
+}
+
 } // namespace
 
 std::optional<std::vector<unsigned char>> FetchUrl(const std::string& url, size_t max_bytes, std::string& error)
@@ -56,13 +92,18 @@ std::optional<std::vector<unsigned char>> FetchUrl(const std::string& url, size_
     soup_message_headers_replace(soup_message_get_request_headers(msg), "Accept", "image/png, image/jpeg");
 
     const guint seconds{static_cast<guint>(FETCH_TIMEOUT.count())};
-    SoupSession* session{soup_session_new_with_options("timeout", seconds, "idle-timeout", seconds, "user-agent", "Flush-app", nullptr)};
+    // No proxy (not the system's either): the address checked is the destination's own, not a proxy's.
+    SoupSession* session{soup_session_new_with_options("timeout", seconds, "idle-timeout", seconds, "user-agent", "Flush-app", "proxy-resolver", nullptr, nullptr)};
     // The bytes as served (their SHA-256 is checked): no Accept-Encoding, nothing decoded.
     soup_session_remove_feature_by_type(session, SOUP_TYPE_CONTENT_DECODER);
 
     // The deadline of the whole download: cancelled at FETCH_TIMEOUT, whatever step it is at (a server that sends a
     // byte now and then keeps each step under its timeout).
     GCancellable* cancellable{g_cancellable_new()};
+    // The address of the connection made, checked as it connects (a DNS name rebound to the user's own network).
+    AddressGuard guard;
+    guard.cancellable = cancellable;
+    g_signal_connect(msg, "network-event", G_CALLBACK(OnNetworkEvent), &guard);
     std::mutex mutex;
     std::condition_variable cv;
     bool done{false};
@@ -88,7 +129,10 @@ std::optional<std::vector<unsigned char>> FetchUrl(const std::string& url, size_
     GInputStream* in{soup_session_send(session, msg, cancellable, &gerror)};
     if (!in) {
         finish();
-        error = Why(gerror, timed_out);
+        error = guard.refused.empty() ? Why(gerror, timed_out) : guard.refused;
+    } else if (!guard.refused.empty() || !guard.checked) {
+        finish();
+        error = guard.refused.empty() ? std::string{"the address of its connection could not be checked"} : guard.refused;
     } else {
         const guint status{soup_message_get_status(msg)};
         SoupMessageHeaders* headers{soup_message_get_response_headers(msg)};
@@ -115,7 +159,9 @@ std::optional<std::vector<unsigned char>> FetchUrl(const std::string& url, size_
                 bytes.insert(bytes.end(), buffer, buffer + got);
             }
             finish();
-            if (failed) {
+            if (!guard.refused.empty()) {
+                error = guard.refused;
+            } else if (failed) {
                 error = Why(gerror, timed_out);
             } else if (bytes.size() > max_bytes) {
                 error = strprintf("larger than %u bytes", max_bytes);
@@ -127,6 +173,7 @@ std::optional<std::vector<unsigned char>> FetchUrl(const std::string& url, size_
         g_object_unref(in);
     }
     if (gerror) g_error_free(gerror);
+    g_signal_handlers_disconnect_by_data(msg, &guard);
     g_object_unref(cancellable);
     g_object_unref(session);
     g_object_unref(msg);

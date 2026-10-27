@@ -13,6 +13,7 @@ add_executable(test_chains-app
   dialog_tests.cpp
   sidechainapi_tests.cpp
   events_tests.cpp
+  fetch_tests.cpp
   hardening_tests.cpp
   i18n_tests.cpp
   $<$<BOOL:${ENABLE_WALLET}>:links_tests.cpp>
