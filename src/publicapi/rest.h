@@ -12,7 +12,7 @@
 #include <variant>
 
 /**
- * The REST face of the public API (doc/public-api.md; flush.markets docs/api.md): GET /api/v1/... (POST for broadcast),
+ * The REST face of the public API (doc/public-api.md; flush.markets docs/api.md): GET /api/v1/... (POST for broadcast, logos and a long portfolio),
  * each path mapped onto a method of flush.dex.v1.DexService and its request message, from the path's segments and the
  * query's parameters (each a field of the request, by its own name; an unknown one is refused). The reply is the
  * method's, printed with the fields' own names and every field present; a logo is served as its image.

@@ -20,6 +20,7 @@
 #include <policy/feerate.h>
 #include <consensus/amount.h>
 #include <core_io.h>
+#include <crypto/sha256.h>
 #include <grpc/standard.h>
 #include <drivechain/sidechain.h>
 #include <key_io.h>
@@ -30,6 +31,7 @@
 #include <primitives/transaction.h>
 #include <publicapi/build.h>
 #include <publicapi/limits.h>
+#include <publicapi/rest.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
@@ -208,6 +210,32 @@ bool SafeLink(const std::string& url)
     return std::all_of(host.begin(), host.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '[' || c == ']' || c == ':'; });
 }
 
+bool SafeLogoUrl(const std::string& url)
+{
+    // As the app reads a link's logo_url (webui/links.cpp, LogoUrl): never a link the app refuses.
+    constexpr std::string_view HTTPS{"https://"};
+    if (url.size() > 512 || !url.starts_with(HTTPS)) return false;
+    constexpr std::string_view REFUSED{" \"<>\\^`{|}"};
+    for (const unsigned char c : url) {
+        if (c <= 0x20 || c >= 0x7f || REFUSED.find(static_cast<char>(c)) != std::string_view::npos) return false;
+    }
+    size_t end{url.find_first_of("/?#", HTTPS.size())};
+    if (end == std::string::npos) end = url.size();
+    const std::string authority{url.substr(HTTPS.size(), end - HTTPS.size())};
+    const size_t colon{authority.find(':')};
+    const std::string host{ToLower(authority.substr(0, colon))};
+    if (colon != std::string::npos) {
+        const std::string port{authority.substr(colon + 1)};
+        if (port.empty() || port.size() > 5 || port.find_first_not_of("0123456789") != std::string::npos) return false;
+    }
+    if (host.empty() || host.size() > 253 || host.front() == '.' || host.front() == '-' || host.back() == '.' || host.back() == '-' || host.find("..") != std::string::npos) return false;
+    if (!std::all_of(host.begin(), host.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.'; })) return false;
+    // A DNS name with a dot, its last label starting with a letter (not an IP address), not localhost.
+    if (host == "localhost" || host.ends_with(".localhost")) return false;
+    const size_t dot{host.rfind('.')};
+    return dot != std::string::npos && host[dot + 1] >= 'a' && host[dot + 1] <= 'z';
+}
+
 CreatorText SplitInfo(const std::string& info)
 {
     CreatorText out;
@@ -255,6 +283,8 @@ double CostOf(const std::string& method_path)
     if (method == "GetPortfolio") return 4;
     if (method == "ListLaunches" || method == "ListPools" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
     if (method == "ServerReflectionInfo") return 2;
+    // 8.1.0: an upload checks up to 32 KiB against the logo rules (and has its own limits: Guard).
+    if (method == "UploadLogo") return 4;
     return 1;
 }
 
@@ -267,6 +297,9 @@ public:
         : m_pool{pool}, m_node{node}, m_options{options}, m_limits{options.rate, options.burst},
           m_broadcast_limits{options.broadcast_per_minute / 60.0, options.broadcast_burst},
           m_broadcast_global{options.broadcast_global_per_minute / 60.0, std::max(1.0, options.broadcast_global_per_minute / 6.0), 1},
+          m_logo_limits{options.logo_per_minute / 60.0, options.logo_burst},
+          m_logo_global{options.logo_global_per_minute / 60.0, std::max(1.0, options.logo_global_per_minute / 6.0), 1},
+          m_logos{options.logo_entries, options.logo_ttl},
           m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}
     {
         RegisterAll(server);
@@ -298,6 +331,17 @@ public:
                 return Status{Code::RESOURCE_EXHAUSTED, "this node broadcasts no more for now: try again shortly", {{"retry-after", util::ToString(seconds)}}};
             }
         }
+        // 8.1.0: uploads of logos, as broadcasts: each client's, a minute, and all clients' together.
+        if (call.path == std::string{"/"} + SERVICE + "/UploadLogo") {
+            if (const auto wait{m_logo_limits.Take(call.client, 1)}) {
+                const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
+                return Status{Code::RESOURCE_EXHAUSTED, strprintf("logo upload limit: %g a minute (try again in %d s)", m_options.logo_per_minute, seconds), {{"retry-after", util::ToString(seconds)}}};
+            }
+            if (const auto wait{m_logo_global.Take("*", 1)}) {
+                const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
+                return Status{Code::RESOURCE_EXHAUSTED, "this node takes no more logos for now: try again shortly", {{"retry-after", util::ToString(seconds)}}};
+            }
+        }
         return std::nullopt;
     }
 
@@ -311,6 +355,8 @@ private:
         //! Taken through the gate of expensive calls.
         bool expensive{false};
         std::string cache_control{"public, max-age=5"};
+        //! Read at the chain's tip (false: a call that reads nothing of the chain, served while the node starts too).
+        bool tip{true};
     };
 
     using Fn = std::function<Message(const Message& req, const Tip& tip)>;
@@ -362,7 +408,7 @@ private:
     {
         if (!server.Register(SERVICE, method, [this, method, policy, fn = std::move(fn)](const Message& req, const std::shared_ptr<grpcsrv::Writer>& w) {
                 try {
-                    const Tip tip{TakeTip()};
+                    const Tip tip{policy.tip ? TakeTip() : Tip{}};
                     const std::string key{method + '\0' + req.Serialize()};
                     std::shared_ptr<const Message> reply;
                     if (policy.cache) reply = m_cache.Get(key, tip.hash);
@@ -1177,6 +1223,16 @@ private:
         return Rpc("searchassets", params);
     }
 
+    /** 8.1.0: where the site hosts the logo (logo_url), only with its hash, put in the URI after it; nothing if none. */
+    static void LogoUrlParam(const Message& req, const std::string& logo, UriParams& uri)
+    {
+        const std::string& url{req.GetString("logo_url")};
+        if (url.empty()) return;
+        if (logo.empty()) Fail(Code::INVALID_ARGUMENT, "logo_url goes with logo_sha256 (the app keeps a downloaded logo only if its SHA-256 is that one)");
+        if (!SafeLogoUrl(url)) Fail(Code::INVALID_ARGUMENT, "logo_url: an https address of a DNS name (not an IP address, not localhost), printable characters, 512 at most");
+        uri.emplace_back("logo_url", url);
+    }
+
     /** Whole units of a supply (digits only) at `decimals`, in units; refused past what an asset can have. */
     static uint64_t WholeSupply(const std::string& text, int decimals)
     {
@@ -1384,6 +1440,7 @@ private:
                 uri.emplace_back("logo", "sha256:" + logo);
                 payload["logo_sha256"] = UniValue{logo};
             }
+            LogoUrlParam(req, logo, uri);
             if (!desc.empty()) {
                 uri.emplace_back("desc", desc);
                 payload["desc"] = UniValue{desc};
@@ -1512,6 +1569,7 @@ private:
                 uri.emplace_back("logo", "sha256:" + logo);
                 payload["logo_sha256"] = UniValue{logo};
             }
+            LogoUrlParam(req, logo, uri);
             if (!desc.empty()) {
                 uri.emplace_back("desc", desc);
                 payload["desc"] = UniValue{desc};
@@ -1744,7 +1802,10 @@ private:
         if (std::none_of(uri.begin(), uri.end(), [](const auto& kv) { return kv.first == "slippage_bps"; })) payload.erase("slippage_bps");
         const std::string payload_text{CanonicalJson(payload)};
         const std::string hash{ActionHash(payload_text)};
-        built.SetString("uri", ActionUri(built.GetString("verb"), m_options.network, expires, uri));
+        const std::string uri_text{ActionUri(built.GetString("verb"), m_options.network, expires, uri)};
+        // The app reads a link of 4096 bytes at most (webui/links.h, MAX_URI): a longer one would only be refused there.
+        if (uri_text.size() > 4096) Fail(Code::INVALID_ARGUMENT, strprintf("the link would take %u bytes, more than the 4096 the app reads: shorten the texts or the addresses", uri_text.size()));
+        built.SetString("uri", uri_text);
         built.SetString("payload", payload_text);
         built.SetString("payload_hash", hash);
         built.SetString("check_code", hash.substr(0, 8));
@@ -2729,6 +2790,42 @@ private:
             m.SetString("txid", tx->GetHash().GetHex());
             return m;
         });
+
+        // 8.1.0: logos kept by their SHA-256 for a link to name (logo_url), checked with the chain's rules.
+        const Policy logos{.cache = false, .cache_control = "no-store", .tip = false};
+        Serve(server, "UploadLogo", logos, [this](const Message& req, const Tip&) {
+            const std::string& text{req.GetString("base64")};
+            if (text.empty()) Fail(Code::INVALID_ARGUMENT, "base64: the logo, a PNG or JPEG in base64");
+            if (text.size() > (bitassets::MAX_LOGO_BYTES + 2) / 3 * 4) Fail(Code::INVALID_ARGUMENT, strprintf("the logo is larger than the %u bytes the chain takes (bad-ba-logo-oversize)", bitassets::MAX_LOGO_BYTES));
+            const auto bytes{DecodeBase64(text)};
+            if (!bytes) Fail(Code::INVALID_ARGUMENT, "base64: not base64");
+            std::string reason;
+            const auto format{bitassets::CheckLogo(*bytes, reason)};
+            if (!format) {
+                Fail(Code::INVALID_ARGUMENT, strprintf("the chain's rules refuse this logo (%s): a PNG or JPEG of exactly %ux%u pixels, at most %u bytes, without metadata",
+                                                       reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
+            }
+            unsigned char hash[CSHA256::OUTPUT_SIZE];
+            CSHA256().Write(bytes->data(), bytes->size()).Finalize(hash);
+            const std::string hex{HexStr(hash)};
+            m_logos.Put(hex, LogoStore::Logo{std::string(bytes->begin(), bytes->end()), bitassets::LogoMime(*format)});
+            Message m{New("UploadLogoReply")};
+            m.SetString("sha256", hex);
+            m.SetString("url", std::string{REST_PREFIX} + "logos/" + hex);
+            return m;
+        });
+        // Its content is its hash's: cached for long (an hour here, then 404 until uploaded again).
+        Serve(server, "GetUploadedLogo", Policy{.cache = false, .cache_control = "public, max-age=31536000, immutable", .tip = false}, [this](const Message& req, const Tip&) {
+            const std::string hex{ToLower(req.GetString("sha256"))};
+            if (hex.size() != 64 || !IsHex(hex)) Fail(Code::INVALID_ARGUMENT, "sha256: 64 hex digits");
+            const auto logo{m_logos.Get(hex)};
+            if (!logo) Fail(Code::NOT_FOUND, "no logo of this SHA-256 here (logos are kept an hour after their upload)");
+            Message m{New("Logo")};
+            m.SetString("data", logo->bytes);
+            m.SetString("content_type", logo->content_type);
+            m.SetString("sha256", hex);
+            return m;
+        });
     }
 
     UniValue PegInfo() const
@@ -2752,6 +2849,9 @@ private:
     RateLimiter m_limits;
     RateLimiter m_broadcast_limits;
     RateLimiter m_broadcast_global;
+    RateLimiter m_logo_limits;
+    RateLimiter m_logo_global;
+    LogoStore m_logos;
     mutable ReplyCache m_cache;
     mutable Gate m_gate;
     mutable Mutex m_table_mutex;

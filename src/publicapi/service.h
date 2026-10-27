@@ -8,6 +8,7 @@
 #include <grpc/protobuf.h>
 #include <grpc/server.h>
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -17,7 +18,7 @@ struct NodeContext;
 } // namespace node
 
 /**
- * The public DEX API (doc/public-api.md): flush.dex.v1.DexService, read only but for Broadcast, served from this node's
+ * The public DEX API (doc/public-api.md): flush.dex.v1.DexService, read only but for Broadcast and UploadLogo, served from this node's
  * own state, its market index (bitassets/market.h) and the node's own RPC methods of the DEX (quoteswap, getswapquote,
  * quoteroute, quotelaunch, quotepoolliquidity, previewposition, getbook, getpool, searchpools...: the code the app's pages
  * quote with, called in process). Never a wallet: no method of a wallet is called, no wallet is read.
@@ -37,6 +38,13 @@ struct Options {
     double broadcast_burst{3};
     double broadcast_global_per_minute{120};
     bool broadcast{true};
+    //! 8.1.0, logos uploaded (POST /logos): each client's, a minute, and the burst; all clients together, a minute; and
+    //! how many are kept, for how long after their last upload.
+    double logo_per_minute{6};
+    double logo_burst{3};
+    double logo_global_per_minute{120};
+    size_t logo_entries{1024};
+    std::chrono::seconds logo_ttl{3600};
     //! Serve gRPC server reflection (a client stream: each message is charged as a call).
     bool reflection{false};
     //! Expensive calls (quotes, builds, the first page of a tip) running at once, at most.
@@ -66,6 +74,11 @@ inline constexpr size_t MAX_PORTFOLIO_ADDRESSES{50};
 
 /** Whether a link a creator wrote may be served as a link: https, a host, no user or password, no space or control, 512 bytes at most. */
 bool SafeLink(const std::string& url);
+/**
+ * Whether an address may be a link's logo_url (8.1.0), as the app reads it (webui/links.h, LogoUrl): https, a DNS name
+ * with a dot (not an IP address, not localhost), an optional port, printable characters the app takes, 512 at most.
+ */
+bool SafeLogoUrl(const std::string& url);
 /** A creator's text (an asset's info): its description (every line not a link) and its safe links, with their labels. */
 struct CreatorText {
     std::string description;

@@ -10,7 +10,8 @@
     the wallets' own holdings), /launches/stats, /launches/log, /stats, /status;
   - quotes against quotelaunch, getswapquote, quoteroute, quotepoolliquidity, previewposition (the same code);
   - builds: the flush: URI exactly as the app's links take it, the payload and its hash; a wallet then signs for the
-    build's floor; a broadcast of a transaction signed elsewhere (and refusals);
+    build's floor; a broadcast of a transaction signed elsewhere (and refusals); a logo uploaded, served by its hash,
+    and named by a build's logo_url (8.1.0);
   - pools of every kind: a concentrated pool and its positions and ticks, a book and its depth, verified issuers per
     curator list, holdings of an address;
   - a reorganisation across the graduation: trades, candles, holders and launches back, then forward again;
@@ -649,6 +650,38 @@ class PublicApiTest(LayersTest):
         assert "slippage_bps" not in json.loads(bare["payload"]), bare["payload"]
         assert_equal(api.get("build/launch", {"ticker": "MOON", "name": "x"}).status, 409)
         assert_equal(api.get("build/launch", {"ticker": "NEW2", "name": "x", "links": "http://insecure.example"}).status, 400)
+
+        self.log.info("Logos by URL (8.1.0): an upload, the same bytes served by their hash, builds with logo_url")
+        from feature_bitassets_logo import b64, make_png
+        site_logo = make_png([10, 120, 200, 250, 250, 10])
+        digest = hashlib.sha256(site_logo).hexdigest()
+        r = api.post("logos", {"base64": b64(site_logo)})
+        assert_equal(r.status, 200)
+        assert_equal(r.headers["cache-control"], "no-store")
+        uploaded = r.json()
+        assert_equal(uploaded, {"sha256": digest, "url": f"/api/v1/logos/{digest}"})
+        served = api.request("GET", uploaded["url"])
+        assert_equal(served.status, 200)
+        assert_equal(served.body, site_logo)
+        assert_equal(served.headers["content-type"], "image/png")
+        assert_equal(served.headers["cache-control"], "public, max-age=31536000, immutable")
+        assert_equal(api.get("logos/" + "0" * 64).status, 404)
+        r = api.post("logos", {"base64": b64(b"not a logo")})
+        assert_equal(r.status, 400)
+        assert "bad-ba-logo" in r.json()["error"]["message"], r
+        site_url = "https://flush.markets" + uploaded["url"]
+        built = api.rest("build/launch", {"ticker": "NEW4", "name": "Logo by URL", "logo_sha256": digest, "logo_url": site_url})
+        verb, params, _ = parse_uri(built["uri"])
+        assert_equal(verb, "launch")
+        assert set(params) - {"network", "exp"} <= URI_PARAMS["launch"]
+        assert_equal((params["logo"], params["logo_url"]), ("sha256:" + digest, site_url))
+        assert_equal(json.loads(built["payload"])["logo_sha256"], digest)
+        built = api.rest("build/register", {"ticker": "NEW5", "name": "Logo by URL", "supply": "1000", "decimals": "2", "logo_sha256": digest, "logo_url": site_url})
+        assert_equal(parse_uri(built["uri"])[1]["logo_url"], site_url)
+        # logo_url only with logo_sha256, and only an https address of a DNS name.
+        assert_equal(api.get("build/launch", {"ticker": "NEW6", "name": "x", "logo_url": site_url}).status, 400)
+        for bad in ("http://flush.markets/a.png", "https://127.0.0.1/a.png", "https://localhost/a.png"):
+            assert_equal(api.get("build/launch", {"ticker": "NEW6", "name": "x", "logo_sha256": digest, "logo_url": bad}).status, 400)
 
         self.log.info("Broadcast: a transaction signed elsewhere; refusals")
         raw = n2.createrawtransaction([], {n0.getnewaddress(): 1})

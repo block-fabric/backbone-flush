@@ -20,6 +20,8 @@
 #include <publicapi/limits.h>
 #include <publicapi/rest.h>
 #include <publicapi/service.h>
+#include <crypto/sha256.h>
+#include <test/bitassets_logo_samples.h>
 #include <test/util/setup_common.h>
 #include <util/sock.h>
 #include <util/strencodings.h>
@@ -350,6 +352,119 @@ BOOST_AUTO_TEST_CASE(rest_routes)
     BOOST_REQUIRE_MESSAGE(std::holds_alternative<grpcsrv::RestMatch>(many), why);
     BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(many).request->Count("addresses"), 3U);
     BOOST_CHECK_EQUAL(match("addresses/abc/portfolio").request->GetString("address"), "abc");
+    // 8.1.0: logos, POSTed in a body, served raw by their SHA-256; build/launch takes logo_url.
+    auto upload{route("POST", "logos", "", R"({"base64":"AAAA"})")};
+    BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(upload));
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(upload).method_path, "/flush.dex.v1.DexService/UploadLogo");
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(upload).request->GetString("base64"), "AAAA");
+    BOOST_CHECK(!std::get<grpcsrv::RestMatch>(upload).raw);
+    BOOST_CHECK(refused("GET", "logos") == Code::UNIMPLEMENTED);
+    auto got{match("logos/" + id)};
+    BOOST_CHECK_EQUAL(got.method_path, "/flush.dex.v1.DexService/GetUploadedLogo");
+    BOOST_CHECK_EQUAL(got.request->GetString("sha256"), id);
+    BOOST_CHECK(got.raw);
+    BOOST_CHECK(refused("POST", "logos/" + id) == Code::UNIMPLEMENTED);
+    BOOST_CHECK_EQUAL(match("build/launch", "ticker=X1&logo_sha256=" + id + "&logo_url=https%3A%2F%2Fflush.markets%2Fapi%2Fv1%2Flogos%2F" + id).request->GetString("logo_url"), "https://flush.markets/api/v1/logos/" + id);
+}
+
+BOOST_AUTO_TEST_CASE(logo_store_and_logo_urls)
+{
+    using publicapi::LogoStore;
+    const auto t0{LogoStore::Clock::now()};
+    LogoStore store{3, std::chrono::hours{1}};
+    store.Put("a", {"A", "image/png"}, t0);
+    store.Put("b", {"B", "image/png"}, t0 + std::chrono::minutes{10});
+    BOOST_REQUIRE(store.Get("a", t0 + std::chrono::minutes{59}));
+    BOOST_CHECK_EQUAL(store.Get("a", t0 + std::chrono::minutes{59})->bytes, "A");
+    BOOST_CHECK(!store.Get("zz", t0));
+    // An hour after its upload: gone; uploaded again, kept an hour from then.
+    BOOST_CHECK(!store.Get("a", t0 + std::chrono::minutes{60}));
+    store.Put("a", {"A", "image/png"}, t0 + std::chrono::minutes{60});
+    BOOST_CHECK(store.Get("a", t0 + std::chrono::minutes{110}));
+    BOOST_CHECK(!store.Get("b", t0 + std::chrono::minutes{110}));
+    store.Put("b", {"B", "image/png"}, t0 + std::chrono::minutes{111});
+    store.Put("a", {"A", "image/png"}, t0 + std::chrono::minutes{112}); // refreshed: the newest
+    store.Put("c", {"C", "image/png"}, t0 + std::chrono::minutes{113});
+    BOOST_CHECK_EQUAL(store.Entries(), 3U);
+    // Full: the one uploaded longest ago goes first (b, not a: a was uploaded again).
+    store.Put("d", {"D", "image/jpeg"}, t0 + std::chrono::minutes{114});
+    BOOST_CHECK_EQUAL(store.Entries(), 3U);
+    BOOST_CHECK(!store.Get("b", t0 + std::chrono::minutes{114}));
+    BOOST_CHECK(store.Get("a", t0 + std::chrono::minutes{114}));
+    BOOST_CHECK_EQUAL(store.Get("d", t0 + std::chrono::minutes{114})->content_type, "image/jpeg");
+
+    // A link's logo_url as the app takes it (webui/links.cpp, LogoUrl).
+    using publicapi::SafeLogoUrl;
+    BOOST_CHECK(SafeLogoUrl("https://flush.markets/api/v1/logos/" + std::string(64, 'a')));
+    BOOST_CHECK(SafeLogoUrl("https://cdn.Example.co.uk:8443/x.png?v=1"));
+    for (const char* bad : {"http://flush.markets/a.png", "https://127.0.0.1/a.png", "https://127.1/a.png", "https://0x7f.1/a", "https://[::1]/a",
+                                   "https://localhost/a", "https://api.localhost/a", "https://intranet/a", "https://flush.markets./a", "https://a..b/a",
+                                   "https://u@flush.markets/a", "https://flush.markets/a b", "https://flush.markets/{a}", "https://flush.markets:x/a", ""}) {
+        BOOST_CHECK_MESSAGE(!SafeLogoUrl(bad), bad);
+    }
+    BOOST_CHECK(!SafeLogoUrl("https://flush.markets/" + std::string(512, 'a')));
+}
+
+BOOST_AUTO_TEST_CASE(logo_uploads_through_the_service)
+{
+    // The service itself (its logo methods read nothing of the chain): upload, get, 404, refusals, the upload limit.
+    grpcsrv::Options options;
+    options.rest_prefix = publicapi::REST_PREFIX;
+    options.rest = publicapi::MakeRestRouter(Pool());
+    options.max_request_bytes = 256 << 10;
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    server.SetGuard([&](const grpcsrv::CallInfo& call) { return service->Guard(call); });
+    const auto post{[&](const std::string& body, const std::string& ip = "203.0.113.1") {
+        return Http1(server, strprintf("POST /api/v1/logos HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: %u\r\n\r\n%s", body.size(), body), *Lookup(ip, 1, false));
+    }};
+    const std::vector<unsigned char> logo{ParseHex(LOGO_PNG_PALETTE)};
+    unsigned char digest[CSHA256::OUTPUT_SIZE];
+    CSHA256().Write(logo.data(), logo.size()).Finalize(digest);
+    const std::string hash{HexStr(digest)};
+
+    std::string r{post(R"({"base64":")" + EncodeBase64(logo) + R"("})")};
+    BOOST_REQUIRE_EQUAL(StatusOf(r), 200);
+    UniValue body;
+    BOOST_REQUIRE(body.read(BodyOf(r)));
+    BOOST_CHECK_EQUAL(body["sha256"].get_str(), hash);
+    BOOST_CHECK_EQUAL(body["url"].get_str(), "/api/v1/logos/" + hash);
+    BOOST_CHECK_EQUAL(HeaderOf(r, "cache-control"), "no-store");
+
+    r = Http1(server, "GET /api/v1/logos/" + hash + " HTTP/1.1\r\n\r\n");
+    BOOST_REQUIRE_EQUAL(StatusOf(r), 200);
+    BOOST_CHECK_EQUAL(HeaderOf(r, "content-type"), "image/png");
+    BOOST_CHECK_EQUAL(HeaderOf(r, "cache-control"), "public, max-age=31536000, immutable");
+    BOOST_CHECK(BodyOf(r) == std::string(logo.begin(), logo.end()));
+    // Its hash in capitals is the same logo; another hash is none; not a hash is refused.
+    BOOST_CHECK_EQUAL(StatusOf(Http1(server, "GET /api/v1/logos/" + ToUpper(hash) + " HTTP/1.1\r\n\r\n")), 200);
+    r = Http1(server, "GET /api/v1/logos/" + std::string(64, 'f') + " HTTP/1.1\r\n\r\n");
+    BOOST_CHECK_EQUAL(StatusOf(r), 404);
+    BOOST_CHECK_EQUAL(HeaderOf(r, "cache-control"), "no-store");
+    BOOST_CHECK_EQUAL(StatusOf(Http1(server, "GET /api/v1/logos/nothex HTTP/1.1\r\n\r\n")), 400);
+
+    // What the chain's rules refuse: 400 with the reason (each from another client: the limit is not what refuses).
+    std::vector<unsigned char> broken{logo};
+    broken[20] ^= 1;
+    r = post(R"({"base64":")" + EncodeBase64(broken) + R"("})", "203.0.113.2");
+    BOOST_CHECK_EQUAL(StatusOf(r), 400);
+    BOOST_REQUIRE(body.read(BodyOf(r)));
+    BOOST_CHECK_NE(body["error"]["message"].get_str().find("bad-ba-logo"), std::string::npos);
+    BOOST_CHECK_EQUAL(StatusOf(post(R"({"base64":"%%%"})", "203.0.113.3")), 400);
+    BOOST_CHECK_EQUAL(StatusOf(post(R"({"base64":""})", "203.0.113.4")), 400);
+    BOOST_CHECK_EQUAL(StatusOf(post(R"({"base64":")" + std::string(44000, 'A') + R"("})", "203.0.113.5")), 400);
+    BOOST_CHECK_EQUAL(StatusOf(post(R"({"nope":1})", "203.0.113.6")), 400);
+    BOOST_CHECK_EQUAL(StatusOf(Http1(server, "GET /api/v1/logos HTTP/1.1\r\n\r\n")), 501);
+
+    // The upload limit: 3 at once a client (6 a minute), then 429 with its Retry-After; another client is not held up.
+    const std::string again{R"({"base64":")" + EncodeBase64(logo) + R"("})"};
+    for (int i{0}; i < 2; ++i) BOOST_CHECK_EQUAL(StatusOf(post(again)), 200);
+    r = post(again);
+    BOOST_CHECK_EQUAL(StatusOf(r), 429);
+    BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
+    BOOST_CHECK_EQUAL(StatusOf(post(again, "198.51.100.7")), 200);
 }
 
 BOOST_AUTO_TEST_CASE(portfolio_cost_scales_with_its_addresses)

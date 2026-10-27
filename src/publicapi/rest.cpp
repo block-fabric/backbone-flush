@@ -74,6 +74,9 @@ const std::vector<RouteDef>& Routes()
         {"GET", {"quote", "position"}, "QuotePosition", {}},
         {"GET", {"build", "{verb}"}, "BuildAction", {}},
         {"POST", {"broadcast"}, "Broadcast", {}},
+        // 8.1.0: a logo kept an hour by its SHA-256 (a body {"base64": ...}), and served as its image.
+        {"POST", {"logos"}, "UploadLogo", {}},
+        {"GET", {"logos", "{sha256}"}, "GetUploadedLogo", {}, true},
     };
     return routes;
 }
