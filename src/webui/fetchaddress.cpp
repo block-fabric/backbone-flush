@@ -30,26 +30,32 @@ const char* WhyNotPublic4(const uint8_t* a)
     if ((a[0] & 0xF0) == 224) return "a multicast address (224.0.0.0/4)";
     if (a[0] == 255 && a[1] == 255 && a[2] == 255 && a[3] == 255) return "the broadcast address";
     if ((a[0] & 0xF0) == 240) return "a reserved address (240.0.0.0/4)";
+    if (a[0] == 192 && a[1] == 0 && a[2] == 0) return "a special-purpose address (192.0.0.0/24)";
+    if (a[0] == 198 && (a[1] & 0xFE) == 18) return "a benchmarking address (198.18.0.0/15)";
+    if ((a[0] == 192 && a[1] == 0 && a[2] == 2) || (a[0] == 198 && a[1] == 51 && a[2] == 100) || (a[0] == 203 && a[1] == 0 && a[2] == 113)) return "a documentation address";
     return nullptr;
 }
 
 const char* WhyNotPublic6(const uint8_t* a)
 {
     static constexpr uint8_t ZERO[16]{};
-    // IPv4 inside IPv6: mapped (::ffff:0:0/96), compatible (::/96, deprecated), NAT64 (64:ff9b::/96): its IPv4's rules.
-    const bool zero10{std::memcmp(a, ZERO, 10) == 0};
-    if (zero10 && a[10] == 0xFF && a[11] == 0xFF) return WhyNotPublic4(a + 12);
-    if (std::memcmp(a, ZERO, 16) == 0) return "the unspecified address ::";
-    if (std::memcmp(a, ZERO, 15) == 0 && a[15] == 1) return "a loopback address (::1)";
-    if (std::memcmp(a, ZERO, 12) == 0) return WhyNotPublic4(a + 12);
-    static constexpr uint8_t NAT64[12]{0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
-    if (std::memcmp(a, NAT64, 12) == 0) return WhyNotPublic4(a + 12);
-    // 6to4 (2002::/16): the IPv4 of its next 32 bits.
+    // An IPv4 address as a dual-stack socket reports it (::ffff:0:0/96, mapped): its IPv4's rules.
+    if (std::memcmp(a, ZERO, 10) == 0 && a[10] == 0xFF && a[11] == 0xFF) return WhyNotPublic4(a + 12);
+    // Otherwise global unicast only (2000::/3): every other range (loopback, unspecified, the IPv4-compatible and SIIT
+    // forms, both NAT64 prefixes, unique local, link-local, site-local, multicast, the reserved rest) is refused, so a
+    // range left out of a list can't be reached.
+    if ((a[0] & 0xE0) != 0x20) {
+        if (std::memcmp(a, ZERO, 15) == 0 && a[15] == 1) return "a loopback address (::1)";
+        if ((a[0] & 0xFE) == 0xFC) return "a private address (fc00::/7)";
+        if (a[0] == 0xFE && (a[1] & 0xC0) == 0x80) return "a link-local address (fe80::/10)";
+        if (a[0] == 0xFF) return "a multicast address (ff00::/8)";
+        return "not a global unicast IPv6 address (2000::/3)";
+    }
+    // Inside 2000::/3: 6to4 (2002::/16) carries an IPv4, judged by its rules; Teredo (2001::/32) hides one; and
+    // documentation (2001:db8::/32).
     if (a[0] == 0x20 && a[1] == 0x02) return WhyNotPublic4(a + 2);
-    if ((a[0] & 0xFE) == 0xFC) return "a private address (fc00::/7)";
-    if (a[0] == 0xFE && (a[1] & 0xC0) == 0x80) return "a link-local address (fe80::/10)";
-    if (a[0] == 0xFE && (a[1] & 0xC0) == 0xC0) return "a site-local address (fec0::/10)";
-    if (a[0] == 0xFF) return "a multicast address (ff00::/8)";
+    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0 && a[3] == 0) return "a Teredo address (2001::/32)";
+    if (a[0] == 0x20 && a[1] == 0x01 && a[2] == 0x0d && a[3] == 0xb8) return "a documentation address (2001:db8::/32)";
     return nullptr;
 }
 
