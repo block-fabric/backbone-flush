@@ -1232,6 +1232,136 @@ message GetUploadedLogoRequest {
   string sha256 = 1;
 }
 
+// 8.2.0: what became of an order (GET trades/{txid}, GET addresses/{address}/trades), from the market index: a swap of
+// the batch (any pool kind, a route, a launch buy or sale), filled or missed; a limit order resting in a book.
+message GetTradeRequest {
+  // The order's transaction (a swap's, a PlaceOrder's), or a SettleOrder's (its order's outcome).
+  string txid = 1;
+}
+
+message ListAddressTradesRequest {
+  string address = 1;
+  string cursor = 2;
+  // 1 to 100 (default 50).
+  uint32 limit = 3;
+}
+
+// Something paid out of an order: by the coinbase of its block (ECX, to `address`), or as a token on an output.
+message TradePayout {
+  // out (what a swap got), back (ECX a launch buy got back at the curve's end), refund (a missed swap's), proceeds
+  // (what a limit order got), left (what it had left to sell).
+  string what = 1;
+  string asset = 2;
+  string asset_id = 3;
+  string amount_units = 4;
+  double amount = 5;
+  // coinbase or output.
+  string via = 6;
+  string address = 7;
+  // via output: txid:n.
+  optional string outpoint = 8;
+}
+
+message TradeHop {
+  string pool = 1;
+  // constant_product, stable, weighted, launch, concentrated, book (as the batch found it).
+  string curve = 2;
+  // curve (a launch's), pool, book: as the trades' venue.
+  string venue = 3;
+  // A launch curve's: its token's id.
+  optional string launch = 4;
+  string asset_in = 5;
+  string asset_out = 6;
+  // Filled: what went in and out of this hop.
+  string amount_in_units = 7;
+  string amount_out_units = 8;
+}
+
+message SwapOutcome {
+  // The assets in order (tickers, ECX), and their ids.
+  repeated string path = 1;
+  repeated string path_ids = 2;
+  repeated TradeHop hops = 3;
+  // What went in, then what came out of each hop (a miss: what went in only).
+  repeated string amounts_units = 4;
+  string amount_in_units = 5;
+  string back_units = 6;
+  // Filled: out (and back); missed: refund.
+  repeated TradePayout payouts = 7;
+}
+
+message OrderFill {
+  uint32 height = 1;
+  uint32 time = 2;
+  string sold_units = 3;
+  string got_units = 4;
+}
+
+// A SettleOrder: one that collected what the order got (it stays), or the one that closed it.
+message OrderSettle {
+  string txid = 1;
+  uint32 height = 2;
+  uint32 time = 3;
+  bool cancel = 4;
+  repeated TradePayout payouts = 5;
+}
+
+message OrderOutcome {
+  string order_id = 1;
+  string book = 2;
+  // ask (sells the pair's asset_b: the token against ECX), bid (sells asset_a), as trades' sides.
+  string side = 3;
+  string sell = 4;
+  string sell_id = 5;
+  string buy = 6;
+  string buy_id = 7;
+  string amount_units = 8;
+  // Its limit: price_num/price_den units of what it buys per unit of what it sells, at least; `price` in whole units.
+  string price_num = 9;
+  string price_den = 10;
+  double price = 11;
+  // The last block it trades in.
+  uint32 expiry = 12;
+  string remaining_units = 13;
+  string got_units = 14;
+  // The block it was evicted in (0: never).
+  uint32 evicted = 15;
+  // The output its token went to (the owner's).
+  string owner_outpoint = 16;
+  // Each block that filled some of it, oldest first (the first 1000; 20 in a listing), and how many.
+  repeated OrderFill fills = 17;
+  uint32 fill_count = 18;
+  repeated OrderSettle collected = 19;
+  uint32 collect_count = 20;
+  optional OrderSettle settle = 21;
+}
+
+message TradeOutcome {
+  // The order's transaction.
+  string txid = 1;
+  // swap or order.
+  string kind = 2;
+  // The block it was made (a swap: cleared) in.
+  uint32 height = 3;
+  uint32 time = 4;
+  // swap: filled, missed; order: open, filled, expired, evicted, cancelled, settled.
+  string status = 5;
+  // A swap's payee (who got its payout or refund), an order's owner; and the script.
+  string address = 6;
+  string script = 7;
+  // Found by a SettleOrder of the order: its txid.
+  optional string settle_txid = 8;
+  optional SwapOutcome swap = 9;
+  optional OrderOutcome order = 10;
+}
+
+message TradeOutcomePage {
+  repeated TradeOutcome items = 1;
+  optional string next_cursor = 2;
+  uint32 total = 3;
+  string address = 4;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 
 service DexService {
@@ -1275,4 +1405,8 @@ service DexService {
   // 8.1.0: logos kept for an hour by their SHA-256 (links name where they are: logo_url).
   rpc UploadLogo(UploadLogoRequest) returns (UploadLogoReply);
   rpc GetUploadedLogo(GetUploadedLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
+
+  // 8.2.0: orders' outcomes (the market index), by transaction and by address.
+  rpc GetTrade(GetTradeRequest) returns (TradeOutcome) { option idempotency_level = NO_SIDE_EFFECTS; }
+  rpc ListAddressTrades(ListAddressTradesRequest) returns (TradeOutcomePage) { option idempotency_level = NO_SIDE_EFFECTS; }
 }

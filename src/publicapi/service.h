@@ -71,6 +71,9 @@ double CostOf(const std::string& method_path);
 double CostOf(const std::string& method_path, const pb::Message* request);
 /** The most addresses one portfolio call names (`address` and `addresses`): more are refused before any work. */
 inline constexpr size_t MAX_PORTFOLIO_ADDRESSES{50};
+/** 8.2.0: the fills and collects of a limit order an outcome lists (GetTrade; each of a page's, ListAddressTrades), the first ones. */
+inline constexpr size_t MAX_TRADE_EVENTS{1000};
+inline constexpr size_t MAX_LISTED_TRADE_EVENTS{20};
 
 /** Whether a link a creator wrote may be served as a link: https, a host, no user or password, no space or control, 512 bytes at most. */
 bool SafeLink(const std::string& url);

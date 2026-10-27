@@ -321,6 +321,15 @@ BOOST_AUTO_TEST_CASE(rest_routes)
     const std::string id(64, 'a');
     BOOST_CHECK_EQUAL(match("pools/" + id).request->GetString("pool"), id);
     BOOST_CHECK_EQUAL(match("pools/" + id + "/trades").method_path, "/flush.dex.v1.DexService/ListPoolTrades");
+    // 8.2.0: orders' outcomes, by transaction and by address.
+    auto trade{match("trades/" + id)};
+    BOOST_CHECK_EQUAL(trade.method_path, "/flush.dex.v1.DexService/GetTrade");
+    BOOST_CHECK_EQUAL(trade.request->GetString("txid"), id);
+    auto address_trades{match("addresses/ecregtest:qq/trades", "limit=2&cursor=ab")};
+    BOOST_CHECK_EQUAL(address_trades.method_path, "/flush.dex.v1.DexService/ListAddressTrades");
+    BOOST_CHECK_EQUAL(address_trades.request->GetString("address"), "ecregtest:qq");
+    BOOST_CHECK_EQUAL(address_trades.request->GetUInt("limit"), 2U);
+    BOOST_CHECK(refused("GET", "addresses/ecregtest:qq/trades", "before=1") == Code::INVALID_ARGUMENT);
     auto pair{match("pools/MOON/ECX")};
     BOOST_CHECK_EQUAL(pair.request->GetString("asset_a"), "MOON");
     BOOST_CHECK_EQUAL(match("quote/deposit", "pool=" + id + "&amount_a=1").request->GetString("action"), "deposit");

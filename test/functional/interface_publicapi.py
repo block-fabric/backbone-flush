@@ -15,6 +15,9 @@
   - pools of every kind: a concentrated pool and its positions and ticks, a book and its depth, verified issuers per
     curator list, holdings of an address;
   - a reorganisation across the graduation: trades, candles, holders and launches back, then forward again;
+  - orders' outcomes (8.2.0): a sale and a buy past the curve's end, a route, a missed swap and its refund, limit orders
+    filled by crossings, collected, settled, cancelled and expired, by txid (a settle's too) and by address, a page at a
+    time, and across a reorganisation;
   - CORS (an allowed origin, another refused, a preflight, no credentials), rate limits (429 and Retry-After), page
     and size bounds, unknown parameters, the GET/POST rules, no wallet method reachable;
   - the Connect protocol (JSON, GET form, binary through protoc) and gRPC (flush-grpc-client, gRPC's own library):
@@ -777,6 +780,125 @@ class PublicApiTest(LayersTest):
         assert_equal(api.get("wallet/balance").status, 404)
         assert_equal(api.get("launches/MOON/../../wallet").status, 404)
 
+        self.log.info("Orders' outcomes (8.2.0): swaps filled and missed, a launch buy past the curve's end, limit orders, by address; a reorganisation")
+        moon_id = api.rest("launches/MOON")["id"]
+        moon_pool = done["pool"]["pool"]
+        # The sale on MOON's curve: filled, ECX out by the coinbase to the seller.
+        out = api.rest(f"trades/{sold['txid']}")
+        assert_equal((out["kind"], out["status"], out["swap"]["path"]), ("swap", "filled", ["MOON", "ECX"]))
+        assert_equal(out["swap"]["hops"][0]["curve"], "launch")
+        assert_equal(out["swap"]["hops"][0]["launch"], moon_id)
+        assert_equal(out["swap"]["payouts"][0]["what"], "out")
+        assert_equal(out["swap"]["payouts"][0]["via"], "coinbase")
+        assert_equal(Decimal(out["swap"]["payouts"][0]["amount_units"]) / 10**8, sold["quote"])
+        assert n1.getaddressinfo(out["address"])["ismine"]
+        # The whale's buy took the curve to its end: what it could not spend came back (back), by the coinbase.
+        big = api.rest(f"trades/{whale['txid']}")
+        assert_equal((big["status"], big["swap"]["hops"][0]["venue"]), ("filled", "curve"))
+        assert_greater_than(int(big["swap"]["back_units"]), 0)
+        assert_equal(Decimal(big["swap"]["back_units"]) / 10**8, whale["back"])
+        assert_equal([(p["what"], p["via"]) for p in big["swap"]["payouts"]], [("out", "output"), ("back", "coinbase")])
+        assert_equal(big["swap"]["payouts"][0]["outpoint"].split(":")[0], whale["txid"])
+        # What the actions bring in goes to one address: its outcomes, newest first.
+        trader = n0.getnewaddress()
+        n0.setlinkdestination(trader)
+        route = n0.swappools("USDX", 100, [cp["pool"], moon_pool])
+        self.bmm()
+        routed = api.rest(f"trades/{route['txid']}")
+        assert_equal((routed["status"], routed["address"]), ("filled", trader))
+        assert_equal(routed["swap"]["path"], ["USDX", "ECX", "MOON"])
+        assert_equal([h["pool"] for h in routed["swap"]["hops"]], [cp["pool"], moon_pool])
+        assert_equal(len(routed["swap"]["amounts_units"]), 3)
+        assert_equal(routed["swap"]["amounts_units"][0], "10000")
+        assert_equal(routed["swap"]["hops"][1]["amount_in_units"], routed["swap"]["amounts_units"][1])
+        assert routed["swap"]["payouts"][0]["outpoint"].startswith(route["txid"] + ":")
+        assert Decimal(routed["swap"]["payouts"][0]["amount_units"]) >= Decimal(str(route["min_out"])) * 10**6
+        # Two buys in one block, one price: the small one at no slippage misses, refunded by the coinbase.
+        tight = n0.swappools("ECX", 1, [moon_pool], 0)
+        n0.swappools("ECX", 50, [moon_pool], 50)
+        self.bmm()
+        miss = api.rest(f"trades/{tight['txid']}")
+        assert_equal(miss["status"], "missed")
+        assert_equal(miss["swap"]["amounts_units"], ["100000000"])
+        assert_equal([(p["what"], p["asset"], p["amount_units"], p["via"]) for p in miss["swap"]["payouts"]], [("refund", "ECX", "100000000", "coinbase")])
+        # Limit orders of USDY for ECX: an ask partly filled by a crossing, collected, filled; one cancelled, one expired.
+        ask = n0.placeorder("USDY", 100, "ECX", Decimal("0.01"))
+        n0.placeorder("ECX", Decimal("0.4"), "USDY", 100)
+        self.bmm()
+        placed = api.rest(f"trades/{ask['txid']}")
+        assert_equal((placed["kind"], placed["status"], placed["address"]), ("order", "open", trader))
+        o = placed["order"]
+        assert_equal((o["order_id"], o["book"], o["side"], o["sell"], o["buy"]), (ask["order"], ask["book"], "ask", "USDY", "ECX"))
+        assert_equal((o["amount_units"], o["fill_count"], len(o["fills"])), ("10000", 1, 1))
+        assert_equal(o["fills"][0]["sold_units"], "4000")
+        assert_equal(o["remaining_units"], "6000")
+        assert o["owner_outpoint"].startswith(ask["txid"] + ":")
+        collect = n0.settleorder(ask["order"])
+        self.bmm()
+        n0.placeorder("ECX", Decimal("0.6"), "USDY", 100)
+        self.bmm()
+        filled = api.rest(f"trades/{ask['txid']}")
+        assert_equal((filled["status"], filled["order"]["fill_count"], filled["order"]["remaining_units"]), ("filled", 2, "0"))
+        assert_equal([c["txid"] for c in filled["order"]["collected"]], [collect["txid"]])
+        assert_equal(filled["order"]["collected"][0]["payouts"][0]["what"], "proceeds")
+        assert_equal(filled["order"]["collected"][0]["payouts"][0]["via"], "coinbase")
+        close = n0.settleorder(ask["order"])
+        ask2 = n0.placeorder("USDY", 100, "ECX", 1)
+        ask3 = n0.placeorder("USDY", 100, "ECX", 1, 1)
+        self.bmm()
+        cancel = n0.settleorder(ask2["order"], True)
+        self.bmm()
+        self.bmm()
+        n0.setlinkdestination()
+        settled = api.rest(f"trades/{ask['txid']}")
+        assert_equal(settled["status"], "settled")
+        assert_equal(settled["order"]["settle"]["txid"], close["txid"])
+        assert_equal(settled["settle_txid"], None)
+        # A settle's txid finds its order.
+        assert_equal(api.rest(f"trades/{collect['txid']}")["txid"], ask["txid"])
+        assert_equal(api.rest(f"trades/{close['txid']}")["settle_txid"], close["txid"])
+        cancelled = api.rest(f"trades/{ask2['txid']}")
+        assert_equal(cancelled["status"], "cancelled")
+        assert_equal([(p["what"], p["amount_units"], p["via"]) for p in cancelled["order"]["settle"]["payouts"]], [("left", "10000", "output")])
+        assert_equal(cancelled["order"]["settle"]["txid"], cancel["txid"])
+        assert_equal(api.rest(f"trades/{ask3['txid']}")["status"], "expired")
+        # The address's, newest first (its three swaps, the two bids, the three asks), a page at a time.
+        listed = api.rest(f"addresses/{trader}/trades")
+        txids = [t["txid"] for t in listed["items"]]
+        assert_equal(listed["total"], len(txids))
+        assert_equal(len(txids), 8)
+        assert {route["txid"], tight["txid"], ask["txid"], ask2["txid"], ask3["txid"]} <= set(txids)
+        heights = [t["height"] for t in listed["items"]]
+        assert_equal(heights, sorted(heights, reverse=True))
+        paged, cursor = [], None
+        while True:
+            page = api.rest(f"addresses/{trader}/trades", {"limit": 2, **({"cursor": cursor} if cursor else {})})
+            paged += page["items"]
+            cursor = page["next_cursor"]
+            if not cursor:
+                break
+        assert_equal(paged, listed["items"])
+        assert_equal(api.get(f"addresses/{trader}/trades", {"limit": 101}).status, 400)
+        assert_equal(api.get(f"addresses/{trader}/trades", {"cursor": "00"}).status, 400)
+        assert_equal(api.get("addresses/notanaddress/trades").status, 400)
+        # Not an order: 404 (a registration, an unknown txid); not a txid: 400.
+        assert_equal(api.get(f"trades/{n0.getbestblockhash()}").status, 404)
+        assert_equal(api.get(f"trades/{route['txid'][:-2]}").status, 400)
+        # A reorganisation takes the cancel's block back, then gives it again.
+        cancel_block = n0.getblock(n0.getbestblockhash())["previousblockhash"]
+        tip = n0.getbestblockhash()
+        for n in self.nodes:
+            n.invalidateblock(cancel_block)
+        assert_equal(api.rest(f"trades/{ask2['txid']}")["status"], "open")
+        assert_equal(api.get(f"trades/{cancel['txid']}").status, 404)
+        for n in self.nodes:
+            n.reconsiderblock(cancel_block)
+        self.wait_until(lambda: all(n.getbestblockhash() == tip for n in self.nodes))
+        assert_equal(api.rest(f"trades/{ask2['txid']}"), cancelled)
+        assert_equal(api.rest(f"addresses/{trader}/trades"), listed)
+        self.outcomes = [route["txid"], tight["txid"], ask["txid"], close["txid"], whale["txid"]]
+        self.trader = trader
+
         self.log.info("Connect (JSON, GET, binary) and gRPC: the same answers as REST")
         code, reply = api.connect("GetLaunch", {"id": "MOON"})
         assert_equal(code, 200)
@@ -844,6 +966,9 @@ class PublicApiTest(LayersTest):
         assert_equal(third.rest("launches/MOON/candles", {"interval": "1h"}), api.rest("launches/MOON/candles", {"interval": "1h"}))
         assert_equal(third.rest("launches/MOON/holders", {"limit": 100}), api.rest("launches/MOON/holders", {"limit": 100}))
         assert_equal(third.rest(f"pools/{pool['pool']}/trades"), api.rest(f"pools/{pool['pool']}/trades"))
+        for txid in self.outcomes:
+            assert_equal(third.rest(f"trades/{txid}"), api.rest(f"trades/{txid}"))
+        assert_equal(third.rest(f"addresses/{self.trader}/trades"), api.rest(f"addresses/{self.trader}/trades"))
 
 
 if __name__ == '__main__':

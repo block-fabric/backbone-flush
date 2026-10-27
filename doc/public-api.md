@@ -58,10 +58,32 @@ block's undo data has its keys), left out of the state's hash, read by no rule.
   moved of the first asset (ECX).
 - **Holders**: what each script holds of each token (asset coins, liquidity shares, positions, orders), from the
   outputs that carry tokens: by token, largest first with how many hold it, and by script (an address's holdings).
+- **Outcomes** (8.2.0, layout 2): what became of each order, by its transaction and by address, newest first.
+  - A **swap** (an order of the batch: any pool kind, a route, a launch buy or sale, a swap through a book), filled
+    or missed: the block and its time, its route (the path's assets, and per hop the pool, its curve as the batch found
+    it, the launch token if the pool is a launch curve), what went in then what came out of each hop, `back` (ECX a
+    launch buy got back past the curve's end), and how it was paid: ECX by the coinbase of that block to its
+    `chn_to`, a token on its result output (txid:n); a miss its refund (what it paid in, `path[0]`, the same way). Its
+    scripts are its `chn_to` and its result output's (both, when they differ). Protocol orders (buybacks) are not
+    noted. A row of ~250–400 bytes per order (by its hops), and one or two address entries of ~70 bytes.
+  - A **limit order** (PlaceOrder, its id `OrderId(txid)`): its book, side, assets, amount, limit (num/den), expiry,
+    block and time, its owner (the script of the output its token went to, in the PlaceOrder's own transaction: who
+    holds the token later is not followed); each block that filled some of it (`remaining` fell: sold, got), each
+    SettleOrder that only collected (a "collected" event), how it ended: evicted (the block), cancelled (a cancel
+    while it still traded), settled (a closing settle of an order filled, expired or evicted), with the settle's txid,
+    block and what it paid (proceeds, left). Expired is the tip's to say (`expiry` < tip, something left, not
+    closed). A row of ~420 bytes and an address entry per order, ~75 bytes per fill, ~200 per collect, ~70 per settle
+    (its txid to the order's).
+  - Placements and settles are noted as they apply (`market::NoteOrder`, `market::NoteSettle`, from `State::ApplyTx`,
+    with the result outputs of what a settle pays in assets); fills and evictions are read in `market::ConnectBlock`
+    from the block's journal of the orders' table (every order a book's round or a crossing changed), against the
+    order's own row. No rule reads any of it.
 - **24 hours** (volume, trades, change): from the hourly candles.
 
 Tests: `dex_market_tests` (trades, candles, holders, pages, a reorganisation that restores the index byte for byte,
-the index wiped and refused as incomplete), `interface_publicapi.py` (against the RPC truth, across a real reorg,
+the index wiped and refused as incomplete; outcomes: a route filled, a swap missed and refunded, a launch buy with
+`back`, limit orders filled by crossings, collected, settled, cancelled, expired, by address a page at a time, each
+undone by a reorganisation), `interface_publicapi.py` (against the RPC truth, across a real reorg,
 and a node that turns `-dexindex` on derives the same trades, candles and holders).
 
 ## REST: `/api/v1`
@@ -97,6 +119,8 @@ quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ET
 | `books/{base}[/{quote}]?depth≤100` | GetBook | the ladder (`getbook`), totals, spread; each level's `price_exact` (the orders' limit, 18 significant digits) and `amount_units`; `best_ask_exact`, `best_bid_exact`. A book's candles: `pools/{book}/candles` |
 | `tickers/{ticker}` | GetTicker | `{ ticker, available, reason }` (reservations are hidden: available can still lose a race) |
 | `addresses/{address}/holdings` | GetHoldings | assets (value in ECX), LP shares, positions, orders of an address |
+| `trades/{txid}` | GetTrade | 8.2.0: the outcome of an order (below): a swap's (`kind` swap, `status` filled or missed) or a limit order's (`kind` order, `status` open, filled, expired, evicted, cancelled or settled), by the order's own transaction; a SettleOrder's txid finds its order too (`settle_txid` is then the one asked of). 404 only when the txid is no order the index knows of (no such transaction, not an order, or not in the chain any more); 400 when not 64 hex digits, and without `-dexindex` (failed_precondition) |
+| `addresses/{address}/trades?cursor=&limit≤100` | ListAddressTrades | 8.2.0: `Page<TradeOutcome>` of an address, newest first (the block the order was made in), misses included: the swaps whose `chn_to` or result output is the address's, the limit orders it owns; `total` all of them; a limit order lists its first 20 fills and collects (`fill_count`, `collect_count` say how many; `trades/{txid}` lists 1000). Cost 2 |
 | `addresses/{address}/portfolio` | GetPortfolio | what an address holds and made: assets (value in ECX), shares of pools (share, what they are worth, the pool), positions (as `positions/{id}`), orders (status open, filled, expired, evicted), auctions it sells, launches it created (fees owed, allocation, what is claimable); at most 500 outputs and 100 of them read whole (cost 4) |
 | `addresses/portfolio?addresses=a,b,…` (GET, 64 at most), or POST `addresses/portfolio` with `{"addresses": ["a", "b", …]}` (200 at most) | GetPortfolio | 7.0.1: several addresses at once (a wallet's, as `flush:connect` shares them): `addresses` (each once, in order), `address` (the first), `assets` summed over them (`amount`, `amount_units`, `value_ecx`, and `holders`: how many of them hold it), `liquidity`, `positions`, `orders`, `auctions` and `launches` of every one with its `owner`; `truncated` when an address had more than 500 holdings, more than 100 holdings other than assets were asked, or more than 5000 in all |
 | `verifications?assets=A,B&curators=<id>,…` | GetVerifications | per **the client's own** curator list (1–20), 1–50 assets (`getverifications`) |
@@ -107,6 +131,51 @@ quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ET
 | POST `broadcast` `{"hex": "…"}` | Broadcast | `{ txid }` |
 | POST `logos` `{"base64": "…"}` | UploadLogo | 8.1.0: `{ "sha256": "<64 hex>", "url": "/api/v1/logos/<sha256>" }` (200; `Cache-Control: no-store`), the logo kept in memory by its SHA-256 for an hour from its last upload (uploaded again, an hour from then), at most 1024 logos (the one uploaded longest ago dropped first). Checked with the chain's logo rules (`bitassets::CheckLogo`: PNG or JPEG, 256×256, at most 32 KiB, no metadata): else 400 with the reason (`bad-ba-logo-…`). The `url` is relative: the site prefixes its own origin and gives it as a link's `logo_url` (doc/flush-links.md). Charged as a broadcast: 6 a minute per client (3 at once), 120 in all (429, Retry-After), and 4 units of the client's rate |
 | `logos/{sha256}` | GetUploadedLogo | 8.1.0: the logo uploaded with that SHA-256 (any case), as the image (`image/png` or `image/jpeg`, the type its rules found), `Cache-Control: public, max-age=31536000, immutable` (its content is its hash's); 404 when none is kept (never uploaded, or more than an hour ago), 400 when not 64 hex digits |
+
+**Orders' outcomes** (8.2.0; the node must be 8.2.0 or later, its market index at layout 2: a node upgraded derives it
+again from the blocks once). A swap that went through two pools and filled (amounts in units; ECX's id is `""`):
+
+```json
+{ "txid": "9f2c…", "kind": "swap", "height": 51234, "time": 1800000000, "status": "filled",
+  "address": "ecregtest:qq…", "script": "76a914…88ac", "settle_txid": null,
+  "swap": { "path": ["USDX", "ECX", "MOON"], "path_ids": ["4be1…", "", "a07d…"],
+            "hops": [ { "pool": "51c0…", "curve": "constant_product", "venue": "pool", "launch": null,
+                        "asset_in": "USDX", "asset_out": "ECX", "amount_in_units": "10000", "amount_out_units": "4985006" },
+                      { "pool": "e3a9…", "curve": "constant_product", "venue": "pool", "launch": null,
+                        "asset_in": "ECX", "asset_out": "MOON", "amount_in_units": "4985006", "amount_out_units": "2453118790" } ],
+            "amounts_units": ["10000", "4985006", "2453118790"], "amount_in_units": "10000", "back_units": "0",
+            "payouts": [ { "what": "out", "asset": "MOON", "asset_id": "a07d…", "amount_units": "2453118790",
+                           "amount": 2453.11879, "via": "output", "address": "", "outpoint": "9f2c…:0" } ] },
+  "order": null }
+```
+
+A miss has `status` missed, `amounts_units` what it paid in only, the hops' amounts "0" and one payout
+`{ "what": "refund", … }` (ECX `via` coinbase to its `chn_to`, else its result output). A launch buy past the curve's
+end has `back_units` and a second payout `{ "what": "back", "asset": "ECX", "via": "coinbase", … }`. A limit order
+(`addresses/{address}/trades` lists the same items):
+
+```json
+{ "txid": "1d77…", "kind": "order", "height": 51240, "time": 1800000090, "status": "settled",
+  "address": "ecregtest:qp…", "script": "0014…", "settle_txid": null, "swap": null,
+  "order": { "order_id": "c4f0…", "book": "7b19…", "side": "ask", "sell": "USDY", "sell_id": "5e2d…", "buy": "ECX", "buy_id": "",
+             "amount_units": "10000", "price_num": "10000", "price_den": "1", "price": 0.01, "expiry": 91560,
+             "remaining_units": "0", "got_units": "100000000", "evicted": 0, "owner_outpoint": "1d77…:0",
+             "fills": [ { "height": 51240, "time": 1800000090, "sold_units": "4000", "got_units": "40000000" },
+                        { "height": 51242, "time": 1800000120, "sold_units": "6000", "got_units": "60000000" } ],
+             "fill_count": 2,
+             "collected": [ { "txid": "88e1…", "height": 51241, "time": 1800000105, "cancel": false,
+                              "payouts": [ { "what": "proceeds", "asset": "ECX", "asset_id": "", "amount_units": "40000000",
+                                             "amount": 0.4, "via": "coinbase", "address": "ecregtest:qp…", "outpoint": null } ] } ],
+             "collect_count": 1,
+             "settle": { "txid": "02ab…", "height": 51243, "time": 1800000135, "cancel": false,
+                         "payouts": [ { "what": "proceeds", "asset": "ECX", "asset_id": "", "amount_units": "60000000",
+                                        "amount": 0.6, "via": "coinbase", "address": "ecregtest:qp…", "outpoint": null } ] } } }
+```
+
+`side`: ask when it sells the pair's `asset_b` (the token against ECX; of two assets, the larger id), bid when it
+sells `asset_a`, as trades' sides. `price`: whole units of what it buys per whole unit it sells. A cancel's `settle`
+pays `{ "what": "left", … }` (and proceeds, if any). Through `trades/{settle txid}` the same order comes back with
+`settle_txid` set.
 
 **One implementation of quotes.** Every quote is the node's own RPC method, called in process: `quotelaunch`,
 `getswapquote`, `quoteroute`, `quotepoolliquidity`, `previewposition`, `getbook` — the methods the app's pages quote
