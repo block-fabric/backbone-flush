@@ -285,6 +285,8 @@ double CostOf(const std::string& method_path)
     if (method == "ServerReflectionInfo") return 2;
     // 8.1.0: an upload checks up to 32 KiB against the logo rules (and has its own limits: Guard).
     if (method == "UploadLogo") return 4;
+    // 8.2.0: a page of outcomes reads up to 100 orders, each with its events.
+    if (method == "ListAddressTrades") return 2;
     return 1;
 }
 
@@ -848,6 +850,132 @@ private:
         t.SetDouble("tokens", tokens);
         t.SetDouble("ecx", quoted);
         t.SetDouble("price_ecx", tokens > 0 ? quoted / tokens : 0);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // Orders' outcomes (8.2.0)
+
+    static void Payout(Message& m, const char* what, const AssetId& asset, uint64_t amount, const CScript& chn_to, const Txid& txid, std::optional<uint32_t> n,
+                       const bitassets::State& state)
+    {
+        Message& p{m.Add("payouts")};
+        p.SetString("what", what);
+        p.SetString("asset", Label(state, asset));
+        p.SetString("asset_id", asset.IsNull() ? "" : Hex(asset));
+        p.SetString("amount_units", util::ToString(amount));
+        p.SetDouble("amount", Whole(amount, DecimalsOf(state, asset)));
+        if (asset.IsNull() || !n) {
+            p.SetString("via", "coinbase");
+            p.SetString("address", AddressOf(chn_to));
+        } else {
+            p.SetString("via", "output");
+            p.SetString("outpoint", txid.GetHex() + ":" + util::ToString(*n));
+        }
+    }
+
+    static void FillSettle(Message& m, const bitassets::market::Settled& settled, int32_t height, uint32_t time, const bitassets::market::OrderRow& row,
+                           const bitassets::State& state)
+    {
+        const auto& order{row.placed};
+        m.SetString("txid", settled.txid.GetHex());
+        m.SetUInt("height", static_cast<uint32_t>(height));
+        m.SetUInt("time", time);
+        m.SetBool("cancel", settled.cancel);
+        if (settled.proceeds > 0) Payout(m, "proceeds", order.buy, settled.proceeds, settled.chn_to, settled.txid, settled.proceeds_n, state);
+        if (settled.left > 0) Payout(m, "left", order.sell, settled.left, settled.chn_to, settled.txid, settled.left_n, state);
+    }
+
+    void FillOutcome(Message& t, const bitassets::market::Outcome& outcome, const Tip& tip, const bitassets::State& state) const
+    {
+        using namespace bitassets::market;
+        if (outcome.swap) {
+            const SwapRow& row{*outcome.swap};
+            const Fill& fill{row.fill};
+            t.SetString("txid", fill.txid.GetHex());
+            t.SetString("kind", "swap");
+            t.SetUInt("height", static_cast<uint32_t>(row.height));
+            t.SetUInt("time", row.time);
+            t.SetString("status", fill.filled ? "filled" : "missed");
+            t.SetString("address", AddressOf(row.Payee()));
+            t.SetString("script", HexStr(row.Payee()));
+            Message& s{t.Mutable("swap")};
+            for (const AssetId& asset : fill.path) {
+                s.AddString("path", Label(state, asset));
+                s.AddString("path_ids", asset.IsNull() ? "" : Hex(asset));
+            }
+            const bool amounts{fill.filled && fill.amounts.size() == fill.path.size()};
+            for (size_t hop{0}; hop < fill.pools.size() && hop + 1 < fill.path.size(); ++hop) {
+                Message& h{s.Add("hops")};
+                h.SetString("pool", Hex(fill.pools[hop]));
+                const auto curve{static_cast<bitassets::Curve>(hop < fill.curves.size() ? fill.curves[hop] : 0)};
+                h.SetString("curve", bitassets::curves::CurveName(curve));
+                h.SetString("venue", curve == bitassets::Curve::LAUNCH ? "curve" : curve == bitassets::Curve::BOOK ? "book" : "pool");
+                if (hop < fill.launches.size() && !fill.launches[hop].IsNull()) h.SetString("launch", Hex(fill.launches[hop]));
+                h.SetString("asset_in", Label(state, fill.path[hop]));
+                h.SetString("asset_out", Label(state, fill.path[hop + 1]));
+                h.SetString("amount_in_units", amounts ? util::ToString(fill.amounts[hop]) : "0");
+                h.SetString("amount_out_units", amounts ? util::ToString(fill.amounts[hop + 1]) : "0");
+            }
+            for (uint64_t a : fill.amounts) s.AddString("amounts_units", util::ToString(a));
+            s.SetString("amount_in_units", util::ToString(fill.amounts.empty() ? 0 : fill.amounts.front()));
+            s.SetString("back_units", util::ToString(fill.back));
+            if (fill.filled) {
+                if (!fill.amounts.empty()) Payout(s, "out", fill.path.back(), fill.amounts.back(), fill.chn_to, fill.txid, fill.result_n, state);
+                if (fill.back > 0) Payout(s, "back", bitassets::CHN, fill.back, fill.chn_to, fill.txid, std::nullopt, state);
+            } else if (!fill.amounts.empty()) {
+                Payout(s, "refund", fill.path.front(), fill.amounts.front(), fill.chn_to, fill.txid, fill.result_n, state);
+            }
+            return;
+        }
+        if (!outcome.order) return;
+        const OrderRow& row{*outcome.order};
+        const bitassets::BookOrder& order{row.placed.order};
+        t.SetString("txid", order.txid.GetHex());
+        t.SetString("kind", "order");
+        t.SetUInt("height", static_cast<uint32_t>(order.height));
+        t.SetUInt("time", row.time);
+        // Closed, else what its last fill and the tip say: filled, evicted (it trades no more), expired, open.
+        const char* status{row.closed ? (row.cancelled ? "cancelled" : "settled")
+                           : row.remaining == 0 ? "filled"
+                           : row.evicted != 0 ? "evicted"
+                           : order.expiry < tip.height ? "expired" : "open"};
+        t.SetString("status", status);
+        t.SetString("address", AddressOf(row.owner));
+        t.SetString("script", HexStr(row.owner));
+        Message& o{t.Mutable("order")};
+        o.SetString("order_id", Hex(bitassets::OrderId(order.txid)));
+        o.SetString("book", Hex(order.book));
+        o.SetString("side", order.sells0 ? "bid" : "ask");
+        o.SetString("sell", Label(state, row.placed.sell));
+        o.SetString("sell_id", row.placed.sell.IsNull() ? "" : Hex(row.placed.sell));
+        o.SetString("buy", Label(state, row.placed.buy));
+        o.SetString("buy_id", row.placed.buy.IsNull() ? "" : Hex(row.placed.buy));
+        o.SetString("amount_units", util::ToString(order.amount));
+        o.SetString("price_num", util::ToString(order.price_num));
+        o.SetString("price_den", util::ToString(order.price_den));
+        const double price{order.price_den > 0 ? static_cast<double>(order.price_num) / static_cast<double>(order.price_den) *
+                                                     std::pow(10.0, int{DecimalsOf(state, row.placed.sell)} - int{DecimalsOf(state, row.placed.buy)})
+                                               : 0};
+        o.SetDouble("price", price);
+        o.SetUInt("expiry", static_cast<uint32_t>(order.expiry));
+        o.SetString("remaining_units", util::ToString(row.closed ? 0 : row.remaining));
+        o.SetString("got_units", util::ToString(row.got));
+        o.SetUInt("evicted", static_cast<uint32_t>(row.evicted));
+        o.SetString("owner_outpoint", order.txid.GetHex() + ":" + util::ToString(row.placed.token_n));
+        for (const OrderEvent& e : outcome.events) {
+            if (e.kind == OrderEvent::FILL) {
+                Message& f{o.Add("fills")};
+                f.SetUInt("height", static_cast<uint32_t>(e.height));
+                f.SetUInt("time", e.time);
+                f.SetString("sold_units", util::ToString(e.sold));
+                f.SetString("got_units", util::ToString(e.got));
+            } else if (e.settle) {
+                FillSettle(o.Add("collected"), *e.settle, e.height, e.time, row, state);
+            }
+        }
+        o.SetUInt("fill_count", row.fills);
+        o.SetUInt("collect_count", row.collects);
+        if (row.closed) FillSettle(o.Mutable("settle"), row.settle, row.closed, row.closed_time, row, state);
     }
 
     Message TradesOf(const bitassets::market::Market& market, const Message& req, const Tip& tip) const
@@ -2692,6 +2820,45 @@ private:
                 }
             }
             return m;
+        });
+
+        // 8.2.0: what became of an order, by its transaction (or a SettleOrder's), and an address's, newest first.
+        Serve(server, "GetTrade", read, [this](const Message& req, const Tip& tip) {
+            if (!bitassets::market::Enabled()) Fail(Code::FAILED_PRECONDITION, "this node keeps no market index (-dexindex)");
+            const std::string id{ToLower(req.GetString("txid"))};
+            if (id.size() != 64 || !IsHex(id)) Fail(Code::INVALID_ARGUMENT, "txid: 64 hex digits");
+            const Txid txid{*Txid::FromHex(id)};
+            const auto outcome{bitassets::market::GetOutcome(*tip.view, txid, MAX_TRADE_EVENTS)};
+            if (!outcome) Fail(Code::NOT_FOUND, "no order of that transaction (a swap or a limit order, or one's settle)");
+            Message m{New("TradeOutcome")};
+            FillOutcome(m, *outcome, tip, tip.State());
+            if (outcome->by_settle) m.SetString("settle_txid", txid.GetHex());
+            return m;
+        });
+
+        Serve(server, "ListAddressTrades", read, [this](const Message& req, const Tip& tip) {
+            if (!bitassets::market::Enabled()) Fail(Code::FAILED_PRECONDITION, "this node keeps no market index (-dexindex)");
+            const std::string address{util::TrimString(req.GetString("address"))};
+            const CTxDestination dest{address.size() <= 128 ? DecodeDestination(address) : CNoDestination{}};
+            if (!IsValidDestination(dest)) Fail(Code::INVALID_ARGUMENT, "not an address of this network");
+            const uint32_t limit{req.GetUInt("limit") == 0 ? 50 : static_cast<uint32_t>(req.GetUInt("limit"))};
+            if (limit > 100) Fail(Code::INVALID_ARGUMENT, "limit: 1 to 100");
+            std::vector<unsigned char> cursor;
+            if (!req.GetString("cursor").empty()) {
+                const auto bytes{TryParseHex<unsigned char>(req.GetString("cursor"))};
+                if (!bytes || bytes->size() > 128) Fail(Code::INVALID_ARGUMENT, "not a cursor of these trades");
+                cursor = *bytes;
+            }
+            const CScript script{GetScriptForDestination(dest)};
+            std::vector<unsigned char> next;
+            const auto rows{bitassets::market::OutcomesOf(*tip.view, script, cursor, limit, MAX_LISTED_TRADE_EVENTS, next)};
+            const bitassets::State state{tip.State()};
+            Message page{New("TradeOutcomePage")};
+            page.SetString("address", address);
+            for (const auto& row : rows) FillOutcome(page.Add("items"), row, tip, state);
+            if (!next.empty()) page.SetString("next_cursor", HexStr(next));
+            page.SetUInt("total", std::min<uint64_t>(bitassets::market::OutcomeCount(*tip.view, script), std::numeric_limits<uint32_t>::max()));
+            return page;
         });
 
         Serve(server, "GetVerifications", read, [this](const Message& req, const Tip& tip) {
