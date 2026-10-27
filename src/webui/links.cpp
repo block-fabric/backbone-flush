@@ -325,6 +325,43 @@ std::string WebLink(const std::string& text)
     return text;
 }
 
+} // namespace
+
+std::string UrlHost(const std::string& url)
+{
+    constexpr std::string_view HTTPS{"https://"};
+    if (!url.starts_with(HTTPS)) return {};
+    const size_t start{HTTPS.size()};
+    size_t end{url.find_first_of("/?#:", start)};
+    if (end == std::string::npos) end = url.size();
+    std::string host{url.substr(start, end - start)};
+    std::transform(host.begin(), host.end(), host.begin(), [](char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; });
+    return host;
+}
+
+std::string LogoUrl(const std::string& text)
+{
+    const auto refuse{[](const std::string& why) { return LinkError("logo_url: " + why); }};
+    try {
+        WebLink(text);
+    } catch (const LinkError& e) {
+        // The words of a link's check, said of logo_url.
+        const std::string what{e.what()};
+        throw refuse(what.starts_with("link: ") ? what.substr(6) : what);
+    }
+    const std::string host{UrlHost(text)};
+    if (host == "localhost" || host.ends_with(".localhost")) throw refuse("not localhost: the address of a site");
+    const size_t dot{host.rfind('.')};
+    if (dot == std::string::npos) throw refuse("the host is a DNS name with a dot (example.com)");
+    if (host.find("..") != std::string::npos || host.back() == '.' || host.back() == '-') throw refuse("the host is a DNS name (example.com)");
+    // The last label of a DNS name starts with a letter: an IP address (1.2.3.4, 127.1, 0x7f.1) does not.
+    const char last{host[dot + 1]};
+    if (!(last >= 'a' && last <= 'z')) throw refuse("the host is a DNS name, not an IP address");
+    return text;
+}
+
+namespace {
+
 /** A SHA-256 as sha256sum prints it: 64 lowercase hex digits, in that order. */
 std::string Sha256Hex(const std::string& text, const char* key)
 {
@@ -350,6 +387,7 @@ void CheckNetwork(const std::string& given, std::string_view network)
 
 void CheckLaunch(const Request& r)
 {
+    if (!r.logo_url.empty() && !r.logo_sha256) throw LinkError("logo_url goes with logo=sha256:<its SHA-256> in the same link: refused (the app keeps a downloaded logo only if its hash is the link's)");
     size_t info{r.description.size()};
     for (const std::string& link : r.links) info += link.size() + 1;
     if (!r.description.empty() && !r.links.empty()) ++info;
@@ -469,6 +507,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.ticker = Ticker(need("ticker"), "ticker", false);
         r.name = Name(need("name"));
         if (auto logo{take("logo")}) r.logo_sha256 = LogoHash(*logo);
+        if (auto url{take("logo_url")}) r.logo_url = LogoUrl(*url);
         if (auto desc{take("desc")}) r.description = Description(*desc);
         for (const std::string& link : links) r.links.push_back(WebLink(link));
         if (auto ecx{take("ecx")}) r.amount = Amount(*ecx, "ecx");
@@ -491,6 +530,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.ticker = Ticker(need("ticker"), "ticker", false);
         if (auto name{take("name")}) r.name = Name(*name);
         if (auto logo{take("logo")}) r.logo_sha256 = LogoHash(*logo);
+        if (auto url{take("logo_url")}) r.logo_url = LogoUrl(*url);
         if (auto desc{take("desc")}) r.description = Description(*desc);
         for (const std::string& link : links) r.links.push_back(WebLink(link));
         r.supply = Supply(need("supply"));

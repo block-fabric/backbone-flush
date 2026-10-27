@@ -8,6 +8,7 @@
 // quote, the question that says where the link comes from (confirm::Preface, through the confirmed RPC methods), a link
 // used once, a connect answered once and only to the one callback; and the handler of the links on a Linux desktop.
 
+#include <bitassets/logo.h>
 #include <crypto/sha256.h>
 #include <interfaces/node.h>
 #include <interfaces/wallet.h>
@@ -502,6 +503,61 @@ BOOST_AUTO_TEST_CASE(launch_resolves_to_reserve_then_launch)
     BOOST_CHECK(HasRow(done.preface, "Logo", hash.substr(0, 16)));
 }
 
+BOOST_AUTO_TEST_CASE(logo_url_names_where_the_logo_is)
+{
+    // 8.1.0: logo_url, on launch and register, with logo=sha256: only; an https address of a DNS name.
+    const std::string hash(64, 'a');
+    const std::string launch{"flush:launch?v=1&network=regtest&exp=" + Exp() + "&ticker=LUMEN&name=Lumen"};
+    const std::string reg{"flush:register?v=1&network=regtest&exp=" + Exp() + "&ticker=LUMEN&supply=1000&decimals=2"};
+    const std::string good{"&logo=sha256%3A" + hash + "&logo_url=https%3A%2F%2Fflush.markets%2Fapi%2Fv1%2Flogos%2F" + hash};
+    for (const std::string& base : {launch, reg}) {
+        const Request r{Parse(base + good, NET, NOW)};
+        BOOST_CHECK_EQUAL(r.logo_url, "https://flush.markets/api/v1/logos/" + hash);
+        BOOST_CHECK_EQUAL(*r.logo_sha256, hash);
+        BOOST_CHECK(!r.logo_downloaded);
+        // Without logo=: refused, whatever the address.
+        BOOST_CHECK_NE(Refused(base + "&logo_url=https%3A%2F%2Fflush.markets%2Fa.png").find("logo_url goes with logo"), std::string::npos);
+    }
+    BOOST_CHECK_EQUAL(Parse(launch + "&logo=sha256%3A" + hash + "&logo_url=https%3A%2F%2Fcdn.Example.co.uk%3A8443%2Fx.png%3Fv%3D1", NET, NOW).logo_url, "https://cdn.Example.co.uk:8443/x.png?v=1");
+    const auto refused{[&](const std::string& url) { return Refused(launch + "&logo=sha256%3A" + hash + "&logo_url=" + url); }};
+    for (const std::string& url : {
+             std::string{"http%3A%2F%2Fflush.markets%2Fa.png"},          // not https
+             std::string{"ftp%3A%2F%2Fflush.markets%2Fa.png"},
+             std::string{"https%3A%2F%2F127.0.0.1%2Fa.png"},             // an IP address
+             std::string{"https%3A%2F%2F10.0.0.1%3A443%2Fa.png"},
+             std::string{"https%3A%2F%2F127.1%2Fa.png"},                 // an IP address, short
+             std::string{"https%3A%2F%2F0x7f.1%2Fa.png"},                // an IP address, in hex
+             std::string{"https%3A%2F%2F%5B%3A%3A1%5D%2Fa.png"},         // IPv6
+             std::string{"https%3A%2F%2Flocalhost%2Fa.png"},             // localhost
+             std::string{"https%3A%2F%2FLOCALHOST%3A8080%2Fa.png"},
+             std::string{"https%3A%2F%2Fapi.localhost%2Fa.png"},
+             std::string{"https%3A%2F%2Fintranet%2Fa.png"},              // no dot
+             std::string{"https%3A%2F%2Fflush.markets.%2Fa.png"},        // a trailing dot
+             std::string{"https%3A%2F%2Fa..b%2Fa.png"},
+             std::string{"https%3A%2F%2Fuser%40flush.markets%2Fa.png"},  // a user name
+             std::string{"https%3A%2F%2Fflush.markets%2Fa%20b.png"},     // a space
+             std::string{"https%3A%2F%2Fflush.markets%2F" + std::string(MAX_LINK, 'a')}, // too long
+         }) {
+        BOOST_CHECK_MESSAGE(refused(url).starts_with("logo_url"), url << ": " << refused(url));
+    }
+    // Twice, or on another verb: refused.
+    BOOST_CHECK(!Refused(launch + good + "&logo_url=https%3A%2F%2Fflush.markets%2Fb.png").empty());
+    BOOST_CHECK(!Refused(Buy("&logo_url=https%3A%2F%2Fflush.markets%2Fb.png")).empty());
+    BOOST_CHECK_EQUAL(UrlHost("https://CDN.flush.markets:8443/a"), "cdn.flush.markets");
+
+    // The question says where a downloaded logo came from.
+    FakeReader reader;
+    const std::vector<unsigned char> logo{ParseHex(LOGO_PNG_PALETTE)};
+    unsigned char digest[CSHA256::OUTPUT_SIZE];
+    CSHA256().Write(logo.data(), logo.size()).Finalize(digest);
+    const std::string logo_hash{HexStr(digest)};
+    Request r{Parse(launch + "&logo=sha256%3A" + logo_hash + "&logo_url=https%3A%2F%2Fcdn.flush.markets%2Flogo.png", NET, NOW)};
+    r.logo = logo;
+    BOOST_CHECK(HasRow(Resolve(r, Source::BROWSER, reader, NOW).preface, "Logo", "the file's SHA-256"));
+    r.logo_downloaded = true;
+    BOOST_CHECK(HasRow(Resolve(r, Source::BROWSER, reader, NOW).preface, "Logo", "downloaded from cdn.flush.markets; its SHA-256 is the one the link names (" + logo_hash.substr(0, 16)));
+}
+
 BOOST_AUTO_TEST_CASE(launch_with_parameters_and_the_new_verbs)
 {
     FakeReader reader;
@@ -581,6 +637,13 @@ struct LinkHostSetup : TestChain100Setup {
     std::atomic<bool> hold{false};
     std::unique_ptr<webui::confirm::ConfirmedRpc> confirmed;
     std::unique_ptr<LinkHost> host;
+    //! The file choosers shown (their titles), and what they answer (nullopt: cancelled).
+    std::vector<std::string> choosers;
+    std::optional<std::string> chosen;
+    //! The downloads asked (8.1.0, logo_url): the address and the bytes allowed; what they give (nullopt: failed, with fetch_error).
+    std::vector<std::pair<std::string, size_t>> fetched;
+    std::optional<std::vector<unsigned char>> fetch_answer;
+    std::string fetch_error{"HTTP 404 (200 only)"};
     LinkHostSetup()
     {
         m_node.wallet_loader = loader.get();
@@ -620,6 +683,15 @@ struct LinkHostSetup : TestChain100Setup {
             return open_ok;
         };
         deps.copy = [this](const std::string& text) { copied.push_back(text); };
+        deps.choose = [this](const webui::Window::FileDialog& d) {
+            choosers.push_back(d.title);
+            return chosen;
+        };
+        deps.fetch = [this](const std::string& url, size_t max_bytes, std::string& error) {
+            fetched.emplace_back(url, max_bytes);
+            if (!fetch_answer) error = fetch_error;
+            return fetch_answer;
+        };
         deps.inform = [this](const std::string& title, const std::string& message, bool) { informed.push_back(title + ": " + message); };
         deps.wallet = [] { return std::string{}; };
         deps.network = [] { return NET; };
@@ -705,6 +777,70 @@ BOOST_FIXTURE_TEST_CASE(launch_asks_once_for_both_steps_then_sends_the_launch, L
     BOOST_CHECK(ran.empty());
     // A logo named by its hash needs the file: none chosen (no chooser), nothing done.
     BOOST_CHECK_THROW(host->Handle(uri + "&logo=sha256%3A" + std::string(64, 'a'), Source::BROWSER), webui::HostError);
+    BOOST_CHECK(ran.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(a_logo_is_downloaded_from_the_links_logo_url, LinkHostSetup)
+{
+    CreateWallet();
+    const std::vector<unsigned char> logo{ParseHex(LOGO_PNG_PALETTE)};
+    unsigned char digest[CSHA256::OUTPUT_SIZE];
+    CSHA256().Write(logo.data(), logo.size()).Finalize(digest);
+    const std::string hash{HexStr(digest)};
+    int n{0};
+    const auto link{[&] {
+        // A fresh link each time (a link is used once): another ticker.
+        return strprintf("flush:launch?v=1&network=regtest&exp=%s&ticker=LUMEN%d&name=Lumen&logo=sha256%%3A%s&logo_url=https%%3A%%2F%%2Fcdn.flush.markets%%2Flogo.png", Exp(), ++n, hash);
+    }};
+    const auto cancelled{[](const webui::HostError& e) { return e.code == webui::BRIDGE_CANCELLED && std::string{e.what()}.find("No logo chosen") != std::string::npos; }};
+
+    // Downloaded with its hash: no file asked for. (The test methods have no second step: refused after, nothing ran.)
+    fetch_answer = logo;
+    BOOST_CHECK_THROW(host->Handle(link(), Source::BROWSER), webui::HostError);
+    BOOST_REQUIRE_EQUAL(fetched.size(), 1U);
+    BOOST_CHECK_EQUAL(fetched[0].first, "https://cdn.flush.markets/logo.png");
+    BOOST_CHECK_EQUAL(fetched[0].second, bitassets::MAX_LOGO_BYTES);
+    BOOST_CHECK(choosers.empty());
+    BOOST_CHECK(ran.empty());
+
+    // Another file than the link's (its hash differs): the file is asked for, the title says why; none chosen, nothing done.
+    std::vector<unsigned char> other{logo};
+    other.back() ^= 1;
+    fetch_answer = other;
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, cancelled);
+    BOOST_CHECK_EQUAL(fetched.size(), 2U);
+    BOOST_REQUIRE_EQUAL(choosers.size(), 1U);
+    BOOST_CHECK_NE(choosers[0].find("could not be downloaded from cdn.flush.markets"), std::string::npos);
+    BOOST_CHECK_NE(choosers[0].find("its SHA-256 is not the one the link names"), std::string::npos);
+
+    // A download that failed: asked for too, with the reason.
+    fetch_answer.reset();
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, cancelled);
+    BOOST_REQUIRE_EQUAL(choosers.size(), 2U);
+    BOOST_CHECK_NE(choosers[1].find("HTTP 404 (200 only)"), std::string::npos);
+
+    // More bytes than a logo has (a fetch that read MAX_LOGO_BYTES + 1): asked for.
+    fetch_answer = std::vector<unsigned char>(bitassets::MAX_LOGO_BYTES + 1, 0);
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, cancelled);
+    BOOST_REQUIRE_EQUAL(choosers.size(), 3U);
+    BOOST_CHECK_NE(choosers[2].find("larger than"), std::string::npos);
+
+    // The file chosen after a failed download is used as before: the link's logo, then on to the question.
+    const fs::path file{m_args.GetDataDirBase() / "logo.png"};
+    {
+        std::ofstream out{file.std_path(), std::ios::binary};
+        out.write(reinterpret_cast<const char*>(logo.data()), logo.size());
+    }
+    chosen = fs::PathToString(file);
+    fetch_answer.reset();
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, [&](const webui::HostError& e) { return !cancelled(e); });
+    BOOST_CHECK_EQUAL(choosers.size(), 4U);
+    // Without logo_url: no download, the file asked for at once.
+    const size_t fetches{fetched.size()};
+    BOOST_CHECK_THROW(host->Handle(strprintf("flush:launch?v=1&network=regtest&exp=%s&ticker=LUMEN99&name=Lumen&logo=sha256%%3A%s", Exp(), hash), Source::BROWSER), webui::HostError);
+    BOOST_CHECK_EQUAL(fetched.size(), fetches);
+    BOOST_CHECK_EQUAL(choosers.size(), 5U);
+    BOOST_CHECK(choosers[4].starts_with("The logo of LUMEN99 (SHA-256"));
     BOOST_CHECK(ran.empty());
 }
 

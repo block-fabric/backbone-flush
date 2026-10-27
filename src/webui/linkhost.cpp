@@ -149,6 +149,13 @@ std::string InfoOf(const Request& r)
     return info;
 }
 
+/** The row of a link's logo: where its bytes came from (the file chosen, or downloaded from the link's logo_url), and that its hash is the link's. */
+dialog::Row LogoRow(const Request& r, const local::Logo& logo)
+{
+    if (r.logo_downloaded) return confirm::Text("Logo", "downloaded from " + UrlHost(r.logo_url) + "; its SHA-256 is the one the link names (" + logo.hash.substr(0, 16) + "…)");
+    return confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo.hash.substr(0, 16) + "…)");
+}
+
 /** A link's logo, checked against the hash it names (the host asked for the file); nullopt if none. */
 std::optional<local::Logo> CheckedLogo(const Request& r)
 {
@@ -417,7 +424,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
             plan.summary = strprintf("Launch %s (%s)", r.ticker, r.name);
         }
         rows = Head(r, source, plan.summary, now);
-        if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
+        if (logo) rows.push_back(LogoRow(r, *logo));
         if (!r.supply.empty()) rows.push_back(confirm::Text("Supply", strprintf("%s %s (%d decimals): 3/4 sold on the curve, 1/4 into the locked pool at graduation", r.supply, r.ticker, decimals)));
         if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator and security parts as the network's)"));
         rows.insert(rows.end(), split_rows.begin(), split_rows.end());
@@ -441,7 +448,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const std::optional<local::Logo> logo{CheckedLogo(r)};
         plan.summary = strprintf("Register %s%s: %s of %d decimals to this wallet, no market", r.ticker, r.name.empty() ? "" : " (" + r.name + ")", r.supply, decimals);
         rows = Head(r, source, plan.summary, now);
-        if (logo) rows.push_back(confirm::Text("Logo", "the file's SHA-256 is the one the request names (" + logo->hash.substr(0, 16) + "…)"));
+        if (logo) rows.push_back(LogoRow(r, *logo));
         rows.push_back(confirm::Text("Control", "this wallet gets the control coin: it mints more, changes the asset's data, opens markets"));
         plan.method = "reserveasset";
         plan.params.push_back(r.ticker);
@@ -1178,10 +1185,44 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
     const std::string wallet{Wallet(node)};
     LogInfo("webui: a link (%s): %s", SourceText(source), VerbName(request.verb));
     if (request.verb == Verb::CONNECT) return Connect(request, source, wallet);
-    // A logo the link names by its hash (it cannot carry 32 KB): chosen by the user, refused if it is not that one.
+    // A logo the link names by its hash (it cannot carry 32 KB): downloaded from where the link says the site hosts it
+    // (8.1.0, logo_url) and kept only if it is that one; else, or if that fails, chosen by the user, refused if it is not.
+    std::string download_failed;
+    if ((request.verb == Verb::LAUNCH || request.verb == Verb::REGISTER) && request.logo_sha256 && request.logo.empty() && !request.logo_url.empty()) {
+        std::string error;
+        std::optional<std::vector<unsigned char>> bytes;
+        if (m_deps.fetch) {
+            bytes = m_deps.fetch(request.logo_url, bitassets::MAX_LOGO_BYTES, error);
+        } else {
+            error = "downloads are not supported here";
+        }
+        if (bytes && bytes->size() > bitassets::MAX_LOGO_BYTES) {
+            bytes.reset();
+            error = strprintf("larger than the %u bytes the chain takes", bitassets::MAX_LOGO_BYTES);
+        }
+        if (bytes) {
+            unsigned char hash[CSHA256::OUTPUT_SIZE];
+            CSHA256().Write(bytes->data(), bytes->size()).Finalize(hash);
+            if (HexStr(hash) != *request.logo_sha256) {
+                bytes.reset();
+                error = "its SHA-256 is not the one the link names";
+            }
+        }
+        if (bytes) {
+            LogInfo("webui: the logo of the link was downloaded from %s (%u bytes, its SHA-256 the link's)", UrlHost(request.logo_url), bytes->size());
+            request.logo = std::move(*bytes);
+            request.logo_downloaded = true;
+        } else {
+            if (error.empty()) error = "it could not be downloaded";
+            LogInfo("webui: the logo of the link could not be downloaded from %s: %s; the file is asked for", UrlHost(request.logo_url), error);
+            download_failed = error;
+        }
+    }
     if ((request.verb == Verb::LAUNCH || request.verb == Verb::REGISTER) && request.logo_sha256 && request.logo.empty()) {
         Window::FileDialog chooser;
-        chooser.title = strprintf("The logo of %s (SHA-256 %s…)", request.ticker, request.logo_sha256->substr(0, 12));
+        chooser.title = download_failed.empty() ? strprintf("The logo of %s (SHA-256 %s…)", request.ticker, request.logo_sha256->substr(0, 12)) :
+                                                  strprintf("The logo of %s could not be downloaded from %s (%s): choose its file (SHA-256 %s…)", request.ticker,
+                                                            UrlHost(request.logo_url), download_failed.substr(0, 160), request.logo_sha256->substr(0, 12));
         chooser.filters = {{"Logo (PNG, JPEG)", {"*.png", "*.jpg", "*.jpeg"}}};
         const auto path{m_deps.choose ? m_deps.choose(chooser) : std::nullopt};
         if (!path) throw HostError(BRIDGE_CANCELLED, "No logo chosen: nothing was done.");

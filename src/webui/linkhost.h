@@ -42,7 +42,8 @@ class Bridge;
  *  - buy, sell, swap: one call of the confirmed RPC methods (confirm.h: buyfromlaunch, selltolaunch, swaproute), its
  *    floor the link's (refused at once when the fresh quote cannot meet it; the node refuses again when it signs);
  *  - launch: reserveasset then launchtoken, in one question (confirm::Reveal), the launch sent by the app once the
- *    reservation is deep enough; a logo named by its SHA-256 is asked for (a file chooser) and refused if it differs;
+ *    reservation is deep enough; a logo named by its SHA-256 is downloaded from the link's logo_url if it has one (8.1.0:
+ *    kept only if its SHA-256 is that one), else, or if that fails, asked for (a file chooser) and refused if it differs;
  *  - register: reserveasset then registerasset, the same way (its supply to this wallet, no market);
  *  - curve, pool, auction, order: one call of curveasset, createpool, createauction, placeorder, every asset by id with
  *    the ticker the link names checked against it, the amounts exactly in their asset's places;
@@ -177,6 +178,10 @@ public:
         std::function<bool(const std::string&)> open;
         //! A file chooser of the desktop (App::Choose).
         std::function<std::optional<std::string>(const Window::FileDialog&)> choose;
+        //! Download a link's logo (8.1.0, logo_url; webui/fetch.h): a GET of an https address, no redirect, a timeout of
+        //! FETCH_TIMEOUT, at most max_bytes + 1 bytes read, HTTP 200 only; nullopt with why in `error` otherwise. Called on
+        //! the thread that handles the link (never the UI thread). Unset: no download, the file is asked for.
+        std::function<std::optional<std::vector<unsigned char>>(const std::string& url, size_t max_bytes, std::string& error)> fetch;
         //! Tell the user (a message of the app): a link refused, a launch done.
         std::function<void(const std::string& title, const std::string& message, bool error)> inform;
         //! Put text on the clipboard (Window::SetClipboard): what the user copies when the browser could not be opened.

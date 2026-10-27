@@ -39,10 +39,11 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   list), a `nonce` of 16 to 64 `A–Z a–z 0–9 - _`;
 - `launch`: a display name the chain's rules take (1 to 64 bytes), a description of at most 512 bytes, `https://`
   links of at most 512 characters with a plain host (no user name) and printable ASCII, the description and links at
-  most 512 bytes together (the chain's info), `logo=sha256:<hex>`, a first buy with both `ecx` and `min_tokens`; and,
+  most 512 bytes together (the chain's info), `logo=sha256:<hex>`, `logo_url` (8.1.0, below; only with `logo`), a first
+  buy with both `ecx` and `min_tokens`; and,
   from the chain's launch parameters, `supply` (whole units, digits only, at most 19), `decimals` (0–12, with a supply),
   `fee_bps` (30–500) and `allocation_bps` (0–1000 from `allocation10_height`, 0–500 before);
-- `register`: `ticker`, `name`?, `desc`?, `link`*, `logo`?, `supply`, `decimals`; `curve`: `asset` (id), `ticker`, `amount`,
+- `register`: `ticker`, `name`?, `desc`?, `link`*, `logo`?, `logo_url`? (only with `logo`), `supply`, `decimals`; `curve`: `asset` (id), `ticker`, `amount`,
   `fee_bps`, `min_buy`?, `max_buy`?; `pool`: `asset_a`, `ticker_a`, `asset_b`, `ticker_b` (an id, or `ECX` for the coin in
   both, and only for it), `kind` (`constant`, `stable`, `weighted`), `fee_ppm` (a fee tier: 100, 500, 3000, 10000),
   `amount_a`, `amount_b`, `amp`? (stable only), `weight_a` (weighted only, required); `auction`: `base` (id),
@@ -65,6 +66,30 @@ A launch file (`*.flushlaunch.json`, at most 64 KB) is read as strictly: exactly
 `keep_control` (8.0.0) is `true` or `false`, a link's `keep_control=1`. An app before 8.0.0 refuses a file with either key (an unknown
 key): a launchpad that must reach those apps gives a link instead.
 
+### Logos by URL (8.1.0)
+
+A link cannot carry a logo (32 KB): it names one by its hash (`logo=sha256:<64 hex>`), and since 8.1.0 may also say
+where the site hosts it, `logo_url=<address>` (percent-encoded), on `launch` and `register`:
+
+- an `https://` address checked as a launch's links are (a plain host of letters, digits, dots and hyphens, an
+  optional port, no user name, printable ASCII, at most 512 characters), and its host a DNS name with a dot: not an IP
+  address (the last label starts with a letter, so `127.0.0.1`, `127.1` and `0x7f.1` are refused), not `localhost` nor a
+  name under it;
+- only with `logo=sha256:…` in the same link: `logo_url` alone is refused.
+
+The app (`LinkHost::Run`, on the thread that handles the link: the links' own thread for a link from the browser, a
+LONG worker of the bridge for one pasted or dropped, never the UI thread) downloads it before anything is asked:
+`webui::FetchUrl` (`webui/fetch.h`; libsoup 3 on Linux, WinHTTP on Windows, none elsewhere), a GET, https only, no
+redirect followed, no content encoding, 10 seconds in all, at most 32 KB + 1 bytes read, HTTP 200 only. The bytes are
+kept only if their SHA-256 is the link's; they then go through the chain's logo rules as a chosen file does
+(`CheckedLogo`, `local::ReadLogo`), and the question says *Logo: downloaded from &lt;host&gt;; its SHA-256 is the one
+the link names* with the picture. On any failure (network, TLS, status, size, hash) the app logs why and asks for the
+file as before, its chooser titled *The logo of &lt;ticker&gt; could not be downloaded from &lt;host&gt; (&lt;why&gt;)*.
+An app before 8.1.0 refuses a link with `logo_url` (an unknown parameter): it fails closed.
+
+The public API keeps logos for sites to host this way: `POST /api/v1/logos` and `GET /api/v1/logos/<sha256>`
+(doc/public-api.md); `GET /api/v1/build/launch|register` take `logo_url` with `logo_sha256`.
+
 ## What each verb does
 
 Every action is resolved against the node and asked in the host's dialog window (`Window::Ask`: a window of the host,
@@ -79,7 +104,7 @@ any page can open one*. Nothing runs unless the user accepts there.
 | `buy` | The token by its id; the link's ticker must be its name; a launch, not graduated; `ecx` exactly in 8 places (at least the node's least payout: 0.0005 ECX, 0.00005 from `small_payout_height`); the floor in the token's places (rounded up); the curve's quote now must meet it. | `buyfromlaunch ["0x<id>", ecx, slippage, floor]` |
 | `sell` | The same; `tokens` exactly in the token's places; the floor in ECX. | `selltolaunch ["0x<id>", tokens, slippage, floor]` |
 | `swap` | The pool by its id; `from` and `to` must be its two assets, by their tickers; not abandoned; the amount exactly in its asset's places; the floor rounded up; the pool's quote now must meet it. | `swaproute [[from, to], amount, slippage, floor, [pool]]` |
-| `launch` | The ticker free; launches active; the logo the link names (a file chooser of the host: refused if its SHA-256 differs, or the rules refuse it); the first buy's quote on a new curve must meet `min_tokens`. | One question for `reserveasset [ticker]` and `launchtoken [ticker, {display_name, info, logo, first_buy, first_min_out}]`; the launch is sent by the app once the reservation is deep enough (`confirm::Authorizations`: within an hour, for at most the fee shown). |
+| `launch` | The ticker free; launches active; the logo the link names (downloaded from its `logo_url` if it has one, else or on a failure a file chooser of the host: refused if its SHA-256 differs, or the rules refuse it); the first buy's quote on a new curve must meet `min_tokens`. | One question for `reserveasset [ticker]` and `launchtoken [ticker, {display_name, info, logo, first_buy, first_min_out}]`; the launch is sent by the app once the reservation is deep enough (`confirm::Authorizations`: within an hour, for at most the fee shown). |
 | `register` | The ticker free; the supply within what an asset can have at its decimals; the logo as a launch's. | One question for `reserveasset [ticker]` and `registerasset [ticker, supply, decimals, {info}, true, logo, display_name]`, the registration sent by the app once the reservation is deep enough (as a launch). |
 | `curve` | Launch parameters active; the asset by id, its ticker the link's; never launched nor on a curve, no pool with ECX of the default kind; the amount exactly in its places, a curve's supply (a multiple of 8 units, at least 10^6). | `curveasset ["0x<id>", amount, {fee, min_buy, max_buy}]` (the control coin goes with it: the supply fixed for good). |
 | `pool` | Both sides by id with their tickers (ECX only as itself); the amounts exactly in their places. | `createpool [a, amount_a, b, amount_b, {curve, fee, amp, weight_a}]` |
@@ -148,7 +173,8 @@ or several and none chosen, the link is refused ("choose one in the app first").
 | 5 | **URI injection** into the shell or the browser call: a callback or an address that adds parameters, a fragment, a `javascript:` or `file:` URL, a newline into the single-instance socket. | The callback is a constant, never the link's; the answer is built from checked text only (a lowercase bech32 address, a nonce of `[A-Za-z0-9_-]`, a network name); it is opened with the system's call (`g_app_info_launch_default_for_uri`, `ShellExecuteW` of an `https:` URL), never a shell; the desktop entry's `Exec` path is quoted as the specification says; a line with a line break is never sent to the running app (`SingleInstance::Send`). |
 | 6 | **Size limits**: a huge link, a huge launch file, a flood of links. | 4096 bytes a link, 64 KB a launch file (and 64 KB a socket message), every text bounded (name 64 bytes, description and links 512, a link 512, a nonce 64), at most 4 links of a launch; one link handled at a time, at most 4 waiting, more refused. |
 | 7 | **Phishing copy in the dialog**: text of the link made to look like the app's own (a name with a newline, a right-to-left mark, a zero-width space, a lookalike ticker). | Control and hidden characters are refused in the link; display names follow the chain's rules (and say when they are not plain ASCII); the dialog shows text as text (`dialog::Shown`, `textContent`); the ticker and the id are shown together, short; the address shared is shown whole. |
-| 8 | **A logo other than the one shown on the site** (a launch link names the logo by hash). | The file the user picks must have that SHA-256, and the chain's logo rules (PNG/JPEG, 256×256, at most 32 KB, no metadata); the dialog shows the picture itself (`dialog::Row::Kind::IMAGE`). |
+| 8 | **A logo other than the one shown on the site** (a launch link names the logo by hash). | The file the user picks, or the one downloaded from `logo_url`, must have that SHA-256, and the chain's logo rules (PNG/JPEG, 256×256, at most 32 KB, no metadata); the dialog shows the picture itself (`dialog::Row::Kind::IMAGE`). |
+| 8b | **A logo download as a weapon** (8.1.0, `logo_url`): the app made to reach the user's own network (a router, `localhost`), a redirect elsewhere, a huge or endless reply, a slow one, another file. | https only (the system's certificate checks), the host a DNS name (no IP address, no `localhost`), no redirect followed (a 3xx fails), no cookies or content decoding, 10 s for the whole download, at most 32 KB + 1 bytes read, HTTP 200 only, the bytes kept only with the link's SHA-256 and then the chain's rules; any failure falls back to the file chooser (nothing runs on a download alone). A DNS name may still resolve to a private address (DNS rebinding): what it can do is a GET without credentials whose answer is kept only if it hashes to the link's logo. |
 | 9 | **The page as a relay**: a page script calls `links.open` itself. | It gets the same question as the browser's link (the preface says *pasted or dropped into the app*): no way around the host's dialog, the same checks. |
 | 10 | **The wrong wallet**. | The question names the wallet (and the address shared, whole); with several open and none chosen, the link is refused. |
 | 11 | **A hostile route or pool** (a link through pools of other assets, a pool that is not the one shown, a lookalike ticker). | Pools by id only; the route's path is the app's own walk from the link's `from` through each pool's other side, which must end at its `to`; liquidity links name the pool's two tickers, checked against its assets; floors checked against the node's quote and given to the call. |
