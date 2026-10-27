@@ -365,7 +365,7 @@ bool ArgsManager::EcashFamily_() const
 {
     AssertLockHeld(cs_args);
     // What the arguments so far name (the command line, before the configuration file in the data directory is read).
-    // Flush: without -chain (and without -regtest, -testnet, -signet), the default network, ecashbeta.
+    // Flush: without -chain (and without -regtest, -testnet, -signet), the default network, ecash.
     const auto chain{SettingToString(GetSetting_("-chain"))};
     if (!chain) {
         for (const char* flag : {"-regtest", "-testnet", "-signet"}) {

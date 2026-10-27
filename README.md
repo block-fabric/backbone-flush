@@ -15,7 +15,7 @@ that eCash miners vote on. It follows its mainchain either through [Backbone](ht
 (`backboned`, our client of the eCash networks) or through a plain eCash node with LayerTwo Labs'
 `bip300301_enforcer`, over the enforcer's interface alone (`-mainchaingrpc`).
 
-| | `ecash` (eCash main network) | `ecashbeta` (betanet, **the default**) | `ecashtest` (test network) |
+| | `ecash` (eCash main network, **the default**) | `ecashbeta` (betanet) | `ecashtest` (test network) |
 |---|---|---|---|
 | Slot on the mainchain | 46 | 46 | 46 |
 | Coin | ECX, deposited from eCash and withdrawn back to it | the same | the same |
@@ -75,12 +75,13 @@ mainchain need a built Backbone tree (`MAINCHAIN_BIN_DIR`, the folder of `backbo
 
 Flush needs an eCash mainchain on the same network, in one of two ways.
 
-**With Backbone** (`backboned -chain=ecashbeta`, RPC on): Flush finds it by itself, over JSON-RPC at
+**With Backbone** (`backboned`, `-chain=ecashbeta` for betanet, RPC on): Flush finds it by itself, over JSON-RPC at
 127.0.0.1 on Backbone's port (8532 for `ecash` and `ecashbeta`, 48532 for `ecashtest`) with the cookie in
 Backbone's data folder (`~/.backbone`, `~/.backbone/betanet`, `~/.backbone/testnet4`):
 
 ```sh
-flush-app                       # betanet, the default (-chain=ecashbeta)
+flush-app                       # eCash's main network, the default (-chain=ecash)
+flush-app -chain=ecashbeta      # betanet
 flushd -chain=ecashtest         # the test network, without a window
 ```
 
@@ -88,8 +89,9 @@ flushd -chain=ecashtest         # the test network, without a window
 the mainchain through the enforcer's gRPC interface alone, with no JSON-RPC access to the eCash node:
 
 ```sh
-flushd -chain=ecashbeta -mainchaingrpc=127.0.0.1:8123        # the enforcer's port on betanet
-flushd -chain=ecash -mainchaingrpc=127.0.0.1:50051 -mainchaingrpcauth=<token>   # or Backbone's -grpc
+flushd -mainchaingrpc=127.0.0.1:50051                         # the enforcer's gRPC (its --serve-grpc-addr)
+flushd -chain=ecashbeta -mainchaingrpc=127.0.0.1:8123          # betanet, an enforcer on 8123
+flushd -mainchaingrpc=127.0.0.1:50051 -mainchaingrpcauth=<token>   # or Backbone's -grpc
 ```
 
 Withdrawal bundles are handed to the enforcer's block producer once the mainchain block that committed to

@@ -13,7 +13,7 @@
 
 void SetupChainParamsBaseOptions(ArgsManager& argsman)
 {
-    argsman.AddArg("-chain=<chain>", "Use the chain <chain> (default: ecashbeta). Allowed values: ecash, ecashbeta, ecashtest (and regtest for tests): "
+    argsman.AddArg("-chain=<chain>", "Use the chain <chain> (default: ecash). Allowed values: ecash, ecashbeta, ecashtest (and regtest for tests): "
                    "sidechains of eCash's main network, its betanet and its test network, followed through Backbone (backboned) or a plain eCash node "
                    "with the bip300301_enforcer (-mainchaingrpc), in ~/.flush (betanet/, testnet4/). "
                    "The Chains (CHN) networks main, test and signet need -chainsnetworks (development only; in ~/.flush/chains).", ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
