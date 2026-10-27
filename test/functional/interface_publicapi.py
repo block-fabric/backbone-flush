@@ -21,6 +21,7 @@
   - a node that turns -dexindex on derives the market index again from the blocks: the same trades and candles.
 """
 
+import hashlib
 import json
 import os
 import time
@@ -445,6 +446,17 @@ class PublicApiTest(LayersTest):
         self.bmm()
         plain = api.rest("assets/PLAIN")
         assert_equal((plain["market"]["status"], plain["market"]["kinds"]), ("none", []))
+        # 7.0.1: a logo's URL has its version (?v=, its SHA-256's first 12 hex digits); the endpoint takes and ignores it.
+        from feature_bitassets_logo import b64, make_png
+        png = make_png([200, 40, 40, 40, 40, 200])
+        n0.setassetlogo("PLAIN", b64(png))
+        self.bmm()
+        logo_url = api.rest("assets/PLAIN")["logo"]
+        assert_equal(logo_url, f"/api/v1/assets/{plain['id']}/logo?v={hashlib.sha256(png).hexdigest()[:12]}")
+        fetched = api.request("GET", logo_url)
+        assert_equal(fetched.status, 200)
+        assert_equal(fetched.body, png)
+        assert_equal(api.get(f"assets/{plain['id']}/logo", {"v": "anything"}).status, 200)
         assert plain["can_curve"]["allowed"], plain["can_curve"]
         built = api.rest("build/curve", {"asset": "PLAIN", "amount": "800000", "fee_bps": "100"})
         assert_equal(parse_uri(built["uri"])[1]["ticker"], "PLAIN")
@@ -531,6 +543,23 @@ class PublicApiTest(LayersTest):
         moon = next(l for l in made["launches"] if l["ticker"] == "MOON")
         assert_equal(moon["state"], n0.getlaunch("MOON")["status"])
         assert_equal(moon["claimable_fees"], n0.getlaunch("MOON")["creator_fees_owed"] >= Decimal("0.0005"))
+        # 7.0.1: several addresses at once (a wallet's, as flush:connect shares them): the assets summed, the rest with
+        # its owner; GET with a short list, POST with a long one.
+        both = api.rest("addresses/portfolio", {"addresses": f"{mine},{creator}"})
+        assert_equal(both["addresses"], [mine, creator])
+        assert_equal(both["address"], mine)
+        assert_equal([p["owner"] for p in both["positions"]], [mine])
+        assert_equal([o["owner"] for o in both["orders"]], [mine])
+        assert_equal([l["owner"] for l in both["launches"] if l["ticker"] == "MOON"], [creator])
+        for a in both["assets"]:
+            alone = [x for f in (folio, made) for x in f.get("assets", []) if x["asset_id"] == a["asset_id"]]
+            assert_equal(int(a["amount_units"]), sum(int(x["amount_units"]) for x in alone))
+            assert_equal(a["holders"], len(alone))
+        posted = api.post("addresses/portfolio", {"addresses": [mine, creator, mine]})
+        assert_equal(posted.status, 200)
+        assert_equal(posted.json()["addresses"], [mine, creator])
+        assert_equal(api.get("addresses/portfolio", {"addresses": "notanaddress"}).status, 400)
+        assert_equal(api.post("addresses/portfolio", {"addresses": [mine] * 1 + [n0.getnewaddress() for _ in range(201)]}).status, 400)
         main_address = self.main.getnewaddress()
         # For the website's test: the address with a position, an order and an auction, and an address of eCash.
         self.e2e_env = {"E2E_ADDRESS": mine, "E2E_ECASH_ADDRESS": main_address}

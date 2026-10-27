@@ -359,6 +359,10 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         const uint32_t fee{r.fee_bps ? static_cast<uint32_t>(*r.fee_bps) * 100 : 0};
         if (r.fee_bps) options.pushKV("fee", Percent(*r.fee_bps));
         if (r.allocation_bps && *r.allocation_bps > 0) options.pushKV("allocation", Percent(*r.allocation_bps));
+        if (r.keep_control) {
+            if (!reader.FeeFlowActive()) throw LinkError("This chain takes no launch that keeps its control coin yet: nothing was done");
+            options.pushKV("keep_control", true);
+        }
         // Upgrade v7: the link's split of the tunable part of the fees (a launchpad's share): every recipient shown in full,
         // accepted or declined with the whole launch (the app does not edit it).
         std::vector<dialog::Row> split_rows;
@@ -417,6 +421,11 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         if (!r.supply.empty()) rows.push_back(confirm::Text("Supply", strprintf("%s %s (%d decimals): 3/4 sold on the curve, 1/4 into the locked pool at graduation", r.supply, r.ticker, decimals)));
         if (r.fee_bps) rows.push_back(confirm::Text("Curve's fee", Bps(*r.fee_bps) + " of each trade (creator and security parts as the network's)"));
         rows.insert(rows.end(), split_rows.begin(), split_rows.end());
+        // 7.0.1: the link asks to keep the control coin: shown as loud as the split, accepted or declined with the whole launch.
+        if (r.keep_control) {
+            rows.push_back(confirm::Heading("Unlocked Supply: you keep the control coin and can mint more"));
+            rows.push_back(confirm::Text("Control coin", "Kept by this wallet: it can create more units at any time. Its pages tag this launch \"Unlocked Supply\". Decline if you did not choose this on the site."));
+        }
         if (!quoted.empty()) QuoteRows(rows, quoted, floored, r.slippage_bps);
         plan.method = "reserveasset";
         plan.params.push_back(r.ticker);
@@ -824,6 +833,31 @@ Window::ConfirmDialog ConnectQuestion(const Request& r, Source source, const std
     return dialog;
 }
 
+Window::ConfirmDialog ConnectAllQuestion(const Request& r, Source source, const std::string& wallet, const std::vector<std::string>& addresses, bool truncated, int64_t now)
+{
+    const std::string name{wallet.empty() ? std::string{"(the default wallet)"} : wallet};
+    Window::ConfirmDialog dialog;
+    dialog.title = strprintf("Share %u addresses of wallet %s", addresses.size(), name);
+    dialog.accept = strprintf("Share all %u", addresses.size());
+    dialog.cancel = "Other choices";
+    dialog.level = dialog::Level::WARNING;
+    dialog.kind = "link:connect";
+    dialog.message = strprintf("A link (%s) asks for the addresses of the wallet %s, for %s to show everything it holds (its coins sit on several "
+                               "addresses). On Share, the app opens your browser at %s with these addresses and the site's code: nothing else is "
+                               "sent, nothing is signed or paid. Other choices: share only one address, or nothing.\n\nShare only if you asked for this on %s yourself just now, with this wallet.",
+                               SourceText(source), name, r.origin, r.callback, r.origin);
+    dialog.rows = Head(r, source, "Share the addresses of wallet " + name + " with " + r.origin, now);
+    dialog.rows.push_back(confirm::Heading("Wallet", name));
+    dialog.rows.push_back(confirm::Text("Site", r.origin));
+    dialog.rows.push_back(confirm::Text("Network", confirm::NetworkName()));
+    dialog.rows.push_back(confirm::Text("The answer goes to", r.callback + " (in your browser)"));
+    dialog.rows.push_back(confirm::Note(strprintf("The site will be able to link these %u addresses as yours (one person's), and show anyone who has them what they hold.", addresses.size())));
+    if (truncated) dialog.rows.push_back(confirm::Note(strprintf("Only the first %u addresses holding something are shared: the wallet has more.", MAX_CONNECT_ADDRESSES)));
+    dialog.rows.push_back(confirm::Heading(strprintf("Addresses shared (%u)", addresses.size())));
+    for (size_t i{0}; i < addresses.size(); ++i) dialog.rows.push_back(confirm::Destination(i == 0 ? "Address (the site's own)" : strprintf("Address %u", i + 1), addresses[i]));
+    return dialog;
+}
+
 namespace {
 class NodeChainReader : public Reader
 {
@@ -881,6 +915,7 @@ public:
     }
     bool LaunchParamsActive() override { return m_chain.getBitAssetsLaunchParamsActive(); }
     bool FeeSplitActive() override { return Params().GetConsensus().sidechain.FeeSplitActive(m_chain.getBitAssetsHeight()); }
+    bool FeeFlowActive() override { return Params().GetConsensus().sidechain.FeeFlowActive(m_chain.getBitAssetsHeight()); }
     uint32_t LaunchSecurityShare() override { return Params().GetConsensus().sidechain.LaunchSecurityShare(m_chain.getBitAssetsHeight()); }
     uint32_t LaunchFee() override { return Params().GetConsensus().sidechain.launch_fee; }
     std::optional<Pool> PoolById(const uint256& id) override
@@ -1077,9 +1112,36 @@ UniValue LinkHost::Connect(const Request& request, Source source, const std::str
             throw HostError(message.isStr() ? message.get_str() : std::string{"The wallet gave no address"});
         }
     }
-    const std::string answer{ConnectAnswer(request, address)};
-    const Window::ConfirmDialog question{ConnectQuestion(request, source, wallet, address, m_deps.now())};
-    if (!m_deps.ask || !m_deps.ask(question).accepted) throw HostError(BRIDGE_CANCELLED, "Not shared: it was declined.");
+    // 7.0.1: the wallet's addresses that hold something (assets, ECX, positions, launch control, pool shares), so that the
+    // site shows all of it; one address only, or none, the user's other choices.
+    std::vector<std::string> holding;
+    try {
+        const UniValue held{node.executeRpc("listholdingaddresses", UniValue{UniValue::VARR}, WalletUri(wallet))};
+        if (held.isArray()) {
+            for (const UniValue& entry : held.getValues()) {
+                if (entry["address"].isStr()) holding.push_back(entry["address"].get_str());
+            }
+        }
+    } catch (...) {
+        // A node of before (no such method), or none: the one address.
+    }
+    bool truncated{false};
+    const std::vector<std::string> all{ConnectAddresses(address, holding, truncated)};
+    if (!m_deps.ask) throw HostError(BRIDGE_CANCELLED, "Not shared: it was declined.");
+    std::string answer;
+    if (all.size() > 1 && m_deps.ask(ConnectAllQuestion(request, source, wallet, all, truncated, m_deps.now())).accepted) {
+        answer = ConnectAnswer(request, address, all, truncated);
+        LogInfo("webui: %u addresses were shared with %s, as the user accepted", all.size(), request.origin);
+    } else {
+        Window::ConfirmDialog question{ConnectQuestion(request, source, wallet, address, m_deps.now())};
+        if (all.size() > 1) {
+            question.title = "Share only one address?";
+            question.accept = "Share only this address";
+            question.cancel = "Don't share";
+        }
+        if (!m_deps.ask(question).accepted) throw HostError(BRIDGE_CANCELLED, "Not shared: it was declined.");
+        answer = ConnectAnswer(request, address);
+    }
     {
         std::lock_guard lock{m_mutex};
         m_nonces.insert(request.nonce);

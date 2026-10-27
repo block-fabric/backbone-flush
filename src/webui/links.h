@@ -116,6 +116,8 @@ struct Request {
     //! launch (upgrade v7): the split of the tunable part of its fees, as the link gives it (split=<to>:<bps>, up to 5):
     //! "creator", "burn" or an address (checked by the host), and its basis points. Empty: all to the creator.
     std::vector<std::pair<std::string, int>> split;
+    //! launch (7.0.1): keep_control=1, the creator keeps the control coin (Unlocked Supply: it can mint more). Without it, not kept.
+    bool keep_control{false};
     //! curve: the bounds of a buy on the curve, in the coin (empty: none).
     std::string min_buy;
     std::string max_buy;
@@ -200,8 +202,22 @@ std::optional<uint64_t> Units(const std::string& decimal, int decimals, Rounding
 /** Units as a decimal: 1.5 for 150 units of 2 places, without trailing zeros. */
 std::string Decimal(uint64_t units, int decimals);
 
-/** The answer of a connect: the callback, its fragment with the address, the nonce and the network (all checked text). */
-std::string ConnectAnswer(const Request& request, const std::string& address);
+/** The most addresses a connect shares (7.0.1: a wallet's that hold something); more are left out, and the answer says so. */
+inline constexpr size_t MAX_CONNECT_ADDRESSES{200};
+
+/**
+ * The answer of a connect: the callback, its fragment with the address, the nonce and the network (all checked text).
+ * With `addresses` (7.0.1: the wallet's that hold something, the primary first; at most MAX_CONNECT_ADDRESSES), also
+ * `addresses=a1,a2,...` and, if some were left out, `truncated=1`:
+ *   <callback>#address=<primary>&addresses=<primary>,<a2>,...[&truncated=1]&nonce=<nonce>&network=<network>
+ */
+std::string ConnectAnswer(const Request& request, const std::string& address, const std::vector<std::string>& addresses = {}, bool truncated = false);
+
+/**
+ * The addresses a connect shares: `primary` first, then those of `holding` (the wallet's that hold something), each
+ * once, in order, MAX_CONNECT_ADDRESSES at most; `truncated` whether some were left out.
+ */
+std::vector<std::string> ConnectAddresses(const std::string& primary, const std::vector<std::string>& holding, bool& truncated);
 
 } // namespace webui::links
 

@@ -566,8 +566,9 @@ void RunRest(Server& server, Request& r)
     RestMatch& match{std::get<RestMatch>(routed)};
     const Server::MethodEntry* entry{server.Find(match.method_path)};
     if (!entry || !match.request) return r.call->Finish({Code::NOT_FOUND, "no such resource"});
-    // GET only for reads; what has side effects is a POST.
-    if ((r.method == "GET") != entry->desc->no_side_effects) return r.call->Finish({Code::UNIMPLEMENTED, r.method == "GET" ? "POST this resource" : "GET this resource"});
+    // GET only for reads; what has side effects is a POST. A read may be a POST where its route says so (the routes
+    // decide: addresses/portfolio with a long list in a body).
+    if (r.method == "GET" && !entry->desc->no_side_effects) return r.call->Finish({Code::UNIMPLEMENTED, "POST this resource"});
     if (const Guard& guard{server.GetGuard()}) {
         if (const auto refused{guard(CallInfo{match.method_path, r.headers, r.client, true})}) return r.call->Finish(*refused);
     }

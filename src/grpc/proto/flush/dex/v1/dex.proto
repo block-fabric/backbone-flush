@@ -455,6 +455,9 @@ message LaunchQuote {
 
 message GetLogoRequest {
   string id = 1;
+  // The version the API's URLs give (?v=<the first 12 hex digits of the logo's SHA-256>), so that a cache keeps a logo
+  // until it changes: ignored here.
+  string v = 2;
 }
 
 // A logo's bytes (REST: served as the image itself, after its magic bytes are checked).
@@ -639,6 +642,8 @@ message Position {
   uint32 height = 14;
   string asset_a = 15;
   string asset_b = 16;
+  // In a portfolio of several addresses: the one holding it (empty elsewhere).
+  string owner = 17;
 }
 
 message GetBookRequest {
@@ -838,6 +843,10 @@ message Holdings {
 // What an address holds and made (GET addresses/{address}/portfolio): the site's portfolio after Connect.
 message GetPortfolioRequest {
   string address = 1;
+  // Several addresses at once (7.0.1: a wallet's, as flush:connect shares them), 1 to 200, with or without `address`:
+  // the assets summed over them, the rest of each listed with its owner. REST: GET addresses/portfolio?addresses=a,b
+  // (64 at most), or POST addresses/portfolio with {"addresses": [...]}.
+  repeated string addresses = 2;
 }
 
 message AssetRef {
@@ -850,9 +859,12 @@ message PortfolioAsset {
   string asset_id = 1;
   string ticker = 2;
   uint32 decimals = 3;
+  // Summed over the addresses asked.
   double amount = 4;
   string amount_units = 5;
   double value_ecx = 6;
+  // How many of the addresses hold it.
+  uint32 holders = 7;
 }
 
 message PortfolioLiquidity {
@@ -865,6 +877,8 @@ message PortfolioLiquidity {
   double amount_a = 6;
   double amount_b = 7;
   Pool pool_info = 8;
+  // The address it is held by (or, a launch, made by).
+  string owner = 9;
 }
 
 message PortfolioOrder {
@@ -879,6 +893,8 @@ message PortfolioOrder {
   uint32 expiry = 9;
   // open, filled, expired or evicted.
   string status = 10;
+  // The address it is held by (or, a launch, made by).
+  string owner = 11;
 }
 
 message PortfolioAuction {
@@ -891,6 +907,8 @@ message PortfolioAuction {
   double price = 7;
   string status = 8;
   uint32 end_height = 9;
+  // The address it is held by (or, a launch, made by).
+  string owner = 10;
 }
 
 message PortfolioLaunch {
@@ -904,11 +922,18 @@ message PortfolioLaunch {
   double creator_fees_owed_ecx = 7;
   bool claimable_fees = 8;
   bool claimable_allocation = 9;
+  // The address it is held by (or, a launch, made by).
+  string owner = 10;
 }
 
 message Portfolio {
+  // The first address asked; `addresses` all of them, as read (each once, in the order asked).
   string address = 1;
   uint32 height = 2;
+  repeated string addresses = 9;
+  // Whether something was left out: an address holding more than the index reads of one (500 holdings), or more than
+  // 100 holdings other than assets in all.
+  bool truncated = 10;
   repeated PortfolioAsset assets = 3;
   repeated PortfolioLiquidity liquidity = 4;
   repeated Position positions = 5;
@@ -1140,6 +1165,8 @@ message BuildActionRequest {
   // split=: "<to>:<bps>" each ("creator", "burn" or an address; the query takes split= again or one list, comma
   // separated), 1 to 5 entries summing to 10000: "creator" and "burn" at most once each, up to 3 addresses. None: all to the creator.
   repeated string split = 56;
+  // launch (7.0.1): the creator keeps the control coin (Unlocked Supply: it can mint more); in the link keep_control=1.
+  bool keep_control = 57;
 }
 
 message Fact {

@@ -167,6 +167,10 @@ The share is fixed in the launch transaction, and every page shows it with what 
   every address in full; the user accepts or declines the whole launch. The app never edits a link's split, and refuses
   a link with a split before v7. **Anyone who does not want a platform's fee launches from the app directly** (Assets →
   Create an asset), whose default is all of the 75 % to the creator.
+- **Keeping the control coin** (7.0.1): `keep_control=1` in the link (the API's `keep_control=1`) launches with an
+  unlocked supply: the creator keeps the control coin and can mint more. The app shows it as loud as the split ("Unlocked
+  Supply: you keep the control coin and can mint more"); the user accepts or declines the whole launch. Without it the
+  control coin is not kept.
 - flush.markets takes 25 % of the 75 % (2500 bps) to `bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke` on every launch made
   through it, shown on its review step ("Flush.markets fee: 25 % of the creator's share").
 

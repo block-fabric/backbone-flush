@@ -422,10 +422,19 @@ private:
 
     static std::string ArgOf(const AssetId& asset) { return asset.IsNull() ? CURRENCY_UNIT : "0x" + asset.GetHex(); }
 
+    /** A logo's URL: the asset's (a launch's is its token's), with ?v= its version, the first 12 hex digits of the logo's
+     * SHA-256 (7.0.1: flush.markets caches logos for hours; a new logo is a new URL). */
+    static std::string LogoUrlOf(const AssetId& asset, const bitassets::LogoRecord& logo)
+    {
+        return strprintf("/api/v1/assets/%s/logo?v=%s", asset.GetHex(), HexStr(std::span<const unsigned char>{logo.hash.begin(), logo.hash.end()}).substr(0, 12));
+    }
     static std::optional<std::string> LogoUrl(const bitassets::State& state, const AssetId& asset, bool launch)
     {
-        if (asset.IsNull() || !state.GetLogo(asset)) return std::nullopt;
-        return strprintf("/api/v1/%s/%s/logo", launch ? "launches" : "assets", asset.GetHex());
+        (void)launch;
+        if (asset.IsNull()) return std::nullopt;
+        const auto logo{state.GetLogo(asset)};
+        if (!logo) return std::nullopt;
+        return LogoUrlOf(asset, *logo);
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -475,6 +484,7 @@ private:
         bitassets::LaunchRecord rec;
         std::string ticker, name, info;
         bool logo{false};
+        std::string logo_url;
         uint32_t created_time{0};
         double raised{0}, sold{0}, price{0}, mcap{0}, progress{0}, curve_left{0}, volume_total{0};
         int decimals{bitassets::LAUNCH_DECIMALS};
@@ -523,7 +533,10 @@ private:
             const auto display{state.GetDisplayName(token)};
             l.name = display ? display->text : l.ticker;
             if (record && record->data.info) l.info = *record->data.info;
-            l.logo = state.GetLogo(token).has_value();
+            if (const auto logo{state.GetLogo(token)}) {
+                l.logo = true;
+                l.logo_url = LogoUrlOf(token, *logo);
+            }
             l.created_time = times.contains(rec->height) ? times.at(rec->height) : 0;
             l.pool = rec->pool;
             const auto pool{state.GetPool(rec->pool)};
@@ -555,7 +568,7 @@ private:
         m.SetString("id", Hex(l.token));
         m.SetString("ticker", l.ticker);
         m.SetString("name", l.name);
-        if (l.logo) m.SetString("logo", strprintf("/api/v1/launches/%s/logo", l.token.GetHex()));
+        if (l.logo) m.SetString("logo", l.logo_url);
         m.SetString("creator", AddressOf(l.rec.creator));
         m.SetUInt("created_height", static_cast<uint32_t>(l.rec.height));
         m.SetUInt("created_time", l.created_time);
@@ -1453,6 +1466,14 @@ private:
                 if (!bitassets::CheckFeeSplit(split)) Fail(Code::INVALID_ARGUMENT, "split: the shares sum to 10000 basis points, \"creator\" and \"burn\" at most once each, up to 3 different addresses");
                 payload["fee_split"] = shares;
             }
+            // 7.0.1: the creator keeps the control coin (the fee-flow release's launches), the app shows it with the launch.
+            if (req.GetBool("keep_control")) {
+                if (!Params().GetConsensus().sidechain.FeeFlowActive(tip.height + 1)) Fail(Code::FAILED_PRECONDITION, "keep_control: launches that keep their control coin do not apply yet on this network");
+                uri.emplace_back("keep_control", "1");
+                payload["keep_control"] = UniValue{true};
+                summary += ", keeping the control coin (Unlocked Supply)";
+                Fact(built, "Unlocked Supply", "the creator keeps the control coin and can mint more");
+            }
             // A slippage only with a first buy: the app refuses one without (7.0.1: every launch without a first buy failed).
             if (!req.GetString("first_buy_ecx").empty()) uri.emplace_back("slippage_bps", util::ToString(slippage));
             built.SetBool("app_ready", true);
@@ -1748,10 +1769,23 @@ private:
     Message Portfolio(const Message& req, const Tip& tip) const
     {
         if (!bitassets::market::Enabled()) Fail(Code::FAILED_PRECONDITION, "this node keeps no market index (-dexindex)");
-        const std::string address{util::TrimString(req.GetString("address"))};
-        const CTxDestination dest{address.size() <= 128 ? DecodeDestination(address) : CNoDestination{}};
-        if (!IsValidDestination(dest)) Fail(Code::INVALID_ARGUMENT, "not an address of this network");
-        const CScript script{GetScriptForDestination(dest)};
+        // The addresses asked: `address` and `addresses` (7.0.1: a wallet's several), each once, in order; 200 at most.
+        constexpr size_t MAX_ADDRESSES{200};
+        std::vector<std::string> asked;
+        if (!util::TrimString(req.GetString("address")).empty()) asked.push_back(util::TrimString(req.GetString("address")));
+        for (size_t i{0}; i < req.Count("addresses"); ++i) asked.push_back(util::TrimString(req.StringAt("addresses", i)));
+        if (asked.empty()) Fail(Code::INVALID_ARGUMENT, "address or addresses: an address of this network");
+        std::vector<std::pair<std::string, CScript>> owners;
+        std::set<CScript> scripts;
+        for (const std::string& text : asked) {
+            const CTxDestination dest{text.size() <= 128 ? DecodeDestination(text) : CNoDestination{}};
+            if (!IsValidDestination(dest)) Fail(Code::INVALID_ARGUMENT, "not an address of this network: " + text.substr(0, 128));
+            const CScript script{GetScriptForDestination(dest)};
+            if (!scripts.insert(script).second) continue;
+            owners.emplace_back(EncodeDestination(dest), script);
+        }
+        if (owners.size() > MAX_ADDRESSES) Fail(Code::INVALID_ARGUMENT, strprintf("addresses: at most %u", MAX_ADDRESSES));
+        const std::string address{owners.front().first};
         const bitassets::State state{tip.State()};
         const auto table{Launches(tip)};
         Message m{New("Portfolio")};
@@ -1761,29 +1795,39 @@ private:
             r.SetString("id", id.IsNull() ? std::string{} : Hex(id));
             r.SetString("ticker", Label(state, id));
         }};
+        for (const auto& [text, script] : owners) m.AddString("addresses", text);
         size_t reads{0};
         constexpr size_t MAX_READS{100};
+        constexpr size_t MAX_HOLDINGS{500};
+        bool truncated{false};
         using Kind = bitassets::Token::Kind;
-        for (const auto& h : bitassets::market::HoldingsOf(*tip.view, script, 500)) {
+        // The assets summed over the addresses, in the order first seen (exact units: 128 bits, capped at the most an amount is).
+        std::vector<AssetId> asset_order;
+        std::map<AssetId, std::pair<unsigned __int128, uint32_t>> summed;
+        // In all at most MAX_TOTAL holdings read, whatever the count of addresses (the work of one call is bounded).
+        constexpr size_t MAX_TOTAL{5000};
+        size_t total{0};
+        for (const auto& [owner, script] : owners) {
+        if (total >= MAX_TOTAL) {
+            truncated = true;
+            break;
+        }
+        const auto holdings{bitassets::market::HoldingsOf(*tip.view, script, std::min(MAX_HOLDINGS, MAX_TOTAL - total))};
+        total += holdings.size();
+        if (holdings.size() >= MAX_HOLDINGS) truncated = true;
+        for (const auto& h : holdings) {
             if (h.kind == Kind::ASSET) {
-                const uint8_t d{DecimalsOf(state, h.id)};
-                Message& a{m.Add("assets")};
-                a.SetString("asset_id", Hex(h.id));
-                a.SetString("ticker", Label(state, h.id));
-                a.SetUInt("decimals", d);
-                a.SetDouble("amount", Whole(h.amount, d));
-                a.SetString("amount_units", util::ToString(h.amount));
-                double price{0};
-                if (const auto it{table->by_token.find(h.id)}; it != table->by_token.end()) {
-                    price = table->launches[it->second].price;
-                } else if (const auto pool{state.GetPool(bitassets::PoolId(bitassets::CHN, h.id))}) {
-                    price = bitassets::market::PoolPrice(state, bitassets::PoolId(bitassets::CHN, h.id), *pool).value_or(0);
-                }
-                a.SetDouble("value_ecx", Whole(h.amount, d) * price);
+                auto [it, fresh]{summed.try_emplace(h.id)};
+                if (fresh) asset_order.push_back(h.id);
+                it->second.first += h.amount;
+                ++it->second.second;
                 continue;
             }
             // Each other holding is read whole: bounded, the rest left out (a portfolio of more is read in the app).
-            if (++reads > MAX_READS) continue;
+            if (++reads > MAX_READS) {
+                truncated = true;
+                continue;
+            }
             try {
                 if (h.kind == Kind::LP) {
                     const auto pool{state.GetPool(h.id)};
@@ -1791,6 +1835,7 @@ private:
                     UniValue params(UniValue::VARR);
                     params.push_back(Hex(h.id));
                     Message& l{m.Add("liquidity")};
+                    l.SetString("owner", owner);
                     l.SetString("pool", Hex(h.id));
                     l.SetString("shares_units", util::ToString(h.amount));
                     const double share{static_cast<double>(h.amount) / static_cast<double>(pool->shares)};
@@ -1801,12 +1846,15 @@ private:
                     l.SetDouble("amount_b", Whole(pool->reserve1, DecimalsOf(state, pool->asset1)) * share);
                     l.Mutable("pool_info") = PoolFromJson(Rpc("getpool", params), tip);
                 } else if (h.kind == Kind::POSITION) {
-                    m.Add("positions") = PositionMessage(Hex(h.id), tip);
+                    Message& p{m.Add("positions")};
+                    p = PositionMessage(Hex(h.id), tip);
+                    if (owners.size() > 1) p.SetString("owner", owner);
                 } else if (h.kind == Kind::ORDER) {
                     UniValue params(UniValue::VARR);
                     params.push_back(Hex(h.id));
                     const UniValue r{Rpc("getorder", params)};
                     Message& o{m.Add("orders")};
+                    o.SetString("owner", owner);
                     o.SetString("order", Hex(h.id));
                     o.SetString("book", r["book"].getValStr());
                     const auto id_of{[](const UniValue& v) { return v.isStr() && v.get_str().size() == 64 ? *uint256::FromHex(v.get_str()) : AssetId{}; }};
@@ -1824,6 +1872,7 @@ private:
                     params.push_back(Hex(h.id));
                     const UniValue r{Rpc("getauction", params)};
                     Message& a{m.Add("auctions")};
+                    a.SetString("owner", owner);
                     a.SetString("auction", Hex(h.id));
                     const auto id_of{[](const UniValue& v) { return v.isStr() && v.get_str().size() == 64 ? *uint256::FromHex(v.get_str()) : AssetId{}; }};
                     ref(a.Mutable("base"), id_of(r["base_id"]));
@@ -1840,9 +1889,34 @@ private:
             } catch (const UniValue&) {
             }
         }
+        }
+        for (const AssetId& id : asset_order) {
+            const auto& [units128, holders]{summed.at(id)};
+            const uint64_t units{units128 > bitassets::MAX_AMOUNT ? bitassets::MAX_AMOUNT : static_cast<uint64_t>(units128)};
+            const uint8_t d{DecimalsOf(state, id)};
+            Message& a{m.Add("assets")};
+            a.SetString("asset_id", Hex(id));
+            a.SetString("ticker", Label(state, id));
+            a.SetUInt("decimals", d);
+            a.SetDouble("amount", Whole(units, d));
+            a.SetString("amount_units", util::ToString(units));
+            double price{0};
+            if (const auto it{table->by_token.find(id)}; it != table->by_token.end()) {
+                price = table->launches[it->second].price;
+            } else if (const auto pool{state.GetPool(bitassets::PoolId(bitassets::CHN, id))}) {
+                price = bitassets::market::PoolPrice(state, bitassets::PoolId(bitassets::CHN, id), *pool).value_or(0);
+            }
+            a.SetDouble("value_ecx", Whole(units, d) * price);
+            a.SetUInt("holders", holders);
+        }
+        m.SetBool("truncated", truncated);
+        std::map<CScript, std::string> owner_of;
+        for (const auto& [text, script] : owners) owner_of.emplace(script, text);
         for (const auto& l : table->launches) {
-            if (l.rec.creator != script) continue;
+            const auto made_by{owner_of.find(l.rec.creator)};
+            if (made_by == owner_of.end()) continue;
             Message& c{m.Add("launches")};
+            c.SetString("owner", made_by->second);
             c.SetString("id", Hex(l.token));
             c.SetString("ticker", l.ticker);
             c.SetString("state", l.rec.Graduated() ? "graduated" : "curve");

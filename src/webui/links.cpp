@@ -473,6 +473,10 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         if (auto d{take("decimals")}) r.decimals = Int(*d, "decimals", 0, bitassets::MAX_DECIMALS);
         if (auto fee{take("fee_bps")}) r.fee_bps = Int(*fee, "fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
         if (auto a{take("allocation_bps")}) r.allocation_bps = Int(*a, "allocation_bps", 0, bitassets::MAX_LAUNCH_ALLOCATION);
+        if (auto k{take("keep_control")}) {
+            if (*k != "1" && *k != "0") throw LinkError("keep_control: 1 (the creator keeps the control coin) or 0");
+            r.keep_control = *k == "1";
+        }
         // A slippage without a first buy binds nothing: ignored (the public API of 7.0.0 wrote one on every launch).
         if (r.amount.empty() && r.floor.empty()) r.slippage_bps.reset();
         CheckLaunch(r);
@@ -774,15 +778,38 @@ std::string Decimal(uint64_t units, int decimals)
     return out;
 }
 
-std::string ConnectAnswer(const Request& request, const std::string& address)
+std::string ConnectAnswer(const Request& request, const std::string& address, const std::vector<std::string>& addresses, bool truncated)
 {
     // Every part is checked text (the callback a constant, the nonce and the network by the parser): nothing to escape, and
     // nothing that could be read as another part of the address.
     if (request.verb != Verb::CONNECT || request.callback != CONNECT_CALLBACK) throw LinkError("Not a connect");
-    if (address.size() < 8 || address.size() > 100 || !std::all_of(address.begin(), address.end(), [](char c) { return Lower(c) || Digit(c); })) {
-        throw LinkError("The address to share is not a bech32 address");
+    const auto bech32{[](const std::string& a) { return a.size() >= 8 && a.size() <= 100 && std::all_of(a.begin(), a.end(), [](char c) { return Lower(c) || Digit(c); }); }};
+    if (!bech32(address)) throw LinkError("The address to share is not a bech32 address");
+    if (addresses.size() > MAX_CONNECT_ADDRESSES) throw LinkError(strprintf("At most %u addresses are shared", MAX_CONNECT_ADDRESSES));
+    std::string list;
+    for (const std::string& a : addresses) {
+        if (!bech32(a)) throw LinkError("An address to share is not a bech32 address");
+        list += (list.empty() ? "" : ",") + a;
     }
-    return strprintf("%s#address=%s&nonce=%s&network=%s", request.callback, address, request.nonce, request.network);
+    std::string fragment{"address=" + address};
+    if (!list.empty()) fragment += "&addresses=" + list + (truncated ? "&truncated=1" : "");
+    return strprintf("%s#%s&nonce=%s&network=%s", request.callback, fragment, request.nonce, request.network);
+}
+
+std::vector<std::string> ConnectAddresses(const std::string& primary, const std::vector<std::string>& holding, bool& truncated)
+{
+    std::vector<std::string> out{primary};
+    std::set<std::string> seen{primary};
+    truncated = false;
+    for (const std::string& a : holding) {
+        if (!seen.insert(a).second) continue;
+        if (out.size() >= MAX_CONNECT_ADDRESSES) {
+            truncated = true;
+            break;
+        }
+        out.push_back(a);
+    }
+    return out;
 }
 
 } // namespace webui::links

@@ -183,8 +183,10 @@
   .chip {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    width: auto;
     gap: 0.3rem;
-    margin: 0.15rem 0.3rem 0 0;
+    margin: 0;
     padding: 0.1rem 0.5rem 0.1rem 0.15rem;
     border: 1px solid var(--line);
     border-radius: 999px;
@@ -221,8 +223,13 @@
   .small {
     font-size: 0.85rem;
   }
+  /* The label then the chips, side by side, wrapping only when the line is full. */
   .controlled {
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
   }
   .actions {
     display: flex;

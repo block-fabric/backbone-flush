@@ -61,6 +61,9 @@ const std::vector<RouteDef>& Routes()
         {"GET", {"tickers", "{ticker}"}, "GetTicker", {}},
         {"GET", {"addresses", "{address}", "holdings"}, "GetHoldings", {}},
         {"GET", {"addresses", "{address}", "portfolio"}, "GetPortfolio", {}},
+        // Several addresses (a wallet's, shared by flush:connect): ?addresses=a,b (64 at most) or a body {"addresses": [...]} (200).
+        {"GET", {"addresses", "portfolio"}, "GetPortfolio", {}},
+        {"POST", {"addresses", "portfolio"}, "GetPortfolio", {}},
         {"GET", {"assets"}, "ListAssets", {}},
         {"GET", {"assets", "{id}", "logo"}, "GetAssetLogo", {}, true},
         {"GET", {"assets", "{id}"}, "GetAsset", {}},
@@ -148,6 +151,7 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
     const pb::ServiceDesc* service{pool.FindService(SERVICE)};
     if (!service) return Status{Code::INTERNAL, "no service"};
     // The first route whose literal segments match (literals win over fields: they come first in the list).
+    std::optional<std::string> other_method;
     for (const RouteDef& route : Routes()) {
         if (route.pattern.size() != segments.size()) continue;
         bool match{true};
@@ -163,7 +167,11 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
         if (!match) continue;
         // pools/{pool} takes an id; two segments of assets are the pair's.
         if (route.method == std::string{"GetPool"} && route.pattern.size() == 2 && (segments[1].size() != 64 || !IsHex(segments[1]))) return Status{Code::NOT_FOUND, "pools/<id>: 64 hex digits; or pools/<asset>/<asset>"};
-        if (http_method != route.http_method) return Status{Code::UNIMPLEMENTED, strprintf("%s this resource", route.http_method)};
+        // A path may have a GET and a POST (addresses/portfolio: a short list in the query, a long one in a body).
+        if (http_method != route.http_method) {
+            if (!other_method) other_method = route.http_method;
+            continue;
+        }
         const pb::MethodDesc* method{nullptr};
         for (const pb::MethodDesc& m : service->methods) {
             if (m.name == route.method) method = &m;
@@ -236,6 +244,7 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
         }
         return match_out;
     }
+    if (other_method) return Status{Code::UNIMPLEMENTED, strprintf("%s this resource", *other_method)};
     return Status{Code::NOT_FOUND, "no such resource (see doc/public-api.md)"};
 }
 
