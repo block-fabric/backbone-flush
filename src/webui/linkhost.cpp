@@ -387,7 +387,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
                     if (!IsValidDestination(dest)) throw LinkError("split: " + to.substr(0, 128) + " is not an address of this chain");
                     share.kind = bitassets::FeeShare::ADDRESS;
                     share.script = GetScriptForDestination(dest);
-                    label = "Paid to " + EncodeDestination(dest) + " (not this wallet's: the link's, e.g. the site's fee)";
+                    label = "Paid to " + EncodeDestination(dest) + " (not this wallet's: the link's or launch file's, e.g. the launchpad's fee)";
                 }
                 shares.push_back(share);
                 UniValue entry(UniValue::VOBJ);

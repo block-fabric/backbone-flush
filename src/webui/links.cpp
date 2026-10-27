@@ -358,6 +358,13 @@ void CheckLaunch(const Request& r)
     if (r.amount.empty() && r.slippage_bps) throw LinkError("slippage_bps is the slippage of a first buy: this link has no first buy (ecx and min_tokens)");
     if (r.verb == Verb::LAUNCH && r.decimals && r.supply.empty()) throw LinkError("decimals go with a supply");
 }
+
+/** A fee share (upgrade v7) of a link (split=<to>:<bps>) or a launch file ({to, bps}): creator, burn or an address (checked by the host). */
+std::pair<std::string, int> Share(const std::string& to, const std::string& bps)
+{
+    if (to.empty() || to.size() > 128 || !std::all_of(to.begin(), to.end(), [](char c) { return Lower(c) || Digit(c); })) throw LinkError("split: the recipient is creator, burn or an address");
+    return {to, Int(bps, "split", 1, bitassets::FEE_SPLIT_BPS)};
+}
 } // namespace
 
 bool IsAction(std::string_view uri)
@@ -444,9 +451,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     for (const std::string& s : splits) {
         const size_t colon{s.rfind(':')};
         if (colon == std::string::npos || colon == 0 || colon + 1 == s.size()) throw LinkError("split: <creator | burn | address>:<basis points>");
-        const std::string to{s.substr(0, colon)};
-        if (to.size() > 128 || !std::all_of(to.begin(), to.end(), [](char c) { return Lower(c) || Digit(c); })) throw LinkError("split: the recipient is creator, burn or an address");
-        r.split.emplace_back(to, Int(s.substr(colon + 1), "split", 1, bitassets::FEE_SPLIT_BPS));
+        r.split.push_back(Share(s.substr(0, colon), s.substr(colon + 1)));
     }
     switch (r.verb) {
     case Verb::CONNECT:
@@ -674,7 +679,7 @@ Request ParseLaunchFile(std::string_view json, std::string_view network)
             if (!allowed.contains(key)) throw LinkError(strprintf("%s: %s is not a field of a launch file of version 1", what, key.substr(0, 40)));
         }
     }};
-    keys_only(doc, {"format", "version", "network", "ticker", "name", "description", "links", "logo", "first_buy", "supply", "decimals", "fee_bps", "allocation_bps"}, "The launch file");
+    keys_only(doc, {"format", "version", "network", "ticker", "name", "description", "links", "logo", "first_buy", "supply", "decimals", "fee_bps", "allocation_bps", "split", "keep_control"}, "The launch file");
     const auto str{[](const UniValue& obj, const char* key, bool required) -> std::string {
         const UniValue& v{obj.find_value(key)};
         if (v.isNull() && !required) return {};
@@ -737,6 +742,24 @@ Request ParseLaunchFile(std::string_view json, std::string_view network)
     r.decimals = whole("decimals", 0, bitassets::MAX_DECIMALS);
     r.fee_bps = whole("fee_bps", MIN_FEE_BPS, MAX_FEE_BPS);
     r.allocation_bps = whole("allocation_bps", 0, bitassets::MAX_LAUNCH_ALLOCATION);
+    // The split of the tunable part of the fees (upgrade v7), as a link's split: [{to, bps}] (to: creator, burn or an address).
+    const UniValue& split{doc.find_value("split")};
+    if (!split.isNull()) {
+        if (!split.isArray() || split.size() > bitassets::MAX_FEE_SHARES) throw LinkError(strprintf("The launch file: split is a list of at most %u {to, bps}", bitassets::MAX_FEE_SHARES));
+        for (const UniValue& share : split.getValues()) {
+            if (!share.isObject()) throw LinkError("The launch file: a split is {to, bps}");
+            keys_only(share, {"to", "bps"}, "split");
+            const UniValue& bps{share.find_value("bps")};
+            if (!bps.isNum()) throw LinkError("split.bps: whole basis points");
+            r.split.push_back(Share(str(share, "to", true), bps.getValStr()));
+        }
+    }
+    // As a link's keep_control=1: the creator keeps the control coin (Unlocked Supply).
+    const UniValue& keep{doc.find_value("keep_control")};
+    if (!keep.isNull()) {
+        if (!keep.isBool()) throw LinkError("The launch file: keep_control is true or false");
+        r.keep_control = keep.get_bool();
+    }
     CheckLaunch(r);
     return r;
 }

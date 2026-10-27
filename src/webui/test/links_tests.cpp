@@ -286,6 +286,27 @@ BOOST_AUTO_TEST_CASE(launch_files)
     // Without a logo or a first buy.
     const Request plain{ParseLaunchFile(R"({"format":"flush-launch","version":1,"network":"regtest","ticker":"LUMEN","name":"Lumen","description":"","links":[],"logo":null,"first_buy":null})", NET)};
     BOOST_CHECK(plain.logo.empty() && plain.amount.empty() && !plain.logo_sha256);
+    BOOST_CHECK(plain.split.empty() && !plain.keep_control);
+    // A launchpad's split and keep_control, as a link's split= and keep_control=1.
+    const std::string pad{"bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke"};
+    const Request split{ParseLaunchFile(file(strprintf(R"(,"split":[{"to":"creator","bps":7500},{"to":"%s","bps":2500}],"keep_control":true)", pad)), NET)};
+    BOOST_REQUIRE_EQUAL(split.split.size(), 2U);
+    BOOST_CHECK(split.split[0] == std::make_pair(std::string{"creator"}, 7500));
+    BOOST_CHECK(split.split[1] == std::make_pair(pad, 2500));
+    BOOST_CHECK(split.keep_control);
+    BOOST_CHECK(ParseLaunchFile(file(R"(,"split":null,"keep_control":false)"), NET).split.empty());
+    // Refused: bps as text, out of range, an unknown key, a recipient that is no recipient, more shares than a launch has, not a list.
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"creator","bps":"7500"}])"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"creator","bps":0}])"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"creator","bps":10001}])"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"creator","bps":7500,"memo":"x"}])"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"Creator!","bps":7500}])"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[{"to":"","bps":7500}])"), NET), LinkError);
+    std::string many;
+    for (size_t i{0}; i <= bitassets::MAX_FEE_SHARES; ++i) many += strprintf(R"(%s{"to":"burn","bps":1})", i ? "," : "");
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":[)" + many + "]"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"split":"creator:10000")"), NET), LinkError);
+    BOOST_CHECK_THROW(ParseLaunchFile(file(R"(,"keep_control":1)"), NET), LinkError);
 }
 
 namespace {
