@@ -67,6 +67,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.graduation100_height = *height;
         } else if (deployment_name == "v7") {
             options.v7_height = *height;
+        } else if (deployment_name == "v8") {
+            options.v8_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {
             options.activation_heights[*buried_deployment] = *height;
         } else {

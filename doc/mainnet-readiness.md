@@ -17,6 +17,8 @@ A fresh chain with the final rules only: every rule is active from Flush's first
   marked Mintable.
 - The DEX's ECX payouts (swaps, curve sales, pools, auctions, the split's addresses) in the coinbase of the block with
   the trade, every block (upgrade v7's instant payouts); deposits, withdrawals, unbonds and rewards with the anchors.
+- The buybacks scanned 64 a block from a cursor, those that cannot buy yet out of the index (upgrade v8): a block's
+  work bounded whatever the count of launches.
 - Blocks of stake: 24 hours without BMM before they halt (5760 slots of 15 s); seed and set 48 hours ahead; the
   drivechain undo depth is 12960 blocks; the least prune target is 24000 MiB; the liveness fix is on.
 - Unbonding: a week of anchors (1008; 432 on ecashtest).

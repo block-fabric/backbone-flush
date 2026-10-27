@@ -707,6 +707,8 @@ public:
             consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v7 only if a test asks (-testactivationheight=v7@<height>).
             consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v8 only if a test asks (-testactivationheight=v8@<height>).
+            consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -906,6 +908,8 @@ public:
         // Upgrade v7 from the first block: the DEX's ECX payouts in every block (not only with the peg actions), and the
         // launch fee split (25 % security, 75 % split). Graduation at 100 ECX: launch_graduation above.
         consensus.sidechain.v7_height = 0;
+        // Upgrade v8 from the first block: the buybacks scanned a bounded number a block (bitassets::MAX_BUYBACK_SCAN).
+        consensus.sidechain.v8_height = 0;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

@@ -133,6 +133,11 @@ inline constexpr size_t MAX_TX_PAYOUTS_PER_BLOCK{500};
  * transaction has one action, which pays out once at most, in 150 vbytes or more.
  */
 inline constexpr int64_t PAYOUT_POLICY_VSIZE{750};
+/**
+ * Upgrade v8: the most tokens of the index of buybacks a block looks at (State::ProtocolOrders): its work bounded
+ * whatever the count of launches; the next block goes on from where it stopped, so each comes round in turn.
+ */
+inline constexpr size_t MAX_BUYBACK_SCAN{64};
 /** Most tokens one burn names. */
 inline constexpr size_t MAX_BURNS{16};
 
