@@ -982,7 +982,7 @@ public:
                 consensus.sidechain.v7_height = SLOT99_V7_HEIGHT;
                 // Upgrade v8 (doc/photon-slot.md, "Upgrade v8"), from block SLOT99_V8_HEIGHT: the buybacks scanned a bounded
                 // number a block, those that cannot buy yet out of the index. In the fingerprint.
-                static constexpr int SLOT99_V8_HEIGHT{std::numeric_limits<int>::max()};
+                static constexpr int SLOT99_V8_HEIGHT{20600};
                 consensus.sidechain.v8_height = SLOT99_V8_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
