@@ -105,6 +105,8 @@ public:
     virtual bool LaunchParamsActive() = 0;
     //! Whether the next block takes a launch's fee split (upgrade v7), and the security part of a launch's fee then (millionths).
     virtual bool FeeSplitActive() { return false; }
+    //! Whether the next block takes the fee-flow release's launches (a kept control coin).
+    virtual bool FeeFlowActive() { return false; }
     virtual uint32_t LaunchSecurityShare() { return 200'000; }
     //! The network's fee of a launch's curve (millionths).
     virtual uint32_t LaunchFee() = 0;
@@ -155,6 +157,12 @@ Plan Resolve(const Request& request, Source source, Reader& reader, int64_t now)
 
 /** The question of a connect: the site, the address shared, where the answer goes. */
 Window::ConfirmDialog ConnectQuestion(const Request& request, Source source, const std::string& wallet, const std::string& address, int64_t now);
+/**
+ * The question of a connect sharing several addresses (7.0.1): "Share N addresses of wallet <name>", the wallet named
+ * first and loud, every address listed, the note that the site can link them as one person's. Declined, the app asks
+ * ConnectQuestion (the one address) next: the user's other choice.
+ */
+Window::ConfirmDialog ConnectAllQuestion(const Request& request, Source source, const std::string& wallet, const std::vector<std::string>& addresses, bool truncated, int64_t now);
 
 class LinkHost
 {

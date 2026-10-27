@@ -318,6 +318,8 @@ struct FakeReader : Reader {
     uint32_t first_buy_fee{0};
     bool params_active{true};
     bool LaunchParamsActive() override { return params_active; }
+    bool fee_flow{true};
+    bool FeeFlowActive() override { return fee_flow; }
     uint32_t LaunchFee() override { return 11'500; }
     std::optional<Pool> PoolById(const uint256& id) override
     {
@@ -426,6 +428,24 @@ BOOST_AUTO_TEST_CASE(buy_sell_swap_resolve_by_id_with_a_fresh_quote)
     std::string too_fine{swap};
     too_fine.replace(too_fine.find("min_out=49.5"), 12, "min_out=50.001");
     BOOST_CHECK_NE(ResolveRefused(too_fine, reader).find("moved"), std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(launch_link_keeps_control)
+{
+    // 7.0.1: keep_control=1 asks to keep the control coin: in the launch's options, and shown loud in its one question.
+    FakeReader reader;
+    const std::string uri{"flush:launch?v=1&network=regtest&exp=" + Exp() + "&ticker=LUMEN&name=Lumen"};
+    Plan kept{Resolve(Parse(uri + "&keep_control=1", NET, NOW), Source::BROWSER, reader, NOW)};
+    BOOST_CHECK_EQUAL(kept.then_params.write(), R"(["LUMEN",{"display_name":"Lumen","keep_control":true}])");
+    BOOST_CHECK(std::any_of(kept.preface.begin(), kept.preface.end(), [](const auto& r) { return r.kind == webui::dialog::Row::Kind::HEADING && r.label.starts_with("Unlocked Supply"); }));
+    // Without it (or 0): not kept, nothing said.
+    for (const std::string& extra : {std::string{}, std::string{"&keep_control=0"}}) {
+        Plan plain{Resolve(Parse(uri + extra, NET, NOW), Source::BROWSER, reader, NOW)};
+        BOOST_CHECK_EQUAL(plain.then_params.write(), R"(["LUMEN",{"display_name":"Lumen"}])");
+    }
+    BOOST_CHECK_THROW(Parse(uri + "&keep_control=yes", NET, NOW), LinkError);
+    reader.fee_flow = false;
+    BOOST_CHECK_NE(ResolveRefused(uri + "&keep_control=1", reader).find("control coin"), std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(launch_resolves_to_reserve_then_launch)
@@ -693,6 +713,38 @@ BOOST_FIXTURE_TEST_CASE(connect_shares_one_address_with_the_one_callback_once, L
     host->Handle("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=1123456789abcdef01234567", Source::BROWSER);
     BOOST_REQUIRE_EQUAL(opened.size(), 2U);
     BOOST_CHECK_NE(opened[1].find("address=" + address->value + "&"), std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(connect_shares_the_wallets_addresses)
+{
+    // 7.0.1: the primary first, then the wallet's addresses that hold something, each once, at most MAX_CONNECT_ADDRESSES.
+    bool truncated{true};
+    const auto list{ConnectAddresses("rflx1qprimary0", {"rflx1qbbbbbbbb", "rflx1qprimary0", "rflx1qaaaaaaaa", "rflx1qbbbbbbbb"}, truncated)};
+    BOOST_CHECK(list == (std::vector<std::string>{"rflx1qprimary0", "rflx1qbbbbbbbb", "rflx1qaaaaaaaa"}));
+    BOOST_CHECK(!truncated);
+    std::vector<std::string> many;
+    for (int i{0}; i < 250; ++i) many.push_back(strprintf("rflx1q%08d", i));
+    const auto capped{ConnectAddresses("rflx1qprimary0", many, truncated)};
+    BOOST_CHECK_EQUAL(capped.size(), MAX_CONNECT_ADDRESSES);
+    BOOST_CHECK(truncated);
+    // The fragment: address, the list, truncated, then the nonce and the network.
+    const std::string nonce{"0123456789abcdef01234567"};
+    const Request r{Parse("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=" + nonce, NET, NOW)};
+    BOOST_CHECK_EQUAL(ConnectAnswer(r, "rflx1qprimary0", list), "https://flush.markets/connect#address=rflx1qprimary0&addresses=rflx1qprimary0,rflx1qbbbbbbbb,rflx1qaaaaaaaa&nonce=" + nonce + "&network=regtest");
+    BOOST_CHECK_NE(ConnectAnswer(r, "rflx1qprimary0", capped, true).find("&truncated=1&nonce="), std::string::npos);
+    BOOST_CHECK_EQUAL(ConnectAnswer(r, "rflx1qprimary0"), "https://flush.markets/connect#address=rflx1qprimary0&nonce=" + nonce + "&network=regtest");
+    BOOST_CHECK_THROW(ConnectAnswer(r, "rflx1qprimary0", {"rflx1qprimary0", "rflx1q&x=evil"}), LinkError);
+    many.push_back("rflx1qprimary0");
+    BOOST_CHECK_THROW(ConnectAnswer(r, "rflx1qprimary0", many), LinkError);
+    // The question: the wallet named in the title and first, every address listed, the note that the site links them.
+    const auto q{webui::links::ConnectAllQuestion(r, Source::BROWSER, "validator", list, false, NOW)};
+    BOOST_CHECK_EQUAL(q.title, "Share 3 addresses of wallet validator");
+    BOOST_CHECK_EQUAL(q.accept, "Share all 3");
+    BOOST_CHECK(HasRow(q.rows, "Wallet", "validator"));
+    size_t shown{0};
+    for (const auto& row : q.rows) shown += row.kind == webui::dialog::Row::Kind::ADDRESS;
+    BOOST_CHECK_EQUAL(shown, 3U);
+    BOOST_CHECK_NE(q.message.find("validator"), std::string::npos);
 }
 
 BOOST_FIXTURE_TEST_CASE(connect_without_a_browser_shows_what_to_copy, LinkHostSetup)

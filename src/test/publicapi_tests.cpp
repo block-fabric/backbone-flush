@@ -343,6 +343,13 @@ BOOST_AUTO_TEST_CASE(rest_routes)
     BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(post));
     BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(post).request->GetString("hex"), "00");
     BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(route("POST", "broadcast", "", "[1]")));
+    // 7.0.1: a portfolio of several addresses, GET with a list in the query, POST with one in a body.
+    BOOST_CHECK_EQUAL(match("addresses/portfolio", "addresses=a1,a2").request->Count("addresses"), 2U);
+    auto many{route("POST", "addresses/portfolio", "", R"({"addresses":["a1","a2","a3"]})")};
+    const std::string why{std::holds_alternative<grpcsrv::Status>(many) ? std::get<grpcsrv::Status>(many).message : std::string{}};
+    BOOST_REQUIRE_MESSAGE(std::holds_alternative<grpcsrv::RestMatch>(many), why);
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(many).request->Count("addresses"), 3U);
+    BOOST_CHECK_EQUAL(match("addresses/abc/portfolio").request->GetString("address"), "abc");
 }
 
 BOOST_AUTO_TEST_CASE(rest_json_printing)

@@ -863,6 +863,51 @@ RPCMethod listmyassets()
     };
 }
 
+RPCMethod listholdingaddresses()
+{
+    return RPCMethod{
+        "listholdingaddresses",
+        "The addresses of this wallet that hold something in blocks: " + CURRENCY_UNIT + " or tokens (assets, control coins, pool shares, positions, orders, auction receipts). For a site the wallet connects to (flush:connect), which reads them all.",
+        {},
+        RPCResult{RPCResult::Type::ARR, "", "By address, in order",
+            {{RPCResult::Type::OBJ, "", "",
+                {
+                    {RPCResult::Type::STR, "address", ""},
+                    {RPCResult::Type::STR_AMOUNT, "amount", CURRENCY_UNIT + " on it"},
+                    {RPCResult::Type::NUM, "tokens", "Outputs with tokens on it"},
+                }}}},
+        RPCExamples{HelpExampleCli("listholdingaddresses", "")},
+        [&](const RPCMethod&, const JSONRPCRequest& request) -> UniValue {
+            const std::shared_ptr<CWallet> pwallet{GetWalletForJSONRPCRequest(request)};
+            if (!pwallet) return UniValue::VNULL;
+            pwallet->BlockUntilSyncedToCurrentChain();
+            std::map<std::string, std::pair<CAmount, int>> held;
+            for (const auto& owned : OwnedTokens(*pwallet)) {
+                if (IsValidDestination(owned.dest)) ++held[EncodeDestination(owned.dest)].second;
+            }
+            {
+                LOCK(pwallet->cs_wallet);
+                CoinFilterParams filter;
+                filter.min_amount = 1;
+                for (const COutput& out : AvailableCoins(*pwallet, nullptr, std::nullopt, filter).All()) {
+                    CTxDestination dest;
+                    if (out.depth < 1 || !ExtractDestination(out.txout.scriptPubKey, dest)) continue;
+                    held[EncodeDestination(dest)].first += out.txout.nValue;
+                }
+            }
+            UniValue result(UniValue::VARR);
+            for (const auto& [address, what] : held) {
+                UniValue entry(UniValue::VOBJ);
+                entry.pushKV("address", address);
+                entry.pushKV("amount", ValueFromAmount(what.first));
+                entry.pushKV("tokens", what.second);
+                result.push_back(std::move(entry));
+            }
+            return result;
+        },
+    };
+}
+
 RPCMethod searchmyassets()
 {
     return RPCMethod{
