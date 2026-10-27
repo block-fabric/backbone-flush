@@ -30,6 +30,13 @@
  *    the block, the volume (what the pool's own volumes counted) in its first asset.
  *  - **Holders**: what each script holds of each token (asset coins, liquidity shares, positions, orders), by token
  *    (largest first, and how many hold it) and by script (an address's holdings), from the outputs that carry tokens.
+ *  - **Outcomes** (layout 2): what became of each order, by its transaction and by address (newest first). A swap of the
+ *    batch (any pool kind, a route, a launch buy or sale), filled or missed: its route, its amounts hop by hop, what it
+ *    got back at a curve's end and how it was paid, or its refund. A limit order (PlaceOrder): its book, side, limit and
+ *    owner (the output its token went to), each block that filled some of it, each collect (a SettleOrder that leaves it
+ *    open) and how it ended (filled, evicted, cancelled or settled; expired is the tip's to say). Placements and settles
+ *    are noted as they apply (NoteOrder, NoteSettle, from State::ApplyTx); fills and evictions read from the journal of
+ *    the orders' table, against the order's own row.
  *
  * Like the search index of the assets (bitassets/index.h) it is derived data kept with the state, under the byte
  * sidechain::DERIVED_TABLE (then 'X', the index's other letters being its own), written at the end of each block in the
@@ -42,8 +49,8 @@
  */
 namespace bitassets::market {
 
-/** The layout of the market index (1: the first). */
-inline constexpr uint32_t MARKET_LAYOUT{1};
+/** The layout of the market index (1: the first; 2: the orders' outcomes, misses included). */
+inline constexpr uint32_t MARKET_LAYOUT{2};
 
 /** Whether this node keeps the index (-dexindex). Set before the chainstate is loaded. */
 void SetEnabled(bool enabled);
@@ -77,6 +84,37 @@ struct Fill {
 };
 void NoteFill(sidechain::StoreOverlay& store, uint32_t index, const Fill& fill);
 
+/** A limit order placed (PlaceOrder), as its transaction made it: noted by State::ApplyTx, taken by ConnectBlock. */
+struct Placed {
+    BookOrder order;
+    AssetId sell;
+    AssetId buy;
+    //! The output its token went to (its owner's).
+    uint32_t token_n{0};
+    SERIALIZE_METHODS(Placed, obj) { READWRITE(obj.order, obj.sell, obj.buy, obj.token_n); }
+};
+void NoteOrder(sidechain::StoreOverlay& store, const Placed& placed);
+
+/** A SettleOrder applied: what it paid out of the order (CHN by the coinbase to chn_to, an asset to its result output). */
+struct Settled {
+    Txid txid;
+    //! The order's own transaction (its PlaceOrder).
+    Txid order;
+    bool cancel{false};
+    //! The order is gone (cancelled, or expired, filled or evicted); else what it got was collected and it stays.
+    bool closes{false};
+    //! What it had left to sell then.
+    uint64_t remaining{0};
+    uint64_t proceeds{0};
+    uint64_t left{0};
+    CScript chn_to;
+    //! The result outputs of the asset paid (none: by the coinbase, or nothing).
+    std::optional<uint32_t> proceeds_n;
+    std::optional<uint32_t> left_n;
+    SERIALIZE_METHODS(Settled, obj) { READWRITE(obj.txid, obj.order, obj.cancel, obj.closes, obj.remaining, obj.proceeds, obj.left, obj.chn_to, BA_OPT(obj.proceeds_n), BA_OPT(obj.left_n)); }
+};
+void NoteSettle(sidechain::StoreOverlay& store, const Settled& settled);
+
 /** Bring the index up to date with a block connected at `height` (after State::FinishBlock and the search index). */
 void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int height);
 
@@ -99,6 +137,70 @@ struct TradeRow {
     uint8_t hops{1};
     SERIALIZE_METHODS(TradeRow, obj) { READWRITE(obj.txid, obj.height, obj.time, obj.pool, obj.asset_in, obj.asset_out, obj.amount_in, obj.amount_out, obj.back, obj.to, obj.curve, obj.hops); }
 };
+
+/** A swap's outcome (an order of the batch): filled or missed, by its transaction. */
+struct SwapRow {
+    Fill fill;
+    int32_t height{0};
+    uint32_t time{0};
+    //! The script of its result output (what gets an asset out, or an asset back).
+    CScript result;
+    SERIALIZE_METHODS(SwapRow, obj) { READWRITE(obj.fill, obj.height, obj.time, obj.result); }
+    //! Who got what it paid out: CHN by the coinbase to chn_to, an asset to its result output; a miss its refund.
+    const CScript& Payee() const { return (fill.filled ? fill.path.back() : fill.path.front()).IsNull() ? fill.chn_to : result; }
+};
+
+/** A limit order's outcome, by its transaction (PlaceOrder): its terms, its owner, what it did. */
+struct OrderRow {
+    Placed placed;
+    uint32_t time{0};
+    CScript owner;
+    //! As of its last fill: what it has left to sell, and what it got in all.
+    uint64_t remaining{0};
+    uint64_t got{0};
+    //! The block it was evicted in (0: never).
+    int32_t evicted{0};
+    //! Its fills and collects (events).
+    uint32_t fills{0};
+    uint32_t collects{0};
+    //! How it was closed, if it was (closed: the block, its time, the SettleOrder; cancelled: by a cancel while it still traded).
+    int32_t closed{0};
+    uint32_t closed_time{0};
+    bool cancelled{false};
+    Settled settle;
+    SERIALIZE_METHODS(OrderRow, obj) { READWRITE(obj.placed, obj.time, obj.owner, obj.remaining, obj.got, obj.evicted, obj.fills, obj.collects, obj.closed, obj.closed_time, obj.cancelled, obj.settle); }
+};
+
+/** Something a limit order did in a block: a fill (sold, got) or a collect (a SettleOrder that left it open: got = proceeds). */
+struct OrderEvent {
+    enum Kind : uint8_t { FILL = 0, COLLECT = 1 };
+    uint8_t kind{FILL};
+    int32_t height{0};
+    uint32_t time{0};
+    uint64_t sold{0};
+    uint64_t got{0};
+    //! A collect's.
+    std::optional<Settled> settle;
+    SERIALIZE_METHODS(OrderEvent, obj) { READWRITE(obj.kind, obj.height, obj.time, obj.sold, obj.got, BA_OPT(obj.settle)); }
+};
+
+/** An order's outcome: a swap's, or a limit order's with its events (oldest first, the first `max_events`). */
+struct Outcome {
+    std::optional<SwapRow> swap;
+    std::optional<OrderRow> order;
+    std::vector<OrderEvent> events;
+    //! Found by a SettleOrder of the order (not its own transaction).
+    bool by_settle{false};
+};
+/** The outcome of an order by its transaction, or by a SettleOrder's (the order it settled); nullopt: no order the index knows of. */
+std::optional<Outcome> GetOutcome(const sidechain::StoreView& view, const Txid& txid, size_t max_events);
+/**
+ * The outcomes of a script's orders, newest first (the block it was made in), a page at a time; and how many. A swap is
+ * a script's if it is its chn_to or its result output's; a limit order its owner's.
+ */
+std::vector<Outcome> OutcomesOf(const sidechain::StoreView& view, const CScript& script, const std::vector<unsigned char>& cursor, size_t limit, size_t max_events,
+                                std::vector<unsigned char>& next);
+uint64_t OutcomeCount(const sidechain::StoreView& view, const CScript& script);
 
 /** Candle intervals. */
 enum class Interval : uint8_t { M5 = 0, H1 = 1, H4 = 2, D1 = 3 };

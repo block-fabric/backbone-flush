@@ -28,6 +28,7 @@ std::atomic<bool> g_enabled{false};
 //! The tables of the state the index reads the journal of (bitassets/state.cpp).
 constexpr uint8_t ST_TOKENS{0x30};
 constexpr uint8_t ST_POOLS{0x34};
+constexpr uint8_t ST_BOOK_ORDERS{0x98};
 
 //! After DERIVED_TABLE: the market index's letter, then its own.
 constexpr unsigned char MARKET{'X'};
@@ -44,6 +45,14 @@ constexpr unsigned char K_CANDLE_POOL{'k'};
 constexpr unsigned char K_CANDLE_LAUNCH{'K'};
 constexpr unsigned char K_MARKET_POOL{'p'};
 constexpr unsigned char K_MARKET_LAUNCH{'P'};
+constexpr unsigned char K_PLACED{'g'};
+constexpr unsigned char K_SETTLED{'h'};
+constexpr unsigned char K_SWAP{'x'};
+constexpr unsigned char K_ORDER{'l'};
+constexpr unsigned char K_EVENT{'e'};
+constexpr unsigned char K_SETTLE{'y'};
+constexpr unsigned char K_BY_SCRIPT{'a'};
+constexpr unsigned char K_SCRIPT_COUNT{'n'};
 
 Bytes K(unsigned char sub) { return Bytes{sidechain::DERIVED_TABLE, MARKET, sub}; }
 void Put32(Bytes& out, uint32_t v) { sidechain::KeyCodec<uint32_t>::Encode(out, v); }
@@ -145,6 +154,34 @@ Bytes MarketKey(const Market& m)
     return k;
 }
 
+Bytes TxKey(unsigned char sub, const Txid& txid)
+{
+    Bytes k{K(sub)};
+    PutHash(k, txid.ToUint256());
+    return k;
+}
+Bytes EventKey(const Txid& order, int32_t height, uint32_t seq)
+{
+    Bytes k{TxKey(K_EVENT, order)};
+    Put32(k, static_cast<uint32_t>(height));
+    Put32(k, seq);
+    return k;
+}
+Bytes ByScriptPrefix(const CScript& script)
+{
+    Bytes k{K(K_BY_SCRIPT)};
+    const Bytes skey{ScriptKey(script)};
+    k.insert(k.end(), skey.begin(), skey.end());
+    return k;
+}
+Bytes ScriptCountKey(const CScript& script)
+{
+    Bytes k{K(K_SCRIPT_COUNT)};
+    const Bytes skey{ScriptKey(script)};
+    k.insert(k.end(), skey.begin(), skey.end());
+    return k;
+}
+
 template <typename V>
 std::optional<V> GetValue(const sidechain::StoreView& view, const Bytes& key)
 {
@@ -207,6 +244,45 @@ std::optional<AssetId> LaunchOfPool(const State& state, const uint256& id, const
     return std::nullopt;
 }
 
+/** An order's outcome under a script: newest first (its block, then its id), and the script's count. */
+void AddByScript(sidechain::StoreOverlay& store, const CScript& script, int32_t height, const Txid& txid)
+{
+    if (script.empty()) return;
+    Bytes key{ByScriptPrefix(script)};
+    Put32(key, ~static_cast<uint32_t>(height));
+    PutHash(key, txid.ToUint256());
+    if (store.Contains(key)) return;
+    store.Put(key, {});
+    const Bytes ckey{ScriptCountKey(script)};
+    store.Put(ckey, sidechain::EncodeValue(GetU64(store, ckey) + 1));
+}
+
+/** Drain the entries noted under `sub` this block, in key order. */
+template <typename V>
+std::vector<V> TakeNotes(sidechain::StoreOverlay& store, unsigned char sub)
+{
+    std::vector<Bytes> keys;
+    std::vector<V> notes;
+    store.ForEach(K(sub), [&](const Bytes& key, const Bytes& value) {
+        keys.push_back(key);
+        notes.push_back(sidechain::DecodeValue<V>(value));
+        return true;
+    });
+    for (const Bytes& key : keys) store.Erase(key);
+    return notes;
+}
+
+std::vector<OrderEvent> EventsOf(const sidechain::StoreView& view, const Txid& order, size_t limit)
+{
+    std::vector<OrderEvent> events;
+    view.ForEach(TxKey(K_EVENT, order), [&](const Bytes&, const Bytes& value) {
+        if (events.size() >= limit) return false;
+        events.push_back(sidechain::DecodeValue<OrderEvent>(value));
+        return true;
+    });
+    return events;
+}
+
 } // namespace
 
 void SetEnabled(bool enabled) { g_enabled = enabled; }
@@ -253,6 +329,18 @@ void NoteFill(sidechain::StoreOverlay& store, uint32_t index, const Fill& fill)
     Bytes key{K(K_FILL)};
     Put32(key, index);
     store.Put(key, sidechain::EncodeValue(fill));
+}
+
+void NoteOrder(sidechain::StoreOverlay& store, const Placed& placed)
+{
+    if (!Enabled()) return;
+    store.Put(TxKey(K_PLACED, placed.order.txid), sidechain::EncodeValue(placed));
+}
+
+void NoteSettle(sidechain::StoreOverlay& store, const Settled& settled)
+{
+    if (!Enabled()) return;
+    store.Put(TxKey(K_SETTLED, settled.txid), sidechain::EncodeValue(settled));
 }
 
 std::optional<double> PoolPrice(const State& state, const uint256& id, const Pool& pool)
@@ -302,8 +390,13 @@ void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int heigh
     // What the journal says is read whole first: writing to the overlay notes more in it.
     std::map<uint256, std::optional<Pool>> old_pools;
     std::vector<std::pair<COutPoint, std::optional<Token>>> token_changes;
+    std::vector<uint256> orders_changed;
     for (const auto& [key, old] : store.Journal().entries) {
         if (key.empty()) continue;
+        if (key[0] == ST_BOOK_ORDERS && key.size() == 33) {
+            orders_changed.emplace_back(std::span{key}.subspan(1, 32));
+            continue;
+        }
         if (key[0] == ST_POOLS && key.size() >= 33) {
             const uint256 id{std::span{key}.subspan(1, 32)};
             old_pools.emplace(id, old ? std::optional{sidechain::DecodeValue<Pool>(*old)} : std::nullopt);
@@ -341,6 +434,76 @@ void ConnectBlock(sidechain::StoreOverlay& store, const CBlock& block, int heigh
         });
         for (const Bytes& key : keys) store.Erase(key);
     }
+    // Outcomes: each order of the batch, filled or missed, by its transaction and its scripts (chn_to, its result output's).
+    for (const Fill& fill : fills) {
+        if (fill.path.empty()) continue;
+        const SwapRow row{fill, height, time, script_of(COutPoint{fill.txid, fill.result_n})};
+        store.Put(TxKey(K_SWAP, fill.txid), sidechain::EncodeValue(row));
+        AddByScript(store, fill.chn_to, height, fill.txid);
+        if (row.result != fill.chn_to) AddByScript(store, row.result, height, fill.txid);
+    }
+    // Limit orders: placed (their owner the output their token went to), settled (collected, or closed), then filled or
+    // evicted (what the journal of the orders' table says changed, against each one's row: the batch is the block's end).
+    uint32_t event_seq{0};
+    for (const Placed& placed : TakeNotes<Placed>(store, K_PLACED)) {
+        OrderRow row;
+        row.placed = placed;
+        row.time = time;
+        row.owner = script_of(COutPoint{placed.order.txid, placed.token_n});
+        row.remaining = placed.order.remaining;
+        row.got = placed.order.got;
+        store.Put(TxKey(K_ORDER, placed.order.txid), sidechain::EncodeValue(row));
+        AddByScript(store, row.owner, height, placed.order.txid);
+    }
+    for (const Settled& settled : TakeNotes<Settled>(store, K_SETTLED)) {
+        const Bytes okey{TxKey(K_ORDER, settled.order)};
+        auto row{GetValue<OrderRow>(store, okey)};
+        if (!row) continue;
+        store.Put(TxKey(K_SETTLE, settled.txid), sidechain::EncodeValue(settled.order));
+        if (settled.closes) {
+            row->closed = height;
+            row->closed_time = time;
+            // A cancel of an order that still traded (not filled, expired or evicted).
+            row->cancelled = settled.cancel && settled.remaining > 0 && row->placed.order.expiry >= height && row->evicted == 0;
+            row->settle = settled;
+        } else {
+            OrderEvent event;
+            event.kind = OrderEvent::COLLECT;
+            event.height = height;
+            event.time = time;
+            event.got = settled.proceeds;
+            event.settle = settled;
+            store.Put(EventKey(settled.order, height, event_seq++), sidechain::EncodeValue(event));
+            ++row->collects;
+        }
+        store.Put(okey, sidechain::EncodeValue(*row));
+    }
+    for (const uint256& id : orders_changed) {
+        const auto now{state.GetOrder(id)};
+        if (!now) continue;
+        const Bytes okey{TxKey(K_ORDER, now->txid)};
+        auto row{GetValue<OrderRow>(store, okey)};
+        if (!row) continue;
+        bool changed{false};
+        if (now->remaining < row->remaining || now->got > row->got) {
+            OrderEvent event;
+            event.height = height;
+            event.time = time;
+            event.sold = row->remaining - std::min(row->remaining, now->remaining);
+            event.got = now->got - std::min(now->got, row->got);
+            store.Put(EventKey(now->txid, height, event_seq++), sidechain::EncodeValue(event));
+            ++row->fills;
+            row->remaining = now->remaining;
+            row->got = now->got;
+            changed = true;
+        }
+        if (now->evicted != 0 && row->evicted == 0) {
+            row->evicted = now->evicted;
+            changed = true;
+        }
+        if (changed) store.Put(okey, sidechain::EncodeValue(*row));
+    }
+
     std::map<uint256, uint32_t> pool_trades;
     //! What the trades moved of each pool's first asset (in its units): the candles' volume.
     std::map<uint256, uint64_t> pool_volume0;
@@ -476,6 +639,50 @@ std::vector<TradeRow> Trades(const sidechain::StoreView& view, const Market& mar
     }
     return rows;
 }
+
+std::optional<Outcome> GetOutcome(const sidechain::StoreView& view, const Txid& txid, size_t max_events)
+{
+    Outcome out;
+    if ((out.swap = GetValue<SwapRow>(view, TxKey(K_SWAP, txid)))) return out;
+    Txid order{txid};
+    if (const auto settled{GetValue<Txid>(view, TxKey(K_SETTLE, txid))}) {
+        order = *settled;
+        out.by_settle = true;
+    }
+    out.order = GetValue<OrderRow>(view, TxKey(K_ORDER, order));
+    if (!out.order) return std::nullopt;
+    out.events = EventsOf(view, order, max_events);
+    return out;
+}
+
+std::vector<Outcome> OutcomesOf(const sidechain::StoreView& view, const CScript& script, const std::vector<unsigned char>& cursor, size_t limit, size_t max_events,
+                                std::vector<unsigned char>& next)
+{
+    const std::vector<unsigned char> cursor_in{cursor}; // `next` may be the cursor given
+    next.clear();
+    const Bytes prefix{ByScriptPrefix(script)};
+    Bytes from{prefix};
+    if (!cursor_in.empty()) {
+        if (cursor_in.size() != prefix.size() + 36 || !std::equal(prefix.begin(), prefix.end(), cursor_in.begin())) throw std::invalid_argument("not a cursor of these trades");
+        from = Bytes(cursor_in.begin(), cursor_in.end());
+    }
+    std::vector<Outcome> rows;
+    while (auto entry{view.Next(from, prefix)}) {
+        if (rows.size() >= limit) {
+            next = entry->first;
+            break;
+        }
+        if (entry->first.size() == prefix.size() + 36) {
+            const Txid txid{Txid::FromUint256(uint256{std::span{entry->first}.subspan(prefix.size() + 4, 32)})};
+            if (auto outcome{GetOutcome(view, txid, max_events)}) rows.push_back(std::move(*outcome));
+        }
+        from = entry->first;
+        from.push_back(0);
+    }
+    return rows;
+}
+
+uint64_t OutcomeCount(const sidechain::StoreView& view, const CScript& script) { return GetU64(view, ScriptCountKey(script)); }
 
 std::vector<CandleRow> Candles(const sidechain::StoreView& view, const Market& market, Interval interval, uint32_t from, uint32_t to, size_t limit)
 {

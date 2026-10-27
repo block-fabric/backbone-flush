@@ -1136,6 +1136,8 @@ struct State::Plan {
     std::optional<std::pair<uint256, BookOrder>> evicted;
     //! Expired entries of a full side, taken out of its index by the order placed there.
     std::vector<uint256> swept;
+    //! A SettleOrder's payouts, for the market index (no rule reads it; its result outputs filled in by ApplyTx).
+    std::optional<market::Settled> settled;
     std::optional<std::pair<Txid, Auction>> auction;
     std::vector<CTxOut> payouts;
     std::vector<Result> results;
@@ -2807,6 +2809,18 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         r_bought -= proceeds;
         r_sold -= left;
         order.proceeds -= proceeds;
+        market::Settled& settled{plan.settled.emplace()};
+        settled.txid = txid;
+        settled.order = order.txid;
+        settled.cancel = settle->cancel;
+        settled.closes = closes;
+        settled.remaining = order.remaining;
+        settled.proceeds = proceeds;
+        settled.left = left;
+        settled.chn_to = settle->chn_to;
+        // Paid in an asset: to a result output (which, ApplyTx says).
+        if (proceeds > 0 && !bought.IsNull()) settled.proceeds_n = 0;
+        if (left > 0 && !sold.IsNull()) settled.left_n = 0;
         if (closes) {
             // One open order less if it was still in its book (not filled, swept or evicted).
             if (m_view->Contains(BookKey(settle->order, *found))) book.shares -= std::min<uint64_t>(book.shares - MIN_LIQUIDITY, 1);
@@ -3065,6 +3079,27 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             }
             BOOK_ORDERS.Erase(out, id);
         }
+    }
+    // The market index (derived data, no rule reads it): an order placed, with the output its token went to; a settle,
+    // with the result outputs of what it paid in assets (the last of the outputs the plan made, in its results' order).
+    if (market::Enabled() && plan->book_order && plan->book_order->second && plan->pool && !plan->settled) {
+        const auto& [id, order]{*plan->book_order};
+        const Pool& book{plan->pool->second};
+        market::Placed placed{*order, order->sells0 ? book.asset0 : book.asset1, order->sells0 ? book.asset1 : book.asset0, 0};
+        for (const auto& [outpoint, token] : plan->created) {
+            if (token.kind == Token::Kind::ORDER && token.id == id) placed.token_n = outpoint.n;
+        }
+        market::NoteOrder(out, placed);
+    }
+    if (market::Enabled() && plan->settled) {
+        market::Settled settled{*plan->settled};
+        const size_t results{size_t{settled.closes ? 0U : 1U} + settled.proceeds_n.has_value() + settled.left_n.has_value()};
+        if (plan->created.size() >= results) {
+            size_t at{plan->created.size() - results + (settled.closes ? 0 : 1)};
+            if (settled.proceeds_n) settled.proceeds_n = plan->created[at++].first.n;
+            if (settled.left_n) settled.left_n = plan->created[at].first.n;
+        }
+        market::NoteSettle(out, settled);
     }
     for (const uint256& id : plan->swept) {
         // Its expiry entry stays until the global sweep reaches it (which then finds it out of the index).
