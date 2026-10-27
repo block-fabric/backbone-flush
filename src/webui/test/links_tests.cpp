@@ -22,6 +22,7 @@
 #include <webui/bridge.h>
 #include <webui/confirm.h>
 #include <webui/linkhost.h>
+#include <webui/local.h>
 #include <webui/links.h>
 #include <webui/urischeme.h>
 #include <test/bitassets_logo_samples.h>
@@ -1076,5 +1077,46 @@ BOOST_AUTO_TEST_CASE(the_desktop_handler_of_the_links)
     BOOST_CHECK_EQUAL(read(data / "applications" / "flush-app.desktop"), entry);
 }
 #endif
+
+// The examples of doc/flush-links.md ("Examples"), as they are written there: a launch link that names its logo by URL,
+// and the launch file of the same launch. If this fails, the documentation shows what the app refuses.
+BOOST_AUTO_TEST_CASE(doc_examples)
+{
+    const std::string sha{"ddadfeabdc67e773b86e9a94f63b09bb8d0c0a2b940b3b21a059baba13580f70"};
+    const std::string link{"flush:launch?v=1&network=ecashbeta&exp=1800000600&ticker=ECORN&name=eCorn&desc=eCorn%20ready%20to%20harvest"
+                           "&link=https%3A%2F%2Fecorn.example&logo=sha256%3A" + sha +
+                           "&logo_url=https%3A%2F%2Fflush.markets%2Fapi%2Fv1%2Flogos%2F" + sha +
+                           "&ecx=3&min_tokens=1243396.639607&slippage_bps=100&supply=1000000000&decimals=6&fee_bps=115"
+                           "&split=creator%3A7500&split=bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke%3A2500&keep_control=1"};
+    const Request r{Parse(link, "ecashbeta", NOW)};
+    BOOST_CHECK_EQUAL(r.ticker, "ECORN");
+    BOOST_CHECK_EQUAL(*r.logo_sha256, sha);
+    BOOST_CHECK_EQUAL(r.logo_url, "https://flush.markets/api/v1/logos/" + sha);
+    BOOST_CHECK(r.keep_control);
+
+    const std::string file{R"({
+  "format": "flush-launch",
+  "version": 1,
+  "network": "ecashbeta",
+  "ticker": "ECORN",
+  "name": "eCorn",
+  "description": "eCorn ready to harvest",
+  "links": ["https://ecorn.example"],
+  "logo": { "type": "image/png", "sha256": ")" + sha + R"(", "base64": "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAC20lEQVR42u3TQQ0AIAwEwYogPJCC8kpCRr84gKSTrILLTYy5pLaFCQSABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgACwggCQAJAAkACQAJAAkACQAJAAkACQAPikk1sPAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAgAAAQCAAABAAAAgAAAQAAAIAAAEAAACAAABAIAAAEAAACAAABAAAAgAAAQAAAIAAAEAgAAAQAAAIAAAEAAACAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuCAAAAgAAAQAAAIAAAEAgAAAQAAAIAAAEAAACAAABAAAAgAAAQCAAABAAAAgAAAQAAAIAAAEAAACAAABAIAAAEAAACAAABAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAFgBQEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIF0VmnuJ6D29UbYAAAAASUVORK5CYII=" },
+  "first_buy": { "ecx": "3", "min_tokens": "1243396.639607", "slippage_bps": 100 },
+  "supply": "1000000000",
+  "decimals": 6,
+  "fee_bps": 115,
+  "allocation_bps": 0,
+  "split": [{ "to": "creator", "bps": 7500 }, { "to": "bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke", "bps": 2500 }],
+  "keep_control": true
+})"};
+    const Request f{ParseLaunchFile(file, "ecashbeta")};
+    BOOST_CHECK_EQUAL(*f.logo_sha256, sha);
+    BOOST_CHECK(f.keep_control);
+    // The logo is one the chain takes (PNG, 256x256, no metadata).
+    std::string reason;
+    BOOST_CHECK_MESSAGE(webui::local::ReadLogo(f.logo, reason).has_value(), reason);
+}
 
 BOOST_AUTO_TEST_SUITE_END()
