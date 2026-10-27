@@ -1243,6 +1243,8 @@ const sidechain::Cell<SecurityFees> SECURITY_FEES{0x9f, SecurityFees{}};
 const sidechain::Cell<bool> COIN_SIDE{0xa1, false};
 //! From fee_flow_height: the launches with coin waiting to buy their token back (LaunchRecord::buyback), by token.
 const sidechain::Table<AssetId, bool> BUYBACKS{0xa2};
+//! From v8_height: where the next block's scan of BUYBACKS starts (null: at its start).
+const sidechain::Cell<AssetId> BUYBACK_CURSOR{0xa5, AssetId{}};
 //! From fee_flow_height: the pools a launch graduated into with its locked position, by pool: the launch's token.
 const sidechain::Table<uint256, AssetId> GRAD_POOLS{0xa3};
 //! From v7_height: the launches whose split owes an address some coin (LaunchRecord::share_owed), by token (FinishBlock pays them).
@@ -4494,11 +4496,38 @@ std::vector<Order> State::ProtocolOrders(int height)
     const uint64_t min_chn{MinChnPayout(height)};
     // Buybacks: the coin waiting buys the token in its venue (its curve, then the pool it graduated into), within a
     // curve's bounds for a buy, once it is min_chn at least and gets something.
+    // Upgrade v8: MAX_BUYBACK_SCAN of them a block, from the cursor on (in the index's order, then from its start
+    // again), and the cursor after them; one that cannot buy yet leaves the index (more coin for it puts it back).
+    const bool bounded{Params().GetConsensus().sidechain.BoundedBuybacksActive(height)};
     std::vector<AssetId> tokens;
-    BUYBACKS.ForEach(out, [&](const AssetId& token, const bool&) {
-        tokens.push_back(token);
-        return true;
-    });
+    if (bounded) {
+        const AssetId cursor{BUYBACK_CURSOR.Get(out)};
+        const auto take{[&](const std::optional<AssetId>& from, const std::optional<AssetId>& before) {
+            BUYBACKS.ForEach(out, [&](const AssetId& token, const bool&) {
+                if (before && !(token < *before)) return false;
+                if (tokens.size() >= MAX_BUYBACK_SCAN) return false;
+                tokens.push_back(token);
+                return true;
+            }, from);
+        }};
+        take(cursor.IsNull() ? std::nullopt : std::optional<AssetId>{cursor}, std::nullopt);
+        if (!cursor.IsNull()) take(std::nullopt, cursor);
+        // The next block starts after the last one taken (none left after it: from the start).
+        AssetId next;
+        if (!tokens.empty() && tokens.size() >= MAX_BUYBACK_SCAN) {
+            BUYBACKS.ForEach(out, [&](const AssetId& token, const bool&) {
+                if (token == tokens.back()) return true;
+                next = token;
+                return false;
+            }, tokens.back());
+        }
+        if (next != cursor) BUYBACK_CURSOR.Put(out, next);
+    } else {
+        BUYBACKS.ForEach(out, [&](const AssetId& token, const bool&) {
+            tokens.push_back(token);
+            return true;
+        });
+    }
     for (const AssetId& token : tokens) {
         auto record{GetLaunch(token)};
         if (!record || record->buyback == 0) {
@@ -4508,10 +4537,16 @@ std::vector<Order> State::ProtocolOrders(int height)
         if (!GetPool(record->pool)) continue;
         uint64_t amount{record->buyback};
         if (!record->Graduated()) {
-            if (amount < record->min_buy) continue;
+            if (amount < record->min_buy) {
+                if (bounded) BUYBACKS.Erase(out, token);
+                continue;
+            }
             if (record->max_buy > 0) amount = std::min(amount, record->max_buy);
         }
-        if (amount < min_chn) continue;
+        if (amount < min_chn) {
+            if (bounded) BUYBACKS.Erase(out, token);
+            continue;
+        }
         const auto outs{dex::QuoteRoutePools(*this, CHN, {record->pool}, amount)};
         if (!outs || outs->back() == 0) continue;
         Order order;

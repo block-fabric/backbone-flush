@@ -707,6 +707,8 @@ public:
             consensus.sidechain.graduation100_height = opts.dep_opts.graduation100_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v7 only if a test asks (-testactivationheight=v7@<height>).
             consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v8 only if a test asks (-testactivationheight=v8@<height>).
+            consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -978,6 +980,10 @@ public:
                 // says. In the fingerprint.
                 static constexpr int SLOT99_V7_HEIGHT{18980};
                 consensus.sidechain.v7_height = SLOT99_V7_HEIGHT;
+                // Upgrade v8 (doc/photon-slot.md, "Upgrade v8"), from block SLOT99_V8_HEIGHT: the buybacks scanned a bounded
+                // number a block, those that cannot buy yet out of the index. In the fingerprint.
+                static constexpr int SLOT99_V8_HEIGHT{std::numeric_limits<int>::max()};
+                consensus.sidechain.v8_height = SLOT99_V8_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
                 // four hours without a block and its median time lagged by 5 h 20 min). Its epochs before keep their seeds

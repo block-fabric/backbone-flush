@@ -176,3 +176,19 @@ state once).
   `split=`; the app's confirmation shows every recipient in full (doc/dex-guide.md "Launchpads").
 - A node of v6 forks off at the first block of stake without the peg actions that pays an asset's ECX, or at the first
   launch with a split (`bad-ba-marker` for it).
+
+## Upgrade v8 (bounded buybacks)
+
+Branch `flush-betanet`, from block `SLOT99_V8_HEIGHT` (`v8_height`; in the fingerprint: a node of v8 rebuilds its sidechain
+state once). Before v8 every block looked at every launch with coin waiting to buy its token back (`BUYBACKS`), and one
+that could not buy yet (less than the least payout, 0.00005 ECX, or than a curve's least buy) stayed there, looked at
+again every block: launches with dust waiting made every block's work grow without bound (security review). From v8:
+
+- a block looks at `MAX_BUYBACK_SCAN` (64) of them at most, from a cursor (`BUYBACK_CURSOR`), in the index's order, then
+  from its start again; the next block goes on from where it stopped, so each comes round in turn (with more than 64
+  waiting, a buyback may wait a block or two more);
+- one that cannot buy yet leaves the index; more coin for it (its next fee) puts it back. What it waits with stays in its
+  record (getlaunch `buyback_pending`) and in the peg balance.
+
+A node of 7.0.1 forks off at the first block whose coinbase pays a sale on a curve it bought back differently (with more
+than 64 buybacks waiting in a block).

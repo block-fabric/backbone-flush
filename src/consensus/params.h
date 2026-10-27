@@ -197,6 +197,15 @@ struct SidechainParams {
     uint32_t launch_security_share_v7{250'000};
     bool InstantPayoutsActive(int height) const { return DexActive(height) && height >= v7_height; }
     bool FeeSplitActive(int height) const { return FeeFlowActive(height) && height >= v7_height; }
+    /**
+     * Upgrade v8 (2026-10-27): from this block the buybacks (bitassets State::ProtocolOrders) are scanned a bounded number
+     * a block (bitassets::MAX_BUYBACK_SCAN, from a cursor, in the index's order), and a token whose coin waiting to buy
+     * it back cannot buy yet (less than the least payout, or a curve's least buy) leaves the index until more comes:
+     * the per-block work no longer grows with the launches. Never (the maximum) unless a network sets it; regtest
+     * unless -testactivationheight=v8@<height>.
+     */
+    int v8_height{std::numeric_limits<int>::max()};
+    bool BoundedBuybacksActive(int height) const { return FeeFlowActive(height) && height >= v8_height; }
     //! The parts of a launch's curve fee for a launch made at `height`.
     uint32_t LaunchSecurityShare(int height) const { return FeeSplitActive(height) ? launch_security_share_v7 : launch_security_share; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
