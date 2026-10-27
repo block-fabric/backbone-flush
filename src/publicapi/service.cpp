@@ -2163,7 +2163,7 @@ private:
             d.SetDouble("creator_tokens_owed", Whole(l.rec.creator_tokens, l.decimals));
             d.SetString("pool_kind", l.rec.v5 ? "concentrated" : "constant_product");
             d.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
-            FillSplit(d, l.rec);
+            // fee_split: FillLaunch's (above); a second FillSplit listed every share twice.
             (void)launch;
             return d;
         });

@@ -168,6 +168,8 @@ class PublicApiTest(LayersTest):
         assert "To the moon and back" in detail["description"]
         # The first buy: 1 ECX paid in, the fee included.
         assert_equal(detail["first_buy_ecx"], 1)
+        # The split once, as getlaunch has it (the detail listed every share twice before 8.0.1).
+        assert_equal([(s["kind"], s["bps"]) for s in detail["fee_split"]], [(s["kind"], s["bps"]) for s in rpc["fee_split"]])
         assert_equal(api.rest("launches/" + rpc["token"])["ticker"], "MOON")
         assert_equal(api.rest("launches/moon")["ticker"], "MOON")
         assert_equal(api.get("launches/NOPE").status, 404)
