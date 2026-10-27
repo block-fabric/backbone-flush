@@ -98,4 +98,45 @@ size_t ReplyCache::Bytes() const
     return m_bytes;
 }
 
+void LogoStore::Expire(Clock::time_point now)
+{
+    while (!m_order.empty() && now - m_order.back().at >= m_ttl) {
+        m_index.erase(m_order.back().sha256);
+        m_order.pop_back();
+    }
+}
+
+void LogoStore::Put(const std::string& sha256, Logo logo, Clock::time_point now)
+{
+    LOCK(m_mutex);
+    Expire(now);
+    if (const auto it{m_index.find(sha256)}; it != m_index.end()) {
+        // Uploaded again: kept from now on, as the newest.
+        it->second->at = now;
+        m_order.splice(m_order.begin(), m_order, it->second);
+        return;
+    }
+    m_order.push_front(Entry{sha256, std::make_shared<const Logo>(std::move(logo)), now});
+    m_index[sha256] = m_order.begin();
+    while (m_order.size() > m_max_entries) {
+        m_index.erase(m_order.back().sha256);
+        m_order.pop_back();
+    }
+}
+
+std::shared_ptr<const LogoStore::Logo> LogoStore::Get(const std::string& sha256, Clock::time_point now)
+{
+    LOCK(m_mutex);
+    Expire(now);
+    const auto it{m_index.find(sha256)};
+    if (it == m_index.end()) return nullptr;
+    return it->second->logo;
+}
+
+size_t LogoStore::Entries() const
+{
+    LOCK(m_mutex);
+    return m_order.size();
+}
+
 } // namespace publicapi

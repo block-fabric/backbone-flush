@@ -85,6 +85,41 @@ private:
     std::atomic<uint64_t> m_hits{0};
 };
 
+/**
+ * Logos uploaded by sites (8.1.0, POST /api/v1/logos), kept by their SHA-256 so that a link can name where one is
+ * (logo_url): each for `ttl` from its last upload (uploaded again, it is kept longer), at most `max_entries`, the one
+ * uploaded longest ago dropped first. What is put here is checked by the caller (the chain's rules of logos).
+ */
+class LogoStore
+{
+public:
+    using Clock = std::chrono::steady_clock;
+    struct Logo {
+        std::string bytes;
+        std::string content_type;
+    };
+    LogoStore(size_t max_entries, Clock::duration ttl) : m_max_entries{max_entries}, m_ttl{ttl} {}
+    /** Keep a logo under `sha256` (hex) from `now`, or keep it longer if it is here. */
+    void Put(const std::string& sha256, Logo logo, Clock::time_point now = Clock::now()) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** The logo of `sha256` if it is here and not expired at `now`. */
+    std::shared_ptr<const Logo> Get(const std::string& sha256, Clock::time_point now = Clock::now()) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    size_t Entries() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+
+private:
+    struct Entry {
+        std::string sha256;
+        std::shared_ptr<const Logo> logo;
+        Clock::time_point at;
+    };
+    void Expire(Clock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
+    const size_t m_max_entries;
+    const Clock::duration m_ttl;
+    mutable Mutex m_mutex;
+    //! Oldest upload last.
+    std::list<Entry> m_order GUARDED_BY(m_mutex);
+    std::unordered_map<std::string, std::list<Entry>::iterator> m_index GUARDED_BY(m_mutex);
+};
+
 /** A bound on how many of a kind of call run at once (the expensive ones: quotes, builds); one over it is refused at once. */
 class Gate
 {

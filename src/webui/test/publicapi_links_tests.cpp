@@ -8,6 +8,7 @@
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <publicapi/build.h>
+#include <publicapi/service.h>
 #include <test/util/setup_common.h>
 #include <webui/links.h>
 
@@ -52,6 +53,15 @@ BOOST_AUTO_TEST_CASE(built_links_are_read_by_the_app)
     BOOST_REQUIRE_EQUAL(launch.links.size(), 2U);
     BOOST_CHECK_EQUAL(launch.links[0], "https://lumen.example/a?b=c&d=e");
     BOOST_CHECK(launch.logo_sha256);
+    // 8.1.0: logo_url as BuildAction writes it (percent-encoded whole), and the API's own check agrees with the app's.
+    const std::string logo_url{"https://flush.markets/api/v1/logos/" + TOKEN + "?a=b&c=d"};
+    BOOST_CHECK(publicapi::SafeLogoUrl(logo_url));
+    const Request hosted{Parse(ActionUri("register", NET, NOW + 3600, {{"ticker", "BROSE"}, {"name", "Bro Se"}, {"logo", "sha256:" + TOKEN}, {"logo_url", logo_url}, {"supply", "1"}, {"decimals", "0"}}), NET, NOW)};
+    BOOST_CHECK_EQUAL(hosted.logo_url, logo_url);
+    for (const std::string& bad : {std::string{"https://10.1.2.3/a"}, std::string{"https://localhost/a"}, std::string{"http://flush.markets/a"}}) {
+        BOOST_CHECK(!publicapi::SafeLogoUrl(bad));
+        BOOST_CHECK_THROW(LogoUrl(bad), LinkError);
+    }
     // The verbs of the asset registry, as BuildAction writes them.
     const Request reg{Parse(ActionUri("register", NET, NOW + 3600, {{"ticker", "BROSE"}, {"name", "Bro Se"}, {"supply", "21000000"}, {"decimals", "8"}}), NET, NOW)};
     BOOST_CHECK(reg.verb == Verb::REGISTER && reg.supply == "21000000" && *reg.decimals == 8);

@@ -502,7 +502,7 @@ void BeginCall(Server& server, Request& r, bool http2)
     }
     if (rest) {
         // Routed once the body is in (EndRequest): GET for the reads, POST for what has a body.
-        if (r.method != "GET" && r.method != "POST") return refuse({Code::UNIMPLEMENTED, "the REST face takes GET (and POST for broadcast)"});
+        if (r.method != "GET" && r.method != "POST") return refuse({Code::UNIMPLEMENTED, "the REST face takes GET (and POST where a route has a body)"});
         r.rest = true;
         r.call = std::make_shared<Call>(Protocol::REST, true, nullptr, max_response);
         return;

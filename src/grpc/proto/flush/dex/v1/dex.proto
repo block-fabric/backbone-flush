@@ -1167,6 +1167,10 @@ message BuildActionRequest {
   repeated string split = 56;
   // launch (7.0.1): the creator keeps the control coin (Unlocked Supply: it can mint more); in the link keep_control=1.
   bool keep_control = 57;
+  // launch, register (8.1.0): where the site hosts the logo named by logo_sha256 (only with it), in the link logo_url=:
+  // an https address of a DNS name (not an IP address, not localhost), 512 characters at most. The app downloads it
+  // (no redirect, 32 KiB at most) and keeps it only if its SHA-256 is logo_sha256; else it asks for the file.
+  string logo_url = 58;
 }
 
 message Fact {
@@ -1210,6 +1214,24 @@ message BroadcastReply {
   string txid = 1;
 }
 
+// 8.1.0: a logo kept for a while by its SHA-256 (POST /api/v1/logos), so that a link can name where it is hosted
+// (logo_url): a site uploads it here and gives the app the address. Checked with the chain's rules of logos.
+message UploadLogoRequest {
+  // The image, base64: a PNG or JPEG the chain takes (256x256, 32 KiB at most, no metadata).
+  string base64 = 1;
+}
+
+message UploadLogoReply {
+  // Its SHA-256, 64 lowercase hex digits (the link's logo=sha256:<it>).
+  string sha256 = 1;
+  // Where it is served, relative to the API's origin: /api/v1/logos/<sha256>.
+  string url = 2;
+}
+
+message GetUploadedLogoRequest {
+  string sha256 = 1;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 
 service DexService {
@@ -1249,4 +1271,8 @@ service DexService {
   rpc BuildAction(BuildActionRequest) returns (BuiltAction) { option idempotency_level = NO_SIDE_EFFECTS; }
 
   rpc Broadcast(BroadcastRequest) returns (BroadcastReply);
+
+  // 8.1.0: logos kept for an hour by their SHA-256 (links name where they are: logo_url).
+  rpc UploadLogo(UploadLogoRequest) returns (UploadLogoReply);
+  rpc GetUploadedLogo(GetUploadedLogoRequest) returns (Logo) { option idempotency_level = NO_SIDE_EFFECTS; }
 }

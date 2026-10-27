@@ -71,7 +71,7 @@ id. Display amounts are numbers in whole units; exact amounts are `*_units` stri
 `{ "items": […], "next_cursor": "…" | null, "total": n }`, `cursor` passed back. Errors:
 `{ "error": { "code": "not_found", "message": "…" } }` with the Connect HTTP status (400, 403, 404, 409, 429, 501,
 503). An unknown query parameter is refused (400). Reads carry `Cache-Control: public, max-age=5` (logos 300,
-quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
+quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ETag` (`If-None-Match` → 304).
 
 | GET | Method | Returns |
 |---|---|---|
@@ -105,6 +105,8 @@ quotes 2, builds `no-store`) and an `ETag` (`If-None-Match` → 304).
 | `quote/position?pool=&price_lower=&price_upper=&amount_a=&amount_b=` | QuotePosition | `previewposition` |
 | `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order\|position\|reposition\|settle\|bid\|collect\|claim\|pegin\|pegout}?…` | BuildAction | the action, unsigned (below); `facts` (what to show beside it), `deposit_address` (pegin with an address) |
 | POST `broadcast` `{"hex": "…"}` | Broadcast | `{ txid }` |
+| POST `logos` `{"base64": "…"}` | UploadLogo | 8.1.0: `{ "sha256": "<64 hex>", "url": "/api/v1/logos/<sha256>" }` (200; `Cache-Control: no-store`), the logo kept in memory by its SHA-256 for an hour from its last upload (uploaded again, an hour from then), at most 1024 logos (the one uploaded longest ago dropped first). Checked with the chain's logo rules (`bitassets::CheckLogo`: PNG or JPEG, 256×256, at most 32 KiB, no metadata): else 400 with the reason (`bad-ba-logo-…`). The `url` is relative: the site prefixes its own origin and gives it as a link's `logo_url` (doc/flush-links.md). Charged as a broadcast: 6 a minute per client (3 at once), 120 in all (429, Retry-After), and 4 units of the client's rate |
+| `logos/{sha256}` | GetUploadedLogo | 8.1.0: the logo uploaded with that SHA-256 (any case), as the image (`image/png` or `image/jpeg`, the type its rules found), `Cache-Control: public, max-age=31536000, immutable` (its content is its hash's); 404 when none is kept (never uploaded, or more than an hour ago), 400 when not 64 hex digits |
 
 **One implementation of quotes.** Every quote is the node's own RPC method, called in process: `quotelaunch`,
 `getswapquote`, `quoteroute`, `quotepoolliquidity`, `previewposition`, `getbook` — the methods the app's pages quote
@@ -136,7 +138,9 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
   up: the same number), assets by id with their tickers. The webui test `publicapi_links_tests` reads the API's
   links with the app's own parser. Verbs the app takes today: `buy`, `sell`, `swap` (one pool), `launch` (with `supply`,
   `decimals`, `fee_bps`, `allocation_bps` from the launch parameters), `register` (ticker, name, description, links,
-  logo_sha256, supply, decimals), `curve` (asset, amount, fee_bps, min_buy, max_buy), `pool` (asset_a, asset_b, kind,
+  logo_sha256, supply, decimals; launch and register take `logo_url` with `logo_sha256`, 8.1.0: an https address of a
+  DNS name, not an IP address or localhost, at most 512 characters, as the app's `logo_url=`; it goes in the URI only,
+  not in the payload, whose `logo_sha256` already binds the logo; a URI over the app's 4096 bytes is refused, 400), `curve` (asset, amount, fee_bps, min_buy, max_buy), `pool` (asset_a, asset_b, kind,
   fee_ppm, amount_a, amount_b, amp, weight_a), `auction` (base, amount, quote, start_price, end_price, duration, delay),
   `order` (sell, buy, amount, price, expiry_blocks), and the site's DEX: `route` (a swap through several pools:
   `pools=<id>,<id>`), `deposit` (`pool`, `asset_a`, `asset_b`, `amount_a`, `amount_b`, `min_shares`), `withdraw`
@@ -167,6 +171,7 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
 | 6 | CORS, CSRF, DNS rebinding | server | An `Origin` not in `-publicapiorigin` is refused (403) for every method, preflights included; allowed origins get `Access-Control-Allow-Origin` with that origin, `Vary: Origin`, never `Allow-Credentials` (no cookies or auth exist); `Host` must be an IP literal, localhost or `-publicapihost`; no state-changing GET (GET only for `NO_SIDE_EFFECTS` methods; broadcast is POST with a JSON or protocol content type) |
 | 7 | Injection into JSON consumers | replies | JSON written by UniValue (escaped); creators' text plain, control characters dropped; links only after the safe-link rule; logos served only as PNG/JPEG after their magic bytes, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` on every reply |
 | 8 | Broadcast abuse | broadcast | 6 a minute per client and 120 in all (429, Retry-After); ≤ 100,000 bytes; standard size; burns only in asset markers; the node's mempool policy and maximum fee rate; can be turned off |
+| 8b | Logo uploads as free hosting or a memory sink (8.1.0) | logos | Only what the chain's logo rules take (a 256×256 PNG/JPEG of at most 32 KiB, no metadata: no other content can be stored or served); at most 1024 kept (32 MiB at most), each for an hour; 6 uploads a minute per client and 120 in all, as broadcasts; served by hash only, as an image after its rules, `nosniff` and `default-src 'none'` |
 | 9 | Request floods, oversized requests and replies | server | Per-client token buckets (`-publicapirate`, `-publicapiburst`; 429 with Retry-After); requests ≤ 256 KiB; HTTP/2: 32 streams a connection, 1 MiB buffered a connection, 64 MiB in all; replies ≤ 4 MiB (else RESOURCE_EXHAUSTED, nothing sent) |
 | 10 | Slow clients (slowloris, slow reads, Rapid Reset, MadeYouReset) | server | A request must be all in within 15 s of its first byte however slowly it trickles (HTTP/2: each stream from its own HEADERS); a connection with no running call that begins or completes no request for 30 s is closed with a GOAWAY (bytes alone, PINGs, are not activity); a client whose replies wait must take at least 4 KiB a second of them (or all that waited) over each 30 s, else it is closed, a byte now and then does not keep it open (in the socket, the calls or behind HTTP/2 flow control; a stream whose window stays closed 30 s is reset); above 1 MiB waiting for the socket nothing more is taken from the calls (backpressure), and a connection holding more than 32 MiB of replies in all is closed; past 100 streams reset before their call was over, by the client or by the server because of it (each counted once), closed with a GOAWAY (nghttp2's own reset rate limit too; an nghttp2 before 1.66, without its MadeYouReset fix, is warned about); past 10,000 requests no new one (GOAWAY), closed once its calls are over; 16 connections per address (IPv6 per /64, `-publicapiipv6prefix`; the named proxies excepted), 256 in all |
 | 11 | Spoofed client address (rate-limit bypass) | server | The client is the socket's peer unless the operator names both the proxy (`-publicapiproxy`) and its header (`-publicapiproxyheader`); X-Forwarded-For: the right-most entry only. The proxy must set the header itself (nginx below) |
