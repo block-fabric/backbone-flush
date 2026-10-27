@@ -95,6 +95,12 @@ struct Request {
     std::optional<std::string> logo_sha256;
     //! A launch file's logo, its bytes (checked against logo_sha256 by the parser).
     std::vector<unsigned char> logo;
+    //! launch, register (8.1.0): where the site hosts the logo it names by logo_sha256 (logo_url=, only with logo=): an
+    //! https address of a DNS name (LogoUrl). The host downloads it (no file asked) and keeps it only if its SHA-256 is
+    //! the link's; otherwise it asks for the file as before.
+    std::string logo_url;
+    //! Set by the host when request.logo is what it downloaded from logo_url (the question says so).
+    bool logo_downloaded{false};
     //! buy, sell: the token's id
     uint256 asset;
     //! swap
@@ -175,6 +181,15 @@ inline constexpr int MIN_FEE_BPS{30};
 inline constexpr int MAX_FEE_BPS{500};
 //! The longest supply a link writes: whole units, digits only (MAX_LAUNCH_SUPPLY and any registration's fit).
 inline constexpr size_t MAX_SUPPLY_DIGITS{19};
+
+/**
+ * The address of a link's logo (logo_url): as a launch's links (https, a host of letters, digits, dots and hyphens, an
+ * optional port, printable characters, at most MAX_LINK), and its host a DNS name with a dot: not an IP address (no
+ * label of the last place starting with a digit), not localhost nor a name under it. Refused (LinkError) otherwise.
+ */
+std::string LogoUrl(const std::string& text);
+/** The host of an https address LogoUrl took (lowercase, without its port). */
+std::string UrlHost(const std::string& url);
 
 /**
  * Read an action link: refused (LinkError) unless it is exactly one of the verbs with exactly their parameters, for

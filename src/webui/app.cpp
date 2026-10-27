@@ -32,6 +32,7 @@
 #include <webui/appconfig.h>
 #include <webui/bridge.h>
 #include <webui/confirm.h>
+#include <webui/fetch.h>
 #include <webui/events.h>
 #include <webui/guard.h>
 #include <webui/i18n.h>
@@ -1713,6 +1714,8 @@ void App::RegisterHostMethods()
             return future.wait_for(10s) == std::future_status::ready && future.get();
         };
         deps.choose = [this](const Window::FileDialog& dialog) { return Choose(dialog); };
+        // A link's logo where the link says the site hosts it (8.1.0, logo_url): on the thread of the link, never the UI's.
+        deps.fetch = [](const std::string& url, size_t max_bytes, std::string& error) { return FetchUrl(url, max_bytes, error); };
         deps.copy = [this](const std::string& text) { m_window->Post([this, text] { m_window->SetClipboard(text); }); };
         deps.inform = [this](const std::string& title, const std::string& message, bool error) {
             UniValue dialog{UniValue::VOBJ};

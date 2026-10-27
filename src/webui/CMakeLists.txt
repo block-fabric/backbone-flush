@@ -211,7 +211,7 @@ if(WIN32)
   # WebView2: its headers (the depends package webview2, or WEBVIEW2_INCLUDE_DIR); the loader is the
   # one built into webview.h, so no WebView2Loader.dll.
   find_path(WEBVIEW2_INCLUDE_DIR WebView2.h PATH_SUFFIXES webview2 REQUIRED)
-  set(webui_window window_win32.cpp urischeme_win.cpp res/chains-app-res.rc)
+  set(webui_window window_win32.cpp fetch_win.cpp urischeme_win.cpp res/chains-app-res.rc)
   # The manifest: per monitor DPI awareness (v2), UTF-8, Windows 8 to 11, common controls 6.
   configure_file(res/chains-app.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/chains-app.manifest USE_SOURCE_PERMISSIONS @ONLY)
   file(CONFIGURE
@@ -220,11 +220,12 @@ if(WIN32)
   )
   list(APPEND webui_window ${CMAKE_CURRENT_BINARY_DIR}/chains-app-manifest.rc)
 elseif(APPLE)
-  set(webui_window window_generic.cpp)
+  set(webui_window window_generic.cpp fetch_generic.cpp)
 else()
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(WEBKITGTK REQUIRED IMPORTED_TARGET gtk+-3.0 webkit2gtk-4.1)
-  set(webui_window window_gtk.cpp tray_gtk.cpp)
+  # The download of a link's logo (fetch.h): libsoup 3, which WebKitGTK 4.1 links (its pkg-config's requirements).
+  set(webui_window window_gtk.cpp tray_gtk.cpp fetch_soup.cpp)
 endif()
 
 add_executable(chains-app WIN32
@@ -251,7 +252,7 @@ target_link_libraries(chains-app
 if(WIN32)
   target_include_directories(chains-app SYSTEM PRIVATE ${WEBVIEW2_INCLUDE_DIR})
   target_compile_definitions(chains-app PRIVATE WEBVIEW_MSWEBVIEW2_BUILTIN_IMPL=1 WEBVIEW_MSWEBVIEW2_EXPLICIT_LINK=1)
-  target_link_libraries(chains-app advapi32 dwmapi gdi32 ole32 shell32 shlwapi user32 uuid version)
+  target_link_libraries(chains-app advapi32 dwmapi gdi32 ole32 shell32 shlwapi user32 uuid version winhttp)
 elseif(APPLE)
   target_link_libraries(chains-app "-framework WebKit" "-framework Cocoa")
 endif()
