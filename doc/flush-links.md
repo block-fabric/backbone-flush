@@ -59,7 +59,11 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   `pegin`: `amount`; `pegout`: `address` (an eCash address: letters, digits and its prefix, at most 128), `amount`, `fee`.
 
 A launch file (`*.flushlaunch.json`, at most 64 KB) is read as strictly: exactly the keys of version 1 (`supply`, `decimals`, `fee_bps`,
-`allocation_bps` optional), `network` required, amounts as text, its logo's bytes with the SHA-256 it says.
+`allocation_bps`, `split` and `keep_control` optional), `network` required, amounts as text, its logo's bytes with the SHA-256 it says.
+`split` (8.0.0) is a link's `split=`: a list of at most 5 `{"to": "creator" | "burn" | <address>, "bps": <whole number>}`, e.g.
+`"split": [{"to": "creator", "bps": 7500}, {"to": "bflx1…", "bps": 2500}]`, shown in full and accepted or declined with the launch;
+`keep_control` (8.0.0) is `true` or `false`, a link's `keep_control=1`. An app before 8.0.0 refuses a file with either key (an unknown
+key): a launchpad that must reach those apps gives a link instead.
 
 ## What each verb does
 
