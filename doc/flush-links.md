@@ -91,6 +91,50 @@ An app before 8.1.0 refuses a link with `logo_url` (an unknown parameter): it fa
 The public API keeps logos for sites to host this way: `POST /api/v1/logos` and `GET /api/v1/logos/<sha256>`
 (doc/public-api.md); `GET /api/v1/build/launch|register` take `logo_url` with `logo_sha256`.
 
+## Examples
+
+Both are parsed as written here by `links_tests.cpp` `doc_examples` (the logo is a 256×256 PNG the chain takes).
+
+A launch on betanet that names its logo by URL (8.1.0): the app downloads
+`https://flush.markets/api/v1/logos/<sha256>`, keeps it only if its SHA-256 is the one `logo` names, and asks for the
+file otherwise. `exp` is a Unix time; a site writes now + 10 minutes. One line in practice, wrapped here:
+
+```
+flush:launch?v=1&network=ecashbeta&exp=1800000600&ticker=ECORN&name=eCorn&desc=eCorn%20ready%20to%20harvest
+  &link=https%3A%2F%2Fecorn.example
+  &logo=sha256%3Addadfeabdc67e773b86e9a94f63b09bb8d0c0a2b940b3b21a059baba13580f70
+  &logo_url=https%3A%2F%2Fflush.markets%2Fapi%2Fv1%2Flogos%2Fddadfeabdc67e773b86e9a94f63b09bb8d0c0a2b940b3b21a059baba13580f70
+  &ecx=3&min_tokens=1243396.639607&slippage_bps=100
+  &supply=1000000000&decimals=6&fee_bps=115
+  &split=creator%3A7500&split=bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke%3A2500
+  &keep_control=1
+```
+
+A site gets such a URL from any https host of its own, or from a Flush node's public API:
+`POST /api/v1/logos {"base64": "…"}` answers `{"sha256": "…", "url": "/api/v1/logos/<sha256>"}` (kept an hour).
+
+The same launch as a launch file (`ECORN.flushlaunch.json`, File → Import launch file), which carries the logo itself:
+
+```json
+{
+  "format": "flush-launch",
+  "version": 1,
+  "network": "ecashbeta",
+  "ticker": "ECORN",
+  "name": "eCorn",
+  "description": "eCorn ready to harvest",
+  "links": ["https://ecorn.example"],
+  "logo": { "type": "image/png", "sha256": "ddadfeabdc67e773b86e9a94f63b09bb8d0c0a2b940b3b21a059baba13580f70", "base64": "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAAC20lEQVR42u3TQQ0AIAwEwYogPJCC8kpCRr84gKSTrILLTYy5pLaFCQSABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgACwggCQAJAAkACQAJAAkACQAJAAkACQAPikk1sPAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAgAAAQCAAABAAAAgAAAQAAAIAAAEAAACAAABAIAAAEAAACAAABAAAAgAAAQAAAIAAAEAgAAAQAAAIAAAEAAACAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAuCAAAAgAAAQAAAIAAAEAgAAAQAAAIAAAEAAACAAABAAAAgAAAQCAAABAAAAgAAAQAAAIAAAEAAACAAABAIAAAEAAACAAABAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQAJAAkACQAJAAkACQAJAAkACQAJAAkACQAJAAFgBQEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIAEgASABIF0VmnuJ6D29UbYAAAAASUVORK5CYII=" },
+  "first_buy": { "ecx": "3", "min_tokens": "1243396.639607", "slippage_bps": 100 },
+  "supply": "1000000000",
+  "decimals": 6,
+  "fee_bps": 115,
+  "allocation_bps": 0,
+  "split": [{ "to": "creator", "bps": 7500 }, { "to": "bflx1qknwc098ye4cjncehs8q9m79ltkg0d2kr0kezke", "bps": 2500 }],
+  "keep_control": true
+}
+```
+
 ## What each verb does
 
 Every action is resolved against the node and asked in the host's dialog window (`Window::Ask`: a window of the host,
