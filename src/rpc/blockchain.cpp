@@ -7,6 +7,7 @@
 #include <rpc/register.h> // IWYU pragma: associated
 
 #include <arith_uint256.h>
+#include <bitassets/state.h>
 #include <blockfilter.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -1256,6 +1257,13 @@ static RPCMethod gettxout()
                     {RPCResult::Type::STR, "address", /*optional=*/true, "The Bitcoin address (only if a well-defined address exists)"},
                 }},
                 {RPCResult::Type::BOOL, "coinbase", "Coinbase or not"},
+                RPCResult{RPCResult{RPCResult::Type::OBJ, "token", /*optional=*/true, "What the output carries besides its coins, as the chain's state says (the results of "
+                    "swaps and launches included); null if nothing. Not there for an output in the mempool: what it carries is known once a block applies it", {
+                    {RPCResult::Type::NUM, "kind", "0 asset, 1 control, 2 reservation, 3 lp, 4 receipt, 5 position, 6 order"},
+                    {RPCResult::Type::STR, "kind_name", "asset, control, reservation, lp, receipt, position or order"},
+                    {RPCResult::Type::STR_HEX, "id", "What the token is of (an asset, a pool, a transaction, a position, an order)"},
+                    {RPCResult::Type::STR, "amount_units", "Units of the asset or shares of the pool (1 for the other kinds), an integer in a string"},
+                }}, RPCResultOptions{.skip_type_check = true}},
             }},
         },
         RPCExamples{
@@ -1306,6 +1314,19 @@ static RPCMethod gettxout()
     ScriptToUniv(coin->out.scriptPubKey, /*out=*/o, /*include_hex=*/true, /*include_address=*/true);
     ret.pushKV("scriptPubKey", std::move(o));
     ret.pushKV("coinbase", coin->IsCoinBase());
+    // The token it carries, from the chain's state at the tip (cs_main held); none known for a coin of the mempool.
+    if (coin->nHeight != MEMPOOL_HEIGHT) {
+        if (const std::optional<bitassets::Token> token{active_chainstate.SideState().BitAssets().GetToken(out)}) {
+            UniValue t(UniValue::VOBJ);
+            t.pushKV("kind", static_cast<int>(token->kind));
+            t.pushKV("kind_name", bitassets::TokenKindName(token->kind));
+            t.pushKV("id", token->id.GetHex());
+            t.pushKV("amount_units", util::ToString(token->amount));
+            ret.pushKV("token", std::move(t));
+        } else {
+            ret.pushKV("token", UniValue::VNULL);
+        }
+    }
 
     return ret;
 },

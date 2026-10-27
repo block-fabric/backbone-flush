@@ -261,6 +261,14 @@ struct Token {
     static bool Divisible(Kind kind) { return kind == Kind::ASSET || kind == Kind::LP; }
 };
 
+/** A token kind's name (gettxout, decodeassettx): asset, control, reservation, lp, receipt, position, order; "unknown" past them. */
+inline const char* TokenKindName(Token::Kind kind)
+{
+    static constexpr const char* NAMES[]{"asset", "control", "reservation", "lp", "receipt", "position", "order"};
+    const auto k{static_cast<size_t>(kind)};
+    return k < std::size(NAMES) ? NAMES[k] : "unknown";
+}
+
 /** An output the marker lists: what it carries, or that it takes a result of the operation. */
 struct MarkerOutput {
     uint32_t n{0};

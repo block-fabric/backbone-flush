@@ -290,6 +290,7 @@ std::vector<RPCResult> PoolResults()
         {RPCResult::Type::NUM, "reserve_b", "What it holds of the second"},
         {RPCResult::Type::NUM, "price", /*optional=*/true, "What one of the first asset is worth in the second: the pool's price (the reserves' ratio for constant product, its curve's slope for the others)"},
         {RPCResult::Type::NUM, "shares", "The shares there are, in units (a share has no decimals)"},
+        {RPCResult::Type::STR, "shares_units", "The same, exact, as an integer in a string"},
         {RPCResult::Type::NUM, "volume_a", "All of the first asset ever traded in"},
         {RPCResult::Type::NUM, "volume_b", "All of the second asset ever traded in"},
         {RPCResult::Type::NUM, "swaps", "How many trades it has made"},
@@ -338,6 +339,7 @@ UniValue PoolToJSON(const bitassets::State& state, const uint256& id, const bita
         obj.pushKV("price", DecimalToJSON(WholeSpotPrice(params, pool, !flip, da, db)));
     }
     obj.pushKV("shares", pool.shares);
+    obj.pushKV("shares_units", util::ToString(pool.shares));
     obj.pushKV("volume_a", AmountToJSON(volume_a, da));
     obj.pushKV("volume_b", AmountToJSON(volume_b, db));
     obj.pushKV("swaps", pool.swaps);
@@ -2718,15 +2720,16 @@ RPCMethod decodeassettx()
             {RPCResult::Type::STR_HEX, "txid", "The transaction"},
             {RPCResult::Type::BOOL, "marker", "Whether it has a marker (an asset transaction)"},
             {RPCResult::Type::STR, "error", /*optional=*/true, "Why its marker is not well formed"},
-            {RPCResult::Type::OBJ_DYN, "operation", /*optional=*/true, "The operation: kind (its marker byte), name, and its fields", {{RPCResult::Type::ANY, "", ""}}},
+            {RPCResult::Type::OBJ_DYN, "operation", /*optional=*/true, "The operation: kind (its marker byte), name, and its fields; each count of units (supply, amount, amount_in, amount_a, amount_b, shares, min_shares, min_out, min0, min1) also as <name>_units, an integer in a string", {{RPCResult::Type::ANY, "", ""}}},
             {RPCResult::Type::ARR, "outputs", /*optional=*/true, "The outputs the marker lists",
             {
                 {RPCResult::Type::OBJ, "", "",
                 {
                     {RPCResult::Type::NUM, "n", "The output"},
-                    {RPCResult::Type::STR, "carries", "asset, control, reservation, lp, receipt, or result (what the operation gives)"},
+                    {RPCResult::Type::STR, "carries", "asset, control, reservation, lp, receipt, position, order, or result (what the operation gives)"},
                     {RPCResult::Type::STR_HEX, "id", /*optional=*/true, "What the token is of"},
                     {RPCResult::Type::NUM, "amount", /*optional=*/true, "In units"},
+                    {RPCResult::Type::STR, "amount_units", /*optional=*/true, "The same, exact, as an integer in a string"},
                 }},
             }},
         }},
@@ -2755,16 +2758,29 @@ RPCMethod decodeassettx()
     result.pushKV("marker", marker.has_value() || !error.empty());
     if (!error.empty()) result.pushKV("error", error);
     if (!marker) return result;
-    if (marker->operation) result.pushKV("operation", OperationToJSON(*marker->operation));
+    if (marker->operation) {
+        UniValue op{OperationToJSON(*marker->operation)};
+        // The counts of units exact as text too (JavaScript's numbers lose them past 2^53): UniValue keeps a number's digits.
+        static const std::set<std::string> UNITS{"supply", "amount", "amount_in", "amount_a", "amount_b", "shares", "min_shares", "min_out", "min0", "min1"};
+        std::vector<std::pair<std::string, std::string>> exact;
+        for (const std::string& key : op.getKeys()) {
+            const UniValue& v{op.find_value(key)};
+            if (UNITS.contains(key) && v.isNum() && v.getValStr().find_first_not_of("0123456789") == std::string::npos) exact.emplace_back(key + "_units", v.getValStr());
+        }
+        for (auto& [key, value] : exact) op.pushKV(key, value);
+        result.pushKV("operation", std::move(op));
+    }
     UniValue outs(UniValue::VARR);
-    static const char* kinds[]{"asset", "control", "reservation", "lp", "receipt"};
     for (const bitassets::MarkerOutput& out : marker->outputs) {
         UniValue o(UniValue::VOBJ);
         o.pushKV("n", out.n);
         if (out.token) {
-            o.pushKV("carries", kinds[static_cast<int>(out.token->kind)]);
+            // Every kind named (position and order were past the table of before: an out-of-bounds read).
+            o.pushKV("carries", bitassets::TokenKindName(out.token->kind));
             o.pushKV("id", out.token->id.GetHex());
             o.pushKV("amount", out.token->amount);
+            // Exact as text too: a JSON number loses units past 2^53 in JavaScript.
+            o.pushKV("amount_units", util::ToString(out.token->amount));
         } else {
             o.pushKV("carries", "result");
         }

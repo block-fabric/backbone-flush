@@ -570,7 +570,7 @@ void RunRest(Server& server, Request& r)
     // decide: addresses/portfolio with a long list in a body).
     if (r.method == "GET" && !entry->desc->no_side_effects) return r.call->Finish({Code::UNIMPLEMENTED, "POST this resource"});
     if (const Guard& guard{server.GetGuard()}) {
-        if (const auto refused{guard(CallInfo{match.method_path, r.headers, r.client, true})}) return r.call->Finish(*refused);
+        if (const auto refused{guard(CallInfo{match.method_path, r.headers, r.client, true, match.request.get()})}) return r.call->Finish(*refused);
     }
     r.call->SetRaw(std::move(match.raw));
     std::shared_ptr<Call> call{r.call};
@@ -683,6 +683,13 @@ void EndRequest(Server& server, Request& r)
     if (!DecodeMessage(r.call->Json(), *payload, request, error)) {
         r.call->Finish({Code::INVALID_ARGUMENT, "failed to decode the request: " + error});
         return;
+    }
+    // Decoded: the guard again, for what the request itself costs beyond its method's base (a portfolio of many addresses).
+    if (const Guard& guard{server.GetGuard()}) {
+        if (const auto refused{guard(CallInfo{r.path, r.headers, r.client, false, &request, true})}) {
+            r.call->Finish(*refused);
+            return;
+        }
     }
     std::shared_ptr<Call> call{r.call};
     Handler handler{r.entry->handler};

@@ -352,6 +352,25 @@ BOOST_AUTO_TEST_CASE(rest_routes)
     BOOST_CHECK_EQUAL(match("addresses/abc/portfolio").request->GetString("address"), "abc");
 }
 
+BOOST_AUTO_TEST_CASE(portfolio_cost_scales_with_its_addresses)
+{
+    // 7.0.1: 4 for each started ten addresses; one alone, or none decoded yet, its base.
+    const std::string path{"/flush.dex.v1.DexService/GetPortfolio"};
+    Message req{New("GetPortfolioRequest")};
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path), 4);
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path, nullptr), 4);
+    req.SetString("address", "a");
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path, &req), 4);
+    for (int i{0}; i < 9; ++i) req.AddString("addresses", "x");
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path, &req), 4);
+    req.AddString("addresses", "x");
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path, &req), 8);
+    while (req.Count("addresses") + 1 < publicapi::MAX_PORTFOLIO_ADDRESSES) req.AddString("addresses", "x");
+    BOOST_CHECK_EQUAL(publicapi::CostOf(path, &req), 20);
+    // Other methods: their base, whatever the request.
+    BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/GetStatus", &req), 1);
+}
+
 BOOST_AUTO_TEST_CASE(rest_json_printing)
 {
     Message d{New("LaunchDetail")};
