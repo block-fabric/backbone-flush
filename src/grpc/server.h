@@ -90,6 +90,10 @@ struct CallInfo {
     std::string client;
     //! A REST request (Options::rest).
     bool rest{false};
+    //! The request, once decoded: a REST request's at its one guard; a gRPC/Connect unary request's at a second guard
+    //! after its decoding (`after_decode`: what it costs beyond its method's base, Service::Guard), null before.
+    const pb::Message* request{nullptr};
+    bool after_decode{false};
 };
 
 /** A check of each call before it runs; a status refuses it. */

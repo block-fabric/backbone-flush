@@ -559,7 +559,11 @@ class PublicApiTest(LayersTest):
         assert_equal(posted.status, 200)
         assert_equal(posted.json()["addresses"], [mine, creator])
         assert_equal(api.get("addresses/portfolio", {"addresses": "notanaddress"}).status, 400)
-        assert_equal(api.post("addresses/portfolio", {"addresses": [mine] * 1 + [n0.getnewaddress() for _ in range(201)]}).status, 400)
+        # More than 50 addresses in one call: refused before any work (the site reads a wallet's several at a time).
+        over = api.post("addresses/portfolio", {"addresses": [n0.getnewaddress() for _ in range(51)]})
+        assert_equal(over.status, 400)
+        assert "at most 50" in over.json()["error"]["message"], over.json()
+        assert_equal(api.post("addresses/portfolio", {"addresses": [n0.getnewaddress() for _ in range(50)]}).status, 200)
         main_address = self.main.getnewaddress()
         # For the website's test: the address with a position, an order and an auction, and an address of eCash.
         self.e2e_env = {"E2E_ADDRESS": mine, "E2E_ECASH_ADDRESS": main_address}

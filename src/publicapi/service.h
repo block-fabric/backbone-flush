@@ -59,6 +59,10 @@ std::unique_ptr<Service> RegisterService(grpcsrv::Server& server, const pb::Pool
 
 /** What a call of a method costs against its client's rate (RateLimiter). */
 double CostOf(const std::string& method_path);
+/** And with its request (7.0.1): a portfolio of several addresses costs its base for each started ten of them. */
+double CostOf(const std::string& method_path, const pb::Message* request);
+/** The most addresses one portfolio call names (`address` and `addresses`): more are refused before any work. */
+inline constexpr size_t MAX_PORTFOLIO_ADDRESSES{50};
 
 /** Whether a link a creator wrote may be served as a link: https, a host, no user or password, no space or control, 512 bytes at most. */
 bool SafeLink(const std::string& url);

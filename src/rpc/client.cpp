@@ -152,6 +152,7 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "launchtoken", 1, "allocation" },
     { "launchtoken", 1, "first_buy" },
     { "launchtoken", 1, "burn_percent" },
+    { "launchtoken", 1, "fee_split" },
     { "launchtoken", 1, "keep_control" },
     { "launchtoken", 1, "first_min_out" },
     { "launchtoken", 1, "min_buy" },

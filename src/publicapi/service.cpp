@@ -230,6 +230,24 @@ CreatorText SplitInfo(const std::string& info)
     return out;
 }
 
+/** How many addresses a portfolio request names (`address` and `addresses`). */
+size_t PortfolioAddresses(const pb::Message& request)
+{
+    return request.Count("addresses") + (request.GetString("address").empty() ? 0 : 1);
+}
+
+double CostOf(const std::string& method_path, const pb::Message* request)
+{
+    const double base{CostOf(method_path)};
+    // A portfolio of several addresses: 4 for each started ten of them (as much work as as many calls of one address
+    // bounded the same way: PortfolioTotalHoldings).
+    if (request && method_path.ends_with("/GetPortfolio")) {
+        const size_t n{std::max<size_t>(1, PortfolioAddresses(*request))};
+        return base * static_cast<double>((n + 9) / 10);
+    }
+    return base;
+}
+
 double CostOf(const std::string& method_path)
 {
     const std::string method{method_path.substr(method_path.rfind('/') + 1)};
@@ -258,7 +276,13 @@ public:
 
     std::optional<Status> Guard(const grpcsrv::CallInfo& call) override
     {
-        const double cost{CostOf(call.path)};
+        // Too many addresses: refused before any work or any token taken.
+        if (call.request && call.path.ends_with("/GetPortfolio") && PortfolioAddresses(*call.request) > MAX_PORTFOLIO_ADDRESSES) {
+            return Status{Code::INVALID_ARGUMENT, strprintf("addresses: at most %u in one call", MAX_PORTFOLIO_ADDRESSES)};
+        }
+        // A REST request is guarded once, decoded; a unary one before it is (its method's base), then after (the rest).
+        const double cost{call.after_decode ? CostOf(call.path, call.request) - CostOf(call.path) : CostOf(call.path, call.request)};
+        if (cost <= 0) return std::nullopt;
         if (const auto wait{m_limits.Take(call.client, cost)}) {
             const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
             return Status{Code::RESOURCE_EXHAUSTED, strprintf("rate limit: %g calls a second at most (try again in %d s)", m_options.rate, seconds), {{"retry-after", util::ToString(seconds)}}};
@@ -1770,7 +1794,7 @@ private:
     {
         if (!bitassets::market::Enabled()) Fail(Code::FAILED_PRECONDITION, "this node keeps no market index (-dexindex)");
         // The addresses asked: `address` and `addresses` (7.0.1: a wallet's several), each once, in order; 200 at most.
-        constexpr size_t MAX_ADDRESSES{200};
+        constexpr size_t MAX_ADDRESSES{MAX_PORTFOLIO_ADDRESSES};
         std::vector<std::string> asked;
         if (!util::TrimString(req.GetString("address")).empty()) asked.push_back(util::TrimString(req.GetString("address")));
         for (size_t i{0}; i < req.Count("addresses"); ++i) asked.push_back(util::TrimString(req.StringAt("addresses", i)));
@@ -1805,7 +1829,7 @@ private:
         std::vector<AssetId> asset_order;
         std::map<AssetId, std::pair<unsigned __int128, uint32_t>> summed;
         // In all at most MAX_TOTAL holdings read, whatever the count of addresses (the work of one call is bounded).
-        constexpr size_t MAX_TOTAL{5000};
+        constexpr size_t MAX_TOTAL{2000};
         size_t total{0};
         for (const auto& [owner, script] : owners) {
         if (total >= MAX_TOTAL) {
