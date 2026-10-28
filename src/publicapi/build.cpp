@@ -68,4 +68,18 @@ std::string ActionHash(const std::string& payload)
     return HexStr(hash);
 }
 
+std::optional<uint256> ParseBytes32(const std::string& hex)
+{
+    if (hex.size() != 64 || !IsHex(hex)) return std::nullopt;
+    const std::vector<unsigned char> bytes{ParseHex(hex)};
+    uint256 out;
+    std::copy(bytes.begin(), bytes.end(), out.begin());
+    return out;
+}
+
+std::string HexBytes32(const uint256& bytes)
+{
+    return HexStr(bytes);
+}
+
 } // namespace publicapi

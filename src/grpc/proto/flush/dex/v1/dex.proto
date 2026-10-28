@@ -1249,16 +1249,21 @@ message BuildPsbtRequest {
   repeated string split = 56;
   bool keep_control = 57;
   string logo_url = 58;
-  // The reservation's nonce: 32 bytes, 64 hex digits as written (the HMAC key, not reversed), chosen by the client and
-  // kept until the reveal (launch, register).
+  // launch, register: the reservation's nonce, 32 bytes as 64 hex digits in order (the HMAC key, not reversed), chosen
+  // by the client at the reservation and kept until the reveal. The JSON body only, never the query string.
   string nonce = 100;
-  // launch, register: the reservation's output (txid:vout), as psbt/reserve answered.
+  // launch, register: the reservation's output (txid:vout), as psbt/reserve answered. The body only.
   string reservation = 101;
-  // The address's coins to pay with (txid:vout, at most 200); none: the node finds them in its UTXO set.
+  // The address's coins to pay with (txid:vout, 1 to 50; from the explorer's /address/<a>/utxo, say). Each is checked
+  // against the UTXO set (the address's, in a block, not spent in the mempool, with value, no token, mature): one that
+  // is not is skipped (the reply says how many and why).
   repeated string coins = 102;
-  // launch with a first buy: the least it gets, in the token's units (a decimal, as the link's min_tokens); none: the
-  // quote less slippage_bps (as build/launch).
-  string min_tokens = 103;
+  // 8.3.0 before review: min_tokens (the floor is build/launch's own, from slippage_bps).
+  reserved 103;
+  // reserve: the commitment the client computed, ReservationCommitment(SHA256(ticker), nonce, the address's script):
+  // the 32 HMAC-SHA256 bytes as 64 hex digits in order (as the marker carries them). The node never sees the ticker
+  // nor the nonce before the reveal. The body only.
+  string commitment = 104;
 }
 
 message BuiltPsbt {
@@ -1280,17 +1285,27 @@ message BuiltPsbt {
   string ticker = 11;
   // The asset's id (the hash of the ticker), as every id of the API.
   string asset = 12;
-  // reserve: the commitment, ReservationCommitment(asset, nonce, the address's script) (uint256, shown as ids are), the
-  // reservation's output (txid:vout and its vout), and the confirmations it needs before psbt/launch takes it.
+  // reserve: the commitment as given (its bytes in order), the reservation's output (txid:vout and its vout), and the
+  // confirmations it needs before psbt/launch takes it. launch and register: no commitment.
   string commitment = 13;
   string reservation = 14;
   uint32 reservation_vout = 15;
   uint32 confirmations_needed = 16;
-  // What it spends (txid:vout, in order) and the tip it was built at.
+  // What it spends (txid:vout, in order) and the tip it was built at; the coins given that were skipped, and why.
   repeated string inputs = 17;
   uint32 height = 18;
   string summary = 19;
   repeated Fact facts = 20;
+  repeated SkippedCoin skipped = 21;
+}
+
+// A coin a PSBT's request named and the build did not spend.
+message SkippedCoin {
+  string coin = 1;
+  // not_found (spent, or not in a block yet), not_address, spent_in_mempool, no_value, token, immature, duplicate,
+  // unreadable (its block cannot be read). (Coins left because worth no more than the fee of their own input, or past
+  // the 30 inputs, are not listed: a refusal for want of coins counts them.)
+  string reason = 2;
 }
 
 // 8.1.0: a logo kept for a while by its SHA-256 (POST /api/v1/logos), so that a link can name where it is hosted

@@ -11,6 +11,7 @@
 
 #include <univalue.h>
 
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <set>
@@ -32,6 +33,8 @@ struct RouteDef {
     std::vector<std::pair<std::string, std::string>> fixed;
     //! The reply is an image (Logo), served as its bytes.
     bool raw{false};
+    //! Fields taken from the body only, refused in the query string (secrets a URL would leak into logs).
+    std::vector<std::string> body_only{};
 };
 
 const std::vector<RouteDef>& Routes()
@@ -78,9 +81,10 @@ const std::vector<RouteDef>& Routes()
         {"GET", {"build", "{verb}"}, "BuildAction", {}},
         {"POST", {"broadcast"}, "Broadcast", {}},
         // 8.3.0: unsigned transactions (PSBTs) of a launch's steps and of a registration: a body, and/or build/launch's query.
-        {"POST", {"psbt", "reserve"}, "BuildPsbt", {{"verb", "reserve"}}},
-        {"POST", {"psbt", "launch"}, "BuildPsbt", {{"verb", "launch"}}},
-        {"POST", {"psbt", "register"}, "BuildPsbt", {{"verb", "register"}}},
+        // The nonce (a secret until the reveal) and the reservation in the body only.
+        {"POST", {"psbt", "reserve"}, "BuildPsbt", {{"verb", "reserve"}}, false, {"nonce", "reservation", "commitment"}},
+        {"POST", {"psbt", "launch"}, "BuildPsbt", {{"verb", "launch"}}, false, {"nonce", "reservation", "commitment"}},
+        {"POST", {"psbt", "register"}, "BuildPsbt", {{"verb", "register"}}, false, {"nonce", "reservation", "commitment"}},
         // 8.1.0: a logo kept an hour by its SHA-256 (a body {"base64": ...}), and served as its image.
         {"POST", {"logos"}, "UploadLogo", {}},
         {"GET", {"logos", "{sha256}"}, "GetUploadedLogo", {}, true},
@@ -230,6 +234,9 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
             const auto key{PercentDecode(part.substr(0, eq))};
             const auto value{PercentDecode(eq == std::string::npos ? "" : part.substr(eq + 1))};
             if (!key || !value) return Bad("a parameter is not percent-encoded text");
+            if (std::find(route.body_only.begin(), route.body_only.end(), *key) != route.body_only.end()) {
+                return Bad(*key + " goes in the JSON body, never in the query string");
+            }
             // The route's own fields are its path's: not again in the query.
             if (std::any_of(bound.begin(), bound.end(), [&](const auto& b) { return b.first == *key; }) ||
                 std::any_of(route.fixed.begin(), route.fixed.end(), [&](const auto& b) { return b.first == *key; })) {
