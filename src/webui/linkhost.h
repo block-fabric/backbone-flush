@@ -53,12 +53,11 @@ class Bridge;
  *    floors checked against the node's quote of now and given to the call so that it never accepts less;
  *  - pegin: a deposit from the wallet of the eCash node to this wallet's flush.markets address (the link's question,
  *    then the deposit's own); pegout: createwithdrawal to an eCash address, with what a withdrawal takes said first;
- *  - what an action of a link brings in goes to the wallet's flush.markets address (the one connect shares), so that
- *    the site, which knows that address only, sees it (setlinkdestination, for the call alone);
- *  - connect: the address to share and the site, in a question; on a yes, the browser opens the one allowed callback
- *    with it and the site's nonce (the system's own call to open a URI, never a shell).
+ *  - what an action of a link brings in goes to the wallet's flush.markets address (its address of that label, if it
+ *    has one: setlinkdestination, for the call alone), else to the wallet's new addresses as always.
  *
- * A link is used once (its nonce, or the link itself once it ran) in a session; it expires (links.h).
+ * A link is used once (the link itself once it ran) in a session; it expires (links.h). The app shares no address
+ * with a site: there is no connect (removed after 8.3.0; a flush:connect link is refused as an unknown action).
  */
 namespace webui::links {
 
@@ -156,15 +155,6 @@ std::string SourceText(Source source);
  */
 Plan Resolve(const Request& request, Source source, Reader& reader, int64_t now);
 
-/** The question of a connect: the site, the address shared, where the answer goes. */
-Window::ConfirmDialog ConnectQuestion(const Request& request, Source source, const std::string& wallet, const std::string& address, int64_t now);
-/**
- * The question of a connect sharing several addresses (7.0.1): "Share N addresses of wallet <name>", the wallet named
- * first and loud, every address listed, the note that the site can link them as one person's. Declined, the app asks
- * ConnectQuestion (the one address) next: the user's other choice.
- */
-Window::ConfirmDialog ConnectAllQuestion(const Request& request, Source source, const std::string& wallet, const std::vector<std::string>& addresses, bool truncated, int64_t now);
-
 class LinkHost
 {
 public:
@@ -174,8 +164,6 @@ public:
         std::function<UniValue(const UniValue&)> confirmed;
         //! A question of the host (App::AskHost).
         guard::AskFn ask;
-        //! Open a web address with the system's browser (Window::OpenExternal); false if it could not.
-        std::function<bool(const std::string&)> open;
         //! A file chooser of the desktop (App::Choose).
         std::function<std::optional<std::string>(const Window::FileDialog&)> choose;
         //! Download a link's logo (8.1.0, logo_url; webui/fetch.h): a GET of an https address, no redirect, a timeout of
@@ -184,8 +172,6 @@ public:
         std::function<std::optional<std::vector<unsigned char>>(const std::string& url, size_t max_bytes, std::string& error)> fetch;
         //! Tell the user (a message of the app): a link refused, a launch done.
         std::function<void(const std::string& title, const std::string& message, bool error)> inform;
-        //! Put text on the clipboard (Window::SetClipboard): what the user copies when the browser could not be opened.
-        std::function<void(const std::string& text)> copy;
         //! The wallet the app shows (its preferences); empty if none chosen.
         std::function<std::string()> wallet;
         //! The network of the app ("ecashbeta").
@@ -218,7 +204,6 @@ public:
 
 private:
     UniValue Run(Request request, Source source, const std::string& uri);
-    UniValue Connect(const Request& request, Source source, const std::string& wallet);
     UniValue Deposit(const Plan& plan, const std::string& wallet);
     std::string Wallet(interfaces::Node& node);
     void Worker();
@@ -228,9 +213,8 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_cv;
     std::deque<std::pair<std::string, Source>> m_queue;
-    //! The links used in this session (the SHA-256 of each that ran), and the nonces of the connects answered.
+    //! The links used in this session (the SHA-256 of each that ran).
     std::set<std::string> m_used;
-    std::set<std::string> m_nonces;
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
     std::vector<std::thread> m_launches;

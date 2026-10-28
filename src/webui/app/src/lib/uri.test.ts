@@ -33,7 +33,7 @@ describe('the action links of the site (handed to the host, never read here)', (
   const S = CHAIN.uriScheme;
   it('tells an action link from a payment', () => {
     expect(isActionUri(`${S}:buy?v=1&network=ecashbeta`)).toBe(true);
-    expect(isActionUri(` ${S.toUpperCase()}:connect?v=1`)).toBe(true);
+    expect(isActionUri(` ${S.toUpperCase()}:sell?v=1`)).toBe(true);
     expect(isActionUri(`${S}:bflx1qabc?amount=1`)).toBe(false);
     expect(isActionUri(`${S}:BUY?v=1`)).toBe(false);
     expect(isActionUri(`${S}:buy`)).toBe(false);

@@ -31,8 +31,8 @@
 namespace webui::links {
 
 namespace {
-//! The label of the address a connect shares (one per wallet, the same each time).
-constexpr const char* CONNECT_LABEL{"flush.markets"};
+//! The label of the wallet's flush.markets address, where what a link's action brings in goes (one per wallet).
+constexpr const char* LINK_LABEL{"flush.markets"};
 
 std::string Short(const uint256& id)
 {
@@ -265,8 +265,6 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
     plan.message = Message(source);
     std::vector<dialog::Row> rows;
     switch (r.verb) {
-    case Verb::CONNECT:
-        throw LinkError("A connect is not a call");
     case Verb::BUY:
     case Verb::SELL: {
         const bool buy{r.verb == Verb::BUY};
@@ -794,7 +792,7 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         plan.summary = strprintf("Deposit %s from eCash into this wallet", Coin(amount));
         rows = Head(r, source, plan.summary, now);
         rows.push_back(confirm::Text("Paid by", "the wallet of the eCash node this app is linked to (its own question comes next)"));
-        rows.push_back(confirm::Text("Credited to", "this wallet's flush.markets address, once the deposit is in an eCash block and a block of this chain takes it"));
+        rows.push_back(confirm::Text("Credited to", "this wallet (its flush.markets address if it has one), once the deposit is in an eCash block and a block of this chain takes it"));
         rows.push_back(confirm::Note("A deposit moves coins from eCash into this sidechain's escrow: coins come back only by a withdrawal, which takes long."));
         plan.amount_units = amount;
         break;
@@ -818,51 +816,6 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
     rows.push_back(Warning());
     plan.preface = std::move(rows);
     return plan;
-}
-
-Window::ConfirmDialog ConnectQuestion(const Request& r, Source source, const std::string& wallet, const std::string& address, int64_t now)
-{
-    Window::ConfirmDialog dialog;
-    dialog.title = "Share an address with flush.markets";
-    dialog.accept = "Share";
-    dialog.level = dialog::Level::WARNING;
-    dialog.kind = "link:connect";
-    dialog.message = strprintf("A link (%s) asks for an address of this wallet, for %s to show what it holds. On Share, the app opens your browser at %s "
-                               "with this address and the site's code: nothing else is sent, nothing is signed or paid.\n\nShare only if you asked for this on %s yourself just now.",
-                               SourceText(source), r.origin, r.callback, r.origin);
-    dialog.rows = Head(r, source, "Share an address with " + r.origin, now);
-    dialog.rows.push_back(confirm::Text("Site", r.origin));
-    dialog.rows.push_back(confirm::Destination("Address shared", address));
-    dialog.rows.push_back(confirm::Text("Wallet", wallet.empty() ? std::string{"(the default wallet)"} : wallet));
-    dialog.rows.push_back(confirm::Text("Network", confirm::NetworkName()));
-    dialog.rows.push_back(confirm::Text("The answer goes to", r.callback + " (in your browser)"));
-    dialog.rows.push_back(confirm::Note("The site can then show anyone who has this address what it holds and receives: an address of its own (label flush.markets) is shared, the same each time."));
-    return dialog;
-}
-
-Window::ConfirmDialog ConnectAllQuestion(const Request& r, Source source, const std::string& wallet, const std::vector<std::string>& addresses, bool truncated, int64_t now)
-{
-    const std::string name{wallet.empty() ? std::string{"(the default wallet)"} : wallet};
-    Window::ConfirmDialog dialog;
-    dialog.title = strprintf("Share %u addresses of wallet %s", addresses.size(), name);
-    dialog.accept = strprintf("Share all %u", addresses.size());
-    dialog.cancel = "Other choices";
-    dialog.level = dialog::Level::WARNING;
-    dialog.kind = "link:connect";
-    dialog.message = strprintf("A link (%s) asks for the addresses of the wallet %s, for %s to show everything it holds (its coins sit on several "
-                               "addresses). On Share, the app opens your browser at %s with these addresses and the site's code: nothing else is "
-                               "sent, nothing is signed or paid. Other choices: share only one address, or nothing.\n\nShare only if you asked for this on %s yourself just now, with this wallet.",
-                               SourceText(source), name, r.origin, r.callback, r.origin);
-    dialog.rows = Head(r, source, "Share the addresses of wallet " + name + " with " + r.origin, now);
-    dialog.rows.push_back(confirm::Heading("Wallet", name));
-    dialog.rows.push_back(confirm::Text("Site", r.origin));
-    dialog.rows.push_back(confirm::Text("Network", confirm::NetworkName()));
-    dialog.rows.push_back(confirm::Text("The answer goes to", r.callback + " (in your browser)"));
-    dialog.rows.push_back(confirm::Note(strprintf("The site will be able to link these %u addresses as yours (one person's), and show anyone who has them what they hold.", addresses.size())));
-    if (truncated) dialog.rows.push_back(confirm::Note(strprintf("Only the first %u addresses holding something are shared: the wallet has more.", MAX_CONNECT_ADDRESSES)));
-    dialog.rows.push_back(confirm::Heading(strprintf("Addresses shared (%u)", addresses.size())));
-    for (size_t i{0}; i < addresses.size(); ++i) dialog.rows.push_back(confirm::Destination(i == 0 ? "Address (the site's own)" : strprintf("Address %u", i + 1), addresses[i]));
-    return dialog;
 }
 
 namespace {
@@ -1049,13 +1002,12 @@ UniValue LinkHost::Handle(const std::string& uri, Source source)
 {
     const int64_t now{m_deps.now()};
     Request request{Parse(uri, m_deps.network(), now)};
-    // The same link once in a session (a link that ran, or the nonce of a connect answered): a link replayed does nothing.
+    // The same link once in a session (a link that ran): a link replayed does nothing.
     uint256 hash;
     CSHA256().Write(reinterpret_cast<const unsigned char*>(uri.data()), uri.size()).Finalize(hash.data());
     {
         std::lock_guard lock{m_mutex};
         if (m_used.contains(hash.GetHex())) throw LinkError("This link was used already: ask the site for a fresh one (a link does its work once)");
-        if (request.verb == Verb::CONNECT && m_nonces.contains(request.nonce)) throw LinkError("This connect was answered already: ask the site again for a fresh one");
     }
     UniValue result{Run(std::move(request), source, uri)};
     std::lock_guard lock{m_mutex};
@@ -1070,12 +1022,12 @@ UniValue LinkHost::ImportLaunch(const std::string& json)
 }
 
 namespace {
-/** The wallet's address of the label flush.markets (a connect's), if it has one. */
-std::string ConnectAddress(interfaces::Node& node, const std::string& wallet)
+/** The wallet's address of the label flush.markets, if it has one. */
+std::string LinkAddress(interfaces::Node& node, const std::string& wallet)
 {
     try {
         UniValue args{UniValue::VARR};
-        args.push_back(CONNECT_LABEL);
+        args.push_back(LINK_LABEL);
         const UniValue found{node.executeRpc("getaddressesbylabel", args, WalletUri(wallet))};
         if (found.isObject()) {
             for (const std::string& key : found.getKeys()) {
@@ -1090,101 +1042,24 @@ std::string ConnectAddress(interfaces::Node& node, const std::string& wallet)
 
 /**
  * For the link's one call, on this thread alone (ScopedLinkDestination, read by the wallet when the call runs, after the
- * user accepted it): what it brings in goes to the wallet's flush.markets address, the one the site knows. None if the
- * wallet has no such address yet (its new addresses, as always).
+ * user accepted it): what it brings in goes to the wallet's flush.markets address. None if the wallet has no such
+ * address (its new addresses, as always).
  */
 class LinkDestination
 {
 public:
-    LinkDestination(interfaces::Node& node, const std::string& wallet) : m_scope{ConnectAddress(node, wallet)} {}
+    LinkDestination(interfaces::Node& node, const std::string& wallet) : m_scope{LinkAddress(node, wallet)} {}
 
 private:
     ScopedLinkDestination m_scope;
 };
 } // namespace
 
-UniValue LinkHost::Connect(const Request& request, Source source, const std::string& wallet)
-{
-    interfaces::Node& node{m_deps.node()};
-    // The wallet's address for the site: the one of its label, else a new one with it.
-    std::string address{ConnectAddress(node, wallet)};
-    if (address.empty()) {
-        UniValue args{UniValue::VARR};
-        args.push_back(CONNECT_LABEL);
-        try {
-            const UniValue made{node.executeRpc("getnewaddress", args, WalletUri(wallet))};
-            if (made.isStr()) address = made.get_str();
-        } catch (const UniValue& error) {
-            const UniValue& message{error.find_value("message")};
-            throw HostError(message.isStr() ? message.get_str() : std::string{"The wallet gave no address"});
-        }
-    }
-    // 7.0.1: the wallet's addresses that hold something (assets, ECX, positions, launch control, pool shares), so that the
-    // site shows all of it; one address only, or none, the user's other choices.
-    std::vector<std::string> holding;
-    try {
-        const UniValue held{node.executeRpc("listholdingaddresses", UniValue{UniValue::VARR}, WalletUri(wallet))};
-        if (held.isArray()) {
-            for (const UniValue& entry : held.getValues()) {
-                if (entry["address"].isStr()) holding.push_back(entry["address"].get_str());
-            }
-        }
-    } catch (...) {
-        // A node of before (no such method), or none: the one address.
-    }
-    bool truncated{false};
-    const std::vector<std::string> all{ConnectAddresses(address, holding, truncated)};
-    if (!m_deps.ask) throw HostError(BRIDGE_CANCELLED, "Not shared: it was declined.");
-    std::string answer;
-    if (all.size() > 1 && m_deps.ask(ConnectAllQuestion(request, source, wallet, all, truncated, m_deps.now())).accepted) {
-        answer = ConnectAnswer(request, address, all, truncated);
-        LogInfo("webui: %u addresses were shared with %s, as the user accepted", all.size(), request.origin);
-    } else {
-        Window::ConfirmDialog question{ConnectQuestion(request, source, wallet, address, m_deps.now())};
-        if (all.size() > 1) {
-            question.title = "Share only one address?";
-            question.accept = "Share only this address";
-            question.cancel = "Don't share";
-        }
-        if (!m_deps.ask(question).accepted) throw HostError(BRIDGE_CANCELLED, "Not shared: it was declined.");
-        answer = ConnectAnswer(request, address);
-    }
-    {
-        std::lock_guard lock{m_mutex};
-        m_nonces.insert(request.nonce);
-    }
-    LogInfo("webui: an address was shared with %s, as the user accepted", request.origin);
-    UniValue out{UniValue::VOBJ};
-    if (!m_deps.open || !m_deps.open(answer)) {
-        // No browser could be opened (WSL without a handler of https, 7.0.1): the user takes the answer to the site,
-        // the address to paste there, or the link to open; never a bare "failed".
-        LogWarning("webui: the browser could not be opened for %s: the address is shown to copy", request.origin);
-        Window::ConfirmDialog copy;
-        copy.title = "Paste it on the site";
-        copy.message = "The browser could not be opened. Copy your address and paste it on the site (Connect), or copy the link below and open it in your browser.";
-        copy.details = answer;
-        copy.level = dialog::Level::INFO;
-        copy.rows = {confirm::Destination("Your address", address)};
-        copy.accept = "Copy the address";
-        copy.cancel = "Close";
-        copy.kind = "connect-copy";
-        if (m_deps.ask && m_deps.ask(copy).accepted && m_deps.copy) m_deps.copy(address);
-        out.pushKV("opened", "");
-        out.pushKV("link", answer);
-        out.pushKV("address", address);
-        return out;
-    }
-    out.pushKV("opened", answer);
-    out.pushKV("address", address);
-    return out;
-}
-
 UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
 {
     interfaces::Node& node{m_deps.node()};
     const std::string wallet{Wallet(node)};
     LogInfo("webui: a link (%s): %s", SourceText(source), VerbName(request.verb));
-    if (request.verb == Verb::CONNECT) return Connect(request, source, wallet);
     // A logo the link names by its hash (it cannot carry 32 KB): downloaded from where the link says the site hosts it
     // (8.1.0, logo_url) and kept only if it is that one; else, or if that fails, chosen by the user, refused if it is not.
     std::string download_failed;
@@ -1269,8 +1144,8 @@ UniValue LinkHost::Deposit(const Plan& plan, const std::string& wallet)
 {
     interfaces::Node& node{m_deps.node()};
     if (!m_deps.deposit) throw LinkError("This app makes no deposits from eCash: deposit with an eCash wallet to the address the site shows");
-    // Credited to the wallet's flush.markets address (the one the site knows); a new one of the label if none yet.
-    std::string address{ConnectAddress(node, wallet)};
+    // Credited to the wallet's flush.markets address if it has one; else a new address of the wallet (getdepositaddress).
+    std::string address{LinkAddress(node, wallet)};
     UniValue args{UniValue::VARR};
     if (!address.empty()) args.push_back(address);
     UniValue made;

@@ -19,14 +19,14 @@ own dialog. The format is the site's `docs/uri.md` (repository flush-web); this 
 
 ```
 flush:<address>?amount=…                         a payment (BIP 21): the page's, as before
-flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: connect, launch, buy, sell, swap, register, curve, pool, auction, order,
-                                                 route, deposit, withdraw, position, reposition, settle, bid, collect, claim,
-                                                 pegin, pegout
+flush:<verb>?v=1&network=<net>&exp=<time>&…      an action: launch, buy, sell, swap, register, curve, pool, auction, order, route,
+                                                 deposit, withdraw, position, reposition, settle, bid, collect, claim, pegin,
+                                                 pegout
 ```
 
 What the parser takes (anything else is refused with what is wrong, before anything is resolved or shown):
 
-- the scheme in any case, then a verb of lowercase letters and `?`; one of the twenty-one verbs;
+- the scheme in any case, then a verb of lowercase letters and `?`; one of the twenty verbs (`connect`, removed after 8.3.0, is refused as any unknown verb);
 - `v=1`, `network` equal to the app's own network (`ecash`, `ecashbeta`, `ecashtest`; `regtest` for the tests), and
   `exp`, a Unix time not past (two minutes of clock difference forgiven) and at most a day ahead;
 - each parameter of the verb once (`link` up to 4 times), **no other parameter** (`req-…` included);
@@ -35,8 +35,6 @@ What the parser takes (anything else is refused with what is wrong, before anyth
   U+2060–U+2069, U+FEFF) or private planes; at most 4096 bytes in all;
 - ids of exactly 64 lowercase hex digits; tickers of 2 to 12 `A–Z 0–9` (`ECX` only as a side of a swap); amounts as
   decimals of at most 8 places, no sign or exponent, more than 0, at most 15 whole digits; `slippage_bps` 0 to 5000;
-- `connect`: `origin` exactly `https://flush.markets`, `callback` exactly `https://flush.markets/connect` (a constant
-  list), a `nonce` of 16 to 64 `A–Z a–z 0–9 - _`;
 - `launch`: a display name the chain's rules take (1 to 64 bytes), a description of at most 512 bytes, `https://`
   links of at most 512 characters with a plain host (no user name) and printable ASCII, the description and links at
   most 512 bytes together (the chain's info), `logo=sha256:<hex>`, `logo_url` (8.1.0, below; only with `logo`), a first
@@ -163,9 +161,8 @@ any page can open one*. Nothing runs unless the user accepts there.
 | `settle` | The order read whole (`getorder`). | `settleorder [order, cancel]` |
 | `bid`, `collect` | The auction read whole (`getauction`): what it sells, for what, its price. | `bidauction [auction, amount, buy_all]`, `collectauction [auction]` |
 | `claim` | The token by id with its ticker; a launch; what is owed read (`getlaunch`): fees, allocation. | `claimlaunch ["0x<id>"]` |
-| `pegin` | The amount exactly in 8 places; the deposit address of the wallet's `flush.markets` address (`getdepositaddress`: never the link's). | The link's question (where from, the amount, the address credited, the deposit address), then the deposit's own question (`peg.deposit`: the eCash node's wallet pays `createsidechaindeposit`). |
+| `pegin` | The amount exactly in 8 places; the deposit address of the wallet's `flush.markets` address if it has one, else of a new address of the wallet (`getdepositaddress`: never the link's). | The link's question (where from, the amount, the address credited, the deposit address), then the deposit's own question (`peg.deposit`: the eCash node's wallet pays `createsidechaindeposit`). |
 | `pegout` | The address as text (the eCash node reads it), the amount and fee in 8 places; a warning that it takes long and that a payment on eCash cannot be undone. | `createwithdrawal [address, amount, fee]` |
-| `connect` | The wallet's address of the label `flush.markets` (made once). | A question: the site, the address shared (whole), the wallet, where the answer goes. On **Share**: the system's browser opens `https://flush.markets/connect#address=…&nonce=…&network=…`. |
 
 The floor binds: `slippage_bps` is shown only. The host gives the node the slippage that makes the order's own
 minimum exactly the floor (`floor(quote × (10000 − s) / 10000) ≥ floor`), so the transaction never accepts less than
@@ -173,10 +170,12 @@ the link's floor, and the node refuses at signing time if the pool or curve move
 its floor on chain (`first_min_out`; the rules refuse the order below it, its ECX back).
 
 What an action of a link brings in (its tokens, the coin paid out by the coinbase, a launch's creator address) goes to
-the wallet's `flush.markets` address, the one connect shares: the link host sets it for its one call, on that call's
-thread alone (`ScopedLinkDestination`, rpc/request.h: thread-local, never set by any RPC), and the wallet uses it when the
-call runs (after the user accepted), refusing the call if the address is not its own. The site, which knows that address
-only, shows it in its portfolio. Without such an address (no connect yet), the wallet's own new addresses, as before.
+the wallet's `flush.markets` address (its receiving address of that label) if it has one: the link host sets it for its
+one call, on that call's thread alone (`ScopedLinkDestination`, rpc/request.h: thread-local, never set by any RPC), and the
+wallet uses it when the call runs (after the user accepted), refusing the call if the address is not its own. Without
+such an address, the wallet's own new addresses, as before. The app shares no address with the site: `connect` (which
+made that address once and opened `https://flush.markets/connect` with it) was removed after 8.3.0, and the site now
+connects only the ECX Wallet browser extension; a `flush:connect` link is refused as an unknown verb.
 (`setlinkdestination`, a hidden wallet method of regtest only, does the same for the functional tests.)
 
 The wallet: the one the app shows (its preferences' `lastWallet`) if it is open, else the only open wallet; with none,
@@ -213,34 +212,34 @@ or several and none chosen, the link is refused ("choose one in the app first").
 |---|---|---|
 | 1 | **Link spoofing**: a page (any site, an ad, a phishing copy of flush.markets) opens a `flush:` link the user did not ask for. | Nothing runs on a link alone: each verb is a question of the host's own dialog window, which a page cannot draw or answer, headed *From a link: opened in your browser — check it*, with what it asks first and a warning that anyone can make such a link. The accept button arms only after a second (audit 7 #7); declines in a row block the kind for the session (audit 7 #8: the kind is `link:…`). |
 | 2 | **Network mismatch**: a link of mainnet opened by a betanet app (or the reverse). | `network` is required and must equal the app's network, else refused with what it is and what the app runs; nothing is resolved. A second start hands a link to the app of its network if that one runs. |
-| 3 | **Replay** of an old link (a trade link in the browser's history, a connect answered). | `exp` is required (at most a day ahead; the site writes 10 minutes, an hour for a launch); a link that ran is refused again in the session (its SHA-256 kept), a connect's nonce answered once; the site checks its own nonce on the callback. Each run is still a question. |
+| 3 | **Replay** of an old link (a trade link in the browser's history). | `exp` is required (at most a day ahead; the site writes 10 minutes, an hour for a launch); a link that ran is refused again in the session (its SHA-256 kept). Each run is still a question. |
 | 4 | **Amount or asset substitution**: a ticker retired and taken again, a lookalike name, a pool of other assets, a floor in the wrong places. | Assets and pools by **id** only, the link's ticker checked against the id's name (both must match); swaps: `from`/`to` must be the pool's two assets; the call names assets by id (`0x…`, `ECX`), as the describers resolve them (security review 2026-10-21: no name or number in a confirmed call); amounts paid exactly in their asset's places (refused otherwise), floors rounded up; the fresh quote must meet the floor before anything is asked, and the node refuses at signing if it moved. What is shown is what runs (`confirm::CanonicalParams`). |
-| 5 | **URI injection** into the shell or the browser call: a callback or an address that adds parameters, a fragment, a `javascript:` or `file:` URL, a newline into the single-instance socket. | The callback is a constant, never the link's; the answer is built from checked text only (a lowercase bech32 address, a nonce of `[A-Za-z0-9_-]`, a network name); it is opened with the system's call (`g_app_info_launch_default_for_uri`, `ShellExecuteW` of an `https:` URL), never a shell; the desktop entry's `Exec` path is quoted as the specification says; a line with a line break is never sent to the running app (`SingleInstance::Send`). |
-| 6 | **Size limits**: a huge link, a huge launch file, a flood of links. | 4096 bytes a link, 64 KB a launch file (and 64 KB a socket message), every text bounded (name 64 bytes, description and links 512, a link 512, a nonce 64), at most 4 links of a launch; one link handled at a time, at most 4 waiting, more refused. |
-| 7 | **Phishing copy in the dialog**: text of the link made to look like the app's own (a name with a newline, a right-to-left mark, a zero-width space, a lookalike ticker). | Control and hidden characters are refused in the link; display names follow the chain's rules (and say when they are not plain ASCII); the dialog shows text as text (`dialog::Shown`, `textContent`); the ticker and the id are shown together, short; the address shared is shown whole. |
+| 5 | **URI injection** into the shell: a link that adds parameters, a fragment, a newline into the single-instance socket. | No link opens anything in the browser (no callback: `connect` was removed after 8.3.0); the desktop entry's `Exec` path is quoted as the specification says; a line with a line break is never sent to the running app (`SingleInstance::Send`). |
+| 6 | **Size limits**: a huge link, a huge launch file, a flood of links. | 4096 bytes a link, 64 KB a launch file (and 64 KB a socket message), every text bounded (name 64 bytes, description and links 512, a link 512), at most 4 links of a launch; one link handled at a time, at most 4 waiting, more refused. |
+| 7 | **Phishing copy in the dialog**: text of the link made to look like the app's own (a name with a newline, a right-to-left mark, a zero-width space, a lookalike ticker). | Control and hidden characters are refused in the link; display names follow the chain's rules (and say when they are not plain ASCII); the dialog shows text as text (`dialog::Shown`, `textContent`); the ticker and the id are shown together, short; a destination address is shown whole. |
 | 8 | **A logo other than the one shown on the site** (a launch link names the logo by hash). | The file the user picks, or the one downloaded from `logo_url`, must have that SHA-256, and the chain's logo rules (PNG/JPEG, 256×256, at most 32 KB, no metadata); the dialog shows the picture itself (`dialog::Row::Kind::IMAGE`). |
 | 8b | **A logo download as a weapon** (8.1.0, `logo_url`; the download comes before any question): the app made to reach the user's own network (a router, `localhost`, a cloud metadata address), by name or by a DNS name rebound to such an address; a redirect elsewhere, a huge or endless reply, a slow one, another file. | https only (the system's certificate checks), the host a DNS name (no IP literal, no `localhost`), no proxy (the system's neither), and the **address of the connection the download actually made** checked as it connects, before TLS or HTTP: the socket's remote address (libsoup: `network-event` at `G_SOCKET_CLIENT_CONNECTED`, `g_socket_connection_get_remote_address`; WinHTTP: the status callback's `CONNECTED_TO_SERVER` address), never a separate lookup, so a rebinding has no window between check and use. Taken (`webui::IsPublicAddress`, unit-tested): a public IPv4 address, and in IPv6 global unicast only (2000::/3), so every other IPv6 range is refused whether listed or not (`::`, ::1, the IPv4-compatible and SIIT forms, both NAT64 prefixes, fc00::/7, fe80::/10, fec0::/10, ff00::/8); an IPv4-mapped address (a dual-stack socket's) and 6to4 (2002::/16) are judged by the IPv4 they carry, Teredo (2001::/32) and 2001:db8::/32 refused. IPv4 refused: 0.0.0.0/8, loopback (127/8), private (10/8, 172.16/12, 192.168/16), link-local (169.254/16), CGNAT (100.64/10), 192.0.0.0/24, benchmarking (198.18/15), the documentation networks, multicast (224/4), 240/4 and the broadcast address; the download is cancelled there (nothing is sent: a listener at the address receives 0 bytes) and a connection never checked is refused too. Then no redirect followed (a 3xx fails), no cookies or content decoding, 10 s for the whole download, at most 32 KB + 1 bytes read, HTTP 200 only, the bytes kept only with the link's SHA-256 and then the chain's rules; any failure falls back to the file chooser, its title saying why (nothing runs on a download alone). |
 | 9 | **The page as a relay**: a page script calls `links.open` itself. | It gets the same question as the browser's link (the preface says *pasted or dropped into the app*): no way around the host's dialog, the same checks. |
-| 10 | **The wrong wallet**. | The question names the wallet (and the address shared, whole); with several open and none chosen, the link is refused. |
+| 10 | **The wrong wallet**. | The question names the wallet; with several open and none chosen, the link is refused. |
 | 11 | **A hostile route or pool** (a link through pools of other assets, a pool that is not the one shown, a lookalike ticker). | Pools by id only; the route's path is the app's own walk from the link's `from` through each pool's other side, which must end at its `to`; liquidity links name the pool's two tickers, checked against its assets; floors checked against the node's quote and given to the call. |
 | 12 | **Slippage as a weapon** where no floor binds (positions). | `position`, `reposition`: at most 10 % (`MAX_BINDING_SLIPPAGE_BPS`), shown as binding. |
 | 13 | **A withdrawal to someone else's address** (a phishing link with the attacker's eCash address). | The address is shown whole as the destination, with a warning that a payment on eCash cannot be undone; the describer of `createwithdrawal` shows it again; the usual arming delay and blocking after declines. A withdrawal stays refundable until it is in a bundle. |
-| 14 | **A deposit credited elsewhere**. | The credited address is never the link's: the wallet's own `flush.markets` address, its deposit address made by the node; two questions (the link's, then the deposit's own with the paying eCash wallet). |
-| 15 | **Results of another action sent to the shared address** (security review 2026-10-23: a destination as wallet-wide state would apply to calls running at the same time). | Thread-local, for the link's one call (`ScopedLinkDestination`, cleared by RAII, on an error too): a call of another thread (the pages, RPC) never reads it; no RPC sets it on a real network; the wallet checks the address is its own (`rpc_tests/link_destination_is_of_one_thread_and_one_scope`). |
+| 14 | **A deposit credited elsewhere**. | The credited address is never the link's: the wallet's own `flush.markets` address (else a new address of the wallet), its deposit address made by the node; two questions (the link's, then the deposit's own with the paying eCash wallet). |
+| 15 | **Results of another action sent to the link's address** (security review 2026-10-23: a destination as wallet-wide state would apply to calls running at the same time). | Thread-local, for the link's one call (`ScopedLinkDestination`, cleared by RAII, on an error too): a call of another thread (the pages, RPC) never reads it; no RPC sets it on a real network; the wallet checks the address is its own (`rpc_tests/link_destination_is_of_one_thread_and_one_scope`). |
 | 16 | **A link's floor lowered to a slippage** (security review 2026-10-23: a deposit's or withdrawal's floor given as a percent of the app's quote would let a move between the quote and the signing go below what the user accepted). | The absolute floors go to the call (`addpoolliquidity` `min_shares`, `removepoolliquidity` `min_amounts`): the wallet refuses below them at signing and the transaction's own floors are never under them; swaps and routes (`min_out`), buys and sales (their floor) did so already; orders (a limit) and bids (a falling price) have none to lower. |
 
 ## Tests
 
 - `test_flush-app --run_test=webui_links_tests`: the parser (each verb, malformed links, unknown verbs and
   parameters, versions, other networks, expiry, ids, amounts and overflows, texts and their characters, links of a
-  launch, connect's callback and nonce, launch files), the units of amounts, the resolution of each verb against a
+  launch, `connect` refused as an unknown verb, launch files), the units of amounts, the resolution of each verb against a
   chain (ids, tickers, graduated launches, pools and their two assets, the floor against the quote, places), the
   host: each verb's question (preface, then the describer's rows, the call), a link used once, a decline, another
-  network, a connect answered once with the one callback, the bound on waiting links, and the Linux handler (the
+  network, a `flush:connect` refused with nothing asked, the bound on waiting links, and the Linux handler (the
   desktop entry, mimeapps.list, another installation kept).
 - `src/webui/test/e2e/links.js` (`webui_e2e_links`, run_sidechain.py against a regtest Flush and a regtest
   mainchain): a launch from a launch file (both steps, the reservation, the launch, the first buy), a launch from a
   link with its logo chosen, a buy, a sale, a swap in the graduated pool, each opened as from the browser (the
-  single-instance hand-over), its question read and accepted in the dialog window and its picture taken; a connect
-  (the callback produced, no browser opened in a test run); and the refusals (another network, expired, used twice,
-  a ticker that is not the token's, a floor the curve cannot meet, an unknown parameter, a callback elsewhere).
+  single-instance hand-over), its question read and accepted in the dialog window and its picture taken; and the
+  refusals (another network, expired, used twice, `connect` as an unknown verb, a ticker that is not the token's, a
+  floor the curve cannot meet, an unknown parameter).

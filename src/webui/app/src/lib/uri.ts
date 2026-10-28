@@ -21,8 +21,8 @@ function decode(text: string): string {
 }
 
 /**
- * Whether text is an action link of the site (scheme:<verb>?..., a verb of lowercase letters: connect, launch, buy, sell,
- * swap), not a payment. The page never reads one: it hands it to the host as it is (host.openLink), which reads it,
+ * Whether text is an action link of the site (scheme:<verb>?..., a verb of lowercase letters: launch, buy, sell, swap,
+ * ...), not a payment. The page never reads one: it hands it to the host as it is (host.openLink), which reads it,
  * resolves it and asks the user in its own dialog (src/webui/linkhost.h).
  */
 export function isActionUri(text: string): boolean {

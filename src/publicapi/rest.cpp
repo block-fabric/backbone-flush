@@ -67,7 +67,7 @@ const std::vector<RouteDef>& Routes()
         // 8.2.0: orders' outcomes (the market index), by transaction and by address.
         {"GET", {"addresses", "{address}", "trades"}, "ListAddressTrades", {}},
         {"GET", {"trades", "{txid}"}, "GetTrade", {}},
-        // Several addresses (a wallet's, shared by flush:connect): ?addresses=a,b (64 at most) or a body {"addresses": [...]} (200).
+        // Several addresses (a wallet's): ?addresses=a,b (64 at most) or a body {"addresses": [...]} (200).
         {"GET", {"addresses", "portfolio"}, "GetPortfolio", {}},
         {"POST", {"addresses", "portfolio"}, "GetPortfolio", {}},
         {"GET", {"assets"}, "ListAssets", {}},

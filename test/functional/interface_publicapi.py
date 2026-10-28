@@ -549,7 +549,7 @@ class PublicApiTest(LayersTest):
         moon = next(l for l in made["launches"] if l["ticker"] == "MOON")
         assert_equal(moon["state"], n0.getlaunch("MOON")["status"])
         assert_equal(moon["claimable_fees"], n0.getlaunch("MOON")["creator_fees_owed"] >= Decimal("0.0005"))
-        # 7.0.1: several addresses at once (a wallet's, as flush:connect shares them): the assets summed, the rest with
+        # 7.0.1: several addresses at once (a wallet's): the assets summed, the rest with
         # its owner; GET with a short list, POST with a long one.
         both = api.rest("addresses/portfolio", {"addresses": f"{mine},{creator}"})
         assert_equal(both["addresses"], [mine, creator])

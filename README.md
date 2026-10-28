@@ -38,7 +38,7 @@ parameters tied to mainchain blocks set for eCash's ten-minute blocks. What come
 Its GUI is `flush-app`: the node and its wallet with an HTML interface in a native web view (WebKitGTK on
 Linux, WebView2 on Windows), with the Staking section and the pages of the assets and the DEX
 ([doc/webui.md](doc/webui.md)). It opens the `flush:` links of [flush.markets](https://flush.markets) (buy, sell,
-swap, launch, connect) and its launch files, each checked and confirmed in its own dialog
+swap, launch and the rest of its actions) and its launch files, each checked and confirmed in its own dialog
 ([doc/flush-links.md](doc/flush-links.md)).
 
 ## Building from source

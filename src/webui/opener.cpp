@@ -38,7 +38,7 @@ std::string LoggableUri(const std::string& uri)
         }
         return scheme + "://" + authority;
     }
-    // Opaque (flush:connect?...): the scheme and a leading verb of [A-Za-z0-9_-] alone.
+    // Opaque (flush:buy?...): the scheme and a leading verb of [A-Za-z0-9_-] alone.
     size_t verb{colon + 1};
     while (verb < uri.size() && (std::isalnum(static_cast<unsigned char>(uri[verb])) || uri[verb] == '_' || uri[verb] == '-')) ++verb;
     return scheme + ":" + uri.substr(colon + 1, verb - colon - 1);

@@ -185,7 +185,7 @@
 
   async function openUri() {
     uriError = '';
-    // A link of the site (buy, sell, swap, launch, connect): the host reads it and asks in its own dialog.
+    // A link of the site (buy, sell, swap, launch, ...): the host reads it and asks in its own dialog.
     if (isActionUri(uriText)) {
       uriDialog = false;
       await openLink(uriText.trim());
@@ -563,7 +563,7 @@
       openUri();
     }}
   >
-    <p>Open payment request from URI or file, or paste a link of flush.markets (buy, sell, swap, launch, connect)</p>
+    <p>Open payment request from URI or file, or paste a link of flush.markets (buy, sell, swap, launch)</p>
     <div class="field">
       <label for="uri-input">URI</label>
       <input id="uri-input" type="text" class="mono" placeholder="{CHAIN.uriScheme}:" bind:value={uriText} autocomplete="off" spellcheck="false" aria-invalid={uriError ? 'true' : undefined} />

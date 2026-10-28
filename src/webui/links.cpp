@@ -23,7 +23,6 @@ namespace webui::links {
 std::string_view VerbName(Verb verb)
 {
     switch (verb) {
-    case Verb::CONNECT: return "connect";
     case Verb::LAUNCH: return "launch";
     case Verb::BUY: return "buy";
     case Verb::SELL: return "sell";
@@ -49,8 +48,7 @@ std::string_view VerbName(Verb verb)
 }
 
 namespace {
-constexpr std::array<std::pair<std::string_view, Verb>, 21> VERBS{{
-    {"connect", Verb::CONNECT},
+constexpr std::array<std::pair<std::string_view, Verb>, 20> VERBS{{
     {"launch", Verb::LAUNCH},
     {"buy", Verb::BUY},
     {"sell", Verb::SELL},
@@ -422,7 +420,7 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
     const size_t q{rest.find('?')};
     const std::string verb_text{rest.substr(0, q)};
     const auto verb{std::find_if(VERBS.begin(), VERBS.end(), [&](const auto& v) { return v.first == verb_text; })};
-    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (connect, launch, buy, sell, swap, register, curve, pool, auction, order, route, deposit, withdraw, position, reposition, settle, bid, collect, claim, pegin, pegout)", verb_text.substr(0, 20)));
+    if (verb == VERBS.end()) throw LinkError(strprintf("\"%s\" is not an action this app knows (launch, buy, sell, swap, register, curve, pool, auction, order, route, deposit, withdraw, position, reposition, settle, bid, collect, claim, pegin, pegout)", verb_text.substr(0, 20)));
 
     // The parameters, each once (link: up to MAX_LINKS times).
     std::map<std::string, std::string> params;
@@ -492,17 +490,6 @@ Request Parse(std::string_view uri, std::string_view network, int64_t now)
         r.split.push_back(Share(s.substr(0, colon), s.substr(colon + 1)));
     }
     switch (r.verb) {
-    case Verb::CONNECT:
-        r.origin = need("origin");
-        r.callback = need("callback");
-        r.nonce = need("nonce");
-        if (r.origin != CONNECT_ORIGIN) throw LinkError(strprintf("This link asks to share an address with %s: the app answers %s only", r.origin.substr(0, 80), std::string{CONNECT_ORIGIN}));
-        if (r.callback != CONNECT_CALLBACK) throw LinkError(strprintf("This link asks to send the answer to %s: the app sends it to %s only", r.callback.substr(0, 80), std::string{CONNECT_CALLBACK}));
-        if (r.nonce.size() < MIN_NONCE || r.nonce.size() > MAX_NONCE ||
-            !std::all_of(r.nonce.begin(), r.nonce.end(), [](char c) { return Lower(c) || (c >= 'A' && c <= 'Z') || Digit(c) || c == '-' || c == '_'; })) {
-            throw LinkError(strprintf("nonce: %u to %u letters, digits, - and _", MIN_NONCE, MAX_NONCE));
-        }
-        break;
     case Verb::LAUNCH: {
         r.ticker = Ticker(need("ticker"), "ticker", false);
         r.name = Name(need("name"));
@@ -838,40 +825,6 @@ std::string Decimal(uint64_t units, int decimals)
     std::string out{digits.substr(0, digits.size() - decimals) + "." + digits.substr(digits.size() - decimals)};
     while (out.back() == '0') out.pop_back();
     if (out.back() == '.') out.pop_back();
-    return out;
-}
-
-std::string ConnectAnswer(const Request& request, const std::string& address, const std::vector<std::string>& addresses, bool truncated)
-{
-    // Every part is checked text (the callback a constant, the nonce and the network by the parser): nothing to escape, and
-    // nothing that could be read as another part of the address.
-    if (request.verb != Verb::CONNECT || request.callback != CONNECT_CALLBACK) throw LinkError("Not a connect");
-    const auto bech32{[](const std::string& a) { return a.size() >= 8 && a.size() <= 100 && std::all_of(a.begin(), a.end(), [](char c) { return Lower(c) || Digit(c); }); }};
-    if (!bech32(address)) throw LinkError("The address to share is not a bech32 address");
-    if (addresses.size() > MAX_CONNECT_ADDRESSES) throw LinkError(strprintf("At most %u addresses are shared", MAX_CONNECT_ADDRESSES));
-    std::string list;
-    for (const std::string& a : addresses) {
-        if (!bech32(a)) throw LinkError("An address to share is not a bech32 address");
-        list += (list.empty() ? "" : ",") + a;
-    }
-    std::string fragment{"address=" + address};
-    if (!list.empty()) fragment += "&addresses=" + list + (truncated ? "&truncated=1" : "");
-    return strprintf("%s#%s&nonce=%s&network=%s", request.callback, fragment, request.nonce, request.network);
-}
-
-std::vector<std::string> ConnectAddresses(const std::string& primary, const std::vector<std::string>& holding, bool& truncated)
-{
-    std::vector<std::string> out{primary};
-    std::set<std::string> seen{primary};
-    truncated = false;
-    for (const std::string& a : holding) {
-        if (!seen.insert(a).second) continue;
-        if (out.size() >= MAX_CONNECT_ADDRESSES) {
-            truncated = true;
-            break;
-        }
-        out.push_back(a);
-    }
     return out;
 }
 

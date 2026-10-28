@@ -812,7 +812,7 @@ RPCMethod listholdingaddresses()
 {
     return RPCMethod{
         "listholdingaddresses",
-        "The addresses of this wallet that hold something in blocks: " + CURRENCY_UNIT + " or tokens (assets, control coins, pool shares, positions, orders, auction receipts). For a site the wallet connects to (flush:connect), which reads them all.",
+        "The addresses of this wallet that hold something in blocks: " + CURRENCY_UNIT + " or tokens (assets, control coins, pool shares, positions, orders, auction receipts).",
         {},
         RPCResult{RPCResult::Type::ARR, "", "By address, in order",
             {{RPCResult::Type::OBJ, "", "",
