@@ -207,32 +207,29 @@ A validator runs its node with `-validatorkeyfile=<file>` and bonds ECX to its k
 led by a validator picked by stake. Fees of a block of stake are shared between its producer and the fee pot,
 which BMM bidders win. Coins are *soft* in blocks of stake, *BMM-confirmed* once an eCash block commits to
 them, and *final* after three anchors (half an hour). If eCash stalls, blocks of stake go on (soft) for up to
-8 hours, and its next blocks anchor them. A bond counts in the validator sets about ten hours after it is mined
-(the sets are fixed before their seeds). Unbonded coins come back after 1008 anchors (seven days; 144 on
+24 hours, and its next blocks anchor them. A bond counts in the validator sets about two days (49 hours) after it is mined
+(the sets are fixed before their seeds). Unbonded coins come back after 1008 anchors (seven days; 432, three days, on
 `ecashtest`); a proof of double signing slashes them until then. See [doc/fastblocks.md](doc/fastblocks.md) and, for the eCash values,
 [doc/ecash-sidechains.md](doc/ecash-sidechains.md).
 
-## Commands
+## Using Flush and the node's API
 
-Assets, on the node: `getbitassetsinfo`, `listassets`, `searchassets`, `getasset`, `getassethistory`,
-`listpools`, `searchpools`, `getpool`, `quoteswap`, `quoteroute`, `listauctions`, `searchauctions`,
-`getauction`, `quotebid`, `getdexinfo`, `listoracles`, `getoraclevalue`, `getoraclecontract`.
+- [doc/using-flush.md](doc/using-flush.md): the tasks, with `flush-cli`: ECX in and out, tokens, a launch (the
+  curve, graduation, the fees and their split), swaps, pools, positions and orders, staking, and the networks.
+- [doc/node-api.md](doc/node-api.md): what a node you run serves, how to turn each on, its ports and auth: the
+  JSON-RPC (every Flush method by area, from `flush-cli help`), the public DEX API, its gRPC services, Bitcoin
+  Core's REST.
 
-Assets, in the wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `mintasset`,
-`fixassetsupply`, `updateasset`, `transferassetcontrol`, `sendasset`, `burnasset`, `releaseasset`,
-`listmyassets`, `listassetactivity`, `addliquidity`, `removeliquidity`, `swapasset`, `swaproute`,
-`createauction`, `bidauction`, `collectauction`, `registeroracle`, `publishoracle`, `createoraclecontract`,
-`settleoraclecontract`.
+A node's interfaces:
 
-Sidechain, on the node: `getmainchaininfo`, `syncmainchain`, `setbmm`, `getbmminfo`, `requestbmmblock`,
-`createbmmblock`, `listwithdrawals`, `getwithdrawalbundle`. In the wallet: `getdepositaddress`,
-`createwithdrawal`, `refundwithdrawal`.
+| | Turned on by | Port (`ecash`) |
+|---|---|---|
+| JSON-RPC, what `flush-cli` speaks (wallets at `/wallet/<name>`) | on in `flushd`; `server=1` for `flush-app` | 8254, cookie auth |
+| Public DEX API: REST/JSON under `/api/v1`, gRPC, gRPC-Web, Connect (`flush.dex.v1.DexService`); no wallet | `-publicapi=<port>` | the one given |
+| Bitcoin Core's REST, read-only | `-rest` | the RPC port |
 
-Staking, on the node: `getposinfo`, `getstakinginfo`, `getvalidators`, `getvalidator`, `getleaderschedule`,
-`getanchorinfo`, `listevidence`, `submitevidence`, `setstaking`, `signbondpop`, `checkpegbalance`. In the
-wallet: `createbond`, `createunbond`, `listbonds`.
-
-`flush-cli help` lists them all with their arguments.
+flush.markets reads a node's public API; any node can serve the same ([doc/public-api.md](doc/public-api.md)).
+`flush-cli help` lists every method, `flush-cli help <method>` its arguments.
 
 ## Following the sidechain template
 
