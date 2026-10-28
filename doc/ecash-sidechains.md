@@ -7,8 +7,8 @@ A sidechain made from this template runs on two families of networks:
   backboned on eCash's main network, its betanet and its test network (backboned's own `-chain` names).
 
 The rules of a sidechain are the same on both. What differs is the mainchain: Backbone on eCash follows the
-drivechain rules of the bip300301_enforcer (votes counted per period; a bundle is paid with more than 13,150
-votes in 26,300 blocks, more than 5 in 10 on the test network and the eCash regtest), has ten-minute blocks,
+drivechain rules of the bip300301_enforcer (votes counted per period; a bundle is paid with more than 6,048
+votes within 12,096 blocks on `ecash`, more than 13,150 in 26,300 on betanet, more than 5 in 10 on the test network and the eCash regtest), has ten-minute blocks,
 uses `OP_NOP8` as `OP_DRIVECHAIN` and, above all, **does not pay one bundle per slot** (see below).
 
 ## Networks
@@ -75,12 +75,12 @@ block. Per network (`Consensus::SidechainParams`, `nPowTargetSpacing`):
 | `refund_grace_blocks` (policy) | blocks in which a new withdrawal can still be refunded ahead of a bundle | 6 | 1 | 1 | 6 |
 | `main_behind_margin` (policy) | mainchain blocks behind its headers before the link is "syncing" | 6 | 2 | 2 | 6 |
 | `nPowTargetSpacing` | the sidechain's block interval: stale-tip and block download timers, the app's estimates | 60 s | 600 s | 600 s | 600 s |
-| `PENDING_TREND_BLOCKS`/`MIN_RISE` | a rising foreign leader: 3 net upvotes in 12 mainchain blocks | 12/3 | 12/3 (same ratio: 13,150 in 26,300 is half a vote per block, as 64,800 in 129,600) | 12/3 | 12/3 |
+| `PENDING_TREND_BLOCKS`/`MIN_RISE` | a rising foreign leader: 3 net upvotes in 12 mainchain blocks | 12/3 | 12/3 (same ratio: 6,048 in 12,096 on `ecash`, like 13,150 in 26,300, is half a vote per block, as 64,800 in 129,600) | 12/3 | 12/3 |
 
 Unchanged, as they count no time: BMM requests are good for the next mainchain block only (both mainchains);
 deposits are paid by the first sidechain block after the mainchain block that has them (no maturity:
-`coinbase_maturity` 0); withdrawal bundles live as the mainchain says (`bundle_max_age` 26,300 blocks, half a year,
-on eCash; payment after more than 13,150 votes, at least about 91 days); the follower polls every second.
+`coinbase_maturity` 0); withdrawal bundles live as the mainchain says (`bundle_max_age` 12,096 blocks, twelve weeks,
+on `ecash`, 26,300 on betanet; payment after more than 6,048 votes on `ecash`, at least about 42 days); the follower polls every second.
 
 The parameter fingerprint of the drivechain database changes only where `main_single_payout` is false.
 

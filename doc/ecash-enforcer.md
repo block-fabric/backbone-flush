@@ -50,7 +50,7 @@ scores too; the rules do not read them, so both kinds of node agree (unit test
 | A bundle of another branch, pending | holds refunds (and, without single payout, new bundles) while it has support (score) | **holds nothing** |
 | This chain's bundle, not proposed in time | fails after `unproposed_expiry_blocks` | **stays until the mainchain closes it** |
 | This chain's bundle closed | Failed: withdrawals wait again (refundable; rebundled after the retry delay). Succeeded: paid | the same, from the Failed/Succeeded events |
-| Expiry | the mainchain's: Failed at its maximum age | the same: Failed at `withdrawal_bundle_max_age` (26,300 blocks; 10 on regtest) |
+| Expiry | the mainchain's: Failed at its maximum age | the same: Failed at `withdrawal_bundle_max_age` (12,096 blocks on `ecash`, 26,300 on betanet; 10 on regtest) |
 | A payout of another bundle (Succeeded with an M6 this chain did not make) | its outputs matched to waiting withdrawals (same script and amount, oldest first); this chain's bundle dropped if it held one of them | matched **first to withdrawals not in this chain's bundle**; this chain's bundle **kept** |
 | Refund | not in this chain's bundle, and no supported foreign bundle | not in this chain's bundle |
 
@@ -62,7 +62,7 @@ Why each change:
 
 - **No hold for a foreign bundle.** Without scores nothing tells a bundle of another branch of this chain
   from a bare proposal by any miner: one M3 in one block would freeze withdrawals and refunds for the
-  bundle's whole life (26,300 blocks, half a year), again and again for one block every half year. Thunder
+  bundle's whole life (12,096 blocks, twelve weeks, on `ecash`), again and again for one block every twelve weeks. Thunder
   and plain-bitnames do not hold either.
 - **No unproposed expiry.** An enforcer's block producer keeps a bundle handed to it
   (`ProposeWithdrawalBundle`, its `bundle_proposals` table) and proposes it in whatever block it mines, until a
@@ -78,7 +78,7 @@ Why each change:
 
 With `-mainchaingrpc` the node hands its bundle to the block producer only once the mainchain block that
 committed to it is `bundle_handoff_depth` blocks deep: 144 (a day) on `ecash` and `ecashbeta`, 12 on
-`ecashtest`, 2 on regtest. A bundle takes three months of votes to be paid; a day is nothing next to it,
+`ecashtest`, 2 on regtest. A bundle takes at least six weeks of votes to be paid; a day is nothing next to it,
 and it means a reorg shallower than that can never leave a handed bundle on a branch the sidechain left.
 There is no vouching in this mode: the enforcer's interface cannot take a word back, and the rules need no
 downvotes. The enforcer's default policy (KNOWN) upvotes the bundles handed to it; Backbone's upvotes the last
@@ -147,7 +147,7 @@ Assumptions:
 - **A1** (finality): no reorg of the mainchain, or of this chain by BMM, takes back the block that committed
   to a bundle after the bundle was handed over (`bundle_handoff_depth` mainchain blocks later).
 - **A2** (honest majority): a bundle that no honest block producer holds does not get the votes to be paid
-  (more than 13,150 in 26,300 blocks). An enforcer with the ALL policy upvotes the first pending bundle of
+  (more than 6,048 in 12,096 blocks on `ecash`). An enforcer with the ALL policy upvotes the first pending bundle of
   anybody; such miners are not counted as honest here (that policy pays whatever a miner proposes, whatever
   the sidechain's rules).
 - **A3** (liveness): some block producer that runs this sidechain mines now and then.

@@ -266,8 +266,8 @@ flush-cli getwithdrawalbundle                               # the bundle being v
 flush-cli refundwithdrawal "<txid>" <vout>                  # take it back while it is in no bundle
 ```
 
-The coins leave the wallet at once. Withdrawals are paid in bundles that eCash miners vote on: more than 13,150 votes
-in 26,300 blocks (about three months) on `ecash` and betanet; more than 5 in 10 on `ecashtest`. A bundle is handed to
+The coins leave the wallet at once. Withdrawals are paid in bundles that eCash miners vote on: more than 6,048 votes
+within 12,096 blocks (at least about six weeks) on `ecash`, more than 13,150 in 26,300 on betanet; more than 5 in 10 on `ecashtest`. A bundle is handed to
 the enforcer once the eCash block that committed to it is 144 blocks deep (12 on `ecashtest`).
 
 ## 6. Staking and validators

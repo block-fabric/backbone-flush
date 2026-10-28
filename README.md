@@ -177,8 +177,8 @@ network (`src/kernel/chainparams.cpp`, `CEcashSidechainParams`).
   <deposit address> <amount>`) or the enforcer's `CreateDepositTransaction`; or from the app's **Peg** page.
   The coins appear with the next Flush block.
 - **Withdraw.** `createwithdrawal <eCash address> <amount> ( <fee for eCash miners> )`, or the **Peg** page.
-  Withdrawals are paid in bundles that eCash miners vote on (more than 13,150 votes in 26,300 blocks, about
-  three months, on `ecash` and `ecashbeta`; more than 5 in 10 on `ecashtest`). A withdrawal not in the bundle
+  Withdrawals are paid in bundles that eCash miners vote on (more than 6,048 votes within 12,096 blocks,
+  at least about six weeks, on `ecash`; more than 13,150 in 26,300 on `ecashbeta`; more than 5 in 10 on `ecashtest`). A withdrawal not in the bundle
   being voted on can be taken back: `refundwithdrawal <txid> <vout>`.
 - **Merged mining.** Flush BMM blocks are mined by eCash miners, for a fee in ECX. `setbmm true <Flush
   address>` has the node ask for a block whenever the fees waiting pay for one; `requestbmmblock <address>
