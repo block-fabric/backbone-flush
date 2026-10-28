@@ -8,7 +8,8 @@
   import SafeText from '../components/SafeText.svelte';
   import { go } from '../lib/nav.svelte';
   import AssetBadge from './ba/AssetBadge.svelte';
-  import { assetMovesOf, counterparty, middleAddress, shortAddress, signedAmount } from './txinfo.svelte';
+  import { assetMovesOf, counterparty, middleAddress, moveNotes, shortAddress, signedAmount } from './txinfo.svelte';
+  import { TICKER } from './config';
 
   function openAddress(ev: Event, address: string) {
     ev.stopPropagation();
@@ -24,9 +25,12 @@
   <span class="moves" class:full data-testid="asset-moves">
     {#each moves as e, i (i)}
       {@const side = counterparty(e)}
+      {@const notes = moveNotes(e)}
       <span class="move">
-        {#if e.asset}<span class="badge" title={e.seq ? `${e.label ?? ''} #${e.seq}` : (e.label ?? '')}><AssetBadge id={e.asset} label={e.label ?? ''} seq={e.seq ?? ''} size="s" /></span>{/if}
-        {#if e.amount !== undefined}<span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no">{signedAmount(e)}</span>{/if}
+        {#if e.asset}<span class="badge" title={e.seq ? `${e.label ?? ''} #${e.seq}` : (e.label ?? '')}><AssetBadge id={e.asset} label={e.label ?? ''} seq={e.seq ?? ''} size="s" /></span>
+        {:else if e.coin}<span class="badge coin" data-testid="coin-move" translate="no">{TICKER}</span>{/if}
+        {#if e.amount !== undefined || e.coin}<span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no" title={notes.join(', ')}>{signedAmount(e)}</span>{/if}
+        {#each notes as n (n)}<span class="ba-tag note" data-testid="move-note">{n}</span>{/each}
         {#if side.dir && (side.parties.length || side.self)}
           <span class="party faint" title={side.parties.map((p) => p.address).join(' ')}>{side.dir === 'to' ? 'to' : 'from'}
             {#each side.parties.slice(0, 3) as p (p.address)}<span class="addr" translate="no">{#if p.address === 'unknown'}unknown{:else}<SafeText text={full ? p.address : shortAddress(p.address)} />{/if}</span> {/each}{#if side.parties.length > 3}+{side.parties.length - 3}{/if}
@@ -81,6 +85,14 @@
   }
   .amt {
     flex: none;
+  }
+  .coin {
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .note {
+    flex: none;
+    font-size: 0.75rem;
   }
   .amt {
     font-variant-numeric: tabular-nums;

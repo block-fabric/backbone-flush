@@ -3,6 +3,7 @@
   import { untrack } from 'svelte';
   // Overview: the balances of the wallet, and the chain as it grows (overviewpage.cpp, chainactivity.cpp).
   import Amount from '../components/Amount.svelte';
+  import SafeText from '../components/SafeText.svelte';
   import Icon from '../components/Icon.svelte';
   import { formatCount, formatTime, niceTimeOffset, shortHash } from '../lib/format';
   import { go } from '../lib/nav.svelte';
@@ -12,8 +13,9 @@
   import BalanceChart from '../components/BalanceChart.svelte';
   import TxStatusIcon from '../components/TxStatusIcon.svelte';
   import { nav } from '../lib/nav.svelte';
-  import { addressText, typeText, walletApi, type TxRecord } from '../lib/wallet';
+  import { addressText, walletApi, type TxRecord } from '../lib/wallet';
   import LocalOverview from '../chain/LocalOverview.svelte';
+  import { movesSummary, recordTypeText, refreshChainTx, shownRecords } from '../chain/txinfo.svelte';
 
   /** The number of transactions shown (NUM_ITEMS of the overview of chains-qt). */
   const NUM_ITEMS = 5;
@@ -21,6 +23,8 @@
   // The newest transactions and the balance chart, asked of the host: the overview never loads the
   // whole history (a large wallet would stall it, and every block would send it again).
   let recent: TxRecord[] = $state.raw([]);
+  // An asset transaction once, as the Transactions page shows it (its halves merged, its type and moves from the chain).
+  const recentShown = $derived(shownRecords(recent).slice(0, NUM_ITEMS));
   let recentOf: string | null = $state(null);
   let history: { time: number; balance: bigint }[] = $state.raw([]);
   let historyOf: string | null = null;
@@ -40,6 +44,7 @@
           if (wallets.current === name) {
             recent = r;
             recentOf = name;
+            refreshChainTx(name);
           }
         })
         .catch(() => undefined);
@@ -232,13 +237,14 @@
           <p class="muted">{recentOf === wallets.current ? 'No transactions yet.' : 'Loading…'}</p>
         {:else}
           <ul class="txs-list">
-            {#each recent as r (r.key)}
+            {#each recentShown as r (r.key)}
+              {@const moved = movesSummary(r.txid)}
               <li>
                 <button type="button" class="tx" disabled={prefs.mask} title={prefs.mask ? 'Hidden: privacy mode' : 'Show in the transactions'} onclick={() => openTx(r.txid)}>
                   <TxStatusIcon record={r} />
                   <span class="what">
-                    <span class="addr" class:muted={!r.label} translate="no">{addressText(r)}</span>
-                    <span class="faint small">{typeText(r.type, r.role) || 'Other'} · {formatTime(r.time)}</span>
+                    <span class="addr" class:muted={!r.label && !moved} translate="no">{moved || addressText(r)}</span>
+                    <span class="faint small"><SafeText text={recordTypeText(r)} /> · {formatTime(r.time)}</span>
                   </span>
                   <span class:pending={!r.countsForBalance} title={r.countsForBalance ? undefined : 'Not counted in the balance yet'}><Amount sats={r.amount} colored plus /></span>
                 </button>

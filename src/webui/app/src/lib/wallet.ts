@@ -4,7 +4,7 @@ import { BridgeError, request } from './bridge';
 import type { AddressActivity } from './explorer';
 import { t, tn } from './i18n.svelte';
 import { formatAmount, unitInfo, type Unit } from './units';
-import { COINBASE_ROLES } from '../chain/roles';
+import { COINBASE_ROLES, SEND_ROLES } from '../chain/roles';
 import { simpleMode } from './uimode.svelte';
 
 /** Error codes of the wallet functions (walletapi.h). */
@@ -168,6 +168,8 @@ export interface DetailRow {
   own?: boolean;
   /** Source of a coinbase: the role of its output, in the chain's words (chain/roles.ts). */
   role?: string;
+  /** Source of a coinbase payout: the wallet's transaction it came of, when known (wallet/payouts.h). */
+  source?: string;
 }
 
 export interface TxDetails {
@@ -387,8 +389,10 @@ export interface TxRecord {
   abandoned: boolean;
   /** Whether the wallet trusts it, as the host said (what matters for a transaction out of a block). */
   trusted: boolean;
-  /** What an output of a coinbase pays, by the chain's words (chain/roles.ts): '' mostly. */
+  /** What an output of a coinbase pays, or a send to no address is, by the chain's words (chain/roles.ts): '' mostly. */
   role: string;
+  /** A coinbase payout's transaction, when the wallet can tell it (wallet/payouts.h): '' mostly. */
+  source?: string;
 }
 
 /**
@@ -451,9 +455,17 @@ export function isEmptyRoleOutput(r: Pick<TxRecord, 'role' | 'type' | 'amount'>)
   return r.role !== '' && r.type === 'mined' && r.amount === 0n;
 }
 
-/** The records as the host sends them: one array each (RecordJson in walletapi.cpp); empty outputs of a role left out. */
+/**
+ * A block of the wallet's that the chain did not take, paying nothing (a block of stake that lost its slot): no
+ * payment, left out of the history like an empty output of a role.
+ */
+export function isEmptyOrphan(r: Pick<TxRecord, 'type' | 'amount' | 'status'>): boolean {
+  return r.type === 'mined' && r.amount === 0n && r.status === 'notaccepted';
+}
+
+/** The records as the host sends them: one array each (RecordJson in walletapi.cpp); empty outputs of a role and empty orphans left out. */
 export function parseRecords(raw: unknown[][]): TxRecord[] {
-  return parseAll(raw).filter((r) => !isEmptyRoleOutput(r));
+  return parseAll(raw).filter((r) => !isEmptyRoleOutput(r) && !isEmptyOrphan(r));
 }
 
 function parseAll(raw: unknown[][]): TxRecord[] {
@@ -482,6 +494,7 @@ function parseAll(raw: unknown[][]): TxRecord[] {
       abandoned: Boolean(r[16]),
       trusted: r.length > 17 ? Boolean(r[17]) : Boolean(r[11]),
       role: r.length > 18 && typeof r[18] === 'string' ? r[18] : '',
+      source: r.length > 19 && typeof r[19] === 'string' ? r[19] : '',
     };
   });
 }
@@ -557,6 +570,8 @@ export const RECOMMENDED_CONFIRMATIONS = 6;
 export function typeText(type: RecordType, role = ''): string {
   const own = role && type === 'mined' ? COINBASE_ROLES[role] : undefined;
   if (own) return t(own.label);
+  const sent = role && (type === 'send' || type === 'sendOther') ? SEND_ROLES[role] : undefined;
+  if (sent) return t(sent.label);
   switch (type) {
     case 'recv':
       return t('Received with');
@@ -635,10 +650,12 @@ export function confirmationProgress(r: Pick<TxRecord, 'status' | 'depth' | 'mat
 }
 
 /** TransactionTableModel::formatTxToAddress: the label, or the address, or "(n/a)". */
-export function addressText(r: Pick<TxRecord, 'type' | 'address' | 'label'>, withAddress = false): string {
+export function addressText(r: Pick<TxRecord, 'type' | 'address' | 'label'> & { role?: string }, withAddress = false): string {
   switch (r.type) {
     case 'recvOther':
     case 'sendOther':
+      // A send to no address: what it went to (a bond, the mainchain), in words.
+      if (!r.address && r.role && SEND_ROLES[r.role]) return t(SEND_ROLES[r.role].to);
       return r.address;
     case 'recv':
     case 'send':

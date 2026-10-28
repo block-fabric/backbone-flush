@@ -163,7 +163,7 @@ describe('the wallet\'s own addresses of a move', () => {
   it('leaves the zero Debit and Credit and the output index of the ECX record out of an asset operation', () => {
     const e = move('register', 1, { to: [mine(ME1)] });
     ba.transfers = [e];
-    expect(chainTxDetails(e.txid)).toEqual({ hideZero: true, raw: { 'Output index': 'Output index of the ECX record' }, simpleRows: ['Status', 'Date', 'Transaction fee'] });
+    expect(chainTxDetails(e.txid)).toEqual({ hideZero: true, raw: { 'Output index': 'Output index of the ECX record' }, simpleRows: ['Status', 'Date', 'Transaction fee', 'Net amount'] });
     expect(chainTxDetails('f'.repeat(64))).toBeUndefined();
   });
 });
