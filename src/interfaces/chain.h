@@ -37,6 +37,9 @@ class uint256;
 enum class MemPoolRemovalReason;
 enum class RBFTransactionState;
 struct bilingual_str;
+namespace bitassets::market {
+struct Outcome;
+} // namespace bitassets::market
 struct CBlockLocator;
 namespace kernel {
 struct ChainstateRole;
@@ -213,6 +216,9 @@ public:
     virtual std::optional<bitassets::ClPosition> getBitAssetsPosition(const uint256& id) = 0;
     //! Order books: a limit order.
     virtual std::optional<bitassets::BookOrder> getBitAssetsOrder(const uint256& id) = 0;
+    //! Layers' DEX: what became of an order (a swap of the batch, a limit order), by its transaction or a SettleOrder's,
+    //! from the market index (bitassets/market.h); nullopt if this node keeps none (-dexindex) or it knows no order there.
+    virtual std::optional<bitassets::market::Outcome> getBitAssetsOutcome(const Txid& txid) = 0;
     //! Concentrated liquidity: what a position is owed in fees now (its record's and those earned since).
     virtual std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) = 0;
     //! Layers' launches: a launch, by its token.

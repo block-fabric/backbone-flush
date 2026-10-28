@@ -7,6 +7,7 @@
 
 #include <rpc/util.h>
 #include <script/script.h>
+#include <wallet/payouts.h>
 #include <wallet/wallet.h>
 
 #include <any>
@@ -77,10 +78,17 @@ public:
     explicit WalletAnchors(const CWallet& wallet) : m_wallet{wallet} {}
     //! (`wallet` is the one this was made for: named here for the lock analysis to see the lock held.)
     const std::optional<interfaces::Chain::Anchors>& Get(const CWallet& wallet) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
+    //! What the coinbase outputs of the wallet the chain names no role pay (wallet/payouts.h), read once for the call.
+    const CoinbasePayouts& Payouts(const CWallet& wallet) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet)
+    {
+        if (!m_payouts) m_payouts.emplace(wallet);
+        return *m_payouts;
+    }
 
 private:
     const CWallet& m_wallet;
     std::optional<std::optional<interfaces::Chain::Anchors>> m_anchors;
+    std::optional<CoinbasePayouts> m_payouts;
 };
 } //  namespace wallet
 

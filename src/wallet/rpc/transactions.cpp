@@ -404,6 +404,13 @@ static void ListTransactions(const CWallet& wallet, const CWalletTx& wtx, Wallet
                         case interfaces::Chain::CoinbaseRole::OTHER: break;
                         }
                     }
+                    // Past the first output, what the chain names no role: a payout, a deposit, an unbond, a refund
+                    // (wallet/payouts.h), with the transaction that gave rise to it when the wallet can tell.
+                    if (r.vout > 0 && (static_cast<size_t>(r.vout) >= roles.size() || roles[r.vout] == interfaces::Chain::CoinbaseRole::OTHER)) {
+                        const CoinbasePayout payout{anchors.Payouts(wallet).Of(wtx.GetTx()->vout.at(r.vout).scriptPubKey, conf->confirmed_block_height)};
+                        entry.pushKV("income", payout.role);
+                        if (payout.source) entry.pushKV("source", payout.source->GetHex());
+                    }
                 }
             }
             entry.pushKV("abandoned", wtx.isAbandoned());
@@ -488,7 +495,8 @@ RPCMethod listtransactions()
                                 "for all other categories"},
                             {RPCResult::Type::STR, "label", /*optional=*/true, "A comment for the address/transaction, if any"},
                             {RPCResult::Type::NUM, "vout", "the vout value"},
-                            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
+                            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split); past its first output, what else the chain pays the wallet: \"payout\" (to an order or a launch of the wallet: a sale, a refund, a pool's, a creator's fees), \"refund\" (a withdrawal given back), \"unbond\" (what a bond unbonded), \"deposit\" (from the mainchain, to an address of getdepositaddress), \"chain\" (anything else)"},
+                            {RPCResult::Type::STR_HEX, "source", /*optional=*/true, "A payout, refund or unbond: the transaction of the wallet that gave rise to it, when the wallet can tell"},
                             {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the\n"
                                  "'send' category of transactions."},
                         },
@@ -579,7 +587,8 @@ static std::vector<RPCResult> ListSinceBlockTxFields()
             {RPCResult::Type::STR_AMOUNT, "amount", "The amount in " + CURRENCY_UNIT + ". This is negative for the 'send' category, and is positive\n"
                 "for all other categories"},
             {RPCResult::Type::NUM, "vout", "the vout value"},
-            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
+            {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split); past its first output, what else the chain pays the wallet: \"payout\" (to an order or a launch of the wallet: a sale, a refund, a pool's, a creator's fees), \"refund\" (a withdrawal given back), \"unbond\" (what a bond unbonded), \"deposit\" (from the mainchain, to an address of getdepositaddress), \"chain\" (anything else)"},
+            {RPCResult::Type::STR_HEX, "source", /*optional=*/true, "A payout, refund or unbond: the transaction of the wallet that gave rise to it, when the wallet can tell"},
             {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the\n"
                  "'send' category of transactions."},
         },
@@ -750,7 +759,8 @@ RPCMethod gettransaction()
                                 {RPCResult::Type::STR_AMOUNT, "amount", "The amount in " + CURRENCY_UNIT},
                                 {RPCResult::Type::STR, "label", /*optional=*/true, "A comment for the address/transaction, if any"},
                                 {RPCResult::Type::NUM, "vout", "the vout value"},
-                                {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split)"},
+                                {RPCResult::Type::STR, "income", /*optional=*/true, "FastBlocks, a coinbase output: \"staked\" (the producer's share of a block of stake), \"anchor\" (the pot paid to an anchor's payee), \"reporter\" (a reward for a proof that a leader signed twice), \"validator\" (a validator's share of the validator pool, fee split); past its first output, what else the chain pays the wallet: \"payout\" (to an order or a launch of the wallet: a sale, a refund, a pool's, a creator's fees), \"refund\" (a withdrawal given back), \"unbond\" (what a bond unbonded), \"deposit\" (from the mainchain, to an address of getdepositaddress), \"chain\" (anything else)"},
+                                {RPCResult::Type::STR_HEX, "source", /*optional=*/true, "A payout, refund or unbond: the transaction of the wallet that gave rise to it, when the wallet can tell"},
                                 {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The amount of the fee in " + CURRENCY_UNIT + ". This is negative and only available for the \n"
                                     "'send' category of transactions."},
                                 {RPCResult::Type::BOOL, "abandoned", "'true' if the transaction has been abandoned (inputs are respendable)."},

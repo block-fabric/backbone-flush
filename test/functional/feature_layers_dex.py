@@ -175,6 +175,41 @@ class LayersDexTest(LayersTest):
         assert_equal(sorted((r["category"], r["label"], r["sign"]) for r in rows), [("swap", "GOLD", -1), ("swap", "SILVER", 1)])
         assert_equal(Decimal(str(next(r["amount"] for r in rows if r["label"] == "GOLD"))), 10)
         assert_equal(Decimal(str(next(r["amount"] for r in rows if r["label"] == "SILVER"))), Decimal(str(quote["amount_out"])))
+
+        self.log.info("The wallet's history of trades through named pools (swappools): a sale, a swap, a buy whose tokens were spent")
+        gold_pool, silver_pool = n0.getpool("GOLD", "ECX")["pool"], n0.getpool("SILVER", "ECX")["pool"]
+        before = self.holding(n0, "SILVER")
+        sale = n0.swappools("GOLD", 10, [gold_pool])
+        self.bmm()
+        swap = n0.swappools("GOLD", 10, [gold_pool, silver_pool])
+        self.bmm()
+        # A sale: the GOLD out, the coin in by the coinbase (at least what it asked: no index here), paid to its chn_to.
+        rows = self.moves(n0, sale["txid"])
+        assert_equal([r[:3] for r in rows][0], ("swap", "GOLD", -1))
+        assert_equal(rows[0][3], 10)
+        assert_equal((rows[1][0], rows[1][2], rows[1][3], rows[1][4]), ("swap", 1, Decimal(str(sale["min_out"])), ("at_least", "coin", "coinbase")))
+        assert_equal([income for income, _ in self.payout_of(n0, sale["txid"])], ["payout"])
+        assert_greater_than(self.payout_of(n0, sale["txid"])[0][1], Decimal(str(sale["min_out"])) - Decimal("0.00000001"))
+        # A swap: the GOLD out, the SILVER in, exactly; GOLD's change is no receive.
+        assert_equal(self.moves(n0, swap["txid"]), [("swap", "GOLD", -1, Decimal(10), ()), ("swap", "SILVER", 1, self.holding(n0, "SILVER") - before, ())])
+        # A buy: the coin out with the transaction, the SILVER in; once that SILVER is spent, what it asked at least.
+        buy = n2.swappools("ECX", "0.1", [silver_pool])
+        self.bmm()
+        got = self.holding(n2, "SILVER")
+        rows = self.moves(n2, buy["txid"])
+        assert_equal((rows[0][0], rows[0][2], rows[0][3], rows[0][4]), ("swap", -1, Decimal("0.1"), ("coin",)))
+        assert_equal(rows[1:], [("swap", "SILVER", 1, got, ())])
+        n2.sendasset(n1.getnewaddress(), "SILVER", got)
+        self.bmm()
+        rows = self.moves(n2, buy["txid"])
+        assert_equal(rows[1], ("swap", "SILVER", 1, Decimal(str(buy["min_out"])), ("at_least",)))
+        assert_equal([r.get("unknown") for r in n2.listassettransactions(1000) if r["txid"] == buy["txid"]], [None, "spent"])
+        # Every asset transaction of the wallet has its row (a launch, a claim, a pool made as well: none left out).
+        for node in (n0, n2):
+            listed = {r["txid"] for r in node.listassettransactions(1000)}
+            assert_equal([a["txid"] for a in node.listassetactivity(1000) if a["txid"] not in listed], [])
+        # The deposit from the mainchain: no mining, a deposit.
+        assert_equal([Decimal(str(e["amount"])) for e in n0.listtransactions("*", 10000) if e.get("income") == "deposit"], [Decimal(60)])
         quote = n0.quoteroute("GOLD", 10, "WOOD")
         assert_equal(quote["path"], ["GOLD", "ECX", "SILVER", "OIL", "WOOD"])
         assert_equal(len(quote["routes"][0]["hops"]), 4)
@@ -211,6 +246,8 @@ class LayersDexTest(LayersTest):
         block = self.bmm()
         assert tight["txid"] in n0.getblock(block)["tx"]
         assert_equal(self.gold(n1), g1)  # its GOLD back
+        # The wallet's history: the GOLD out and the same back (a refund, not a receive nor a trade).
+        assert_equal(self.moves(n1, tight["txid"]), [("swap", "GOLD", -1, Decimal(50), ()), ("swap", "GOLD", 1, Decimal(50), ("refund",))])
         assert not self.paid_in(n1, block, alone)
         assert self.paid_in(n2, block, alone)
         assert_peg_balance(main, self.nodes)

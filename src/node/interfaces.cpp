@@ -38,6 +38,7 @@
 #include <node/coin.h>
 #include <node/context.h>
 #include <sidechain/follower.h>
+#include <bitassets/market.h>
 #include <node/interface_ui.h>
 #include <node/kernel_notifications.h>
 #include <node/miner.h>
@@ -805,6 +806,13 @@ public:
     {
         LOCK(::cs_main);
         return chainman().ActiveChainstate().SideState().BitAssets().GetOrder(id);
+    }
+    std::optional<bitassets::market::Outcome> getBitAssetsOutcome(const Txid& txid) override
+    {
+        if (!bitassets::market::Enabled()) return std::nullopt;
+        LOCK(::cs_main);
+        const sidechain::State state{chainman().ActiveChainstate().SideState()};
+        return bitassets::market::GetOutcome(state.View(), txid, /*max_events=*/64);
     }
     std::pair<uint64_t, uint64_t> getBitAssetsPositionFees(const uint256& id) override
     {

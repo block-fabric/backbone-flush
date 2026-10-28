@@ -434,11 +434,24 @@ Wallet: `reserveasset`, `registerasset`, `releaseassetreservation`, `listmyasset
 `listassetactivity`, `listassettransactions`.
 
 `listassettransactions (count skip asset)` lists the asset moves of the wallet, newest first, one entry per asset a
-transaction moves: its category (send, receive, register, mint, burn, swap, pool_add, pool_remove, auction, bid,
-collect, logo, update, control, reserve, release), the asset with its label and number, the amount (exact) and its sign,
-the network fee when the wallet paid it, and the other side: for a send the addresses it went to, for a receive the
-addresses that paid the transaction, read from the undo data of its block (or the mempool) — no index; "unknown" when
-the block is pruned. A result of a swap or a bid spent since is shown as the least the transaction asked (`at_least`).
+transaction moves, and every asset transaction of the wallet once at least: its category (send, receive, register,
+mint, burn, swap, pool_create, pool_add, pool_remove, position_open/add/remove/collect/close, order_place,
+order_settle, order_cancel, launch, curve, claim, auction, bid, collect, contract, logo, update, control, reserve,
+release, operation), the asset with its label and number, the amount (exact) and its sign, the network fee when the
+wallet paid it, and the other side: for a send the addresses it went to, for a receive the addresses that paid the
+transaction, read from the undo data of its block (or the mempool) — no index; "unknown" when the block is pruned.
+What an operation took of the wallet is what went in, never its change counted as a receive; what it gave is what
+came to its result outputs (the outputs the marker names no token for). The coin has rows of its own (`coin`): what
+an order, a pool or a position was paid in by the transaction, and what a coinbase pays out for it (`via`
+"coinbase": a sale, a refund, a creator's fees). An order the batch did not fill shows what came back (`refund`). A
+result spent since, or not in a block yet, is the least the transaction asked (`at_least`, `unknown` "spent" or
+"pending"); a node with `-dexindex` says it exactly from the market index (what came out, what came back).
+
+`listtransactions` names what a coinbase output past the first pays the wallet when the chain names it no role
+(`income`, wallet/payouts.h): "payout" (an order or a launch of the wallet: its chn_to, its creator, an address of its
+fee split), "refund" (a withdrawal given back), "unbond", "deposit" (an address of `getdepositaddress`), "chain"
+(the rest); `source` the transaction it came of, when the wallet can tell (the only one of its block that named the
+script, else the only one before).
 
 ## Differences from the original
 

@@ -97,6 +97,17 @@ class LayersTest(SidechainTest):
                 return a["balance"]
         return Decimal(0)
 
+    def moves(self, node, txid):
+        """The rows of listassettransactions of a transaction: (category, label, sign, amount or None, flags), in the node's order."""
+        rows = [r for r in node.listassettransactions(1000) if r["txid"] == txid]
+        assert rows, f"no row of {txid} in the wallet's asset history"
+        flags = lambda r: tuple(f for f in ("at_least", "at_most", "refund", "coin") if r.get(f)) + ((r["via"],) if r.get("via") else ())
+        return [(r["category"], r.get("label"), r["sign"], Decimal(str(r["amount"])) if "amount" in r else None, flags(r)) for r in rows]
+
+    def payout_of(self, node, source):
+        """The coinbase payouts of the wallet of `node` that listtransactions ties to `source`: (income, amount)."""
+        return [(e["income"], Decimal(str(e["amount"]))) for e in node.listtransactions("*", 10000) if e.get("source") == source]
+
     def paid_in(self, node, blockhash, amount):
         """Whether the coinbase of a block pays `amount` to an address of the wallet of `node`, beyond its first output."""
         block = node.getblock(blockhash, 2)

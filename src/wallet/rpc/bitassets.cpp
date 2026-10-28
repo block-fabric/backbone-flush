@@ -10,6 +10,7 @@
 #include <bitassets/dex.h>
 #include <bitassets/launch.h>
 #include <bitassets/logo.h>
+#include <bitassets/market.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <chainparams.h>
@@ -443,9 +444,6 @@ std::string FormatFee(uint32_t fee)
     if (text.back() == '.') text.pop_back();
     return text;
 }
-
-/** Units of what a route gives (its last asset is not in the operation): as units. */
-std::string FormatUnitsOnly(uint64_t units) { return strprintf("%u units", units); }
 
 /** A 128-bit number as decimal text. */
 std::string curves_text(unsigned __int128 value)
@@ -3308,8 +3306,10 @@ RPCMethod listassettransactions()
     };
     return RPCMethod{
         "listassettransactions",
-        "The asset transactions of this wallet, newest first, one entry per asset each moves: what kind of move it is, the\n"
-        "asset and amount (signed), the network fee the wallet paid, and who the other side is: the addresses an asset was\n"
+        "The asset transactions of this wallet, newest first, one entry per asset each moves (and per move of the coin an\n"
+        "operation paid in, or got by the coinbase; every asset transaction has one entry at least): what kind of move it is, the\n"
+        "asset and amount (signed; the change of what went in is no receive), the network fee the wallet paid, and who the\n"
+        "other side is: the addresses an asset was\n"
         "sent to, or the addresses that paid a transaction the wallet received an asset by (the outputs it spent, from the\n"
         "undo data of its block or the mempool: no index; \"unknown\" when they cannot be read).",
         {
@@ -3324,16 +3324,23 @@ RPCMethod listassettransactions()
             {RPCResult::Type::NUM, "confirmations", ""},
             {RPCResult::Type::STR_HEX, "blockhash", /*optional=*/true, ""},
             {RPCResult::Type::NUM, "blockheight", /*optional=*/true, ""},
-            {RPCResult::Type::STR, "category", "send, receive, register, mint, burn, swap, pool_add, pool_remove, auction, bid, collect, logo, display_name, update, control, reserve, release"},
-            {RPCResult::Type::STR_HEX, "asset", /*optional=*/true, "The asset (none for a reservation)"},
-            {RPCResult::Type::STR, "label", /*optional=*/true, "Its label"},
+            {RPCResult::Type::STR, "category", "send, receive, register, mint, burn, swap (a swap, a route, a buy or a sale), pool_create, pool_add, pool_remove, "
+                                               "position_open, position_add, position_remove, position_collect, position_close, order_place, order_settle, order_cancel, "
+                                               "launch, curve, claim, auction, bid, collect, contract, contract_settle, oracle, attest, logo, display_name, update, control, "
+                                               "reserve, release, operation (any other)"},
+            {RPCResult::Type::STR_HEX, "asset", /*optional=*/true, "The asset (none for a reservation, nor for the coin)"},
+            {RPCResult::Type::BOOL, "coin", /*optional=*/true, "A row of " + CURRENCY_UNIT + " itself: paid into the operation by the transaction (sign -1), or out by the coinbase (via)"},
+            {RPCResult::Type::STR, "via", /*optional=*/true, "\"coinbase\": paid by a coinbase to the wallet (in this transaction's block or a later one), not by this transaction"},
+            {RPCResult::Type::STR, "label", /*optional=*/true, "Its label (" + CURRENCY_UNIT + " for the coin)"},
             {RPCResult::Type::STR, "display_name", /*optional=*/true, "Its display name, if it has one"},
             {RPCResult::Type::STR, "seq", /*optional=*/true, "Its number"},
             {RPCResult::Type::NUM, "decimals", /*optional=*/true, ""},
             {RPCResult::Type::NUM, "amount", /*optional=*/true, "How much of it moved, in whole assets (exact)"},
             {RPCResult::Type::NUM, "sign", "+1 into the wallet, -1 out of it, 0 neither (a change of its data, a logo)"},
-            {RPCResult::Type::BOOL, "at_least", /*optional=*/true, "The amount is the least the transaction asked for (a result not read)"},
-            {RPCResult::Type::BOOL, "at_most", /*optional=*/true, "The amount is the most it offered (a deposit into a pool)"},
+            {RPCResult::Type::BOOL, "at_least", /*optional=*/true, "The amount is the least the transaction asked for (a result not read: see unknown)"},
+            {RPCResult::Type::BOOL, "at_most", /*optional=*/true, "The amount is the most it offered (a deposit into a pool, a position)"},
+            {RPCResult::Type::BOOL, "refund", /*optional=*/true, "What an order that did not fill gave back of what went in"},
+            {RPCResult::Type::STR, "unknown", /*optional=*/true, "Why an amount is the least asked for, or missing: \"pending\" (not in a block yet), \"spent\" (what came out was spent before it was read; -dexindex keeps it)"},
             {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The network fee, when the wallet paid all of it"},
             {RPCResult::Type::ARR, "to", "Where the asset went (outputs of others first)", {{RPCResult::Type::OBJ, "", "", party}}},
             {RPCResult::Type::ARR, "from", "Who paid the transaction, for what the wallet received", {{RPCResult::Type::OBJ, "", "", party}}},
@@ -3374,6 +3381,13 @@ RPCMethod listassettransactions()
         bool abandoned;
         //! The wallet's own outputs of CHN that carry nothing (its change), when it paid the transaction.
         std::vector<std::string> change{};
+        //! The chain's coin (no asset): paid in by the transaction, or out by the coinbase (`coinbase`).
+        bool coin{false};
+        bool coinbase{false};
+        //! What an order that did not fill gave back of what went in.
+        bool refund{false};
+        //! Why the amount is not exact: "pending" (not in a block yet), "spent" (what came out was spent before it was read).
+        std::string unknown{};
     };
     struct Seen {
         CTransactionRef tx;
@@ -3385,6 +3399,8 @@ RPCMethod listassettransactions()
         std::vector<bool> owned;
         bool abandoned;
         Marker marker;
+        //! The wallet's outputs spent since (what a result output carried is no longer read then).
+        std::vector<bool> spent{};
     };
     std::vector<Seen> seen;
     {
@@ -3399,7 +3415,11 @@ RPCMethod listassettransactions()
             if (const auto* conf{wtx.state<TxStateConfirmed>()}) s.block = std::make_pair(conf->confirmed_block_hash, conf->confirmed_block_height);
             for (const CTxIn& in : tx->vin) s.any_mine |= InputIsMine(*pwallet, in);
             if (s.all_mine) s.debit = CachedTxGetDebit(*pwallet, wtx, /*avoid_reuse=*/false);
-            for (const CTxOut& out : tx->vout) s.owned.push_back(pwallet->IsMine(out));
+            for (uint32_t n{0}; n < tx->vout.size(); ++n) {
+                const bool mine{pwallet->IsMine(tx->vout[n])};
+                s.owned.push_back(mine);
+                s.spent.push_back(mine && pwallet->IsSpent(COutPoint{txid, n}));
+            }
             seen.push_back(std::move(s));
         }
     }
@@ -3407,28 +3427,46 @@ RPCMethod listassettransactions()
         CTxDestination dest;
         return ExtractDestination(script, dest) ? EncodeDestination(dest) : std::string{"script " + HexStr(script).substr(0, 16)};
     }};
+    // The two assets of a pool by its id (asset0, asset1), if the chain has it.
+    const auto pool_assets{[&](const uint256& id) -> std::optional<std::pair<AssetId, AssetId>> {
+        if (const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)}) return std::make_pair(found->first.asset0, found->first.asset1);
+        return std::nullopt;
+    }};
     std::vector<Row> rows;
     for (const Seen& s : seen) {
         const CTransaction& tx{*s.tx};
         const Txid txid{tx.GetHash()};
-        // What each output carries: the marker says it for the outputs it names a token for; a result output, the state
-        // says while it is not spent.
+        // What each output carries: the marker says it for the outputs it names a token for (the change of what went in,
+        // what was sent); a result output (one the marker names no token for), the state says while it is not spent.
         std::map<uint32_t, Token> tokens;
+        std::set<uint32_t> result_ns;
         for (const bitassets::MarkerOutput& out : s.marker.outputs) {
             if (out.token) {
                 Token t{*out.token};
                 if (t.id.IsNull()) t.id = txid.ToUint256();
                 tokens[out.n] = t;
-            } else if (out.n < tx.vout.size() && s.owned[out.n]) {
-                if (const auto t{pwallet->chain().getBitAssetsToken(COutPoint{txid, out.n})}) tokens[out.n] = *t;
+            } else {
+                result_ns.insert(out.n);
+                if (out.n < tx.vout.size() && s.owned[out.n]) {
+                    if (const auto t{pwallet->chain().getBitAssetsToken(COutPoint{txid, out.n})}) tokens[out.n] = *t;
+                }
             }
         }
+        // Whether what the results carried can be read: the transaction is in a block, and none of its result outputs of
+        // the wallet was spent since. Otherwise a result is the least the operation asked for ("at least").
+        bool results_spent{false};
+        for (const uint32_t n : result_ns) {
+            if (n < tx.vout.size() && s.owned[n] && s.spent[n] && !tokens.contains(n)) results_spent = true;
+        }
+        const bool pending{!s.block};
+        const bool results_read{!pending && !results_spent};
+        const std::string unknown{pending ? "pending" : results_spent ? "spent" : ""};
         const auto base{[&](std::string category) {
             Row r{s.time, txid, s.confirmations, s.block, std::move(category)};
             r.abandoned = s.abandoned;
             if (s.any_mine) {
                 for (uint32_t n{0}; n < tx.vout.size(); ++n) {
-                    if (!s.owned[n] || tokens.contains(n) || bitassets::IsMarkerScript(tx.vout[n].scriptPubKey)) continue;
+                    if (!s.owned[n] || tokens.contains(n) || result_ns.contains(n) || bitassets::IsMarkerScript(tx.vout[n].scriptPubKey)) continue;
                     std::string a{address(tx.vout[n].scriptPubKey)};
                     if (std::ranges::find(r.change, a) == r.change.end()) r.change.push_back(std::move(a));
                 }
@@ -3436,8 +3474,10 @@ RPCMethod listassettransactions()
             if (s.all_mine) r.fee = s.debit - tx.GetValueOut();
             return r;
         }};
-        const auto add{[&](std::string category, const AssetId& asset, std::optional<uint64_t> amount, int sign, bool at_least = false, bool at_most = false) {
-            if (asset.IsNull()) return; // CHN: the transactions of the wallet say it
+        // A row of an asset. `results_only`: what came in went to the result outputs (not the change of what went in).
+        const auto add{[&](std::string category, const AssetId& asset, std::optional<uint64_t> amount, int sign, bool at_least = false, bool at_most = false,
+                           bool results_only = false, bool refund = false) {
+            if (asset.IsNull()) return; // CHN: add_coin
             Row r{base(std::move(category))};
             r.asset = asset;
             r.sign = sign;
@@ -3447,14 +3487,18 @@ RPCMethod listassettransactions()
             }
             r.at_least = at_least;
             r.at_most = at_most;
+            r.refund = refund;
+            if (at_least && !amount) r.at_least = false;
+            if (at_least) r.unknown = unknown;
             for (const auto& [n, t] : tokens) {
                 if (t.id != asset || (t.kind != Token::Kind::ASSET && t.kind != Token::Kind::CONTROL)) continue;
                 const std::string role{t.kind == Token::Kind::ASSET ? "asset" : "control coin"};
                 const Party p{address(tx.vout[n].scriptPubKey), s.owned[n], {role}};
                 // Change back to the wallet is no destination of a send.
                 if (sign < 0 && p.mine) continue;
-                // What came in: to the wallet's outputs (the sender's change is theirs).
+                // What came in: to the wallet's outputs (the sender's change is theirs); of an operation, its results.
                 if (sign > 0 && !p.mine && !s.any_mine) continue;
+                if (sign > 0 && results_only && !result_ns.contains(n)) continue;
                 const auto same{std::find_if(r.to.begin(), r.to.end(), [&](const Party& q) { return q.address == p.address; })};
                 if (same == r.to.end()) {
                     r.to.push_back(p);
@@ -3465,10 +3509,44 @@ RPCMethod listassettransactions()
             std::stable_partition(r.to.begin(), r.to.end(), [](const Party& p) { return !p.mine; });
             rows.push_back(std::move(r));
         }};
+        // A row of the chain's coin: paid into the operation by the transaction (sign -1), or paid out by the coinbase
+        // (`coinbase`: to the wallet's chn_to, in this block or a later one; its amount when known).
+        const auto add_coin{[&](std::string category, std::optional<uint64_t> amount, int sign, bool coinbase, bool at_least = false, bool at_most = false, bool refund = false) {
+            Row r{base(std::move(category))};
+            r.coin = true;
+            r.coinbase = coinbase;
+            r.sign = sign;
+            if (amount) {
+                r.amount = *amount;
+                r.has_amount = true;
+            }
+            r.at_least = at_least && amount.has_value();
+            r.at_most = at_most && amount.has_value();
+            r.refund = refund;
+            if (r.at_least || !amount) r.unknown = unknown;
+            rows.push_back(std::move(r));
+        }};
+        // In or out, whatever it is: an asset row, or one of the coin.
+        const auto add_any{[&](std::string category, const AssetId& asset, std::optional<uint64_t> amount, int sign, bool coinbase, bool at_least = false, bool at_most = false,
+                               bool refund = false) {
+            if (asset.IsNull()) {
+                add_coin(std::move(category), amount, sign, coinbase, at_least, at_most, refund);
+            } else {
+                add(std::move(category), asset, amount, sign, at_least, at_most, /*results_only=*/sign > 0, refund);
+            }
+        }};
         const auto received{[&](const AssetId& asset, Token::Kind kind) {
             uint64_t sum{0};
             for (const auto& [n, t] : tokens) {
                 if (t.id == asset && t.kind == kind && s.owned[n]) sum += t.amount;
+            }
+            return sum;
+        }};
+        // What the results gave the wallet of an asset (the change of what went in left out).
+        const auto result_of{[&](const AssetId& asset) {
+            uint64_t sum{0};
+            for (const auto& [n, t] : tokens) {
+                if (result_ns.contains(n) && t.id == asset && t.kind == Token::Kind::ASSET && s.owned[n]) sum += t.amount;
             }
             return sum;
         }};
@@ -3483,11 +3561,101 @@ RPCMethod listassettransactions()
         for (const auto& [n, t] : tokens) {
             if (t.kind == Token::Kind::ASSET || t.kind == Token::Kind::CONTROL) assets.insert(t.id);
         }
+        // An order of the batch (Swap, Route, SwapPools, a launch's first buy): what went in, and what came out or back.
+        // The node's market index says it exactly (-dexindex); else the result output while it is not spent; else the
+        // least it asked for. CHN out or back is paid by the coinbase to chn_to.
+        const auto order_rows{[&](const char* category, const AssetId& in, uint64_t amount_in, std::optional<AssetId> out, uint64_t min_out) {
+            const auto outcome{pwallet->chain().getBitAssetsOutcome(txid)};
+            if (outcome && outcome->swap && !outcome->by_settle && !outcome->swap->fill.path.empty()) {
+                const auto& fill{outcome->swap->fill};
+                const AssetId from{fill.path.front()}, to{fill.path.back()};
+                add_any(category, from, amount_in, -1, /*coinbase=*/false);
+                if (fill.filled && !fill.amounts.empty()) {
+                    add_any(category, to, fill.amounts.back(), +1, /*coinbase=*/to.IsNull());
+                    if (fill.back > 0) add_coin(category, fill.back, +1, /*coinbase=*/true, false, false, /*refund=*/true);
+                } else {
+                    add_any(category, from, fill.amounts.empty() ? amount_in : fill.amounts.front(), +1, /*coinbase=*/from.IsNull(), false, false, /*refund=*/true);
+                }
+                return;
+            }
+            add_any(category, in, amount_in, -1, /*coinbase=*/false);
+            if (!results_read) {
+                // Not in a block yet, or what it gave was spent before this was read: the least it asked for.
+                if (out) add_any(category, *out, min_out, +1, /*coinbase=*/out->IsNull(), /*at_least=*/true);
+                return;
+            }
+            // In a block, its result read: what came out, or what went in back (an order the batch did not fill).
+            const uint64_t back{in.IsNull() ? 0 : result_of(in)};
+            if (out && !out->IsNull()) {
+                if (const uint64_t got{result_of(*out)}) {
+                    add(category, *out, got, +1, false, false, /*results_only=*/true);
+                } else if (back) {
+                    add(category, in, back, +1, false, false, /*results_only=*/true, /*refund=*/true);
+                } else if (in.IsNull()) {
+                    // Nothing out, nothing in its result: missed, its CHN back by the coinbase.
+                    add_coin(category, amount_in, +1, /*coinbase=*/true, false, false, /*refund=*/true);
+                }
+            } else if (out) {
+                // Out in CHN, by the coinbase: the least it asked for (only the index knows how much), unless it missed.
+                if (back) {
+                    add(category, in, back, +1, false, false, /*results_only=*/true, /*refund=*/true);
+                } else {
+                    add_coin(category, min_out, +1, /*coinbase=*/true, /*at_least=*/true);
+                }
+            } else {
+                // The asset out is not known (a pool the chain no longer has): what came to the result outputs.
+                for (const AssetId& asset : assets) {
+                    if (const uint64_t got{result_of(asset)}) add(category, asset, got, +1, false, false, /*results_only=*/true, /*refund=*/asset == in);
+                }
+            }
+        }};
+        // What a list of named pools gives at its end, walking from what goes in: nullopt if a pool is not known.
+        const auto end_of_pools{[&](AssetId at, const std::vector<uint256>& pools) -> std::optional<AssetId> {
+            for (const uint256& id : pools) {
+                const auto pair{pool_assets(id)};
+                if (!pair) return std::nullopt;
+                if (pair->first == at) {
+                    at = pair->second;
+                } else if (pair->second == at) {
+                    at = pair->first;
+                } else {
+                    return std::nullopt;
+                }
+            }
+            return at;
+        }};
+        // Each asset of a deposit into a pool or a position: what went in, exactly if what came back is read (`max` the most
+        // it offered), else at most. CHN back is paid by the coinbase: its side stays "at most".
+        const auto deposit_rows{[&](const char* category, const AssetId& asset, uint64_t max) {
+            if (max == 0) return;
+            if (asset.IsNull()) {
+                add_coin(category, max, -1, /*coinbase=*/false, false, /*at_most=*/true);
+            } else if (results_read) {
+                const uint64_t back{std::min(max, result_of(asset))};
+                if (max > back) add(category, asset, max - back, -1);
+            } else {
+                add(category, asset, max, -1, false, /*at_most=*/true);
+            }
+        }};
+        // What came out to the wallet of each asset (a withdrawal from a pool, a position, a settle): the results read,
+        // else at least `min` (CHN by the coinbase).
+        const auto out_rows{[&](const char* category, const AssetId& asset, uint64_t min) {
+            if (asset.IsNull()) {
+                add_coin(category, min ? std::optional<uint64_t>{min} : std::nullopt, +1, /*coinbase=*/true, /*at_least=*/min > 0);
+            } else if (results_read) {
+                if (const uint64_t got{result_of(asset)}) add(category, asset, got, +1, false, false, /*results_only=*/true);
+            } else if (min) {
+                add(category, asset, min, +1, /*at_least=*/true);
+            }
+        }};
         const size_t first{rows.size()};
+        std::string fallback{"operation"};
         if (!s.any_mine) {
-            // From someone else: what came to the wallet's outputs.
+            // From someone else: what came to the wallet's outputs (a claim anyone may send: the creator's allocation).
+            const bool claim{s.marker.operation && std::holds_alternative<bitassets::ClaimLaunch>(*s.marker.operation)};
+            fallback = claim ? "claim" : "receive";
             for (const AssetId& asset : assets) {
-                if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("receive", asset, got, +1);
+                if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add(claim ? "claim" : "receive", asset, got, +1);
                 if (received(asset, Token::Kind::CONTROL)) add("control", asset, std::nullopt, +1);
             }
         } else if (!s.marker.operation) {
@@ -3495,6 +3663,7 @@ RPCMethod listassettransactions()
                 if (const uint64_t gone{sent(asset, Token::Kind::ASSET)}) add("send", asset, gone, -1);
                 if (sent(asset, Token::Kind::CONTROL)) add("control", asset, std::nullopt, -1);
             }
+            fallback = "send";
         } else {
             std::visit([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
@@ -3517,56 +3686,172 @@ RPCMethod listassettransactions()
                         if (t.kind == Token::Kind::ASSET) add("burn", t.id, t.amount, -1);
                         if (t.kind == Token::Kind::CONTROL) add("control", t.id, std::nullopt, -1);
                     }
+                    fallback = "burn";
                 } else if constexpr (std::is_same_v<T, bitassets::Swap>) {
-                    add("swap", op.asset_in, op.amount_in, -1);
-                    const uint64_t got{received(op.asset_out, Token::Kind::ASSET)};
-                    add("swap", op.asset_out, got ? got : op.min_out, +1, /*at_least=*/!got);
+                    order_rows("swap", op.asset_in, op.amount_in, op.asset_out, op.min_out);
+                    fallback = "swap";
                 } else if constexpr (std::is_same_v<T, bitassets::Route>) {
                     // A route as a swap: what went in, what came out (the change of what went in is no receive).
-                    if (op.path.empty()) return;
-                    add("swap", op.path.front(), op.amount_in, -1);
-                    const uint64_t got{received(op.path.back(), Token::Kind::ASSET)};
-                    add("swap", op.path.back(), got ? got : op.min_out, +1, /*at_least=*/!got);
+                    if (!op.path.empty()) order_rows("swap", op.path.front(), op.amount_in, op.path.back(), op.min_out);
+                    fallback = "swap";
                 } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
-                    // Through named pools (what the wallet sends for a swap or a route): its marker names only what goes
-                    // in, so what came out is the other asset its outputs to the wallet carry. ECX out is the wallet's own
-                    // payment (CHN rows are not this list's), as is a result output already spent.
-                    add("swap", op.asset_in, op.amount_in, -1);
-                    for (const AssetId& asset : assets) {
-                        if (asset == op.asset_in) continue;
-                        if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("swap", asset, got, +1);
-                    }
+                    // Through named pools (what the wallet sends for every swap, buy and sale): its marker names only what goes
+                    // in; what comes out is the other asset of the last pool, walking the pools from it.
+                    order_rows("swap", op.asset_in, op.amount_in, end_of_pools(op.asset_in, op.pools), op.min_out);
+                    fallback = "swap";
                 } else if constexpr (std::is_same_v<T, bitassets::AddLiquidity>) {
-                    add("pool_add", op.asset_a, op.amount_a, -1, false, /*at_most=*/true);
-                    add("pool_add", op.asset_b, op.amount_b, -1, false, /*at_most=*/true);
+                    // The amounts are the most that goes in; what does not, goes back (asset coins to the second result output).
+                    deposit_rows("pool_add", op.asset_a, op.amount_a);
+                    deposit_rows("pool_add", op.asset_b, op.amount_b);
+                    fallback = "pool_add";
+                } else if constexpr (std::is_same_v<T, bitassets::CreatePool>) {
+                    if (op.curve == static_cast<uint8_t>(bitassets::Curve::CONCENTRATED)) {
+                        // A concentrated pool is made at a price, nothing in (its liquidity comes by positions).
+                        add("pool_create", op.asset_a.IsNull() ? op.asset_b : op.asset_a, std::nullopt, 0);
+                    } else {
+                        // Both amounts go in whole.
+                        add_any("pool_create", op.asset_a, op.amount_a, -1, false);
+                        add_any("pool_create", op.asset_b, op.amount_b, -1, false);
+                    }
+                    fallback = "pool_create";
+                } else if constexpr (std::is_same_v<T, bitassets::PoolDeposit>) {
+                    // All of it goes in.
+                    if (const auto pair{pool_assets(op.pool)}) {
+                        if (op.amount0) add_any("pool_add", pair->first, op.amount0, -1, false);
+                        if (op.amount1) add_any("pool_add", pair->second, op.amount1, -1, false);
+                    }
+                    fallback = "pool_add";
                 } else if constexpr (std::is_same_v<T, bitassets::RemoveLiquidity>) {
-                    const uint64_t a{received(op.asset_a, Token::Kind::ASSET)}, b{received(op.asset_b, Token::Kind::ASSET)};
-                    add("pool_remove", op.asset_a, a ? a : op.min_a, +1, !a);
-                    add("pool_remove", op.asset_b, b ? b : op.min_b, +1, !b);
+                    out_rows("pool_remove", op.asset_a, op.min_a);
+                    out_rows("pool_remove", op.asset_b, op.min_b);
+                    fallback = "pool_remove";
+                } else if constexpr (std::is_same_v<T, bitassets::PoolWithdraw>) {
+                    if (const auto pair{pool_assets(op.pool)}) {
+                        if (op.only != 2) out_rows("pool_remove", pair->first, op.min0);
+                        if (op.only != 1) out_rows("pool_remove", pair->second, op.min1);
+                    } else {
+                        for (const AssetId& asset : assets) out_rows("pool_remove", asset, 0);
+                    }
+                    fallback = "pool_remove";
+                } else if constexpr (std::is_same_v<T, bitassets::OpenPosition>) {
+                    // At most max0 and max1 go in, what the liquidity needs; the rest comes back (asset coins to the results).
+                    if (const auto pair{pool_assets(op.pool)}) {
+                        deposit_rows("position_open", pair->first, op.max0);
+                        deposit_rows("position_open", pair->second, op.max1);
+                    }
+                    fallback = "position_open";
+                } else if constexpr (std::is_same_v<T, bitassets::ChangePosition>) {
+                    const char* category{op.close ? "position_close" : op.add ? "position_add" : op.Liquidity() == 0 && op.collect ? "position_collect" : "position_remove"};
+                    std::optional<std::pair<AssetId, AssetId>> pair;
+                    if (const auto position{pwallet->chain().getBitAssetsPosition(op.position)}) pair = pool_assets(position->pool);
+                    if (op.add) {
+                        if (pair) {
+                            deposit_rows(category, pair->first, op.limit0);
+                            deposit_rows(category, pair->second, op.limit1);
+                        }
+                    } else if (pair) {
+                        // Taken out (at least limit0 and limit1) and the fees it earned: what came out.
+                        out_rows(category, pair->first, op.collect || op.close ? 0 : op.limit0);
+                        out_rows(category, pair->second, op.collect || op.close ? 0 : op.limit1);
+                    } else {
+                        // Closed: the position is gone, its pool with it from here; what came to the results.
+                        for (const AssetId& asset : assets) out_rows(category, asset, 0);
+                    }
+                    fallback = category;
+                } else if constexpr (std::is_same_v<T, bitassets::PlaceOrder>) {
+                    // What it sells leaves the wallet into the book (CHN with the transaction).
+                    add_any("order_place", op.asset_sell, op.amount, -1, false);
+                    fallback = "order_place";
+                } else if constexpr (std::is_same_v<T, bitassets::SettleOrder>) {
+                    const char* category{op.cancel ? "order_cancel" : "order_settle"};
+                    const auto outcome{pwallet->chain().getBitAssetsOutcome(txid)};
+                    const bitassets::market::Settled* settled{nullptr};
+                    if (outcome && outcome->order) {
+                        if (outcome->order->settle.txid == txid) settled = &outcome->order->settle;
+                        for (const auto& e : outcome->events) {
+                            if (e.settle && e.settle->txid == txid) settled = &*e.settle;
+                        }
+                    }
+                    if (settled && outcome->order) {
+                        // What it got and what was left of what it sold, exactly (the index).
+                        if (settled->proceeds) add_any(category, outcome->order->placed.buy, settled->proceeds, +1, outcome->order->placed.buy.IsNull());
+                        if (settled->left) add_any(category, outcome->order->placed.sell, settled->left, +1, outcome->order->placed.sell.IsNull(), false, false, /*refund=*/true);
+                    } else if (results_read) {
+                        for (const AssetId& asset : assets) {
+                            if (const uint64_t got{result_of(asset)}) add(category, asset, got, +1, false, false, /*results_only=*/true);
+                        }
+                    }
+                    fallback = category;
+                } else if constexpr (std::is_same_v<T, bitassets::LaunchToken> || std::is_same_v<T, bitassets::CurveAsset>) {
+                    AssetId token;
+                    if constexpr (std::is_same_v<T, bitassets::LaunchToken>) {
+                        token = op.reg.name;
+                        // The launch itself: an asset registered onto its curve (none of it the wallet's).
+                        add("launch", token, std::nullopt, 0);
+                        if (received(token, Token::Kind::CONTROL)) add("control", token, std::nullopt, +1);
+                    } else {
+                        token = op.asset;
+                        // Part of the supply onto a curve, taken from the wallet's coins.
+                        add("curve", token, op.amount, -1);
+                    }
+                    if (op.first_buy) order_rows("swap", bitassets::CHN, op.first_buy, token, op.first_min_out);
+                    fallback = "launch";
+                } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
+                    // The allocation, once graduated, to the result output; the creator's part of the fees in CHN, by the coinbase.
+                    if (results_read) {
+                        if (const uint64_t got{result_of(op.token)}) add("claim", op.token, got, +1, false, false, /*results_only=*/true);
+                    }
+                    const auto launch{pwallet->chain().getBitAssetsLaunch(op.token)};
+                    bool creator{false};
+                    if (launch) {
+                        LOCK(pwallet->cs_wallet);
+                        creator = pwallet->IsMine(launch->creator);
+                    }
+                    if (creator) add_coin("claim", std::nullopt, +1, /*coinbase=*/true);
+                    fallback = "claim";
                 } else if constexpr (std::is_same_v<T, bitassets::CreateAuction>) {
                     add("auction", op.base, op.base_amount, -1);
+                    fallback = "auction";
                 } else if constexpr (std::is_same_v<T, bitassets::Bid>) {
                     if (const auto auction{pwallet->chain().getBitAssetsAuction(op.auction)}) {
-                        add("bid", auction->quote, op.quote_amount, -1);
-                        const uint64_t got{received(auction->base, Token::Kind::ASSET)};
-                        add("bid", auction->base, got ? got : op.min_base, +1, !got);
+                        // What it pays, less what an overpaying bid got back of an asset (its second result output).
+                        const uint64_t back{auction->quote.IsNull() || !results_read ? 0 : std::min(op.quote_amount, result_of(auction->quote))};
+                        add_any("bid", auction->quote, op.quote_amount - back, -1, false);
+                        if (results_read) {
+                            if (const uint64_t got{result_of(auction->base)}) add("bid", auction->base, got, +1, false, false, /*results_only=*/true);
+                        } else {
+                            add("bid", auction->base, op.min_base, +1, /*at_least=*/true);
+                        }
                     }
+                    fallback = "bid";
                 } else if constexpr (std::is_same_v<T, bitassets::Collect>) {
                     for (const AssetId& asset : assets) {
                         if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("collect", asset, got, +1);
                     }
-                    if (rows.size() == first) rows.push_back(base("collect"));
+                    fallback = "collect";
+                } else if constexpr (std::is_same_v<T, bitassets::RegisterOracle>) {
+                    fallback = "oracle";
+                } else if constexpr (std::is_same_v<T, bitassets::Attest>) {
+                    fallback = "attest";
+                } else if constexpr (std::is_same_v<T, bitassets::CreateOracleContract>) {
+                    add_any("contract", op.asset, op.amount, -1, false);
+                    fallback = "contract";
+                } else if constexpr (std::is_same_v<T, bitassets::SettleOracleContract>) {
+                    for (const AssetId& asset : assets) {
+                        if (const uint64_t got{result_of(asset)}) add("contract_settle", asset, got, +1, false, false, /*results_only=*/true);
+                    }
+                    fallback = "contract_settle";
                 } else {
-                    // An operation added later (Layers' own): what moved, as a transfer.
+                    // An operation added later: what went to others, what came to its results (never the change).
                     for (const AssetId& asset : assets) {
                         if (const uint64_t gone{sent(asset, Token::Kind::ASSET)}) add("send", asset, gone, -1);
-                        if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("receive", asset, got, +1);
+                        if (const uint64_t got{result_of(asset)}) add("receive", asset, got, +1, false, false, /*results_only=*/true);
                     }
                 }
             }, *s.marker.operation);
-            // Units sent to others besides what the operation does (a mint to another address is its "to").
         }
-        if (rows.size() == first) continue;
+        // Every asset transaction of the wallet has its row: the operation, if nothing of the wallet moved.
+        if (rows.size() == first) rows.push_back(base(fallback));
         // Who paid what the wallet received from someone else: the outputs the transaction spent.
         if (!s.any_mine) {
             std::vector<Party> from;
@@ -3600,10 +3885,17 @@ RPCMethod listassettransactions()
         // Seen in the same second: the newer is the less deep.
         if (a.confirmations != b.confirmations) return a.confirmations < b.confirmations;
         return a.txid < b.txid; });
+    // Of one asset: its rows, and the coin's rows of the same transactions (what was paid for it, or got for it).
+    std::set<Txid> of_only;
+    if (only) {
+        for (const Row& r : rows) {
+            if (r.asset && *r.asset == *only) of_only.insert(r.txid);
+        }
+    }
     UniValue result(UniValue::VARR);
     int skipped{0};
     for (const Row& r : rows) {
-        if (only && (!r.asset || *r.asset != *only)) continue;
+        if (only && !(r.asset ? *r.asset == *only : r.coin && of_only.contains(r.txid))) continue;
         if (skipped++ < skip) continue;
         if (result.size() >= static_cast<size_t>(count)) break;
         UniValue obj(UniValue::VOBJ);
@@ -3624,10 +3916,18 @@ RPCMethod listassettransactions()
             if (record) obj.pushKV("seq", bitassets::FormatSeq(record->seq));
             obj.pushKV("decimals", decimals);
             if (r.has_amount) obj.pushKV("amount", bitassets::AmountToJSON(r.amount, decimals));
+        } else if (r.coin) {
+            obj.pushKV("label", CURRENCY_UNIT);
+            obj.pushKV("decimals", 8);
+            obj.pushKV("coin", true);
+            if (r.has_amount) obj.pushKV("amount", ValueFromAmount(static_cast<CAmount>(r.amount)));
+            if (r.coinbase) obj.pushKV("via", "coinbase");
         }
         obj.pushKV("sign", r.sign);
         if (r.at_least) obj.pushKV("at_least", true);
         if (r.at_most) obj.pushKV("at_most", true);
+        if (r.refund) obj.pushKV("refund", true);
+        if (!r.unknown.empty()) obj.pushKV("unknown", r.unknown);
         if (r.fee) obj.pushKV("fee", ValueFromAmount(*r.fee));
         const auto parties{[](const std::vector<Party>& list) {
             UniValue arr(UniValue::VARR);
@@ -3684,6 +3984,8 @@ RPCMethod listassetactivity()
         Txid txid;
         int confirmations;
         Marker marker;
+        bool any_mine;
+        std::vector<bool> owned;
     };
     std::vector<Entry> entries;
     {
@@ -3692,11 +3994,48 @@ RPCMethod listassetactivity()
             if (wtx.isAbandoned()) continue;
             const auto marker{bitassets::GetMarker(*wtx.GetTx())};
             if (!marker) continue;
-            entries.push_back({wtx.GetTxTime(), txid, pwallet->GetTxDepthInMainChain(wtx), *marker});
+            // As listassettransactions: a conflicted transaction left out.
+            const int depth{pwallet->GetTxDepthInMainChain(wtx)};
+            if (depth < 0) continue;
+            Entry e{wtx.GetTxTime(), txid, depth, *marker, false, {}};
+            for (const CTxIn& in : wtx.GetTx()->vin) e.any_mine |= InputIsMine(*pwallet, in);
+            for (const CTxOut& out : wtx.GetTx()->vout) e.owned.push_back(pwallet->IsMine(out));
+            entries.push_back(std::move(e));
         }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.time > b.time; });
     const auto amount{[&](const AssetId& asset, uint64_t units) { return bitassets::FormatUnits(units, DecimalsOf(*pwallet, asset)) + " " + LabelOfAsset(*pwallet, asset); }};
+    const auto pools_text{[](size_t n) { return strprintf("%u pool%s", n, n == 1 ? "" : "s"); }};
+    // What a list of named pools gives at its end, walking from what goes in (nullopt: a pool not known).
+    const auto end_of_pools{[&](AssetId at, const std::vector<uint256>& pools) -> std::optional<AssetId> {
+        for (const uint256& id : pools) {
+            const auto found{pwallet->chain().getBitAssetsPoolOfKind(id)};
+            if (!found) return std::nullopt;
+            if (found->first.asset0 == at) {
+                at = found->first.asset1;
+            } else if (found->first.asset1 == at) {
+                at = found->first.asset0;
+            } else {
+                return std::nullopt;
+            }
+        }
+        return at;
+    }};
+    // A trade in words: a buy (the coin in), a sale (the coin out), else a swap; what comes out at least.
+    const auto trade{[&](std::string& operation, const AssetId& in, uint64_t amount_in, const std::optional<AssetId>& out, uint64_t min_out, size_t hops) {
+        const std::string least{out ? amount(*out, min_out) : strprintf("%u units", min_out)};
+        const std::string through{hops > 1 ? " through " + pools_text(hops) : ""};
+        if (in.IsNull() && out) {
+            operation = "buy";
+            return strprintf("Bought at least %s for %s%s", least, amount(in, amount_in), through);
+        }
+        if (out && out->IsNull()) {
+            operation = "sell";
+            return strprintf("Sold %s for at least %s%s", amount(in, amount_in), least, through);
+        }
+        operation = "route";
+        return strprintf("Traded %s for at least %s%s", amount(in, amount_in), least, hops > 1 ? through : " in 1 pool");
+    }};
     UniValue result(UniValue::VARR);
     for (const Entry& e : entries) {
         if (result.size() >= static_cast<size_t>(count)) break;
@@ -3749,7 +4088,7 @@ RPCMethod listassetactivity()
                     summary = "Retired a dead asset (its pools' " + CURRENCY_UNIT + " go to mainchain miners)";
                 } else if constexpr (std::is_same_v<T, bitassets::Route>) {
                     operation = "route";
-                    summary = strprintf("Traded %s for at least %s through %u pools", amount(op.path.front(), op.amount_in), amount(op.path.back(), op.min_out), op.path.size() - 1);
+                    if (!op.path.empty()) summary = trade(operation, op.path.front(), op.amount_in, op.path.back(), op.min_out, op.path.size() - 1);
                 } else if constexpr (std::is_same_v<T, bitassets::RegisterOracle>) {
                     operation = "register oracle";
                     summary = "Registered the oracle " + op.name;
@@ -3768,26 +4107,58 @@ RPCMethod listassetactivity()
                                               : strprintf("Set the logo of %s (%u bytes)", LabelOfAsset(*pwallet, op.asset), op.logo.size());
                 } else if constexpr (std::is_same_v<T, bitassets::CreatePool>) {
                     operation = "create pool";
-                    summary = strprintf("Made a %s pool of %s and %s at %s %%", bitassets::curves::CurveName(static_cast<bitassets::Curve>(op.curve)), amount(op.asset_a, op.amount_a),
-                                        amount(op.asset_b, op.amount_b), FormatFee(op.fee));
+                    if (op.curve == static_cast<uint8_t>(bitassets::Curve::CONCENTRATED)) {
+                        // Made at the price amount_b/amount_a, nothing in: its liquidity comes by positions.
+                        summary = strprintf("Made a concentrated pool of %s and %s at %s %%, at the price of %s for %s, nothing put in", LabelOfAsset(*pwallet, op.asset_a),
+                                            LabelOfAsset(*pwallet, op.asset_b), FormatFee(op.fee), amount(op.asset_b, op.amount_b), amount(op.asset_a, op.amount_a));
+                    } else {
+                        summary = strprintf("Made a %s pool of %s and %s at %s %%", bitassets::curves::CurveName(static_cast<bitassets::Curve>(op.curve)), amount(op.asset_a, op.amount_a),
+                                            amount(op.asset_b, op.amount_b), FormatFee(op.fee));
+                    }
                 } else if constexpr (std::is_same_v<T, bitassets::PoolDeposit>) {
                     operation = "add liquidity";
-                    summary = "Put liquidity into a pool";
+                    const auto found{pwallet->chain().getBitAssetsPoolOfKind(op.pool)};
+                    std::vector<std::string> parts;
+                    if (found && op.amount0) parts.push_back(amount(found->first.asset0, op.amount0));
+                    if (found && op.amount1) parts.push_back(amount(found->first.asset1, op.amount1));
+                    summary = parts.empty() ? "Put liquidity into a pool" : "Put " + util::Join(parts, " and ") + " into a pool";
                 } else if constexpr (std::is_same_v<T, bitassets::PoolWithdraw>) {
                     operation = "remove liquidity";
                     summary = op.only == 0 ? "Took liquidity out of a pool" : "Took liquidity out of a pool, one asset alone";
                 } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
                     operation = "route";
-                    summary = strprintf("Traded %s for at least %s through %u pools", amount(op.asset_in, op.amount_in), FormatUnitsOnly(op.min_out), op.pools.size());
+                    summary = trade(operation, op.asset_in, op.amount_in, end_of_pools(op.asset_in, op.pools), op.min_out, op.pools.size());
                 } else if constexpr (std::is_same_v<T, bitassets::LaunchToken>) {
                     operation = "launch";
                     summary = op.reg.text ? "Launched " + *op.reg.text + " on a bonding curve" : "Launched an asset on a bonding curve";
+                    if (op.first_buy) {
+                        summary += op.first_min_out ? strprintf(", and bought at least %s for %s", amount(op.reg.name, op.first_min_out), amount(bitassets::CHN, op.first_buy))
+                                                    : strprintf(", and bought of it for %s", amount(bitassets::CHN, op.first_buy));
+                    }
                 } else if constexpr (std::is_same_v<T, bitassets::CurveAsset>) {
                     operation = "curve";
                     summary = strprintf("Put %s on a bonding curve", amount(op.asset, op.amount));
                 } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
                     operation = "claim launch";
-                    summary = "Paid a launch's creator what it was owed";
+                    summary = "Paid the creator of " + LabelOfAsset(*pwallet, op.token) + "'s launch what it was owed (" + CURRENCY_UNIT + " by the coinbase, the allocation once graduated)";
+                } else if constexpr (std::is_same_v<T, bitassets::OpenPosition>) {
+                    operation = "open position";
+                    const auto found{pwallet->chain().getBitAssetsPoolOfKind(op.pool)};
+                    summary = found ? strprintf("Opened a position in the pool of %s and %s, for at most %s and %s", LabelOfAsset(*pwallet, found->first.asset0), LabelOfAsset(*pwallet, found->first.asset1),
+                                                amount(found->first.asset0, op.max0), amount(found->first.asset1, op.max1))
+                                    : "Opened a position in a pool";
+                } else if constexpr (std::is_same_v<T, bitassets::ChangePosition>) {
+                    operation = "change position";
+                    summary = op.close ? "Closed a position: all its liquidity out, its fees collected"
+                              : op.add ? "Added liquidity to a position"
+                              : op.Liquidity() == 0 && op.collect ? "Collected the fees of a position"
+                              : op.collect ? "Took liquidity out of a position, its fees collected" : "Took liquidity out of a position";
+                } else if constexpr (std::is_same_v<T, bitassets::PlaceOrder>) {
+                    operation = "place order";
+                    summary = strprintf("Placed an order: %s for %s, until block %d", amount(op.asset_sell, op.amount), LabelOfAsset(*pwallet, op.asset_buy), op.expiry);
+                } else if constexpr (std::is_same_v<T, bitassets::SettleOrder>) {
+                    operation = op.cancel ? "cancel order" : "settle order";
+                    summary = op.cancel ? "Cancelled an order: what is left of what it sold back, with what it got" : "Collected what an order got";
                 } else if constexpr (std::is_same_v<T, bitassets::SetDisplayName>) {
                     operation = "display name";
                     summary = op.display_name.empty() ? "Removed the display name of " + LabelOfAsset(*pwallet, op.asset)
@@ -3795,12 +4166,19 @@ RPCMethod listassetactivity()
                 }
             }, *e.marker.operation);
         } else {
+            // A transfer: what went to others (a send), or what came to the wallet (from someone else); the change left out.
             std::vector<std::string> parts;
             for (const auto& out : e.marker.outputs) {
+                const bool mine{out.n < e.owned.size() && e.owned[out.n]};
+                if (e.any_mine == mine) continue;
                 if (out.token && out.token->kind == Token::Kind::ASSET) parts.push_back(amount(out.token->id, out.token->amount));
                 if (out.token && out.token->kind == Token::Kind::CONTROL) parts.push_back("the control coin of " + LabelOfAsset(*pwallet, out.token->id));
             }
-            summary = "Moved " + util::Join(parts, ", ");
+            if (parts.empty()) {
+                summary = e.any_mine ? "Moved assets between addresses of this wallet" : "Received nothing";
+            } else {
+                summary = (e.any_mine ? "Sent " : "Received ") + util::Join(parts, ", ");
+            }
         }
         UniValue obj(UniValue::VOBJ);
         obj.pushKV("txid", e.txid.GetHex());
