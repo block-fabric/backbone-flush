@@ -44,6 +44,10 @@ struct Status {
     std::string message;
     //! Headers to send with the reply (Retry-After with RESOURCE_EXHAUSTED, say).
     std::vector<std::pair<std::string, std::string>> headers{};
+    //! REST only (8.3.0): a machine-readable reason, and numbers, beside the code and the message of the error object
+    //! (`{"error": {"code", "message", "reason", <name>: <number>…}}`), for a client that waits on them.
+    std::string reason{};
+    std::vector<std::pair<std::string, int64_t>> numbers{};
     bool ok() const { return code == Code::OK; }
 };
 

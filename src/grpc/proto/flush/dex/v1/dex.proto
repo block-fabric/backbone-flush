@@ -1206,12 +1206,91 @@ message BuiltAction {
 }
 
 message BroadcastRequest {
-  // The signed transaction, hex.
+  // The signed transaction, hex; or (8.3.0) a PSBT whose inputs are all signed (base64): the node finalizes it (as
+  // finalizepsbt), extracts the transaction and broadcasts it. One of the two.
   string hex = 1;
+  string psbt = 2;
+  // 8.3.0: the most ECX (satoshis, an integer) an unspendable output may hold, as sendrawtransaction's maxburnamount:
+  // a launch's first buy, which its marker holds (a PSBT's build says it: burn_units). Not given: any amount in an
+  // asset marker, as before (and never outside one).
+  string max_burn_units = 3;
 }
 
 message BroadcastReply {
   string txid = 1;
+}
+
+// 8.3.0: an unsigned transaction (a PSBT) of a launch's two steps, or a registration's, for a wallet that signs what it is
+// given (POST /api/v1/psbt/reserve|launch|register, doc/public-api.md). The node builds it as its own wallet would
+// (bitassets/launch.h: the same checks, operation, outputs and marker), from the coins of one address, to which
+// everything comes back. The launch's and the registration's parameters are build/launch's and build/register's, of
+// the same names (and numbers: BuildActionRequest's).
+message BuildPsbtRequest {
+  // reserve, launch or register (the route's).
+  string verb = 1;
+  uint32 slippage_bps = 11;
+  uint32 expires_in = 13;
+  string ticker = 14;
+  string name = 15;
+  string description = 16;
+  repeated string links = 17;
+  string logo_sha256 = 18;
+  string first_buy_ecx = 19;
+  string supply = 20;
+  optional uint32 decimals = 21;
+  uint32 fee_bps = 22;
+  uint32 allocation_bps = 23;
+  // launch: the least and most ECX a buy on its curve pays (launchtoken's min_buy, max_buy; none: any).
+  string min_buy = 25;
+  string max_buy = 26;
+  // The wallet's address (P2WPKH, the one it gave the site): its coins pay, the reservation, the tokens, the first
+  // buy's result and the change go to it, and it is the launch's creator.
+  string address = 52;
+  repeated string split = 56;
+  bool keep_control = 57;
+  string logo_url = 58;
+  // The reservation's nonce: 32 bytes, 64 hex digits as written (the HMAC key, not reversed), chosen by the client and
+  // kept until the reveal (launch, register).
+  string nonce = 100;
+  // launch, register: the reservation's output (txid:vout), as psbt/reserve answered.
+  string reservation = 101;
+  // The address's coins to pay with (txid:vout, at most 200); none: the node finds them in its UTXO set.
+  repeated string coins = 102;
+  // launch with a first buy: the least it gets, in the token's units (a decimal, as the link's min_tokens); none: the
+  // quote less slippage_bps (as build/launch).
+  string min_tokens = 103;
+}
+
+message BuiltPsbt {
+  string verb = 1;
+  // The PSBT, base64: version 0, every input with its previous transaction (non_witness_utxo) and the output it spends
+  // (witness_utxo), nothing else (no derivation, no unknown field).
+  string psbt = 2;
+  // Its txid: signing does not change it (every input is P2WPKH).
+  string txid = 3;
+  // The fee it pays, and at what rate (satoshis per virtual byte, with the signatures' size).
+  double fee = 4;
+  string fee_units = 5;
+  double fee_rate = 6;
+  uint32 vsize = 7;
+  // What its marker holds (a launch's first buy): the broadcast's max_burn_units.
+  double burn = 8;
+  string burn_units = 9;
+  string address = 10;
+  string ticker = 11;
+  // The asset's id (the hash of the ticker), as every id of the API.
+  string asset = 12;
+  // reserve: the commitment, ReservationCommitment(asset, nonce, the address's script) (uint256, shown as ids are), the
+  // reservation's output (txid:vout and its vout), and the confirmations it needs before psbt/launch takes it.
+  string commitment = 13;
+  string reservation = 14;
+  uint32 reservation_vout = 15;
+  uint32 confirmations_needed = 16;
+  // What it spends (txid:vout, in order) and the tip it was built at.
+  repeated string inputs = 17;
+  uint32 height = 18;
+  string summary = 19;
+  repeated Fact facts = 20;
 }
 
 // 8.1.0: a logo kept for a while by its SHA-256 (POST /api/v1/logos), so that a link can name where it is hosted
@@ -1401,6 +1480,8 @@ service DexService {
   rpc BuildAction(BuildActionRequest) returns (BuiltAction) { option idempotency_level = NO_SIDE_EFFECTS; }
 
   rpc Broadcast(BroadcastRequest) returns (BroadcastReply);
+  // 8.3.0: an unsigned transaction of a launch's steps (or a registration's) for a wallet that signs what it is given.
+  rpc BuildPsbt(BuildPsbtRequest) returns (BuiltPsbt);
 
   // 8.1.0: logos kept for an hour by their SHA-256 (links name where they are: logo_url).
   rpc UploadLogo(UploadLogoRequest) returns (UploadLogoReply);

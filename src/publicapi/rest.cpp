@@ -77,6 +77,10 @@ const std::vector<RouteDef>& Routes()
         {"GET", {"quote", "position"}, "QuotePosition", {}},
         {"GET", {"build", "{verb}"}, "BuildAction", {}},
         {"POST", {"broadcast"}, "Broadcast", {}},
+        // 8.3.0: unsigned transactions (PSBTs) of a launch's steps and of a registration: a body, and/or build/launch's query.
+        {"POST", {"psbt", "reserve"}, "BuildPsbt", {{"verb", "reserve"}}},
+        {"POST", {"psbt", "launch"}, "BuildPsbt", {{"verb", "launch"}}},
+        {"POST", {"psbt", "register"}, "BuildPsbt", {{"verb", "register"}}},
         // 8.1.0: a logo kept an hour by its SHA-256 (a body {"base64": ...}), and served as its image.
         {"POST", {"logos"}, "UploadLogo", {}},
         {"GET", {"logos", "{sha256}"}, "GetUploadedLogo", {}, true},

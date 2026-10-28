@@ -92,7 +92,7 @@ Conventions: ids are 64 lowercase hex digits; ECX has none (`null`); a launch is
 id. Display amounts are numbers in whole units; exact amounts are `*_units` strings of integers. Lists:
 `{ "items": […], "next_cursor": "…" | null, "total": n }`, `cursor` passed back. Errors:
 `{ "error": { "code": "not_found", "message": "…" } }` with the Connect HTTP status (400, 403, 404, 409, 429, 501,
-503). An unknown query parameter is refused (400). Reads carry `Cache-Control: public, max-age=5` (logos 300,
+503); some (8.3.0: `psbt/launch`'s wait) add a `reason` and numbers to the error object. An unknown query parameter is refused (400). Reads carry `Cache-Control: public, max-age=5` (logos 300,
 quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ETag` (`If-None-Match` → 304).
 
 | GET | Method | Returns |
@@ -128,7 +128,8 @@ quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ET
 | `quote/deposit?pool=&amount_a=&amount_b=`, `quote/withdraw?pool=&shares=&only=a\|b` | QuoteLiquidity | `quotepoolliquidity`, floors |
 | `quote/position?pool=&price_lower=&price_upper=&amount_a=&amount_b=` | QuotePosition | `previewposition` |
 | `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order\|position\|reposition\|settle\|bid\|collect\|claim\|pegin\|pegout}?…` | BuildAction | the action, unsigned (below); `facts` (what to show beside it), `deposit_address` (pegin with an address) |
-| POST `broadcast` `{"hex": "…"}` | Broadcast | `{ txid }` |
+| POST `broadcast` `{"hex": "…"}` or (8.3.0) `{"psbt": "…", "max_burn_units": "…"}` | Broadcast | `{ txid }`; a PSBT whose inputs are all signed is finalized here (as `finalizepsbt`) and extracted, else 400 `the PSBT is not complete: input N not signed`; `max_burn_units` caps what an unspendable output holds (sendrawtransaction's `maxburnamount`): a launch's first buy, the `burn_units` of its build |
+| POST `psbt/reserve`, `psbt/launch`, `psbt/register` | BuildPsbt | 8.3.0: a launch's two steps (and a registration's) as unsigned PSBTs for a wallet that signs what it is given (below). Cost 8, `no-store` |
 | POST `logos` `{"base64": "…"}` | UploadLogo | 8.1.0: `{ "sha256": "<64 hex>", "url": "/api/v1/logos/<sha256>" }` (200; `Cache-Control: no-store`), the logo kept in memory by its SHA-256 for an hour from its last upload (uploaded again, an hour from then), at most 1024 logos (the one uploaded longest ago dropped first). Checked with the chain's logo rules (`bitassets::CheckLogo`: PNG or JPEG, 256×256, at most 32 KiB, no metadata): else 400 with the reason (`bad-ba-logo-…`). The `url` is relative: the site prefixes its own origin and gives it as a link's `logo_url` (doc/flush-links.md). Charged as a broadcast: 6 a minute per client (3 at once), 120 in all (429, Retry-After), and 4 units of the client's rate |
 | `logos/{sha256}` | GetUploadedLogo | 8.1.0: the logo uploaded with that SHA-256 (any case), as the image (`image/png` or `image/jpeg`, the type its rules found), `Cache-Control: public, max-age=31536000, immutable` (its content is its hash's); 404 when none is kept (never uploaded, or more than an hour ago), 400 when not 64 hex digits |
 
@@ -228,6 +229,91 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
   marker, and hands it to the node's own mempool and relay (`BroadcastTransaction`, the node's policy, the default
   maximum fee rate). Rate-limited per client and in all; off with `-publicapibroadcast=0`.
 
+### Unsigned transactions: a launch from a wallet extension (8.3.0)
+
+The ECX Wallet extension signs only a PSBT someone else built. For a launch, the node builds both of its
+transactions as its own wallet's `reserveasset` and `launchtoken` would (and `registerasset`'s for a
+registration): the same checks of the ticker and the options, the same operation, outputs and marker
+(`src/bitassets/launch.{h,cpp}`, which the wallet's RPC methods call too), from the coins of **one address**, the one
+the wallet gave the site (P2WPKH only: the only kind it signs). Everything comes back to that address: the reservation,
+the launch's creator, its first buy's tokens (and ECX back), a kept control coin, a registration's supply and control
+coin, the change. The site gets each PSBT signed by the wallet, then `POST broadcast {"psbt": …}`.
+
+```
+site ──POST psbt/reserve {address, ticker, nonce}──▶ node ◀── { psbt, reservation, commitment, confirmations_needed, … }
+     ──wallet signs (partial signatures)──▶ POST broadcast {psbt} ──▶ { txid }
+     ──POST psbt/launch?<build/launch's query> {address, ticker, nonce, reservation}──▶ node  (409 until deep enough: poll)
+     ◀── { psbt, burn_units, … } ──wallet signs──▶ POST broadcast {psbt, max_burn_units}
+```
+
+**The request**, a JSON body and/or the query string (both fill the same `BuildPsbtRequest`; the route sets `verb`):
+
+| Field | | |
+|---|---|---|
+| `address` | all | the wallet's P2WPKH address of this chain |
+| `ticker` | all | the ticker (uppercased: `NewAssetName`); refused if taken (409 `already_exists`) or if the rules refuse it (`reserveasset`'s checks) |
+| `nonce` | all | 32 bytes, 64 hex digits **as written** (the HMAC key's bytes in order, not reversed), chosen by the client and kept until the reveal. The same nonce for `psbt/reserve` and `psbt/launch` |
+| `reservation` | launch, register | `txid:vout`, as `psbt/reserve` answered |
+| `coins` | all | optional, at most 200 `txid:vout`: the address's coins to pay with, each checked (in the UTXO set, the address's, not spent in the mempool, with value, no token, mature). None: the node scans its UTXO set for the address's script (below) |
+| `name`, `description`, `links`, `logo_sha256`, `logo_url`, `supply`, `decimals`, `fee_bps`, `allocation_bps`, `first_buy_ecx`, `slippage_bps`, `split`, `keep_control`, `expires_in` | launch | exactly `build/launch`'s, same names and units (the query string the site builds for `build/launch` is taken as it is). `logo_sha256` must be a logo uploaded here (`POST logos`, kept an hour): its bytes go into the launch |
+| `min_tokens` | launch | optional: the first buy's floor in the token's units (the link's `min_tokens`); none: the quote less `slippage_bps`, as `build/launch` |
+| `min_buy`, `max_buy` | launch | optional: launchtoken's bounds of a buy on the curve (ECX) |
+| `name`, `description`, `links`, `logo_sha256`, `supply`, `decimals` | register | exactly `build/register`'s |
+
+The launch's parameters go through `build/launch` itself (`Build`: every check and the payload the app's link would
+carry), then into launchtoken's options as the app makes them from that link (`webui/linkhost.cpp`): `display_name`,
+`info` (the description, then each link on a line), `logo`, `supply`/`decimals`, `fee`, `allocation`, `keep_control`,
+`fee_split`, `first_buy`/`first_min_out`; then `bitassets::ParseLaunchOptions`, launchtoken's own parser.
+
+**The reply** (`BuiltPsbt`):
+
+```json
+{ "verb": "reserve", "psbt": "cHNidP8BAH0CAAAAA…", "txid": "5c1e…", "fee": 0.0000302, "fee_units": "3020", "fee_rate": 20.0,
+  "vsize": 151, "burn": 0, "burn_units": "0", "address": "ecregtest:qq…", "ticker": "MOON", "asset": "a07d…",
+  "commitment": "9b41…", "reservation": "5c1e…:0", "reservation_vout": 0, "confirmations_needed": 2,
+  "inputs": ["e3a9…:1"], "height": 51234, "summary": "Reserve MOON (…)", "facts": [] }
+```
+
+- `psbt`: base64, **version 0**; every input carries its previous transaction (`non_witness_utxo`, read from its block:
+  no `-txindex` needed) and `witness_utxo`; no derivation, no unknown or proprietary field. Version 2, the tip's height
+  as lock time, every input replaceable (`0xfffffffd`), as the wallet makes them.
+- `txid`: signing does not change it (every input is P2WPKH).
+- `asset`: the hash of the ticker, as every id of the API (`uint256` hex); `commitment` the same way:
+  `HMAC-SHA256(key = nonce, SHA256(ticker) ‖ scriptPubKey(address))`, shown byte-reversed like the ids.
+- `reservation_vout` is 0: the reservation, then the marker, then the change. A launch: its first buy's result output
+  (if a first buy), its control coin (if kept), the marker (holding the first buy: `burn`), the change; its inputs the
+  reservation first, then the coins. A registration: the control coin, the supply (if any), the marker, the change.
+- `confirmations_needed` (reserve): the confirmations the reservation needs before `psbt/launch` takes it (the rules'
+  `bitassets_reveal_depth`, at least 1).
+- `burn_units`: what the marker holds (a launch's first buy, 0 otherwise): pass it as the broadcast's `max_burn_units`.
+- launch and register: `summary` and `facts` are `build/launch`'s (`build/register`'s); `reservation` echoes the request.
+
+Before handing it out the node runs the asset rules on the unsigned transaction at the next block (`State::CheckTx`,
+the mempool's own check): a PSBT the rules would refuse is never built (400 with the reason).
+
+**Waiting for the reservation.** `psbt/launch` (and `psbt/register`) before the reservation can be revealed answers
+409 with a reason and the numbers, for the site to poll (every ~20 s) and show "waiting N of M blocks":
+
+```json
+{ "error": { "code": "aborted", "message": "the reservation has 1 of the 2 confirmations it needs", "reason": "reservation_not_deep",
+             "confirmations": 1, "needed": 2 } }
+```
+
+The same with `confirmations: 0` while the reservation waits in the mempool, or is found neither there nor in a block
+(not relayed here yet). Other refusals: a reservation not at the address, not a reservation, or whose commitment is
+not this ticker's, nonce's and address's: 400; spent by a transaction in the mempool: 400; the ticker taken: 409
+`already_exists`. There is no transaction-status endpoint: poll `psbt/launch` itself.
+
+**Coins.** Only coins in a block (not spent in the mempool): a coin carrying a token is never spent as a payment (it
+would need the marker to list it again). With no `coins`, the node scans its UTXO set for the address's script (as
+`scantxoutset`: the coins database flushed first, one scan at a time, else 429 `busy`; the 200 largest kept), the
+largest first until they pay the burn and the fee.
+
+**Fee.** The rate the node's wallet would pay (`wallet/fees.cpp`, `GetMinimumFeeRate` with its defaults): the estimate
+for 6 blocks (economical), else the wallet's fallback (20 sat/vB), at least the mempool's minimum, the relay's minimum
+and 1 sat/vB; the size counted with 72-byte signatures. A change below the dust of the wallet's discard rate (10 sat/vB)
+goes to the fee.
+
 ## Security
 
 | # | Threat | Where | What stops it |
@@ -246,6 +332,8 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
 | 11 | Spoofed client address (rate-limit bypass) | server | The client is the socket's peer unless the operator names both the proxy (`-publicapiproxy`) and its header (`-publicapiproxyheader`); X-Forwarded-For: the right-most entry only. The proxy must set the header itself (nginx below) |
 | 12 | Rate-limit bypass through a client stream | server | Each message of a client-streaming call (reflection) is charged by the guard again, at most 32 a stream; reflection off by default |
 | 13 | Reorgs serving stale or wrong market data | market index | Written in the block's journaled overlay: undone exactly with the block (tested byte for byte); the per-tip cache is keyed by the tip's hash |
+| 14b | A PSBT that spends or pays what the user did not ask (8.3.0) | psbt | Inputs only the one address's coins (the client's list checked against the UTXO set and that script), everything back to that address; every input's previous transaction in the PSBT (the wallet reads the amounts from it, checked against the txid); the rules run on it before it is handed out; the broadcast's `max_burn_units`. The wallet shows and signs it; the node holds no key |
+| 14c | UTXO scans as a cost (8.3.0) | psbt | Cost 8 of the client's rate, the gate of expensive calls, one scan at a time (429 busy), 200 coins kept; or the client names its coins |
 | 14 | A build that misleads the signer | builds | Assets and pools by id with their tickers (the app checks both), the floor is the chain's quote less the slippage rounded down, `exp` bounded; the app quotes again and signs only for the floor or more; the payload hash binds what the page shows to what the extension signs |
 
 Backbone's enforcer interface (`~/skydoge/chains-ecash`, `src/grpc/server.cpp`) shares the server: it has no idle or
@@ -286,6 +374,12 @@ and `flushd -publicapi=49100 -publicapiorigin=https://flush.markets -publicapipr
   charged per message, a slow request seen as receiving).
 - `src/test/dex_market_tests.cpp`: the market index on a state of its own, and a reorganisation.
 - `src/webui/test/publicapi_links_tests.cpp`: the API's links read by the app's own parser.
+- `test/functional/interface_publicapi_psbt.py` (8.3.0): a launch and a registration from an address whose key only
+  another wallet holds: both PSBTs built by the API, checked as the extension reads them (version 0, previous
+  transactions, no other field, the address's coins only, everything back to it), the commitment computed in the
+  test, signed without finalizing and broadcast as PSBTs (the node finalizes), the 409 wait with its confirmations,
+  the refusals (ticker, address, nonce, logo, coins, an unsigned PSBT, `max_burn_units`), `getlaunch` and the
+  tokens at the address; the wallet's own `launchtoken` alongside.
 - `test/functional/interface_publicapi.py`: every endpoint against the RPC truth on a regtest chain (launches,
   trades, candles, holders, pools of every kind, books, positions, ticks, verifications, holdings, quotes, builds and
   the app's floors, broadcast), a reorganisation across a graduation, CORS, rate limits, slow clients, connection
