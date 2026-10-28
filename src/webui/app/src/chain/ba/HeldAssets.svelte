@@ -226,6 +226,8 @@
   /* The label then the chips, side by side, wrapping only when the line is full. */
   .controlled {
     margin: 0;
+    /* A row of chips, not text: the whole width (base.css caps a paragraph at 72ch), so they wrap only at its end. */
+    max-width: none;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
