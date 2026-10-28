@@ -202,6 +202,7 @@ BASE_SCRIPTS = [
     'feature_layers_cl.py',
     'feature_layers_book.py',
     'interface_publicapi.py',
+    'interface_publicapi_psbt.py',
     'feature_layers_logo.py',
     'feature_fastblocks_feesplit.py',
     'feature_bitassets_logo.py',

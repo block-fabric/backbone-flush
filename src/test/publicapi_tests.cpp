@@ -11,6 +11,8 @@
 
 #ifdef ENABLE_PUBLICAPI
 
+#include <bitassets/launch.h>
+#include <bitassets/state.h>
 #include <grpc/descriptors.h>
 #include <grpc/protobuf.h>
 #include <grpc/server.h>
@@ -374,6 +376,112 @@ BOOST_AUTO_TEST_CASE(rest_routes)
     BOOST_CHECK(got.raw);
     BOOST_CHECK(refused("POST", "logos/" + id) == Code::UNIMPLEMENTED);
     BOOST_CHECK_EQUAL(match("build/launch", "ticker=X1&logo_sha256=" + id + "&logo_url=https%3A%2F%2Fflush.markets%2Fapi%2Fv1%2Flogos%2F" + id).request->GetString("logo_url"), "https://flush.markets/api/v1/logos/" + id);
+}
+
+BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
+{
+    // 8.3.0: POST psbt/<verb>: a body, and build/launch's parameters in the query as they are.
+    const std::string nonce(64, 'c'), txid(64, 'd');
+    auto r{publicapi::Route(Pool(), "POST", "psbt/launch", "ticker=X1&name=X%20one&first_buy_ecx=1&slippage_bps=100&keep_control=1&links=https%3A%2F%2Fa.example%2F%3Fa%2Cb",
+                            R"({"address":"a1","nonce":")" + nonce + R"(","reservation":")" + txid + R"(:0","decimals":2,"supply":"1000000","coins":[")" + txid + R"(:1"]})")};
+    const std::string why{std::holds_alternative<grpcsrv::Status>(r) ? std::get<grpcsrv::Status>(r).message : std::string{}};
+    BOOST_REQUIRE_MESSAGE(std::holds_alternative<grpcsrv::RestMatch>(r), why);
+    const auto& m{std::get<grpcsrv::RestMatch>(r)};
+    BOOST_CHECK_EQUAL(m.method_path, "/flush.dex.v1.DexService/BuildPsbt");
+    BOOST_CHECK_EQUAL(m.request->GetString("verb"), "launch");
+    BOOST_CHECK_EQUAL(m.request->GetString("name"), "X one");
+    BOOST_CHECK_EQUAL(m.request->GetString("nonce"), nonce);
+    BOOST_CHECK_EQUAL(m.request->GetString("reservation"), txid + ":0");
+    BOOST_CHECK(m.request->Has("decimals"));
+    BOOST_CHECK_EQUAL(m.request->GetUInt("decimals"), 2U);
+    BOOST_CHECK(m.request->GetBool("keep_control"));
+    BOOST_CHECK_EQUAL(m.request->StringAt("links", 0), "https://a.example/?a,b");
+    BOOST_CHECK_EQUAL(m.request->Count("coins"), 1U);
+    for (const char* verb : {"reserve", "register"}) {
+        auto v{publicapi::Route(Pool(), "POST", std::string{"psbt/"} + verb, "", R"({"address":"a1"})")};
+        BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(v));
+        BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(v).request->GetString("verb"), verb);
+    }
+    // The route's verb, not the client's; no GET; no other verb.
+    auto fixed{publicapi::Route(Pool(), "POST", "psbt/reserve", "verb=launch", "{}")};
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(fixed));
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "GET", "psbt/launch", "", "")));
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "POST", "psbt/curve", "", "{}")));
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "POST", "psbt/launch", "bogus=1", "{}")));
+    // A broadcast of a PSBT, and its cap on what a marker holds.
+    auto b{publicapi::Route(Pool(), "POST", "broadcast", "", R"({"psbt":"cHNidP8=","max_burn_units":"100000000"})")};
+    BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(b));
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(b).request->GetString("max_burn_units"), "100000000");
+    BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/BuildPsbt"), 8);
+
+    // The launch the wallet's launchtoken and the API's psbt/launch both make (bitassets/launch.h).
+    bitassets::LaunchRules rules;
+    rules.height = 100;
+    rules.tickers = rules.logos = rules.curves = rules.params = rules.fee_flow = rules.fee_split = true;
+    rules.max_allocation = 1000;
+    rules.min_chn = 5000;
+    rules.reveal_depth = 2;
+    rules.network_fee = 10'000;
+    rules.graduation = 500 * COIN;
+    UniValue options{UniValue::VOBJ};
+    options.pushKV("display_name", "Moon Coin");
+    options.pushKV("info", "To the moon\nhttps://example.org");
+    options.pushKV("first_buy", "1");
+    options.pushKV("first_min_out", "1");
+    bitassets::LaunchPlan plan{bitassets::ParseLaunchOptions("MOON", options, rules)};
+    BOOST_CHECK(plan.launch.reg.name == bitassets::HashName("MOON"));
+    BOOST_CHECK_EQUAL(*plan.launch.reg.text, "MOON");
+    BOOST_CHECK_EQUAL(plan.launch.first_buy, uint64_t(COIN));
+    BOOST_CHECK_EQUAL(plan.launch.first_min_out, 1'000'000U);
+    BOOST_CHECK(!plan.launch.WithParams());
+    BOOST_CHECK_EQUAL(plan.fee, 10'000U);
+    // Its first buy's result output, nothing else: the marker lists it as output 0, a result.
+    auto outs{bitassets::LaunchOutputs(plan.launch)};
+    BOOST_REQUIRE_EQUAL(outs.size(), 1U);
+    BOOST_CHECK(!outs[0]);
+    // Keeping control: the control coin after it.
+    options.pushKV("keep_control", true);
+    plan = bitassets::ParseLaunchOptions("MOON", options, rules);
+    outs = bitassets::LaunchOutputs(plan.launch);
+    BOOST_REQUIRE_EQUAL(outs.size(), 2U);
+    BOOST_CHECK(outs[1] && outs[1]->kind == bitassets::Token::Kind::CONTROL && outs[1]->id == bitassets::HashName("MOON"));
+    const bitassets::Marker marker{bitassets::MarkerOf(plan.launch, outs)};
+    BOOST_REQUIRE_EQUAL(marker.outputs.size(), 2U);
+    BOOST_CHECK_EQUAL(marker.outputs[1].n, 1U);
+    BOOST_CHECK(bitassets::ParseMarkerScript(bitassets::MarkerScript(marker)) == marker);
+    // The RPC's refusals, as the RPC words them.
+    const auto refusal{[&](UniValue o) {
+        try {
+            bitassets::ParseLaunchOptions("MOON", o, rules);
+        } catch (const UniValue& e) {
+            return e["message"].get_str();
+        }
+        return std::string{};
+    }};
+    UniValue bad{options};
+    bad.pushKV("fee", 6);
+    BOOST_CHECK(refusal(bad).find("0.3 to 5 percent") != std::string::npos);
+    UniValue low{UniValue::VOBJ};
+    low.pushKV("first_buy", "0.00001");
+    BOOST_CHECK(refusal(low).find("at least") != std::string::npos);
+    UniValue greedy{UniValue::VOBJ};
+    greedy.pushKV("first_buy", "1");
+    greedy.pushKV("first_min_out", "1000000000");
+    BOOST_CHECK(refusal(greedy).find("less than first_min_out") != std::string::npos);
+    rules.curves = false;
+    BOOST_CHECK(refusal(UniValue{UniValue::VOBJ}).find("curves_active") != std::string::npos);
+    // A reservation's and a registration's outputs.
+    const auto reserve{bitassets::ReserveOutputs()};
+    BOOST_REQUIRE_EQUAL(reserve.size(), 1U);
+    BOOST_CHECK(reserve[0]->kind == bitassets::Token::Kind::RESERVATION && reserve[0]->id.IsNull());
+    rules.curves = true;
+    bitassets::Register reg{bitassets::ParseRegistration("GOLD", UniValue{"10.5"}, UniValue{2}, UniValue{}, UniValue{true}, UniValue{}, UniValue{"Gold"}, rules)};
+    BOOST_CHECK_EQUAL(reg.supply, 1050U);
+    const auto reg_outs{bitassets::RegisterOutputs(reg)};
+    BOOST_REQUIRE_EQUAL(reg_outs.size(), 2U);
+    BOOST_CHECK(reg_outs[0]->kind == bitassets::Token::Kind::CONTROL && reg_outs[1]->kind == bitassets::Token::Kind::ASSET && reg_outs[1]->amount == 1050);
+    BOOST_CHECK_THROW(bitassets::NewAssetName("go ld", /*tickers=*/true), UniValue);
+    BOOST_CHECK_EQUAL(bitassets::NewAssetName("gold", /*tickers=*/true), "GOLD");
 }
 
 BOOST_AUTO_TEST_CASE(logo_store_and_logo_urls)

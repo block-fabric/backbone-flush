@@ -94,6 +94,8 @@ std::string RestErrorJson(const Status& status)
     UniValue err(UniValue::VOBJ);
     err.pushKV("code", ConnectCodeName(status.code));
     err.pushKV("message", status.message);
+    if (!status.reason.empty()) err.pushKV("reason", status.reason);
+    for (const auto& [name, number] : status.numbers) err.pushKV(name, number);
     UniValue body(UniValue::VOBJ);
     body.pushKV("error", std::move(err));
     return body.write();
