@@ -119,6 +119,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   compressor.cpp
   core_io.cpp
   bitassets/rpcutil.cpp
+  bitassets/launch.cpp
   bitassets/index.cpp
   bitassets/market.cpp
   bitassets/logo.cpp
