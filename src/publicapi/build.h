@@ -5,10 +5,12 @@
 #ifndef BITCOIN_PUBLICAPI_BUILD_H
 #define BITCOIN_PUBLICAPI_BUILD_H
 
+#include <uint256.h>
 #include <univalue.h>
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,6 +51,14 @@ std::string ActionUri(const std::string& verb, const std::string& network, int64
 std::string CanonicalJson(const std::map<std::string, UniValue>& fields);
 /** SHA-256 of "flush-action/v1\n" and the payload, hex. */
 std::string ActionHash(const std::string& payload);
+
+/**
+ * 32 bytes given as 64 hex digits in the order written, not reversed as a hash's display is: a reservation's nonce (the
+ * HMAC key) and its commitment (the HMAC's output, as the marker carries it). nullopt if it is not that.
+ */
+std::optional<uint256> ParseBytes32(const std::string& hex);
+/** The same 32 bytes as hex, in order. */
+std::string HexBytes32(const uint256& bytes);
 
 } // namespace publicapi
 

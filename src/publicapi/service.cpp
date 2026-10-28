@@ -19,6 +19,8 @@
 #include <bitassets/launch.h>
 #include <node/types.h>
 #include <policy/fees/estimator_man.h>
+#include <coins.h>
+#include <primitives/block.h>
 #include <psbt.h>
 #include <util/fees.h>
 #include <util/rbf.h>
@@ -1958,8 +1960,13 @@ private:
     // it is given (the ECX Wallet extension). The operation, its outputs and its marker are the wallet's own
     // (bitassets/launch.h); the coins are the one address's, and everything comes back to it.
 
-    //! The most coins of an address a build considers (the largest first), and that a client may name.
-    static constexpr size_t MAX_PSBT_COINS{200};
+    //! The most coins a client may name (txid:vout), the most inputs a PSBT has, and its most bytes (each input carries
+    //! its whole previous transaction).
+    static constexpr size_t MAX_PSBT_COINS{50};
+    static constexpr size_t MAX_PSBT_INPUTS{30};
+    static constexpr size_t MAX_PSBT_BYTES{400'000};
+    //! A P2WPKH input's virtual size (a 72-byte signature and a key): what spending a coin adds.
+    static constexpr int32_t P2WPKH_INPUT_VSIZE{68};
 
     /** A refusal of the rules' checks (bitassets/launch.h throws as the RPC methods do), as the API's. */
     template <typename F>
@@ -1982,6 +1989,13 @@ private:
         throw e;
     }
 
+    [[noreturn]] static void Spent(const std::string& message)
+    {
+        ApiError e{Code::ALREADY_EXISTS, message};
+        e.status.reason = "reservation_spent";
+        throw e;
+    }
+
     /** The wallet's address: P2WPKH of this chain (the only kind the ECX Wallet signs). */
     static CScript PsbtAddress(const std::string& text)
     {
@@ -1990,16 +2004,6 @@ private:
         if (!IsValidDestination(dest)) Fail(Code::INVALID_ARGUMENT, "address: not an address of this chain");
         if (!std::holds_alternative<WitnessV0KeyHash>(dest)) Fail(Code::INVALID_ARGUMENT, "address: a P2WPKH address (bech32, a single key): the only kind the wallet signs");
         return GetScriptForDestination(dest);
-    }
-
-    /** A reservation's nonce: 32 bytes, as written (the HMAC key's bytes in order). */
-    static uint256 PsbtNonce(const std::string& text)
-    {
-        if (text.size() != 64 || !IsHex(text)) Fail(Code::INVALID_ARGUMENT, "nonce: 32 bytes, 64 hex digits (chosen by the client, kept until the reveal)");
-        const std::vector<unsigned char> bytes{ParseHex(text)};
-        uint256 nonce;
-        std::copy(bytes.begin(), bytes.end(), nonce.begin());
-        return nonce;
     }
 
     static COutPoint ParseOutpoint(const std::string& text, const char* what)
@@ -2019,53 +2023,47 @@ private:
         int height{0};
     };
 
+    /** A coin the client named that the build left, and why (SkippedCoin). */
+    struct Skipped {
+        COutPoint outpoint;
+        std::string reason;
+    };
+
+    /** The blocks read for one request, each read once (the previous transactions of its inputs). */
+    using BlockCache = std::map<int, std::shared_ptr<const CBlock>>;
+
     /** The transaction holding a coin of the UTXO set, read from its block (no -txindex needed). */
-    CTransactionRef TxOfCoin(const COutPoint& outpoint, int height) const
+    CTransactionRef TxOfCoin(const COutPoint& outpoint, int height, BlockCache& blocks) const
     {
         ChainstateManager& chainman{*Assert(m_node.chainman)};
-        const CBlockIndex* index{WITH_LOCK(::cs_main, return chainman.ActiveChain()[height])};
-        if (!index) return nullptr;
-        uint256 block_hash;
-        const CTransactionRef tx{node::GetTransaction(index, nullptr, outpoint.hash, chainman.m_blockman, block_hash)};
-        if (!tx || outpoint.n >= tx->vout.size()) return nullptr;
-        return tx;
+        auto it{blocks.find(height)};
+        if (it == blocks.end()) {
+            const CBlockIndex* index{WITH_LOCK(::cs_main, return chainman.ActiveChain()[height])};
+            auto block{std::make_shared<CBlock>()};
+            if (!index || !chainman.m_blockman.ReadBlock(*block, *index)) block.reset();
+            it = blocks.emplace(height, std::move(block)).first;
+        }
+        if (!it->second) return nullptr;
+        for (const CTransactionRef& tx : it->second->vtx) {
+            if (tx->GetHash() == outpoint.hash) return outpoint.n < tx->vout.size() ? tx : nullptr;
+        }
+        return nullptr;
     }
 
     /**
-     * The address's coins that can pay: in the UTXO set (in a block), not spent in the mempool, with value, carrying no
-     * token, mature. The client's list if it gave one (each checked), else a scan of the UTXO set for the script (one at
-     * a time; the coins database flushed first, as scantxoutset).
+     * The coins the client named (1 to MAX_PSBT_COINS, required: no scan of the UTXO set for a public call) that can pay:
+     * in the UTXO set (in a block), the address's, not spent in the mempool, with value, carrying no token, mature. A coin
+     * that is not is skipped, with its reason. The largest first.
      */
-    std::vector<PsbtCoin> CoinsOf(const CScript& script, const Message& req, const bitassets::State& state, const std::set<COutPoint>& excluded) const
+    std::vector<PsbtCoin> CoinsOf(const CScript& script, const Message& req, const bitassets::State& state, const std::set<COutPoint>& excluded, std::vector<Skipped>& skipped) const
     {
-        ChainstateManager& chainman{*Assert(m_node.chainman)};
-        std::vector<COutPoint> candidates;
-        if (req.Count("coins") > 0) {
-            if (req.Count("coins") > MAX_PSBT_COINS) Fail(Code::INVALID_ARGUMENT, strprintf("coins: at most %u", MAX_PSBT_COINS));
-            for (size_t i{0}; i < req.Count("coins"); ++i) candidates.push_back(ParseOutpoint(req.StringAt("coins", i), "coins"));
-        } else {
-            TRY_LOCK(m_scan_mutex, scanning);
-            if (!scanning) Fail(Code::RESOURCE_EXHAUSTED, "busy finding another address's coins: try again in a moment, or name the coins (coins)");
-            std::unique_ptr<CCoinsViewCursor> cursor;
-            {
-                LOCK(::cs_main);
-                Chainstate& chainstate{chainman.ActiveChainstate()};
-                chainstate.ForceFlushStateToDisk(/*wipe_cache=*/false);
-                cursor = chainstate.CoinsDB().Cursor();
-            }
-            if (!cursor) Fail(Code::UNAVAILABLE, "the UTXO set cannot be read now");
-            std::vector<std::pair<CAmount, COutPoint>> found;
-            for (; cursor->Valid(); cursor->Next()) {
-                COutPoint key;
-                ::Coin coin;
-                if (!cursor->GetKey(key) || !cursor->GetValue(coin)) continue;
-                if (coin.out.scriptPubKey == script && coin.out.nValue > 0) found.emplace_back(coin.out.nValue, key);
-            }
-            // The largest first: the fewest inputs (and the bound below keeps the largest).
-            std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-            if (found.size() > MAX_PSBT_COINS) found.resize(MAX_PSBT_COINS);
-            for (const auto& [value, outpoint] : found) candidates.push_back(outpoint);
+        const size_t n{req.Count("coins")};
+        if (n == 0 || n > MAX_PSBT_COINS) {
+            Fail(Code::INVALID_ARGUMENT, strprintf("coins: the address's coins to pay with (txid:vout), 1 to %u (from the explorer's /address/<address>/utxo)", MAX_PSBT_COINS));
         }
+        std::vector<COutPoint> named;
+        for (size_t i{0}; i < n; ++i) named.push_back(ParseOutpoint(req.StringAt("coins", i), "coins"));
+        ChainstateManager& chainman{*Assert(m_node.chainman)};
         std::vector<PsbtCoin> coins;
         {
             LOCK2(::cs_main, m_node.mempool->cs);
@@ -2073,24 +2071,21 @@ private:
             const int next{chainstate.m_chain.Height() + 1};
             const int maturity{chainman.GetConsensus().coinbase_maturity};
             std::set<COutPoint> seen;
-            for (const COutPoint& outpoint : candidates) {
-                if (!seen.insert(outpoint).second || excluded.contains(outpoint)) continue;
+            for (const COutPoint& outpoint : named) {
+                if (excluded.contains(outpoint)) continue;
+                const auto skip{[&](const char* why) { skipped.push_back({outpoint, why}); }};
+                if (!seen.insert(outpoint).second) { skip("duplicate"); continue; }
                 const auto coin{chainstate.CoinsTip().GetCoin(outpoint)};
-                const bool named{req.Count("coins") > 0};
-                const auto refuse{[&](const std::string& why) {
-                    if (named) Fail(Code::FAILED_PRECONDITION, strprintf("coins: %s:%u %s", outpoint.hash.GetHex(), outpoint.n, why));
-                }};
-                if (!coin) { refuse("is not in the UTXO set (spent, or not in a block yet)"); continue; }
-                if (coin->out.scriptPubKey != script) { refuse("is not the address's"); continue; }
-                if (m_node.mempool->isSpent(outpoint)) { refuse("is spent by a transaction waiting in the mempool"); continue; }
-                if (coin->out.nValue <= 0) { refuse("holds no " + Coin()); continue; }
-                if (coin->IsCoinBase() && next - static_cast<int>(coin->nHeight) < maturity) { refuse("is a coinbase's, not mature yet"); continue; }
+                if (!coin) { skip("not_found"); continue; }
+                if (coin->out.scriptPubKey != script) { skip("not_address"); continue; }
+                if (m_node.mempool->isSpent(outpoint)) { skip("spent_in_mempool"); continue; }
+                // A coin that carries a token is spent only with a marker that lists it again: never as a payment here.
+                if (state.GetToken(outpoint)) { skip("token"); continue; }
+                if (coin->out.nValue <= 0) { skip("no_value"); continue; }
+                if (coin->IsCoinBase() && next - static_cast<int>(coin->nHeight) < maturity) { skip("immature"); continue; }
                 coins.push_back({outpoint, coin->out, nullptr, static_cast<int>(coin->nHeight)});
             }
         }
-        // A coin that carries a token is spent only with a marker that lists it again: never as a payment here.
-        std::erase_if(coins, [&](const PsbtCoin& c) { return state.GetToken(c.outpoint).has_value(); });
-        // Their transactions are read from their blocks as they are spent (MakePsbtTx).
         std::sort(coins.begin(), coins.end(), [](const PsbtCoin& a, const PsbtCoin& b) { return a.out.nValue > b.out.nValue; });
         return coins;
     }
@@ -2119,20 +2114,28 @@ private:
         CAmount fee{0};
         int64_t vsize{0};
         CFeeRate rate;
+        std::vector<Skipped> skipped;
     };
+
+    /** What an input adds to a PSBT: its previous transaction, its witness_utxo, the keys and the input itself. */
+    static size_t PsbtInputBytes(const CTransaction& prev)
+    {
+        return GetSerializeSize(TX_NO_WITNESS(prev)) + 100;
+    }
 
     /**
      * A transaction as the wallet's Send makes it: `outs` (the token outputs, value 0) first, then the marker (holding
-     * `chn_in`), then the change; spending `fixed` (a reservation) first, then the address's coins, the largest first,
-     * until they pay `chn_in` and the fee. Version 2, the tip's height as its lock time, every input replaceable.
+     * `chn_in`), then the change; spending `fixed` (a reservation) first, then the client's coins, the largest first,
+     * until they pay `chn_in` and the fee: none worth no more than the fee of its own input, at most MAX_PSBT_INPUTS
+     * inputs, at most MAX_PSBT_BYTES of PSBT. Version 2, the tip's height as its lock time, every input replaceable.
      */
     PsbtBuilt MakePsbtTx(const CScript& script, const std::vector<bitassets::OutToken>& outs, const CScript& marker, CAmount chn_in, const std::vector<PsbtCoin>& fixed,
-                         const Message& req, const bitassets::State& state, const Tip& tip) const
+                         const Message& req, const bitassets::State& state, const Tip& tip, BlockCache& blocks) const
     {
         std::set<COutPoint> excluded;
         for (const PsbtCoin& c : fixed) excluded.insert(c.outpoint);
-        const std::vector<PsbtCoin> coins{CoinsOf(script, req, state, excluded)};
         PsbtBuilt built;
+        const std::vector<PsbtCoin> coins{CoinsOf(script, req, state, excluded, built.skipped)};
         built.rate = WalletFeeRate();
         CMutableTransaction& tx{built.tx};
         tx.version = CTransaction::CURRENT_VERSION;
@@ -2142,6 +2145,7 @@ private:
         const CTxOut change_out{0, script};
         // A change worth less than this goes to the fee (the wallet's discard rate, DEFAULT_DISCARD_FEE).
         const CAmount dust{GetDustThreshold(change_out, std::max(CFeeRate{10'000}, m_node.mempool->m_opts.dust_relay_feerate))};
+        const CAmount input_fee{built.rate.GetFee(P2WPKH_INPUT_VSIZE)};
         const auto vsize_of{[&](bool with_change) {
             CMutableTransaction sized{tx};
             if (with_change) sized.vout.push_back(change_out);
@@ -2149,18 +2153,23 @@ private:
             for (CTxIn& in : sized.vin) in.scriptWitness.stack = {std::vector<unsigned char>(72, 0), std::vector<unsigned char>(33, 0)};
             return GetVirtualTransactionSize(CTransaction{sized});
         }};
+        size_t bytes{GetSerializeSize(TX_NO_WITNESS(CTransaction{tx})) + 100};
         CAmount in{0};
         const auto add{[&](const PsbtCoin& c) {
+            bytes += PsbtInputBytes(*c.tx);
+            if (bytes > MAX_PSBT_BYTES) {
+                Fail(Code::INVALID_ARGUMENT, strprintf("the PSBT would take more than %u bytes (each input carries its whole previous transaction, and %s:%u's is large): name other coins",
+                                                       MAX_PSBT_BYTES, c.outpoint.hash.GetHex(), c.outpoint.n));
+            }
             tx.vin.emplace_back(c.outpoint, CScript{}, MAX_BIP125_RBF_SEQUENCE);
             built.prevs.push_back(c.tx);
             in += c.out.nValue;
         }};
         for (const PsbtCoin& c : fixed) add(c);
-        size_t next{0};
-        size_t unread{0};
+        size_t next{0}, worthless{0}, capped{0};
         while (true) {
             const int64_t without{vsize_of(false)}, with{vsize_of(true)};
-            const CAmount fee_without{built.rate.GetFee(without)}, fee_with{built.rate.GetFee(with)};
+            const CAmount fee_without{built.rate.GetFee(static_cast<int32_t>(without))}, fee_with{built.rate.GetFee(static_cast<int32_t>(with))};
             if (!tx.vin.empty() && in >= chn_in + fee_with + dust) {
                 tx.vout.emplace_back(in - chn_in - fee_with, script);
                 built.fee = fee_with;
@@ -2172,20 +2181,29 @@ private:
                 built.vsize = without;
                 break;
             }
+            // Past the largest coins worth more than their own input's fee (the rest are smaller still), or the inputs' cap.
+            if (next < coins.size() && coins[next].out.nValue <= input_fee) worthless = coins.size() - next, next = coins.size();
+            if (next < coins.size() && tx.vin.size() >= MAX_PSBT_INPUTS) capped = coins.size() - next, next = coins.size();
             if (next >= coins.size()) {
-                Fail(Code::FAILED_PRECONDITION, strprintf("the address's coins in blocks (%u of them, %s %s) do not pay %s %s and the fee: fund it (coins waiting in the mempool are not spent here)",
-                                                          coins.size(), FormatMoney(in), Coin(), FormatMoney(chn_in), Coin()));
+                std::map<std::string, int> why;
+                for (const Skipped& s : built.skipped) ++why[s.reason];
+                std::vector<std::string> parts;
+                for (const auto& [reason, count] : why) parts.push_back(strprintf("%d %s", count, reason));
+                if (worthless) parts.push_back(strprintf("%u worth no more than the fee of their own input", worthless));
+                if (capped) parts.push_back(strprintf("%u past %u inputs", capped, MAX_PSBT_INPUTS));
+                Fail(Code::FAILED_PRECONDITION, strprintf("the coins given hold %s %s spendable here, which does not pay %s %s and the fee (%u coins given%s): name other coins, or fund the address",
+                                                          FormatMoney(in), Coin(), FormatMoney(chn_in), Coin(), req.Count("coins"),
+                                                          parts.empty() ? "" : "; left: " + util::Join(parts, ", ")));
             }
             PsbtCoin coin{coins[next++]};
             // The wallet reads every amount from the transaction holding it: a coin whose block cannot be read (pruned) is left.
-            coin.tx = TxOfCoin(coin.outpoint, coin.height);
+            coin.tx = TxOfCoin(coin.outpoint, coin.height, blocks);
             if (!coin.tx) {
-                ++unread;
+                built.skipped.push_back({coin.outpoint, "unreadable"});
                 continue;
             }
             add(coin);
         }
-        if (unread > 0) LogDebug(BCLog::RPC, "public API: %u coins of a PSBT's address left, their blocks unread", unread);
         return built;
     }
 
@@ -2213,9 +2231,11 @@ private:
         if (!state.CheckTx(tx, tip.height + 1, reason, nullptr, rules.bitassets_reveal_depth, nullptr, rules.DexActive(tip.height + 1))) {
             Fail(Code::FAILED_PRECONDITION, "the chain's rules refuse this transaction now (" + reason + ")");
         }
+        const std::string psbt{EncodePsbt(built)};
+        if (psbt.size() / 4 * 3 > MAX_PSBT_BYTES) Fail(Code::INVALID_ARGUMENT, strprintf("the PSBT would take more than %u bytes (each input carries its whole previous transaction): name other coins", MAX_PSBT_BYTES));
         Message m{New("BuiltPsbt")};
         m.SetString("verb", verb);
-        m.SetString("psbt", EncodePsbt(built));
+        m.SetString("psbt", psbt);
         m.SetString("txid", tx.GetHash().GetHex());
         m.SetDouble("fee", static_cast<double>(built.fee) / COIN);
         m.SetString("fee_units", util::ToString(built.fee));
@@ -2226,21 +2246,30 @@ private:
         m.SetString("address", address);
         for (const CTxIn& in : tx.vin) m.AddString("inputs", strprintf("%s:%u", in.prevout.hash.GetHex(), in.prevout.n));
         m.SetUInt("height", static_cast<uint32_t>(tip.height));
+        for (const Skipped& skipped : built.skipped) {
+            Message& k{m.Add("skipped")};
+            k.SetString("coin", strprintf("%s:%u", skipped.outpoint.hash.GetHex(), skipped.outpoint.n));
+            k.SetString("reason", skipped.reason);
+        }
         return m;
     }
 
     /** psbt/launch and psbt/register: the reservation the client names, checked as the rules will at the reveal. */
-    PsbtCoin CheckedReservation(const Message& req, const AssetId& asset, const uint256& nonce, const CScript& script, const bitassets::State& state, const Tip& tip) const
+    PsbtCoin CheckedReservation(const Message& req, const AssetId& asset, const uint256& nonce, const CScript& script, const bitassets::State& state, const Tip& tip, BlockCache& blocks) const
     {
         const COutPoint outpoint{ParseOutpoint(req.GetString("reservation"), "reservation")};
         const int needed{std::max(1, Params().GetConsensus().sidechain.bitassets_reveal_depth)};
         std::optional<::Coin> coin;
         {
             LOCK2(::cs_main, m_node.mempool->cs);
-            if (m_node.mempool->isSpent(outpoint)) Fail(Code::FAILED_PRECONDITION, "the reservation is spent by a transaction waiting in the mempool (the launch or registration sent already?)");
-            coin = m_node.chainman->ActiveChainstate().CoinsTip().GetCoin(outpoint);
+            // Spent (by the launch or the registration, sent already): never a wait, the site would poll for ever.
+            if (m_node.mempool->isSpent(outpoint)) Spent("the reservation is spent by a transaction waiting in the mempool (the launch or registration sent already?)");
+            CCoinsViewCache& tip_coins{m_node.chainman->ActiveChainstate().CoinsTip()};
+            coin = tip_coins.GetCoin(outpoint);
             if (!coin) {
                 if (m_node.mempool->exists(outpoint.hash)) NotDeep(0, needed, strprintf("the reservation is waiting in the mempool: it needs %d confirmations", needed));
+                // Its transaction in a block (another of its outputs, its change, unspent) and the reservation gone: spent.
+                if (!AccessByTxid(tip_coins, outpoint.hash).IsSpent()) Spent("the reservation was spent (by a launch or a registration in a block?)");
                 NotDeep(0, needed, strprintf("no reservation %s:%u in a block or the mempool (yet): it needs %d confirmations", outpoint.hash.GetHex(), outpoint.n, needed));
             }
         }
@@ -2263,7 +2292,7 @@ private:
         if (int64_t{tip.height + 1} - origin->height < Params().GetConsensus().sidechain.bitassets_reveal_depth) {
             NotDeep(confirmations, needed, strprintf("the reservation has %d of the %d confirmations it needs", confirmations, needed));
         }
-        const CTransactionRef tx{TxOfCoin(outpoint, static_cast<int>(coin->nHeight))};
+        const CTransactionRef tx{TxOfCoin(outpoint, static_cast<int>(coin->nHeight), blocks)};
         if (!tx) Fail(Code::UNAVAILABLE, "the reservation's transaction cannot be read now");
         return {outpoint, coin->out, tx, static_cast<int>(coin->nHeight)};
     }
@@ -2311,37 +2340,47 @@ private:
         if (verb != "reserve" && verb != "launch" && verb != "register") Fail(Code::INVALID_ARGUMENT, "verb: reserve, launch or register");
         const std::string address{req.GetString("address")};
         const CScript script{PsbtAddress(address)};
-        const uint256 nonce{PsbtNonce(req.GetString("nonce"))};
         const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
         const bitassets::LaunchRules launch_rules{bitassets::LaunchRulesAt(rules, tip.height + 1)};
-        const std::string ticker{Checked([&] { return bitassets::NewAssetName(req.GetString("ticker"), launch_rules.tickers); })};
-        if (ticker.empty()) Fail(Code::INVALID_ARGUMENT, "ticker: the ticker to reserve");
-        const AssetId asset{bitassets::HashName(ticker)};
-        if (state.GetAsset(asset)) Fail(Code::ALREADY_EXISTS, "the ticker " + ticker + " is taken");
+        BlockCache blocks;
 
         if (verb == "reserve") {
-            Checked([&] { bitassets::CheckReserveName(ticker); return 0; });
-            // The commitment binds the reservation to the address's script: only its key can reveal it.
-            const uint256 commitment{bitassets::ReservationCommitment(asset, nonce, script)};
+            // The node never sees the ticker nor the nonce before the reveal (whoever runs it may make blocks): the client
+            // computes the commitment itself (doc/public-api.md, "The commitment"), and checks the ticker is free (tickers/).
+            if (!req.GetString("ticker").empty() || !req.GetString("nonce").empty()) {
+                Fail(Code::INVALID_ARGUMENT, "psbt/reserve takes no ticker and no nonce: send the commitment you computed (HMAC-SHA256 of SHA256(ticker) and the address's script, keyed by the nonce)");
+            }
+            const auto commitment{ParseBytes32(req.GetString("commitment"))};
+            if (!commitment) Fail(Code::INVALID_ARGUMENT, "commitment: 32 bytes, 64 hex digits in order: HMAC-SHA256(key = nonce, SHA256(ticker) || the address's scriptPubKey)");
             const std::vector<bitassets::OutToken> outs{bitassets::ReserveOutputs()};
-            const CScript marker{bitassets::MarkerScript(bitassets::MarkerOf(bitassets::Reserve{commitment}, outs))};
-            const PsbtBuilt built{MakePsbtTx(script, outs, marker, 0, {}, req, state, tip)};
+            const CScript marker{bitassets::MarkerScript(bitassets::MarkerOf(bitassets::Reserve{*commitment}, outs))};
+            const PsbtBuilt built{MakePsbtTx(script, outs, marker, 0, {}, req, state, tip, blocks)};
             Message m{PsbtReply(verb, built, 0, address, state, tip)};
-            m.SetString("ticker", ticker);
-            m.SetString("asset", Hex(asset));
-            m.SetString("commitment", commitment.GetHex());
+            m.SetString("commitment", HexBytes32(*commitment));
             m.SetString("reservation", strprintf("%s:%u", built.tx.GetHash().GetHex(), 0));
             m.SetUInt("reservation_vout", 0);
             m.SetUInt("confirmations_needed", static_cast<uint32_t>(std::max(1, rules.bitassets_reveal_depth)));
-            m.SetString("summary", strprintf("Reserve %s (the ticker stays hidden until the launch reveals it, %d blocks later at least)", ticker, std::max(1, rules.bitassets_reveal_depth)));
+            m.SetString("summary", strprintf("Reserve a ticker: only its commitment goes on the chain; the launch reveals the ticker, %d blocks later at least", std::max(1, rules.bitassets_reveal_depth)));
             return m;
+        }
+
+        const auto nonce{ParseBytes32(req.GetString("nonce"))};
+        if (!nonce) Fail(Code::INVALID_ARGUMENT, "nonce: the reservation's, 32 bytes as 64 hex digits in order (the JSON body only)");
+        if (!req.GetString("commitment").empty()) Fail(Code::INVALID_ARGUMENT, "commitment goes with psbt/reserve: the launch reveals the ticker and the nonce instead");
+        const std::string ticker{Checked([&] { return bitassets::NewAssetName(req.GetString("ticker"), launch_rules.tickers); })};
+        if (ticker.empty()) Fail(Code::INVALID_ARGUMENT, "ticker: the ticker reserved");
+        const AssetId asset{bitassets::HashName(ticker)};
+        if (state.GetAsset(asset)) {
+            ApiError e{Code::ALREADY_EXISTS, "the ticker " + ticker + " is taken"};
+            e.status.reason = "ticker_taken";
+            throw e;
         }
 
         // The parameters as build/<verb> checks them, and its payload: what the app's link would carry.
         const Message action{BuildOf(req, verb, tip)};
         UniValue payload;
         if (!payload.read(action.GetString("payload"))) throw std::logic_error("a build's payload is not JSON");
-        const PsbtCoin reservation{CheckedReservation(req, asset, nonce, script, state, tip)};
+        const PsbtCoin reservation{CheckedReservation(req, asset, *nonce, script, state, tip, blocks)};
         const std::string logo{payload.exists("logo_sha256") ? LogoBase64(payload["logo_sha256"].get_str()) : std::string{}};
         const std::string info{InfoOfPayload(payload)};
         std::vector<bitassets::OutToken> outs;
@@ -2362,12 +2401,9 @@ private:
             if (payload.exists("keep_control")) options.pushKV("keep_control", true);
             if (payload.exists("fee_split")) options.pushKV("fee_split", payload["fee_split"]);
             if (payload.exists("ecx")) {
+                // The floor is build/launch's own (the quote less slippage_bps): the one its summary and facts describe.
                 options.pushKV("first_buy", payload["ecx"].get_str());
-                const std::string floor{req.GetString("min_tokens").empty() ? payload["min_tokens"].get_str() : req.GetString("min_tokens")};
-                if (floor.size() > 40 || floor.find_first_not_of("0123456789.") != std::string::npos) Fail(Code::INVALID_ARGUMENT, "min_tokens: a decimal in the token's places");
-                options.pushKV("first_min_out", floor);
-            } else if (!req.GetString("min_tokens").empty()) {
-                Fail(Code::INVALID_ARGUMENT, "min_tokens goes with a first buy (first_buy_ecx)");
+                options.pushKV("first_min_out", payload["min_tokens"].get_str());
             }
             for (const char* key : {"min_buy", "max_buy"}) {
                 if (req.GetString(key).empty()) continue;
@@ -2375,7 +2411,7 @@ private:
             }
             bitassets::LaunchPlan plan{Checked([&] { return bitassets::ParseLaunchOptions(ticker, options, launch_rules); })};
             bitassets::LaunchToken& launch{plan.launch};
-            launch.reg.nonce = nonce;
+            launch.reg.nonce = *nonce;
             // The creator, the first buy's ECX back and its result: the address.
             launch.creator = script;
             if (launch.first_buy > 0) launch.chn_to = script;
@@ -2390,12 +2426,12 @@ private:
                 return bitassets::ParseRegistration(ticker, UniValue{payload["supply"].get_str()}, UniValue{payload["decimals"].getInt<int>()}, data, UniValue{true},
                                                     logo.empty() ? UniValue{} : UniValue{logo}, UniValue{payload["name"].get_str()}, launch_rules);
             })};
-            reg.nonce = nonce;
+            reg.nonce = *nonce;
             outs = bitassets::RegisterOutputs(reg);
             operation = std::move(reg);
         }
         const CScript marker{bitassets::MarkerScript(bitassets::MarkerOf(std::move(operation), outs))};
-        const PsbtBuilt built{MakePsbtTx(script, outs, marker, burn, {reservation}, req, state, tip)};
+        const PsbtBuilt built{MakePsbtTx(script, outs, marker, burn, {reservation}, req, state, tip, blocks)};
         Message m{PsbtReply(verb, built, burn, address, state, tip)};
         m.SetString("ticker", ticker);
         m.SetString("asset", Hex(asset));
@@ -3519,8 +3555,6 @@ private:
     mutable Gate m_gate;
     mutable Mutex m_table_mutex;
     mutable std::shared_ptr<const LaunchTable> m_table GUARDED_BY(m_table_mutex);
-    //! One scan of the UTXO set for an address's coins at a time (BuildPsbt).
-    mutable Mutex m_scan_mutex;
     mutable Mutex m_peg_mutex;
     mutable UniValue m_peg GUARDED_BY(m_peg_mutex);
     mutable int64_t m_peg_time GUARDED_BY(m_peg_mutex){0};

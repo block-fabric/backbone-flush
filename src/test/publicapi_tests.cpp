@@ -402,6 +402,14 @@ BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
         BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(v));
         BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(v).request->GetString("verb"), verb);
     }
+    // The nonce, the reservation and the commitment in the body only, never in a URL.
+    for (const char* secret : {"nonce", "reservation", "commitment"}) {
+        auto q{publicapi::Route(Pool(), "POST", "psbt/launch", std::string{secret} + "=" + nonce, "{}")};
+        BOOST_REQUIRE(std::holds_alternative<grpcsrv::Status>(q));
+        BOOST_CHECK(std::get<grpcsrv::Status>(q).message.find("JSON body") != std::string::npos);
+    }
+    // min_tokens is not taken (the floor is build/launch's own).
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "POST", "psbt/launch", "min_tokens=1", "{}")));
     // The route's verb, not the client's; no GET; no other verb.
     auto fixed{publicapi::Route(Pool(), "POST", "psbt/reserve", "verb=launch", "{}")};
     BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(fixed));
@@ -482,6 +490,36 @@ BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
     BOOST_CHECK(reg_outs[0]->kind == bitassets::Token::Kind::CONTROL && reg_outs[1]->kind == bitassets::Token::Kind::ASSET && reg_outs[1]->amount == 1050);
     BOOST_CHECK_THROW(bitassets::NewAssetName("go ld", /*tickers=*/true), UniValue);
     BOOST_CHECK_EQUAL(bitassets::NewAssetName("gold", /*tickers=*/true), "GOLD");
+}
+
+BOOST_AUTO_TEST_CASE(psbt_commitment_test_vector)
+{
+    // The vector of doc/public-api.md ("The commitment"), for a client computing psbt/reserve's commitment itself:
+    // ticker "moon" (uppercased: MOON), nonce 01..20, the P2WPKH script of the key hash 11..11
+    // (bflx1qzyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg38lhslw on betanet).
+    const std::string ticker{bitassets::NewAssetName("moon", /*tickers=*/true)};
+    BOOST_CHECK_EQUAL(ticker, "MOON");
+    const auto nonce{publicapi::ParseBytes32("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")};
+    BOOST_REQUIRE(nonce);
+    BOOST_CHECK_EQUAL(nonce->data()[0], 0x01); // in order, not reversed
+    const std::vector<unsigned char> script_bytes{ParseHex("00141111111111111111111111111111111111111111")};
+    const CScript script(script_bytes.begin(), script_bytes.end());
+    const bitassets::AssetId asset{bitassets::HashName(ticker)};
+    // SHA256("MOON"), in order; the API shows ids byte-reversed (as every uint256).
+    BOOST_CHECK_EQUAL(HexStr(asset), "addf9430f1392c9bed3315724ca7157afa8bb3dbb59763cf6082328fe2af05d1");
+    BOOST_CHECK_EQUAL(asset.GetHex(), "d105afe28f328260cf6397b5dbb38bfa7a15a74c721533ed9b2c39f13094dfad");
+    // HMAC-SHA256(key = nonce, SHA256(ticker) || script): its 32 bytes in order, as psbt/reserve takes them.
+    const uint256 commitment{bitassets::ReservationCommitment(asset, *nonce, script)};
+    BOOST_CHECK_EQUAL(publicapi::HexBytes32(commitment), "4ba6017675ee65410e8f1407bebd19f2fd4f2350f07f65afce092665daacdbd4");
+    BOOST_CHECK(publicapi::ParseBytes32("4ba6017675ee65410e8f1407bebd19f2fd4f2350f07f65afce092665daacdbd4") == commitment);
+    // The marker carries those bytes as they are: OP_RETURN, a push of "BAST", the kind (Reserve: 1), the 32 bytes, and
+    // the outputs it lists (the reservation at 0).
+    const CScript marker{bitassets::MarkerScript(bitassets::MarkerOf(bitassets::Reserve{commitment}, bitassets::ReserveOutputs()))};
+    const std::string hex{HexStr(marker)};
+    BOOST_CHECK(hex.find("4ba6017675ee65410e8f1407bebd19f2fd4f2350f07f65afce092665daacdbd4") != std::string::npos);
+    BOOST_TEST_MESSAGE("reserve marker: " + hex);
+    BOOST_CHECK(!publicapi::ParseBytes32("4ba6"));
+    BOOST_CHECK(!publicapi::ParseBytes32(std::string(64, 'g')));
 }
 
 BOOST_AUTO_TEST_CASE(logo_store_and_logo_urls)

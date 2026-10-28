@@ -144,24 +144,40 @@ class PublicApiPsbtTest(LayersTest):
         self.bmm()
         status = api.rest("status")
 
+        def coins(of=address):
+            """What the site gives: the address's coins (the explorer's /address/<a>/utxo)."""
+            return [f"{u['txid']}:{u['vout']}" for u in ext.listunspent() if u["address"] == of and u["amount"] > 0]
+
+        def commit(ticker, nonce_hex, script_bytes=script):
+            """The client's own commitment (doc/public-api.md, "The commitment")."""
+            return hmac.new(bytes.fromhex(nonce_hex), hashlib.sha256(ticker.upper().encode()).digest() + script_bytes, hashlib.sha256).hexdigest()
+
         self.log.info("psbt/reserve: refusals")
         nonce = os.urandom(32).hex()
-        assert_equal(self.post(api, "psbt/reserve", {"address": address, "ticker": "x", "nonce": nonce}).status, 400)
-        assert_equal(self.post(api, "psbt/reserve", {"address": funder.getnewaddress("", "legacy"), "ticker": "PSBTX", "nonce": nonce}).status, 400)
-        assert_equal(self.post(api, "psbt/reserve", {"address": address, "ticker": "PSBTX", "nonce": "00"}).status, 400)
-        no_coins = self.post(api, "psbt/reserve", {"address": empty, "ticker": "PSBTX", "nonce": nonce})
+        commitment = commit("PSBTX", nonce)
+        reserve_body = {"address": address, "commitment": commitment, "coins": coins()}
+        # The node never takes the ticker nor the nonce at the reservation.
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, ticker="PSBTX")).status, 400)
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, nonce=nonce)).status, 400)
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, commitment="00")).status, 400)
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, address=funder.getnewaddress("", "legacy"))).status, 400)
+        # Coins are required (no scan of the UTXO set), at most 50.
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, coins=[])).status, 400)
+        assert_equal(self.post(api, "psbt/reserve", dict(reserve_body, coins=[f"{'22' * 32}:{i}" for i in range(51)])).status, 400)
+        # Coins that are not the address's: skipped, then too little.
+        no_coins = self.post(api, "psbt/reserve", dict(reserve_body, address=empty))
         assert_equal(no_coins.status, 400)
-        assert "fund it" in no_coins.json()["error"]["message"]
+        assert "not_address" in no_coins.json()["error"]["message"], no_coins
+        # The commitment (a secret's) never in the query string, nor the nonce or the reservation.
+        assert_equal(self.post(api, "psbt/reserve", {"address": address, "coins": coins()}, {"commitment": commitment}).status, 400)
         # A GET of a PSBT build is not one.
         assert_equal(api.get("psbt/reserve").status, 501)
 
-        self.log.info("psbt/reserve: the commitment, the coins, the PSBT")
-        reserve = self.ok(self.post(api, "psbt/reserve", {"address": address, "ticker": "psbtx", "nonce": nonce}))
-        assert_equal(reserve["ticker"], "PSBTX")
-        name_hash = hashlib.sha256(b"PSBTX").digest()
-        assert_equal(reserve["asset"], name_hash[::-1].hex())
-        commitment = hmac.new(bytes.fromhex(nonce), name_hash + script, hashlib.sha256).digest()
-        assert_equal(reserve["commitment"], commitment[::-1].hex())
+        self.log.info("psbt/reserve: the commitment as given, the coins (a missing one skipped), the PSBT")
+        reserve = self.ok(self.post(api, "psbt/reserve", dict(reserve_body, coins=coins() + ["33" * 32 + ":7"])))
+        assert "ticker" not in reserve or reserve["ticker"] == ""
+        assert_equal(reserve["commitment"], commitment)
+        assert_equal(reserve["skipped"], [{"coin": "33" * 32 + ":7", "reason": "not_found"}])
         assert_equal(reserve["reservation_vout"], 0)
         assert_equal(reserve["reservation"], reserve["txid"] + ":0")
         assert_equal(reserve["burn_units"], "0")
@@ -170,6 +186,8 @@ class PublicApiPsbtTest(LayersTest):
         assert_equal(decoded["tx"]["txid"], reserve["txid"])
         assert_equal(decoded["tx"]["vout"][0]["value"], 0)
         assert_equal(decoded["tx"]["vout"][1]["scriptPubKey"]["type"], "nulldata")
+        # The marker carries the commitment's bytes as the client computed them.
+        assert commitment in decoded["tx"]["vout"][1]["scriptPubKey"]["hex"]
         assert_equal(Decimal(reserve["fee_units"]), decoded["fee"] * 100000000)
         # The wallet's fee rate: no estimate on a new chain, its fallback of 20 sat/vB.
         assert 19.5 < reserve["fee_rate"] < 21, reserve["fee_rate"]
@@ -185,19 +203,21 @@ class PublicApiPsbtTest(LayersTest):
         sent = self.ok(self.broadcast(api, {"psbt": signed}))
         assert_equal(sent["txid"], reserve["txid"])
 
-        launch_query = {"name": "Psbt Coin", "description": "Launched from an external wallet", "links": ["https://example.org/psbtx"],
+        launch_query = {"ticker": "PSBTX", "name": "Psbt Coin", "description": "Launched from an external wallet", "links": ["https://example.org/psbtx"],
                         "first_buy_ecx": "1", "slippage_bps": "100"}
         png = make_png([10, 120, 200, 240, 240, 10])
         logo = self.ok(api.post("logos", {"base64": b64(png)}))
         launch_query["logo_sha256"] = logo["sha256"]
-        body = {"address": address, "ticker": "PSBTX", "nonce": nonce, "reservation": reserve["reservation"]}
+        body = {"address": address, "nonce": nonce, "reservation": reserve["reservation"]}
 
         self.log.info("psbt/launch: not deep enough (in the mempool, then one block): 409 and the confirmations")
+        body["coins"] = coins()
         waiting = self.post(api, "psbt/launch", body, launch_query)
         assert_equal(waiting.status, 409)
         err = waiting.json()["error"]
         assert_equal((err["code"], err["reason"], err["confirmations"], err["needed"]), ("aborted", "reservation_not_deep", 0, 2))
         self.bmm()
+        body["coins"] = coins()
         waiting = self.post(api, "psbt/launch", body, launch_query)
         assert_equal(waiting.status, 409)
         err = waiting.json()["error"]
@@ -206,17 +226,28 @@ class PublicApiPsbtTest(LayersTest):
         missing = self.post(api, "psbt/launch", dict(body, reservation="11" * 32 + ":0"), launch_query)
         assert_equal((missing.status, missing.json()["error"]["confirmations"]), (409, 0))
         self.bmm()
+        body["coins"] = coins()
 
-        self.log.info("psbt/launch: a wrong nonce, another address, refused")
+        self.log.info("psbt/launch: a wrong nonce, another address, secrets in the query, refused")
         assert_equal(self.post(api, "psbt/launch", dict(body, nonce=os.urandom(32).hex()), launch_query).status, 400)
         assert_equal(self.post(api, "psbt/launch", dict(body, address=empty), launch_query).status, 400)
+        no_nonce = dict(body)
+        del no_nonce["nonce"]
+        assert_equal(self.post(api, "psbt/launch", no_nonce, dict(launch_query, nonce=nonce)).status, 400)
+        no_reservation = dict(body)
+        del no_reservation["reservation"]
+        assert_equal(self.post(api, "psbt/launch", no_reservation, dict(launch_query, reservation=reserve["reservation"])).status, 400)
+        # The floor is build/launch's own: no min_tokens of the client's.
+        assert_equal(self.post(api, "psbt/launch", body, dict(launch_query, min_tokens="1")).status, 400)
         # The logo must be one uploaded here.
         assert_equal(self.post(api, "psbt/launch", body, dict(launch_query, logo_sha256="ab" * 32)).status, 400)
 
-        self.log.info("psbt/launch: the launch, its first buy's burn")
+        self.log.info("psbt/launch: the launch, its first buy's burn, its floor build/launch's")
         launch = self.ok(self.post(api, "psbt/launch", body, launch_query))
         assert_equal(launch["burn_units"], "100000000")
         assert_equal(launch["burn"], 1)
+        build = api.rest("build/launch", launch_query)
+        assert_equal(launch["summary"], build["summary"])
         assert launch["summary"].startswith("Launch PSBTX (Psbt Coin)"), launch["summary"]
         decoded = self.check_psbt(n0, launch["psbt"], address)
         # The reservation first, then the coins.
@@ -231,6 +262,9 @@ class PublicApiPsbtTest(LayersTest):
         assert "max_burn_units" in low.json()["error"]["message"]
         sent = self.ok(self.broadcast(api, {"psbt": signed, "max_burn_units": launch["burn_units"]}))
         assert_equal(sent["txid"], launch["txid"])
+        # Spent in the mempool: a distinct refusal, never a wait.
+        spent = self.post(api, "psbt/launch", dict(body, coins=coins()), launch_query)
+        assert_equal((spent.status, spent.json()["error"].get("reason")), (409, "reservation_spent"))
         self.bmm()
         self.bmm()
 
@@ -244,19 +278,23 @@ class PublicApiPsbtTest(LayersTest):
         # The first buy's tokens: at the address (the external wallet's).
         held = {a["label"]: a["balance"] for a in ext.listmyassets()["assets"]}
         assert_greater_than(held.get("PSBTX", 0), 0)
-        # The ticker is taken now.
-        assert_equal(self.post(api, "psbt/reserve", {"address": address, "ticker": "PSBTX", "nonce": nonce}).status, 409)
+        # Launched: the ticker is taken (a distinct reason), and the coin carrying the tokens is skipped as a payment.
+        taken = self.post(api, "psbt/launch", dict(body, coins=coins()), launch_query)
+        assert_equal((taken.status, taken.json()["error"].get("reason")), (409, "ticker_taken"))
 
         self.log.info("psbt/register: reserve, then register, as hex this time (walletprocesspsbt finalizing)")
         nonce2 = os.urandom(32).hex()
-        reserve2 = self.ok(self.post(api, "psbt/reserve", {"address": address, "ticker": "REGX", "nonce": nonce2}))
+        # The first buy's result output: the PSBTX tokens, at the address (value 0: listunspent does not list it).
+        token_coins = [launch["txid"] + ":0"]
+        reserve2 = self.ok(self.post(api, "psbt/reserve", {"address": address, "commitment": commit("REGX", nonce2), "coins": coins() + token_coins}))
+        assert {"coin": token_coins[0], "reason": "token"} in reserve2["skipped"], reserve2["skipped"]
         self.check_psbt(n0, reserve2["psbt"], address)
         done = ext.walletprocesspsbt(self.sign(ext, reserve2["psbt"]))
         assert done["complete"]
         self.ok(self.broadcast(api, {"hex": done["hex"]}))
         self.bmm_to(n0.getblockcount() + 2)
-        register = self.ok(self.post(api, "psbt/register", {"address": address, "ticker": "REGX", "nonce": nonce2, "reservation": reserve2["reservation"],
-                                                             "name": "Registered X", "supply": "5000", "decimals": 2}))
+        register = self.ok(self.post(api, "psbt/register", {"address": address, "ticker": "regx", "nonce": nonce2, "reservation": reserve2["reservation"],
+                                                             "name": "Registered X", "supply": "5000", "decimals": 2, "coins": coins()}))
         decoded = self.check_psbt(n0, register["psbt"], address)
         assert_equal(register["burn_units"], "0")
         self.ok(self.broadcast(api, {"psbt": self.sign(ext, register["psbt"])}))
@@ -266,14 +304,20 @@ class PublicApiPsbtTest(LayersTest):
         assert_equal(asset["decimals"], 2)
         held = {a["label"]: a for a in ext.listmyassets()["assets"]}
         assert_equal(held["REGX"]["balance"], 5000)
+        # Registered (the reservation spent in a block, the ticker taken): never a wait.
+        again = self.post(api, "psbt/register", {"address": address, "ticker": "REGX", "nonce": nonce2, "reservation": reserve2["reservation"],
+                                                 "name": "Registered X", "supply": "5000", "decimals": 2, "coins": coins()})
+        assert_equal(again.status, 409)
+        assert again.json()["error"]["reason"] in ("ticker_taken", "reservation_spent")
 
-        self.log.info("The coins named by the client: checked against the UTXO set and the address")
-        nonce3 = os.urandom(32).hex()
-        utxo = [u for u in ext.listunspent() if u["address"] == address and u["amount"] > 0][0]
-        named = self.ok(self.post(api, "psbt/reserve", {"address": address, "ticker": "NAMEDX", "nonce": nonce3, "coins": [f"{utxo['txid']}:{utxo['vout']}"]}))
-        assert_equal([f"{v['txid']}:{v['vout']}" for v in n0.decodepsbt(named["psbt"])["tx"]["vin"]], [f"{utxo['txid']}:{utxo['vout']}"])
-        other = [u for u in ext.listunspent() if u["address"] != address][0]
-        assert_equal(self.post(api, "psbt/reserve", {"address": address, "ticker": "NAMEDX", "nonce": nonce3, "coins": [f"{other['txid']}:{other['vout']}"]}).status, 400)
+        self.log.info("The coins named by the client: the ones given only, another address's skipped")
+        utxo = coins()[0]
+        named = self.ok(self.post(api, "psbt/reserve", {"address": address, "commitment": commit("NAMEDX", os.urandom(32).hex()), "coins": [utxo]}))
+        assert_equal([f"{v['txid']}:{v['vout']}" for v in n0.decodepsbt(named["psbt"])["tx"]["vin"]], [utxo])
+        other = [u for u in ext.listunspent() if u["address"] != address and u["amount"] > 0][0]
+        refused = self.post(api, "psbt/reserve", {"address": address, "commitment": commit("NAMEDX", os.urandom(32).hex()), "coins": [f"{other['txid']}:{other['vout']}"]})
+        assert_equal(refused.status, 400)
+        assert "1 not_address" in refused.json()["error"]["message"], refused
 
         self.log.info("The wallet's own launch alongside (the shared code)")
         funder.reserveasset("OWNX")
