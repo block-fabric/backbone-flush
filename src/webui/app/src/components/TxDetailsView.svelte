@@ -11,6 +11,7 @@
   import LocalTxDetails from '../chain/LocalTxDetails.svelte';
   import { chainTxDetails } from '../lib/chaintx';
   import { simpleMode } from '../lib/uimode.svelte';
+  import { go } from '../lib/nav.svelte';
 
   let { wallet, record }: { wallet: string; record: Pick<TxRecord, 'txid' | 'idx' | 'address'> } = $props();
 
@@ -54,8 +55,9 @@
   {:else if row.k === 'Status'}
     <span class="break"><SafeText text={row.text ?? ''} /></span>
   {:else if row.k === 'Source' && row.role && COINBASE_ROLES[row.role]}
-    <!-- What the output pays, in the chain's words (chain/roles.ts). -->
+    <!-- What the output pays, in the chain's words (chain/roles.ts), and the transaction of the wallet it came of. -->
     <span class="break">{t(COINBASE_ROLES[row.role].source)}</span>
+    {#if row.source}<span class="break" data-testid="payout-source">{t('For the transaction')} <button type="button" class="linkish mono" onclick={() => go('explorer', `search:${row.source}`)}>{row.source.slice(0, 16)}…</button> <CopyButton text={row.source} label="Copy transaction ID" /></span>{/if}
   {:else}
     <SafeText class="break" text={row.text} />
   {/if}
@@ -164,5 +166,13 @@
   summary {
     cursor: pointer;
     font-weight: 600;
+  }
+  .linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
   }
 </style>

@@ -12,7 +12,8 @@
   import { simpleMode } from '../lib/uimode.svelte';
   import { assetTitle, formatAmount, type Activity, type AssetTx } from './ba/model';
   import { ba, displayNameOf } from './ba/store.svelte';
-  import { assetMovesOf, counterparty, middleAddress, operationText, ownAddresses, signedAmount } from './txinfo.svelte';
+  import { assetMovesOf, counterparty, middleAddress, moveNotes, operationText, ownAddresses, signedAmount, typeOfMoves } from './txinfo.svelte';
+  import { TICKER } from './config';
 
   const simple = $derived(simpleMode());
 
@@ -72,8 +73,10 @@
       .catch(() => undefined);
   });
 
-  function direction(sign: number): string {
-    return sign > 0 ? t('Into this wallet') : sign < 0 ? t('Out of this wallet') : t('Neither in nor out');
+  function direction(e: AssetTx): string {
+    if (e.sign > 0 && e.via === 'coinbase') return t('Into this wallet, paid by a coinbase (listed apart, as its payout)');
+    if (e.sign < 0 && e.coin) return t('Out of this wallet, paid into the operation by this transaction');
+    return e.sign > 0 ? t('Into this wallet') : e.sign < 0 ? t('Out of this wallet') : t('Neither in nor out');
   }
 </script>
 
@@ -90,7 +93,7 @@
         {#if !simple}
         <dt>Operation</dt>
         <!-- Already in the language shown (operationText translates it). -->
-        <dd><span translate="no">{operationText(e, activity?.operation)}</span></dd>
+        <dd><span translate="no">{i === 0 && moves.length > 1 ? typeOfMoves(moves, activity?.operation) : operationText(e, activity?.operation)}</span></dd>
         {/if}
         {#if e.asset}
           <dt>Asset</dt>
@@ -98,13 +101,18 @@
             <AssetBadge id={e.asset} label={e.label ?? ''} display={e.display_name} seq={e.seq ?? ''} size={e.category === 'logo' ? 'l' : 'm'} />
           </dd>
         {/if}
-        {#if e.amount !== undefined}
-          <dt>Amount</dt>
-          <dd><span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no">{signedAmount(e)}</span> {#if e.label}<SafeText text={e.label} />{/if}</dd>
+        {#if e.coin}
+          <dt>Asset</dt>
+          <dd translate="no">{TICKER}</dd>
         {/if}
-        {#if !simple}
+        {#if e.amount !== undefined || e.coin}
+          <dt>Amount</dt>
+          <dd><span class="amt" class:neg={e.sign < 0} class:pos={e.sign > 0} translate="no">{signedAmount(e)}</span> {#if e.amount !== undefined}{#if e.coin}{TICKER}{:else if e.label}<SafeText text={e.label} />{/if}{/if}
+            {#each moveNotes(e) as n (n)}<span class="ba-tag">{n}</span>{/each}</dd>
+        {/if}
+        {#if !simple || e.via === 'coinbase'}
         <dt>Direction</dt>
-        <dd>{direction(e.sign)}</dd>
+        <dd>{direction(e)}</dd>
         {/if}
         {#if side.parties.length}
           <dt>{side.dir === 'from' ? 'From' : 'To'}</dt>

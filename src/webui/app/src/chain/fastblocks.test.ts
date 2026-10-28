@@ -377,7 +377,7 @@ describe('the staking income in the history', () => {
   it('a coinbase output with a role is Staked, BMM reward or Slashing reward, and the type filter has them', () => {
     const r = parseRecords(records);
     expect(r.map((x) => typeText(x.type, x.role))).toEqual(['Staked', 'Staked', 'BMM reward', 'Slashing reward', 'Mined']);
-    expect(Object.keys(COINBASE_ROLES)).toEqual(['staked', 'bmm', 'slashing', 'validator']);
+    expect(Object.keys(COINBASE_ROLES)).toEqual(['staked', 'bmm', 'slashing', 'validator', 'payout', 'refund', 'unbond', 'deposit', 'chain']);
     expect(typeText('mined', 'validator')).toBe('Validator share');
     expect(TYPE_FILTERS.map((f) => f.label)).toEqual(expect.arrayContaining(['Staked', 'BMM reward', 'Slashing reward']));
     const only = (type: string) => filterRecords(r, { type: type as never, search: '', minAmount: 0n, showInactive: false }).map((x: TxRecord) => x.role);

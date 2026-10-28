@@ -17,8 +17,9 @@
   import { bumpFee } from '../../lib/txactions';
   import { stacked } from '../../lib/actions';
   import { coinsToSats } from '../../lib/units';
-  import { addressText, typeText, walletApi, type TxRecord } from '../../lib/wallet';
+  import { addressText, walletApi, type TxRecord } from '../../lib/wallet';
   import { current } from '../../lib/walletdata.svelte';
+  import { movesSummary, recordTypeText, shownRecords } from '../../chain/txinfo.svelte';
 
   interface Peer {
     id: number;
@@ -147,7 +148,7 @@
     const before = history.filter((p) => p.time <= r.time).slice(-12);
     return before.map((p) => Number(p.balance));
   }
-  const txRows = $derived(sorted(recent, 'transactions', (r, k) => (k === 'amount' ? r.amount : k === 'status' ? txState(r).label : r.time)));
+  const txRows = $derived(sorted(shownRecords(recent), 'transactions', (r, k) => (k === 'amount' ? r.amount : k === 'status' ? txState(r).label : r.time)));
   const bumpable = (r: TxRecord) => r.depth === 0 && r.amount < 0n && r.status !== 'abandoned' && r.status !== 'conflicted';
 
   function details(r: TxRecord) {
@@ -249,8 +250,8 @@
                   <button type="button" class="row-name" disabled={prefs.mask} title={prefs.mask ? 'Hidden: privacy mode' : 'Show the details'} onclick={() => details(r)}>
                     <span class="bubble" class:in={r.amount >= 0n}><Icon name={r.type === 'mined' ? 'mine' : r.amount < 0n ? 'send' : 'receive'} size={16} /></span>
                     <span class="what">
-                      <span class="ellipsis strong">{#if addressText(r)}<SafeText text={addressText(r)} />{:else}{typeText(r.type, r.role) || 'Other'}{/if}</span>
-                      <span class="faint small">{typeText(r.type, r.role) || 'Other'}</span>
+                      <span class="ellipsis strong">{#if movesSummary(r.txid)}<SafeText text={movesSummary(r.txid)} />{:else if addressText(r)}<SafeText text={addressText(r)} />{:else}<SafeText text={recordTypeText(r)} />{/if}</span>
+                      <span class="faint small"><SafeText text={recordTypeText(r)} /></span>
                     </span>
                   </button>
                 </td>

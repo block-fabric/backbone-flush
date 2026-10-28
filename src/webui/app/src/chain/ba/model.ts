@@ -284,6 +284,14 @@ export interface AssetTx {
   abandoned: boolean;
   /** The wallet's own outputs of ECX that carry nothing (its change), when it paid (newer nodes). */
   change?: string[];
+  /** A row of ECX itself (no asset): paid into the operation by the transaction, or out by a coinbase (`via`). */
+  coin?: boolean;
+  /** 'coinbase': paid to the wallet by a coinbase (of this transaction's block or a later one), not by this transaction. */
+  via?: 'coinbase' | string;
+  /** What an order that did not fill gave back of what went in. */
+  refund?: boolean;
+  /** Why the amount is the least asked for, or missing: 'pending' (not in a block yet), 'spent' (read before it was spent no more). */
+  unknown?: 'pending' | 'spent' | string;
 }
 
 export interface SwapQuote {
@@ -980,12 +988,26 @@ export const OPERATIONS: Record<string, string> = {
   update: 'Update',
   burn: 'Burn',
   swap: 'Swap',
+  buy: 'Buy',
+  sell: 'Sell',
   'add liquidity': 'Add liquidity',
   'remove liquidity': 'Remove liquidity',
   'create pool': 'Create pool',
-  route: 'Trade along a route',
+  route: 'Swap',
   launch: 'Launch an asset',
-  'claim launch': 'Pay a launch\'s creator',
+  curve: 'Put on a curve',
+  'claim launch': 'Claim a launch',
+  'open position': 'Open a position',
+  'change position': 'Change a position',
+  'place order': 'Place an order',
+  'settle order': 'Collect an order',
+  'cancel order': 'Cancel an order',
+  logo: 'Logo',
+  'display name': 'Display name',
+  'register oracle': 'Register an oracle',
+  attest: 'Attest',
+  'oracle contract': 'Oracle contract',
+  settle: 'Settle a contract',
   auction: 'Auction',
   bid: 'Bid',
   collect: 'Collect',

@@ -8,6 +8,7 @@ import { ba, holdingOf, refreshBitAssets, startBitAssets } from './ba/store.svel
 import { ignoreAsset } from './ba/hide.svelte';
 import { hiddenAsset } from './ba/visible.svelte';
 import { TICKER } from './config';
+import { mergeByTxid, typeText, type TxRecord } from '../lib/wallet';
 
 export interface ChainTx {
   type: string;
@@ -34,10 +35,42 @@ export function categoryText(e: Pick<AssetTx, 'category' | 'sign'>): string {
       return t('Burned');
     case 'swap':
       return t('Swap');
+    case 'pool_create':
+      return t('Pool created');
     case 'pool_add':
       return t('Pool add');
     case 'pool_remove':
       return t('Pool remove');
+    case 'position_open':
+      return t('Position opened');
+    case 'position_add':
+      return t('Position added to');
+    case 'position_remove':
+      return t('Position reduced');
+    case 'position_collect':
+      return t('Position fees collected');
+    case 'position_close':
+      return t('Position closed');
+    case 'order_place':
+      return t('Order placed');
+    case 'order_settle':
+      return t('Order collected');
+    case 'order_cancel':
+      return t('Order cancelled');
+    case 'launch':
+      return t('Launched');
+    case 'curve':
+      return t('Put on a curve');
+    case 'claim':
+      return t('Launch claim');
+    case 'contract':
+      return t('Oracle contract');
+    case 'contract_settle':
+      return t('Contract settled');
+    case 'oracle':
+      return t('Oracle registered');
+    case 'attest':
+      return t('Attested');
     case 'auction':
       return t('Auction');
     case 'bid':
@@ -62,16 +95,50 @@ export function categoryText(e: Pick<AssetTx, 'category' | 'sign'>): string {
 }
 
 /**
- * The operations of Layers' DEX (createpool, addpoolliquidity, removepoolliquidity, swappools, swaproute; launchtoken,
- * claimlaunch; buys and sales on a launch's curve are routes) that
- * listassettransactions lists as moves of the assets (sent, received): named as listassetactivity names them.
+ * The operations of Layers' DEX that a node before 8.3 listed as moves of the assets (sent, received): named as
+ * listassetactivity names them. Newer nodes give each its own category (categoryText).
  */
-const DEX_OPERATIONS = new Set(['create pool', 'add liquidity', 'remove liquidity', 'route', 'launch', 'claim launch']);
+const DEX_OPERATIONS = new Set(['create pool', 'add liquidity', 'remove liquidity', 'route', 'buy', 'sell', 'launch', 'claim launch', 'open position', 'change position', 'place order', 'settle order', 'cancel order']);
 
 /** The words of a move, with the operation listassetactivity says of its transaction (if read). */
 export function operationText(e: Pick<AssetTx, 'category' | 'sign'>, operation: string | undefined): string {
-  if (operation && DEX_OPERATIONS.has(operation) && (e.category === 'send' || e.category === 'receive')) return t(OPERATIONS[operation]);
+  if (operation && DEX_OPERATIONS.has(operation) && OPERATIONS[operation] && (e.category === 'send' || e.category === 'receive')) return t(OPERATIONS[operation]);
   return categoryText(e);
+}
+
+/**
+ * The kind of a transaction from its moves, for the Type column and the notices: a launch; a buy (ECX in, an asset out),
+ * a sale (an asset in, ECX out), a swap, or one that did not fill (its refund); else its first move's kind.
+ */
+export function typeOfMoves(moves: readonly AssetTx[], operation: string | undefined): string {
+  if (!moves.length) return '';
+  if (moves.some((e) => e.category === 'launch')) return t('Launched');
+  const swap = moves.filter((e) => e.category === 'swap');
+  if (swap.length && swap.length === moves.filter((e) => e.category !== 'control').length) {
+    if (swap.some((e) => e.refund)) return t('Swap not filled');
+    if (swap.some((e) => e.coin && e.sign < 0)) return t('Buy');
+    if (swap.some((e) => e.coin && e.sign > 0)) return t('Sell');
+    return t('Swap');
+  }
+  const main = moves.find((e) => e.category !== 'control') ?? moves[0];
+  return operationText(main, operation);
+}
+
+/** What a move's amount needs said beside it: paid by a coinbase, a refund, or why it is the least asked for. */
+export function moveNotes(e: Pick<AssetTx, 'via' | 'refund' | 'unknown' | 'at_least' | 'at_most' | 'amount'>): string[] {
+  const notes: string[] = [];
+  if (e.refund) notes.push(t('refund'));
+  if (e.via === 'coinbase') notes.push(t('paid by a coinbase'));
+  if (e.unknown === 'pending') notes.push(t('not in a block yet'));
+  else if (e.unknown === 'spent' && (e.at_least || e.amount === undefined)) notes.push(t('the least asked for: what came out was spent since'));
+  else if (e.at_least) notes.push(t('at least'));
+  if (e.at_most) notes.push(t('at most'));
+  return notes;
+}
+
+/** The name a move shows: its asset's label, ECX for the coin. */
+export function moveLabel(e: Pick<AssetTx, 'label' | 'coin'>): string {
+  return e.coin ? TICKER : (e.label ?? '');
 }
 
 /** The operation listassetactivity says of a transaction of the wallet, if it read it. */
@@ -86,9 +153,10 @@ export function activityOperationOf(txid: string): string | undefined {
   return opsByTxid.get(txid);
 }
 
-/** An amount with its sign, in the asset's decimals, exact. */
+/** An amount with its sign, in the asset's decimals, exact ("≥" the least asked for, "≤" the most offered). */
 export function signedAmount(e: AssetTx): string {
-  if (e.amount === undefined) return '';
+  // The coin paid by a coinbase without an amount the wallet can read (a creator's fees): its direction alone.
+  if (e.amount === undefined) return e.coin && e.sign !== 0 ? (e.sign < 0 ? '−' : '+') : '';
   const text = formatAmount(e.amount, e.decimals ?? 0, { trim: false });
   const bound = e.at_least ? '≥ ' : e.at_most ? '≤ ' : '';
   return `${e.sign < 0 ? '−' : e.sign > 0 ? '+' : ''}${bound}${text}`;
@@ -181,12 +249,12 @@ function makeChainTx(moves: AssetTx[]): ChainTx | undefined {
   const parties = (e: AssetTx) => counterparty(e).parties.map((p) => p.address);
   const operation = activityOperationOf(moves[0].txid);
   return {
-    type: operationText(moves[0], operation),
-    search: moves.map((e) => [e.label ?? '', e.display_name ?? '', e.seq ? `#${e.seq}` : '', e.asset ?? '', categoryText(e), ...parties(e)].join(' ')).join(' '),
+    type: typeOfMoves(moves, operation),
+    search: moves.map((e) => [moveLabel(e), e.display_name ?? '', e.seq ? `#${e.seq}` : '', e.asset ?? '', categoryText(e), ...parties(e)].join(' ')).join(' '),
     csv: [
-      moves.map((e) => e.label ?? '').join('; '),
+      moves.map((e) => moveLabel(e)).join('; '),
       moves.map((e) => e.seq ?? '').join('; '),
-      moves.map((e) => signedAmount(e).replace('−', '-')).join('; '),
+      moves.map((e) => [signedAmount(e).replace('−', '-'), ...moveNotes(e).map((n) => `(${n})`)].join(' ').trim()).join('; '),
       moves.map((e) => { const c = counterparty(e); return c.dir ? `${c.dir} ${[...c.parties.map((p) => p.address), ...(c.self ? ['this wallet'] : [])].join(' ')}` : ''; }).join('; '),
     ],
   };
@@ -198,7 +266,8 @@ function makeChainTx(moves: AssetTx[]): ChainTx | undefined {
  */
 export function chainTxHidden(txid: string): boolean {
   const moves = assetMovesOf(txid);
-  return moves.length > 0 && moves.every((e) => !!e.asset && hiddenAsset(e.asset, e.label));
+  const assets = moves.filter((e) => !e.coin);
+  return assets.length > 0 && assets.every((e) => !!e.asset && hiddenAsset(e.asset, e.label));
 }
 
 /**
@@ -207,7 +276,8 @@ export function chainTxHidden(txid: string): boolean {
  */
 export function chainTxDetails(txid: string): { hideZero: boolean; raw: Record<string, string>; simpleRows?: string[] } | undefined {
   if (!assetMovesOf(txid).length) return undefined;
-  return { hideZero: true, raw: { 'Output index': `Output index of the ${TICKER} record` }, simpleRows: ['Status', 'Date', 'Transaction fee'] };
+  // Simple mode keeps the net amount: what the operation took of the wallet's ECX (a buy, a pool), beside the fee.
+  return { hideZero: true, raw: { 'Output index': `Output index of the ${TICKER} record` }, simpleRows: ['Status', 'Date', 'Transaction fee', 'Net amount'] };
 }
 
 /** What the notice of an asset received offers (Ignore this asset) and warns of (a name like one the wallet holds). */
@@ -242,4 +312,25 @@ export function refreshChainTx(wallet: string): void {
   };
   if (wait === 0) read();
   else readLater = setTimeout(read, wait);
+}
+
+/** What a transaction moved, in a line (the overview's recent transactions): "−500.00 BROSEVELT, +21.115475 COINYE". */
+export function movesSummary(txid: string): string {
+  return assetMovesOf(txid)
+    .filter((e) => e.amount !== undefined || e.coin)
+    .map((e) => `${signedAmount(e)} ${moveLabel(e)}`)
+    .join(', ');
+}
+
+/**
+ * The records of a short list (the overview, the home's tables) as the Transactions page shows them: those of an asset
+ * transaction merged into one (mergeByTxid), its type and what it moved from the chain.
+ */
+export function shownRecords(records: readonly TxRecord[]): TxRecord[] {
+  return mergeByTxid(records, (txid) => !!chainTxOf(txid));
+}
+
+/** The type of a record: what the chain knows of its transaction, else the wallet's words. */
+export function recordTypeText(r: Pick<TxRecord, 'txid' | 'type' | 'role'>): string {
+  return chainTxOf(r.txid)?.type || typeText(r.type, r.role) || t('Other');
 }
