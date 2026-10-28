@@ -90,22 +90,30 @@ class LayersLaunchTest(LayersTest):
         assert_equal(len(log), 1)
         assert log[0]["created"]
         assert_equal(n1.decodeassettx(made["txid"])["operation"]["name"], "launch_token")
+        # The wallet's history of the launch: launched (none of it the wallet's), its first buy: the coin out, the tokens in.
+        rows = self.moves(n0, made["txid"])
+        assert_equal([(r[0], r[2], r[3], r[4]) for r in rows], [("launch", 0, None, ()), ("swap", -1, Decimal(1), ("coin",)), ("swap", 1, self.holding(n0, "MOON"), ())])
+        assert_equal(rows[0][1], "MOON")
         # No pool of it but its curve while it is on its curve.
         assert_raises_rpc_error(-4, "not accepted", n0.addliquidity, "MOON", 1000, "CHN", 1)
         assert_peg_balance(main, self.nodes)
 
         self.log.info("Buys and a sale on the curve, each what quotelaunch said")
         quote = n1.quotelaunch("MOON", 5)
-        n1.buyfromlaunch("0x" + made["token"], 5)
+        bought = n1.buyfromlaunch("0x" + made["token"], 5)
         self.bmm()
         got = self.holding(n1, "MOON")
         assert_equal(got, quote["amount_out"])
+        assert_equal([(r[0], r[2], r[3], r[4]) for r in self.moves(n1, bought["txid"])], [("swap", -1, Decimal(5), ("coin",)), ("swap", 1, got, ())])
         half = (got / 2).quantize(Decimal("0.000001"))
         quote = n1.quotelaunch("MOON", half, "sell")
         sold = n1.selltolaunch("0x" + made["token"], half)
         block = self.bmm()
         assert self.paid_in(n1, block, sold["quote"]), "the sale's CHN by the coinbase"
         assert_equal(sold["quote"], quote["amount_out"])
+        # The sale: the tokens out, the coin in by the coinbase (its payout tied to the sale in the wallet's history).
+        assert_equal([(r[0], r[2], r[3], r[4]) for r in self.moves(n1, sold["txid"])], [("swap", -1, half, ()), ("swap", 1, Decimal(str(sold["min_out"])), ("at_least", "coin", "coinbase"))])
+        assert_equal(self.payout_of(n1, sold["txid"]), [("payout", Decimal(str(sold["quote"])))])
         assert_peg_balance(main, self.nodes)
 
         self.log.info("A buy past the curve's end: the last tokens, the rest back; it graduates at exactly 500")
@@ -130,6 +138,7 @@ class LayersLaunchTest(LayersTest):
         assert_equal(pool["reserve_a"], Decimal("250000000"))
         assert not any(p.get("pool") == pool["pool"] for p in n0.listmyassets().get("pools", []))
         assert self.paid_in(n0, grad_block, whale["back"]), "what the curve's end did not take, back"
+        assert_equal(self.payout_of(n0, whale["txid"]), [("payout", Decimal(str(whale["back"])))])
         log = {r["token"]: r for r in n1.getlaunchlog(grad_height)}
         assert log[made["token"]]["graduated"]
         assert_equal(n1.listlaunches({"status": "graduated"})["total"], 1)
@@ -157,9 +166,13 @@ class LayersLaunchTest(LayersTest):
         owed = n1.getlaunch("MOON")["creator_fees_owed"]
         assert_greater_than(owed, Decimal("1"))
         mine = self.holding(n0, "MOON")
-        n2.claimlaunch("0x" + made["token"])
+        claim = n2.claimlaunch("0x" + made["token"])
         block = self.bmm()
         assert self.paid_in(n0, block, owed), "the creator's fees by the coinbase"
+        # The claim in the history: the sender's, the operation alone; the creator's, the allocation in and its fees paid.
+        assert_equal(self.moves(n2, claim["txid"]), [("claim", None, 0, None, ())])
+        assert_equal(self.moves(n0, claim["txid"]), [("claim", "MOON", 1, Decimal("20000000"), ())])
+        assert_equal(self.payout_of(n0, claim["txid"]), [("payout", owed)])
         assert_equal(self.holding(n0, "MOON") - mine, Decimal("20000000"))
         claimed = n1.getlaunch("MOON")
         assert claimed["allocation_claimed"]

@@ -71,6 +71,8 @@ class LayersBookTest(LayersTest):
         self.bmm()
         a3 = n1.placeorder("GOLD", 1000, "USDX", 3)
         self.bmm()
+        # The wallet's history: what an order sells leaves the wallet (its change is no receive).
+        assert_equal(self.moves(n1, a2["txid"]), [("order_place", "GOLD", -1, Decimal(1000), ())])
         book = n0.getbook("GOLD", "USDX")
         assert_equal(book["book"], a2["book"])
         assert_equal(book["open_orders"], 2)
@@ -102,9 +104,10 @@ class LayersBookTest(LayersTest):
 
         self.log.info("Collect what an order got; the bid's GOLD to its holder")
         before = self.holding(n1, "USDX")
-        n1.settleorder(a2["order"])
+        collect = n1.settleorder(a2["order"])
         self.bmm()
         assert_equal(self.holding(n1, "USDX") - before, ask["got"])
+        assert_equal(self.moves(n1, collect["txid"]), [("order_settle", "USDX", 1, ask["got"], ())])
         assert_raises_rpc_error(-8, "No such order", n0.getorder, a2["order"])
         before = self.holding(n2, "GOLD")
         n2.settleorder(bid["order"], True)
@@ -126,9 +129,13 @@ class LayersBookTest(LayersTest):
 
         self.log.info("Cancel: what is left comes back")
         before = self.holding(n1, "GOLD")
-        n1.settleorder(a3["order"], True)
+        cancel = n1.settleorder(a3["order"], True)
         self.bmm()
         assert_equal(self.holding(n1, "GOLD") - before, Decimal("900"))
+        # A cancel: what is left back (and what it got, apart).
+        rows = self.moves(n1, cancel["txid"])
+        assert ("order_cancel", "GOLD", 1, Decimal(900), ()) in rows, rows
+        assert all(r[0] == "order_cancel" and r[2] == 1 for r in rows), rows
         assert_equal(n0.getbook("GOLD", "USDX")["open_orders"], 0)
 
         self.log.info("An order that expires: back to its holder")

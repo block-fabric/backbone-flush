@@ -93,6 +93,17 @@ class LayersClTest(LayersTest):
         assert (held["amount0"] > 0) and held["amount1"] == 0
         ticks = n0.getpoolticks(pool)["ticks"]
         assert_equal(len(ticks), 6)
+        # The wallet's history: the pool made at a price, nothing in; each position what went into it, exactly (what came
+        # back read from its results), never the change of what went in as a receive.
+        made = [r for r in n0.listassettransactions(1000) if r["category"] == "pool_create"]
+        assert_equal([(r["sign"], "amount" in r) for r in made], [(0, False)])
+        for p in (near, wide):
+            rows = self.moves(n0, p["txid"])
+            assert_equal(sorted((r[0], r[1], r[2], r[4]) for r in rows), [("position_open", "USDX", -1, ()), ("position_open", "USDY", -1, ())])
+            assert all(0 < r[3] <= 50000 for r in rows), rows
+        rows = self.moves(n0, above["txid"])
+        assert_equal([(r[0], r[2]) for r in rows], [("position_open", -1)])
+        assert_equal(rows[0][1], "USDX" if x_first else "USDY")
         assert_peg_balance(main, self.nodes)
 
         self.log.info("Orders that cross ticks, each what getswapquote said alone")
@@ -121,6 +132,9 @@ class LayersClTest(LayersTest):
         self.bmm()
         assert self.holding(n0, "USDX") + self.holding(n0, "USDY") > x0 + y0
         assert_equal(n0.getposition(near["position"])["fees0"], 0)
+        collected = [r for r in n0.listassettransactions(1000) if r["category"] == "position_collect"]
+        assert collected and all(r["sign"] == 1 and Decimal(str(r["amount"])) > 0 for r in collected), collected
+        assert_equal(sum(Decimal(str(r["amount"])) for r in collected), self.holding(n0, "USDX") + self.holding(n0, "USDY") - x0 - y0)
 
         self.log.info("A reorganisation across a clearing that crossed ticks")
         tip = n0.getbestblockhash()
@@ -135,8 +149,11 @@ class LayersClTest(LayersTest):
 
         self.log.info("A position closed: all its liquidity out, all it is owed collected, its token gone")
         before = self.holding(n0, "USDX") + self.holding(n0, "USDY")
-        n0.changeposition(wide["position"], {"close": True})
+        closed = n0.changeposition(wide["position"], {"close": True})
         self.bmm()
+        rows = self.moves(n0, closed["txid"])
+        assert_equal(sorted((r[0], r[1], r[2]) for r in rows), [("position_close", "USDX", 1), ("position_close", "USDY", 1)])
+        assert_equal(sum(r[3] for r in rows), self.holding(n0, "USDX") + self.holding(n0, "USDY") - before)
         assert_raises_rpc_error(-8, "No such position", n0.getposition, wide["position"])
         assert self.holding(n0, "USDX") + self.holding(n0, "USDY") > before
         assert_peg_balance(main, self.nodes)

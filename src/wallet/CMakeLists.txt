@@ -17,6 +17,7 @@ add_library(bitcoin_wallet STATIC EXCLUDE_FROM_ALL
   interfaces.cpp
   load.cpp
   migrate.cpp
+  payouts.cpp
   receive.cpp
   rpc/addresses.cpp
   rpc/bitassets.cpp

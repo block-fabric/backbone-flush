@@ -649,7 +649,7 @@ test of duplicate table ids keeps them apart), so a pruned node serves it, and a
   `dex_height`, a height set goes into the fingerprint of the drivechain database (each node makes it again once).
 - RPCs: `getassetlogo`, `setassetlogo`, `registerasset ... <logo>`, `logo` in `getasset` / `listassets`, `logo_height`
   in `getbitassetsinfo`; `listassettransactions` lists the asset moves of the wallet with the other side (an operation
-  of the DEX shows as what it sent and received).
+  of the DEX shows as what went in and what came out, the coin's legs included: doc/bitassets.md).
 - The app: the logo picker in Register new asset and Change logo, logos wherever assets show, the logo in the
   confirmation; Your assets on the Home and the Overview; asset transfers in Transactions.
 - Tests: `bitassets_logo_tests` (unit), `feature_bitassets_logo.py`, `feature_bitassets_transactions.py`,

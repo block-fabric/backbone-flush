@@ -798,6 +798,11 @@ class PublicApiTest(LayersTest):
         assert_greater_than(int(big["swap"]["back_units"]), 0)
         assert_equal(Decimal(big["swap"]["back_units"]) / 10**8, whale["back"])
         assert_equal([(p["what"], p["via"]) for p in big["swap"]["payouts"]], [("out", "output"), ("back", "coinbase")])
+        # The wallet of a node that keeps the index says it exactly too: the coin in, the tokens out, the coin back.
+        rows = self.moves(n0, whale["txid"])
+        assert_equal([(r[0], r[2], r[4]) for r in rows], [("swap", -1, ("coin",)), ("swap", 1, ()), ("swap", 1, ("refund", "coin", "coinbase"))])
+        assert_equal(rows[1][3], Decimal(big["swap"]["payouts"][0]["amount_units"]) / 10**6)
+        assert_equal(rows[2][3], whale["back"])
         assert_equal(big["swap"]["payouts"][0]["outpoint"].split(":")[0], whale["txid"])
         # What the actions bring in goes to one address: its outcomes, newest first.
         trader = n0.getnewaddress()
@@ -813,6 +818,7 @@ class PublicApiTest(LayersTest):
         assert_equal(routed["swap"]["hops"][1]["amount_in_units"], routed["swap"]["amounts_units"][1])
         assert routed["swap"]["payouts"][0]["outpoint"].startswith(route["txid"] + ":")
         assert Decimal(routed["swap"]["payouts"][0]["amount_units"]) >= Decimal(str(route["min_out"])) * 10**6
+        assert_equal(self.moves(n0, route["txid"]), [("swap", "USDX", -1, Decimal(100), ()), ("swap", "MOON", 1, Decimal(routed["swap"]["payouts"][0]["amount_units"]) / 10**6, ())])
         # Two buys in one block, one price: the small one at no slippage misses, refunded by the coinbase.
         tight = n0.swappools("ECX", 1, [moon_pool], 0)
         n0.swappools("ECX", 50, [moon_pool], 50)
@@ -821,6 +827,8 @@ class PublicApiTest(LayersTest):
         assert_equal(miss["status"], "missed")
         assert_equal(miss["swap"]["amounts_units"], ["100000000"])
         assert_equal([(p["what"], p["asset"], p["amount_units"], p["via"]) for p in miss["swap"]["payouts"]], [("refund", "ECX", "100000000", "coinbase")])
+        # In the wallet: the coin in, and the same back by the coinbase (not filled), exactly.
+        assert_equal([(r[0], r[2], r[3], r[4]) for r in self.moves(n0, tight["txid"])], [("swap", -1, Decimal(1), ("coin",)), ("swap", 1, Decimal(1), ("refund", "coin", "coinbase"))])
         # Limit orders of USDY for ECX: an ask partly filled by a crossing, collected, filled; one cancelled, one expired.
         ask = n0.placeorder("USDY", 100, "ECX", Decimal("0.01"))
         n0.placeorder("ECX", Decimal("0.4"), "USDY", 100)
@@ -861,6 +869,8 @@ class PublicApiTest(LayersTest):
         assert_equal(cancelled["status"], "cancelled")
         assert_equal([(p["what"], p["amount_units"], p["via"]) for p in cancelled["order"]["settle"]["payouts"]], [("left", "10000", "output")])
         assert_equal(cancelled["order"]["settle"]["txid"], cancel["txid"])
+        assert_equal(self.moves(n0, ask2["txid"]), [("order_place", "USDY", -1, Decimal(100), ())])
+        assert_equal(self.moves(n0, cancel["txid"]), [("order_cancel", "USDY", 1, Decimal(100), ("refund",))])
         assert_equal(api.rest(f"trades/{ask3['txid']}")["status"], "expired")
         # The address's, newest first (its three swaps, the two bids, the three asks), a page at a time.
         listed = api.rest(f"addresses/{trader}/trades")

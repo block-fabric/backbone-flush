@@ -8,6 +8,7 @@
   a burn, a logo.
 - The other wallet: a receive (+ the amount) from the addresses that paid it, in the mempool and in a block.
 - Filters by asset, pages.
+- The activity in words of the same send: the amount sent, or received, never the change.
 """
 
 from decimal import Decimal
@@ -76,6 +77,9 @@ class BitAssetsTransactionsTest(BitAssetsTest):
         assert "change" not in r
         assert_greater_than(s["fee"], 0)
         assert_equal(s["fee"], -side.gettransaction(sent)["fee"])
+        # The activity in words: what went to the other side, or came to this one; the change of GOLD left out.
+        assert_equal(next(a["summary"] for a in side.listassetactivity() if a["txid"] == sent), "Sent 12.50 GOLD")
+        assert_equal(next(a["summary"] for a in other.listassetactivity() if a["txid"] == sent), "Received 12.50 GOLD")
 
         self.log.info("Registration, mint, burn and logo")
         side.mintasset("GOLD", 5)

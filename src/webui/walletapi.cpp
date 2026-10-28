@@ -9,6 +9,9 @@
 #include <webui/local.h>
 
 #include <addresstype.h>
+#include <bitassets/state.h>
+#include <pos/bond.h>
+#include <sidechain/state.h>
 #include <chainparams.h>
 #include <coins.h>
 #include <common/args.h>
@@ -45,6 +48,7 @@
 #include <util/time.h>
 #include <util/translation.h>
 #include <wallet/coincontrol.h>
+#include <wallet/payouts.h>
 #include <wallet/receive.h>
 #include <wallet/spend.h>
 #include <wallet/types.h>
@@ -284,9 +288,23 @@ struct Record {
     CAmount debit{0};
     CAmount credit{0};
     int idx{0};
-    //! What the chain says the output pays, for an output of a coinbase (local::CoinbaseRoles); "" else.
+    //! What the chain says the output pays, for an output of a coinbase (local::CoinbaseRoles, wallet/payouts.h: a payout,
+    //! a deposit, an unbond, a refund); for a send to no address, what it is (SendRole: a bond, an unbond, a withdrawal); "" else.
     std::string role;
+    //! A payout's transaction (wallet/payouts.h), when the wallet can tell it.
+    std::string source;
 };
+
+/** What an output to no address that the wallet pays is, in the page's words (chain/roles.ts SEND_ROLES): "" for the rest. */
+std::string SendRole(const CScript& script)
+{
+    if (pos::IsBondScript(script)) return "bond";
+    if (pos::IsUnbondScript(script)) return "unbond";
+    if (sidechain::IsWithdrawalScript(script)) return "withdrawal";
+    if (sidechain::ParseRefundScript(script)) return "refund_request";
+    if (bitassets::IsMarkerScript(script)) return "marker";
+    return "";
+}
 
 //! Number of confirmations recommended for accepting a transaction (TransactionRecord::RecommendedNumConfirmations).
 constexpr int RECOMMENDED_CONFIRMATIONS{6};
@@ -294,7 +312,7 @@ constexpr int RECOMMENDED_CONFIRMATIONS{6};
 constexpr size_t MAX_OWNED_ASKED{500};
 
 /** TransactionRecord::decomposeTransaction. */
-std::vector<Record> Decompose(const interfaces::WalletTx& wtx, const std::vector<std::string>& roles = {})
+std::vector<Record> Decompose(const interfaces::WalletTx& wtx, const std::vector<std::string>& roles = {}, const std::vector<std::string>& sources = {})
 {
     std::vector<Record> parts;
     const int64_t nTime{wtx.time};
@@ -329,6 +347,7 @@ std::vector<Record> Decompose(const interfaces::WalletTx& wtx, const std::vector
                 } else {
                     sub.type = RecordType::SendToOther;
                     sub.address = wtx.comment_to.value_or("");
+                    sub.role = SendRole(txout.scriptPubKey);
                 }
                 CAmount nValue{txout.nValue};
                 // Add fee to first output.
@@ -352,6 +371,7 @@ std::vector<Record> Decompose(const interfaces::WalletTx& wtx, const std::vector
                 }
                 if (wtx.is_coinbase) sub.type = RecordType::Generated;
                 if (wtx.is_coinbase && i < roles.size()) sub.role = roles[i];
+                if (wtx.is_coinbase && i < sources.size()) sub.source = sources[i];
                 parts.push_back(sub);
             }
         }
@@ -495,20 +515,44 @@ UniValue RecordJson(const Record& rec, const RecordStatus& s, const interfaces::
     r.push_back(status.is_coinbase);
     r.push_back(status.is_abandoned);
     r.push_back(status.is_trusted);
-    // The role of an output of a coinbase, in the chain's words (local::CoinbaseRoles): "" mostly.
+    // The role of an output of a coinbase, in the chain's words (local::CoinbaseRoles), or what a send to no address is: "" mostly.
     r.push_back(rec.role);
+    // A payout's transaction, when the wallet can tell it (wallet/payouts.h): "" mostly.
+    r.push_back(rec.source);
     return r;
 }
 
+/**
+ * The roles of the outputs of a confirmed coinbase of the wallet: the chain's (local::CoinbaseRoles), and past the first
+ * output those it names none of, what the wallet knows they pay (wallet/payouts.h: read once, `payouts`), with their sources.
+ */
+void CoinbaseRolesOf(const wallet::CWallet& w, const wallet::CWalletTx& wtx, std::optional<wallet::CoinbasePayouts>& payouts, std::vector<std::string>& roles,
+                     std::vector<std::string>& sources) EXCLUSIVE_LOCKS_REQUIRED(w.cs_wallet)
+{
+    const auto* confirmed{wtx.state<wallet::TxStateConfirmed>()};
+    if (!confirmed || !wtx.IsCoinBase()) return;
+    roles = local::CoinbaseRoles(w.chain(), confirmed->confirmed_block_hash);
+    roles.resize(std::max(roles.size(), wtx.GetTx()->vout.size()));
+    sources.assign(roles.size(), "");
+    for (size_t n{1}; n < wtx.GetTx()->vout.size(); ++n) {
+        if (!roles[n].empty() || wtx.GetTx()->vout[n].nValue == 0 || !w.IsMine(wtx.GetTx()->vout[n])) continue;
+        if (!payouts) payouts.emplace(w);
+        const wallet::CoinbasePayout payout{payouts->Of(wtx.GetTx()->vout[n].scriptPubKey, confirmed->confirmed_block_height)};
+        roles[n] = payout.role;
+        if (payout.source) sources[n] = payout.source->GetHex();
+    }
+}
+
 /** The records of a transaction of the wallet, under its lock. */
-void AppendRecords(UniValue& records, const wallet::CWallet& w, const wallet::CWalletTx& wtx, std::set<Txid>& trusted_parents, const std::map<std::string, std::string>& labels) EXCLUSIVE_LOCKS_REQUIRED(w.cs_wallet)
+void AppendRecords(UniValue& records, const wallet::CWallet& w, const wallet::CWalletTx& wtx, std::set<Txid>& trusted_parents, const std::map<std::string, std::string>& labels,
+                   std::optional<wallet::CoinbasePayouts>& payouts) EXCLUSIVE_LOCKS_REQUIRED(w.cs_wallet)
 {
     const interfaces::WalletTx tx{MakeTx(w, wtx)};
     const interfaces::WalletTxStatus status{MakeStatus(w, wtx, trusted_parents)};
     const char* state{StateCode(wtx)};
-    std::vector<std::string> roles;
-    if (const auto* confirmed{wtx.state<wallet::TxStateConfirmed>()}; confirmed && wtx.IsCoinBase()) roles = local::CoinbaseRoles(w.chain(), confirmed->confirmed_block_hash);
-    for (const Record& rec : Decompose(tx, roles)) records.push_back(RecordJson(rec, StatusOf(rec, status), status, state, labels));
+    std::vector<std::string> roles, sources;
+    CoinbaseRolesOf(w, wtx, payouts, roles, sources);
+    for (const Record& rec : Decompose(tx, roles, sources)) records.push_back(RecordJson(rec, StatusOf(rec, status), status, state, labels));
 }
 
 /** TransactionDesc::FormatTxStatus. */
@@ -588,21 +632,24 @@ UniValue Describe(interfaces::Node& node, interfaces::Wallet& wallet, const Txid
     }
 
     // From
+    // What the coinbase output pays, past the block's own: none of it was generated by this wallet (no mining note).
+    std::string coinbase_role;
     if (wtx.is_coinbase) {
         UniValue source{TextRow("Source", "Generated")};
-        // What the output pays, in the chain's words (local::CoinbaseRoles): the page says it instead.
+        // What the output pays, in the chain's words (local::CoinbaseRoles) or the wallet's (wallet/payouts.h: a payout, a
+        // deposit, an unbond, a refund): the page says it instead, with the transaction it came of when known.
         if (wallet::CWallet* cw{wallet.wallet()}; cw && idx >= 0) {
-            uint256 block;
-            {
-                LOCK(cw->cs_wallet);
-                const auto it{cw->mapWallet.find(txid)};
-                if (it != cw->mapWallet.end()) {
-                    if (const auto* confirmed{it->second.state<wallet::TxStateConfirmed>()}) block = confirmed->confirmed_block_hash;
+            LOCK(cw->cs_wallet);
+            const auto it{cw->mapWallet.find(txid)};
+            if (it != cw->mapWallet.end()) {
+                std::optional<wallet::CoinbasePayouts> payouts;
+                std::vector<std::string> roles, sources;
+                CoinbaseRolesOf(*cw, it->second, payouts, roles, sources);
+                if (static_cast<size_t>(idx) < roles.size() && !roles[idx].empty()) {
+                    coinbase_role = roles[idx];
+                    source.pushKV("role", roles[idx]);
+                    if (!sources[idx].empty()) source.pushKV("source", sources[idx]);
                 }
-            }
-            if (!block.IsNull()) {
-                const auto roles{local::CoinbaseRoles(cw->chain(), block)};
-                if (static_cast<size_t>(idx) < roles.size() && !roles[idx].empty()) source.pushKV("role", roles[idx]);
             }
         }
         rows.push_back(std::move(source));
@@ -648,6 +695,16 @@ UniValue Describe(interfaces::Node& node, interfaces::Wallet& wallet, const Txid
                     CTxDestination address;
                     if (ExtractDestination(txout.scriptPubKey, address)) {
                         rows.push_back(AddressRow("To", EncodeDestination(address), LabelOf(wallet, address), to_self));
+                    } else if (const auto bond{pos::ParseBond(txout)}) {
+                        rows.push_back(TextRow("To", "A bond to the validator " + bond->pubkey.GetHex()));
+                    } else if (const auto unbond{pos::ParseUnbond(txout)}) {
+                        rows.push_back(TextRow("To", "An unbond from the validator " + unbond->pubkey.GetHex() + " (paid back to the bond's owner by a coinbase, some anchors later)"));
+                    } else if (const auto withdrawal{sidechain::ParseWithdrawalOutput(txout)}) {
+                        rows.push_back(TextRow("To", strprintf("A withdrawal to the mainchain (%s there, %s of it the mainchain's fee)", FormatMoney(withdrawal->amount), FormatMoney(withdrawal->main_fee))));
+                    } else if (sidechain::ParseRefundScript(txout.scriptPubKey)) {
+                        rows.push_back(TextRow("To", "A request to give a withdrawal back (paid by a coinbase)"));
+                    } else if (bitassets::IsMarkerScript(txout.scriptPubKey) && txout.nValue > 0) {
+                        rows.push_back(TextRow("To", "The asset operation: paid into it (an order, a pool, a position, a launch)"));
                     }
                 }
                 rows.push_back(AmountRow("Debit", -txout.nValue));
@@ -697,7 +754,7 @@ UniValue Describe(interfaces::Node& node, interfaces::Wallet& wallet, const Txid
     for (const std::string& m : messages) msgs.push_back(m);
     out.pushKV("messages", std::move(msgs));
 
-    if (wtx.is_coinbase) {
+    if (wtx.is_coinbase && (coinbase_role.empty() || coinbase_role == "staked")) {
         const int maturity{Params().GetConsensus().coinbase_maturity + 1};
         out.pushKV("coinbaseNote", strprintf("Generated coins must mature %d blocks before they can be spent. When you generated this block, it was broadcast to the network to be added to the block chain. If it fails to get into the chain, its state will change to \"not accepted\" and it won't be spendable. This may occasionally happen if another node generates a block within a few seconds of yours.", maturity));
     }
@@ -1297,6 +1354,7 @@ WalletApi::WalletApi(NodeFn node, FileFn may_use_file, guard::AskFn ask) : m_nod
         UniValue out{UniValue::VOBJ};
         LOCK(cw->cs_wallet);
         std::set<Txid> trusted_parents;
+        std::optional<wallet::CoinbasePayouts> payouts;
         if (txids.isArray()) {
             UniValue gone{UniValue::VARR};
             for (const UniValue& id : txids.getValues()) {
@@ -1307,7 +1365,7 @@ WalletApi::WalletApi(NodeFn node, FileFn may_use_file, guard::AskFn ask) : m_nod
                     gone.push_back(txid->GetHex());
                     continue;
                 }
-                AppendRecords(records, *cw, it->second, trusted_parents, labels);
+                AppendRecords(records, *cw, it->second, trusted_parents, labels, payouts);
             }
             out.pushKV("gone", std::move(gone));
         } else if (latest) {
@@ -1316,10 +1374,10 @@ WalletApi::WalletApi(NodeFn node, FileFn may_use_file, guard::AskFn ask) : m_nod
             const int64_t wanted{std::clamp<int64_t>(*latest, 1, 1000)};
             int64_t txs{0};
             for (auto it{cw->wtxOrdered.rbegin()}; it != cw->wtxOrdered.rend() && (records.size() < static_cast<size_t>(wanted) || txs < wanted * 4); ++it, ++txs) {
-                AppendRecords(records, *cw, *it->second, trusted_parents, labels);
+                AppendRecords(records, *cw, *it->second, trusted_parents, labels, payouts);
             }
         } else {
-            for (const auto& [txid, wtx] : cw->mapWallet) AppendRecords(records, *cw, wtx, trusted_parents, labels);
+            for (const auto& [txid, wtx] : cw->mapWallet) AppendRecords(records, *cw, wtx, trusted_parents, labels, payouts);
         }
         out.pushKV("height", cw->GetLastBlockHeight());
         out.pushKV("hash", cw->GetLastBlockHash().GetHex());
