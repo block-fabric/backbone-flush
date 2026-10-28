@@ -166,9 +166,15 @@ class LayersDexTest(LayersTest):
         quote = n0.quoteroute("GOLD", 10, "SILVER")
         assert_equal(quote["path"], ["GOLD", "ECX", "SILVER"])
         before = self.holding(n0, "SILVER")
-        n0.swaproute(quote["path"], 10)
+        sent = n0.swaproute(quote["path"], 10)
         self.bmm()
         assert_equal(self.holding(n0, "SILVER") - before, quote["amount_out"])
+        # The wallet's asset history: the route as a swap, 10 GOLD out and the SILVER in; GOLD's change is no receive.
+        txid = sent["txid"] if isinstance(sent, dict) else sent
+        rows = [r for r in n0.listassettransactions(1000) if r["txid"] == txid]
+        assert_equal(sorted((r["category"], r["label"], r["sign"]) for r in rows), [("swap", "GOLD", -1), ("swap", "SILVER", 1)])
+        assert_equal(Decimal(str(next(r["amount"] for r in rows if r["label"] == "GOLD"))), 10)
+        assert_equal(Decimal(str(next(r["amount"] for r in rows if r["label"] == "SILVER"))), Decimal(str(quote["amount_out"])))
         quote = n0.quoteroute("GOLD", 10, "WOOD")
         assert_equal(quote["path"], ["GOLD", "ECX", "SILVER", "OIL", "WOOD"])
         assert_equal(len(quote["routes"][0]["hops"]), 4)
