@@ -3521,6 +3521,21 @@ RPCMethod listassettransactions()
                     add("swap", op.asset_in, op.amount_in, -1);
                     const uint64_t got{received(op.asset_out, Token::Kind::ASSET)};
                     add("swap", op.asset_out, got ? got : op.min_out, +1, /*at_least=*/!got);
+                } else if constexpr (std::is_same_v<T, bitassets::Route>) {
+                    // A route as a swap: what went in, what came out (the change of what went in is no receive).
+                    if (op.path.empty()) return;
+                    add("swap", op.path.front(), op.amount_in, -1);
+                    const uint64_t got{received(op.path.back(), Token::Kind::ASSET)};
+                    add("swap", op.path.back(), got ? got : op.min_out, +1, /*at_least=*/!got);
+                } else if constexpr (std::is_same_v<T, bitassets::SwapPools>) {
+                    // Through named pools (what the wallet sends for a swap or a route): its marker names only what goes
+                    // in, so what came out is the other asset its outputs to the wallet carry. ECX out is the wallet's own
+                    // payment (CHN rows are not this list's), as is a result output already spent.
+                    add("swap", op.asset_in, op.amount_in, -1);
+                    for (const AssetId& asset : assets) {
+                        if (asset == op.asset_in) continue;
+                        if (const uint64_t got{received(asset, Token::Kind::ASSET)}) add("swap", asset, got, +1);
+                    }
                 } else if constexpr (std::is_same_v<T, bitassets::AddLiquidity>) {
                     add("pool_add", op.asset_a, op.amount_a, -1, false, /*at_most=*/true);
                     add("pool_add", op.asset_b, op.amount_b, -1, false, /*at_most=*/true);
