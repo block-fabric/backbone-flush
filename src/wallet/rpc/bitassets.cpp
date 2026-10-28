@@ -8,6 +8,7 @@
 #include <bitassets/clmath.h>
 #include <bitassets/curves.h>
 #include <bitassets/dex.h>
+#include <bitassets/launch.h>
 #include <bitassets/logo.h>
 #include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
@@ -244,13 +245,14 @@ struct Out {
 CTransactionRef Send(CWallet& wallet, std::optional<bitassets::Operation> operation, const std::vector<Out>& outs, const std::vector<COutPoint>& inputs, CAmount chn_in = 0,
                      const std::optional<CFeeRate>& fee_rate = std::nullopt)
 {
-    Marker marker;
-    marker.operation = std::move(operation);
+    std::vector<bitassets::OutToken> tokens;
     std::vector<CRecipient> recipients;
     for (const Out& out : outs) {
-        marker.outputs.push_back({static_cast<uint32_t>(recipients.size()), out.token});
+        tokens.push_back(out.token);
         recipients.push_back({out.dest, 0, /*fSubtractFeeFromAmount=*/false});
     }
+    // The marker as the public API's unsigned transactions write it too (bitassets/launch.h).
+    const Marker marker{bitassets::MarkerOf(std::move(operation), tokens)};
     recipients.push_back({CNoDestination{bitassets::MarkerScript(marker)}, chn_in, false});
 
     CCoinControl coin_control;
@@ -377,25 +379,7 @@ int RevealHeight(CWallet& wallet, int made)
  * A logo given to an RPC: base64 of a PNG or JPEG the rules take (bitassets/logo.h), checked here so that
  * the wallet never pays for a transaction the rules refuse. An empty string, if `allow_empty`: none.
  */
-std::vector<unsigned char> ParseLogo(const UniValue& value, bool allow_empty)
-{
-    const std::string& text{value.get_str()};
-    // Base64 of the largest logo, and no more: nothing larger is decoded.
-    if (text.size() > (bitassets::MAX_LOGO_BYTES + 2) / 3 * 4) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (bad-ba-logo-oversize): a logo is at most %u bytes", bitassets::MAX_LOGO_BYTES));
-    const auto bytes{DecodeBase64(text)};
-    if (!bytes) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is not base64");
-    if (bytes->empty()) {
-        if (!allow_empty) throw JSONRPCError(RPC_INVALID_PARAMETER, "The logo is empty");
-        return {};
-    }
-    std::string reason;
-    if (!bitassets::CheckLogo(*bytes, reason)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this logo (%s): a PNG or a JPEG of exactly %ux%u pixels, at most %u bytes, "
-                                                            "without metadata or chunks other than the image's (see doc/bitassets.md, Logos)",
-                                                            reason, bitassets::LOGO_SIZE, bitassets::LOGO_SIZE, bitassets::MAX_LOGO_BYTES));
-    }
-    return *bytes;
-}
+using bitassets::ParseLogo;
 
 /** The logos of assets are in the rules from the next block, or a logo is refused here. */
 void NeedLogos(CWallet& wallet)
@@ -409,14 +393,13 @@ void NeedLogos(CWallet& wallet)
  */
 std::string NewAssetName(CWallet& wallet, const std::string& given)
 {
-    if (!wallet.chain().bitAssetsTickersActive()) return given;
-    const std::string name{ToUpper(given)};
-    if (!bitassets::IsTicker(name)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The name of a new asset is a ticker (from ticker_height in getbitassetsinfo): %u to %u characters, "
-                                                            "letters A to Z and digits 0 to 9 only (\"%s\" is not one). A longer name goes in the display name",
-                                                            bitassets::MIN_TICKER_SIZE, bitassets::MAX_TICKER_SIZE, name));
-    }
-    return name;
+    return bitassets::NewAssetName(given, wallet.chain().bitAssetsTickersActive());
+}
+
+/** The rules of new assets and launches at the next block (bitassets/launch.h), as the chain says them. */
+bitassets::LaunchRules RulesOf(CWallet& wallet)
+{
+    return bitassets::LaunchRulesAt(Params().GetConsensus().sidechain, wallet.chain().getBitAssetsHeight());
 }
 
 /** Tickers and display names are in the rules from the next block, or a display name is refused here. */
@@ -426,19 +409,7 @@ void NeedTickers(CWallet& wallet)
 }
 
 /** A display name given to an RPC, checked as the rules check it; "" if `allow_empty` (none). */
-std::string ParseDisplayName(const UniValue& value, bool allow_empty)
-{
-    const std::string& text{value.get_str()};
-    if (text.empty()) {
-        if (!allow_empty) throw JSONRPCError(RPC_INVALID_PARAMETER, "The display name is empty");
-        return text;
-    }
-    if (const auto why{bitassets::WhyNotDisplayName(text)}) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The rules refuse this display name (bad-ba-display-name): %s. A display name is 1 to %u bytes of UTF-8 in NFC, "
-                                                            "printable, without a space at either end", *why, bitassets::MAX_DISPLAY_NAME_SIZE));
-    }
-    return text;
-}
+using bitassets::ParseDisplayName;
 
 UniValue TxResult(const CTransactionRef& tx)
 {
@@ -541,8 +512,7 @@ std::optional<CKey> KeyOfXOnly(CWallet& wallet, const uint256& xonly)
 }
 } // namespace
 
-//! bitassets::NameMimicsNumber: refused by the wallet, not relayed by the mempool.
-constexpr const char* NAME_MIMICS_NUMBER{"The name holds '#', '(', ')' or four digits, a dash and four digits: shown with its number, it would read as the number of another asset"};
+//! bitassets::NameMimicsNumber: refused by the wallet, not relayed by the mempool (the message: bitassets/launch.cpp).
 
 RPCMethod reserveasset()
 {
@@ -566,18 +536,15 @@ RPCMethod reserveasset()
     const auto pwallet{ReadyWallet(request)};
     if (!pwallet) return UniValue::VNULL;
     const std::string name{NewAssetName(*pwallet, request.params[0].get_str())};
-    if (!bitassets::IsAssetName(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A name is 1 to %u printable characters, without a space at either end", bitassets::MAX_NAME_TEXT_SIZE));
-    if (bitassets::ReadsAsAnotherAsset(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The name reads as another asset (" + CURRENCY_UNIT + ", a number such as 1739-0029, or \"0x\" and a hash)");
-    if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, NAME_MIMICS_NUMBER);
+    bitassets::CheckReserveName(name);
     const AssetId asset{bitassets::HashName(name)};
     if (pwallet->chain().getBitAsset(asset)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset of this name is registered");
     const CTxDestination dest{NewDestination(*pwallet, ReservationLabel(name))};
-    Token reservation{UnitToken(Token::Kind::RESERVATION, uint256{})};
     const uint256 nonce{ReservationNonce(*pwallet, dest, asset)};
     // The commitment binds the reservation to the script of its output: a copy of it, made by
     // someone who saw it, can never reveal the name before this one.
     const uint256 commitment{bitassets::ReservationCommitment(asset, nonce, GetScriptForDestination(dest))};
-    const CTransactionRef tx{Send(*pwallet, bitassets::Reserve{commitment}, {{dest, reservation}}, {})};
+    const CTransactionRef tx{Send(*pwallet, bitassets::Reserve{commitment}, {{dest, bitassets::ReserveOutputs()[0]}}, {})};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("asset", asset.GetHex());
@@ -615,15 +582,11 @@ RPCMethod registerasset()
 {
     const auto pwallet{ReadyWallet(request)};
     if (!pwallet) return UniValue::VNULL;
-    const bool tickers{pwallet->chain().bitAssetsTickersActive()};
     const std::string name{NewAssetName(*pwallet, request.params[0].get_str())};
     const AssetId asset{bitassets::HashName(name)};
     if (pwallet->chain().getBitAsset(asset)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset of this name is registered");
-    if (tickers && !request.params[4].isNull() && !request.params[4].get_bool()) throw JSONRPCError(RPC_INVALID_PARAMETER, "From ticker_height the name of a new asset (its ticker) is published: public cannot be false");
-    if (bitassets::ReadsAsAnotherAsset(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The name reads as another asset (" + CURRENCY_UNIT + ", a number such as 1739-0029, or \"0x\" and a hash)");
-    const int decimals{request.params[2].isNull() ? 0 : request.params[2].getInt<int>()};
-    if (decimals < 0 || decimals > bitassets::MAX_DECIMALS) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The decimals are from 0 to %u", bitassets::MAX_DECIMALS));
-    const uint64_t supply{bitassets::ParseUnits(request.params[1], decimals, /*allow_zero=*/true)};
+    // Its arguments, as the public API's unsigned registrations check them too (bitassets/launch.h).
+    bitassets::Register reg{bitassets::ParseRegistration(name, request.params[1], request.params[2], request.params[3], request.params[4], request.params[5], request.params[6], RulesOf(*pwallet))};
     // A registration sent before that the mempool dropped holds the reservation: abandoned, it frees it.
     AbandonDroppedRegistration(*pwallet, asset);
     const auto reservation{FindReservation(*pwallet, asset)};
@@ -637,27 +600,9 @@ RPCMethod registerasset()
                                                            pwallet->chain().getBitAssetsRevealDepth(), *made, from, from - next));
         }
     }
-    bitassets::Register reg;
-    reg.name = asset;
     reg.nonce = reservation->nonce;
-    reg.supply = supply;
-    reg.decimals = decimals;
-    if (!request.params[3].isNull()) reg.data = bitassets::ParseData(request.params[3]);
-    if (!request.params[5].isNull() && !request.params[5].get_str().empty()) {
-        NeedLogos(*pwallet);
-        reg.logo = ParseLogo(request.params[5], /*allow_empty=*/false);
-    }
-    if (!request.params[6].isNull() && !request.params[6].get_str().empty()) {
-        NeedTickers(*pwallet);
-        reg.display_name = ParseDisplayName(request.params[6], /*allow_empty=*/false);
-    }
-    if (request.params[4].isNull() || request.params[4].get_bool()) {
-        // Published, it would read as another asset's number where names are shown with theirs.
-        if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, std::string{NAME_MIMICS_NUMBER} + " (register it unpublished: public false)");
-        reg.text = name;
-    }
-    std::vector<Out> outs{{ChangeDestination(*pwallet), UnitToken(Token::Kind::CONTROL, asset)}};
-    if (supply > 0) outs.push_back({ChangeDestination(*pwallet), AssetToken(asset, supply)});
+    std::vector<Out> outs;
+    for (const bitassets::OutToken& token : bitassets::RegisterOutputs(reg)) outs.push_back({ChangeDestination(*pwallet), token});
     const CTransactionRef tx{Send(*pwallet, reg, outs, {reservation->outpoint})};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
@@ -2318,40 +2263,14 @@ void NeedLaunchParams(CWallet& wallet)
 }
 
 /** A curve's fee in percent (0.3 to 5), in millionths. */
-uint32_t LaunchFeeArg(const UniValue& value)
-{
-    const double fee{value.isNum() ? value.get_real() : std::stod(value.get_str())};
-    const long long ppm{std::llround(fee * 10000)};
-    if (!(fee > 0) || ppm < bitassets::MIN_LAUNCH_FEE || ppm > bitassets::MAX_LAUNCH_FEE) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The curve's fee is %g to %g percent", bitassets::MIN_LAUNCH_FEE / 10000.0, bitassets::MAX_LAUNCH_FEE / 10000.0));
-    }
-    return static_cast<uint32_t>(ppm);
-}
-
+using bitassets::LaunchFeeArg;
 /** Refused unless `supply` units can be a launch's (IsLaunchSupply), saying why in whole units of `decimals`. */
-void CheckLaunchSupply(uint64_t supply, uint8_t decimals)
-{
-    if (supply % bitassets::LAUNCH_SUPPLY_MULTIPLE != 0) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A curve's supply is a multiple of %u units (%s of %u decimals)", bitassets::LAUNCH_SUPPLY_MULTIPLE,
-                                                            bitassets::FormatUnits(bitassets::LAUNCH_SUPPLY_MULTIPLE, decimals), decimals));
-    }
-    if (supply < bitassets::MIN_LAUNCH_SUPPLY || supply > bitassets::MAX_LAUNCH_SUPPLY) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("A curve's supply is %s to %s (at %u decimals)", bitassets::FormatUnits(bitassets::MIN_LAUNCH_SUPPLY, decimals),
-                                                            bitassets::FormatUnits(bitassets::MAX_LAUNCH_SUPPLY, decimals), decimals));
-    }
-}
+using bitassets::CheckLaunchSupply;
 
 /** What a first buy gets alone in its block on a new curve of `supply` units at `fee`: never signed for less than the least asked. */
 void CheckFirstBuy(uint64_t supply, uint32_t fee, uint64_t first_buy, uint64_t first_min_out, uint64_t min_buy, uint64_t max_buy, uint8_t decimals, int height)
 {
-    if (first_min_out == 0) return;
-    if (first_buy == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "first_min_out goes with a first buy");
-    const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
-    const auto quote{bitassets::curves::ClearLaunch(bitassets::curves::LaunchCurve{fee, supply / 8 * 3, max_buy, min_buy}, static_cast<uint64_t>(rules.LaunchGraduation(height)) / 2, supply / 8 * 9,
-                                                    {bitassets::dex::HopIn{true, first_buy}}, {true})};
-    if (!quote || quote->outs[0] < first_min_out) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy gets %s alone in its block, less than first_min_out", bitassets::FormatUnits(quote ? quote->outs[0] : 0, decimals)));
-    }
+    bitassets::CheckFirstBuy(Params().GetConsensus().sidechain.LaunchGraduation(height), supply, fee, first_buy, first_min_out, min_buy, max_buy, decimals);
 }
 
 /** A fee in millionths as a percent, exactly (1.15 for 11500). */
@@ -2374,37 +2293,6 @@ uint256 LaunchPoolId(const AssetId& asset, uint32_t fee)
     return bitassets::PoolIdOf(bitassets::CHN, asset, params);
 }
 } // namespace
-
-/** launchtoken's fee_split: [{"to": "creator" | "burn" | address, "bps": n}] (bitassets::CheckFeeSplit). */
-static std::vector<bitassets::FeeShare> ParseFeeSplit(const UniValue& value)
-{
-    if (!value.isArray()) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: an array of {\"to\", \"bps\"}");
-    if (value.size() == 0 || value.size() > bitassets::MAX_FEE_SHARES) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("fee_split: 1 to %u entries", bitassets::MAX_FEE_SHARES));
-    std::vector<bitassets::FeeShare> split;
-    for (const UniValue& entry : value.getValues()) {
-        if (!entry.isObject() || !entry["to"].isStr() || !entry["bps"].isNum()) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: each entry is {\"to\": \"creator\" | \"burn\" | address, \"bps\": 1 to 10000}");
-        const int64_t bps{entry["bps"].getInt<int64_t>()};
-        if (bps < 1 || bps > bitassets::FEE_SPLIT_BPS) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: a share is 1 to 10000 basis points");
-        bitassets::FeeShare share;
-        share.bps = static_cast<uint16_t>(bps);
-        const std::string& to{entry["to"].get_str()};
-        if (to == "creator") {
-            share.kind = bitassets::FeeShare::CREATOR;
-        } else if (to == "burn") {
-            share.kind = bitassets::FeeShare::BURN;
-        } else {
-            const CTxDestination dest{DecodeDestination(to)};
-            if (!IsValidDestination(dest)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "fee_split: not an address of this chain: " + to);
-            share.kind = bitassets::FeeShare::ADDRESS;
-            share.script = GetScriptForDestination(dest);
-        }
-        split.push_back(std::move(share));
-    }
-    if (!bitassets::CheckFeeSplit(split)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split: the shares sum to 10000 basis points, with the creator and the burn at most once each and up to 3 different addresses");
-    }
-    return split;
-}
 
 RPCMethod launchtoken()
 {
@@ -2464,26 +2352,11 @@ RPCMethod launchtoken()
     const std::string name{NewAssetName(*pwallet, request.params[0].get_str())};
     const AssetId asset{bitassets::HashName(name)};
     if (pwallet->chain().getBitAsset(asset)) throw JSONRPCError(RPC_INVALID_PARAMETER, "An asset of this name is registered");
-    if (bitassets::ReadsAsAnotherAsset(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The name reads as another asset (" + CURRENCY_UNIT + ", a number such as 1739-0029, or \"0x\" and a hash)");
-    if (bitassets::NameMimicsNumber(name)) throw JSONRPCError(RPC_INVALID_PARAMETER, NAME_MIMICS_NUMBER);
-    const UniValue none{UniValue::VOBJ};
-    const UniValue& options{request.params[1].isNull() ? none : request.params[1]};
-    // Its parameters: the network's unless chosen (a launch with parameters only where they apply).
-    const uint32_t network_fee{Params().GetConsensus().sidechain.launch_fee};
-    int decimals{bitassets::LAUNCH_DECIMALS};
-    if (options.exists("decimals") && !options["decimals"].isNull()) {
-        decimals = options["decimals"].getInt<int>();
-        if (decimals < 0 || decimals > bitassets::MAX_DECIMALS) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Decimals are 0 to %u", bitassets::MAX_DECIMALS));
-    }
-    uint64_t supply{bitassets::LAUNCH_SUPPLY};
-    if (options.exists("supply") && !options["supply"].isNull()) supply = bitassets::ParseUnits(options["supply"], static_cast<uint8_t>(decimals));
-    else if (decimals != bitassets::LAUNCH_DECIMALS) throw JSONRPCError(RPC_INVALID_PARAMETER, "With decimals of its own, a launch names its supply");
-    const uint32_t fee{options.exists("fee") && !options["fee"].isNull() ? LaunchFeeArg(options["fee"]) : network_fee};
-    const bool with_params{supply != bitassets::LAUNCH_SUPPLY || decimals != bitassets::LAUNCH_DECIMALS || fee != network_fee};
-    if (with_params) {
-        NeedLaunchParams(*pwallet);
-        CheckLaunchSupply(supply, static_cast<uint8_t>(decimals));
-    }
+    // Its options, as the public API's unsigned launches check them too (bitassets/launch.h).
+    bitassets::LaunchPlan plan{bitassets::ParseLaunchOptions(name, request.params[1], RulesOf(*pwallet))};
+    const uint64_t supply{plan.supply};
+    const int decimals{plan.decimals};
+    const uint32_t fee{plan.fee};
     AbandonDroppedRegistration(*pwallet, asset);
     const auto reservation{FindReservation(*pwallet, asset)};
     if (!reservation) throw JSONRPCError(RPC_INVALID_PARAMETER, "This wallet has no reservation of the ticker in a block (see reserveasset)");
@@ -2492,76 +2365,15 @@ RPCMethod launchtoken()
         const int from{RevealHeight(*pwallet, *made)};
         if (from > next) throw JSONRPCError(RPC_WALLET_ERROR, strprintf("The reservation is too recent: try again from block %d, in %d blocks", from, from - next));
     }
-    bitassets::LaunchToken launch;
-    launch.reg.name = asset;
+    bitassets::LaunchToken& launch{plan.launch};
     launch.reg.nonce = reservation->nonce;
-    launch.reg.decimals = static_cast<uint8_t>(decimals);
-    launch.reg.text = name;
-    if (with_params) {
-        launch.reg.supply = supply;
-        launch.fee = fee;
-    }
-    if (options.exists("display_name") && !options["display_name"].get_str().empty()) launch.reg.display_name = ParseDisplayName(options["display_name"], /*allow_empty=*/false);
-    if (options.exists("logo") && !options["logo"].get_str().empty()) {
-        NeedLogos(*pwallet);
-        launch.reg.logo = ParseLogo(options["logo"], /*allow_empty=*/false);
-    }
-    if (options.exists("info")) {
-        const std::string info{options["info"].get_str()};
-        if (info.size() > bitassets::MAX_INFO_SIZE) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The description is at most %u bytes", bitassets::MAX_INFO_SIZE));
-        if (!info.empty()) launch.reg.data.info = info;
-    }
-    const double allocation{options.exists("allocation") ? options["allocation"].get_real() : 0.0};
-    const uint16_t max_allocation{pwallet->chain().getBitAssetsMaxLaunchAllocation()};
-    if (!(allocation >= 0 && allocation <= max_allocation / 100.0)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The allocation is 0 to %d percent", max_allocation / 100));
-    launch.allocation = static_cast<uint16_t>(std::llround(allocation * 100));
-    // The supply and the allocation minted on top of it are within an amount (bitassets::IsLaunchAllocation).
-    if (!bitassets::IsLaunchAllocation(supply, launch.allocation)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The supply with its allocation is more than an asset can have: a smaller supply or allocation");
     launch.creator = GetScriptForDestination(NewDestination(*pwallet, "launch creator"));
-    const auto coin{[&](const char* key) { return options.exists(key) ? bitassets::ParseUnits(options[key], bitassets::CHN_DECIMALS, /*allow_zero=*/true) : uint64_t{0}; }};
-    launch.min_buy = coin("min_buy");
-    launch.max_buy = coin("max_buy");
-    if (launch.max_buy != 0 && launch.max_buy < launch.min_buy) throw JSONRPCError(RPC_INVALID_PARAMETER, "max_buy is less than min_buy");
-    launch.first_buy = coin("first_buy");
-    if (options.exists("first_min_out")) launch.first_min_out = bitassets::ParseUnits(options["first_min_out"], static_cast<uint8_t>(decimals), /*allow_zero=*/true);
-    CheckFirstBuy(supply, fee, launch.first_buy, launch.first_min_out, launch.min_buy, launch.max_buy, static_cast<uint8_t>(decimals), pwallet->chain().getBitAssetsHeight());
-    // The fee-flow release's options (the node refuses them before its height: bad-ba-marker).
-    if (options.exists("fee_destination")) {
-        const std::string destination{options["fee_destination"].get_str()};
-        if (destination == "creator") {
-            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::CREATOR);
-        } else if (destination == "burn") {
-            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::BURN);
-        } else if (destination == "split") {
-            launch.destination = static_cast<uint8_t>(bitassets::FeeDestination::SPLIT);
-        } else {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_destination: creator, burn or split");
-        }
-    }
-    if (launch.destination == static_cast<uint8_t>(bitassets::FeeDestination::SPLIT)) {
-        const double percent{options.exists("burn_percent") ? options["burn_percent"].get_real() : 0.0};
-        const long bps{std::lround(percent * 100)};
-        if (bps <= 0 || bps >= 10000) throw JSONRPCError(RPC_INVALID_PARAMETER, "burn_percent: above 0 and below 100 with a split");
-        launch.burn_bps = static_cast<uint16_t>(bps);
-    } else if (options.exists("burn_percent") && options["burn_percent"].get_real() != 0) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "burn_percent goes with fee_destination \"split\"");
-    }
-    // Upgrade v7's split (the node refuses it before its height: bad-ba-marker).
-    if (options.exists("fee_split") && !options["fee_split"].isNull()) {
-        if (options.exists("fee_destination") || options.exists("burn_percent")) throw JSONRPCError(RPC_INVALID_PARAMETER, "fee_split replaces fee_destination and burn_percent: give one or the other");
-        launch.split = ParseFeeSplit(options["fee_split"]);
-        // All to the creator is the default: no split in the marker.
-        if (launch.split.size() == 1 && launch.split[0].kind == bitassets::FeeShare::CREATOR) launch.split.clear();
-    }
-    launch.keep_control = options.exists("keep_control") && options["keep_control"].get_bool();
+    if (launch.first_buy > 0) launch.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
+    // The first buy's result output to an address of this wallet, then the control coin kept.
     std::vector<Out> outs;
-    if (launch.first_buy > 0) {
-        if (launch.first_buy < MinChn(*pwallet)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The first buy pays %s %s at least", FormatMoney(MinChn(*pwallet)), CURRENCY_UNIT));
-        launch.chn_to = GetScriptForDestination(NewDestination(*pwallet, "bitassets payout"));
-        outs.push_back({ChangeDestination(*pwallet), std::nullopt});
+    for (const bitassets::OutToken& token : bitassets::LaunchOutputs(launch)) {
+        outs.push_back({token ? NewDestination(*pwallet, "asset control") : ChangeDestination(*pwallet), token});
     }
-    // The control coin kept: to an address of this wallet, after the first buy's output.
-    if (launch.keep_control) outs.push_back({NewDestination(*pwallet, "asset control"), Token{Token::Kind::CONTROL, asset, 1}});
     const CTransactionRef tx{Send(*pwallet, launch, outs, {reservation->outpoint}, static_cast<CAmount>(launch.first_buy))};
     UniValue result(UniValue::VOBJ);
     result.pushKV("txid", tx->GetHash().GetHex());
