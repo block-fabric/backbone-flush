@@ -5,9 +5,9 @@
 // file dropped on the window. Each one's question in the host's dialog window, in the Launchpad look, read there (where
 // it comes from, what it asks, the quote, the floor, the command, the assets resolved), pictured and accepted there; then
 // what it did on the chain: a buy, a sale, a swap in the graduated pool, a launch from a launch file (both steps, its logo,
-// its first buy), a launch from a link, a connect (the callback produced; a test run opens no browser). Then the refusals:
-// another network, expired, used twice, a ticker that is not the token's, a floor the curve cannot meet, an unknown
-// parameter, a callback elsewhere, a launch file with another logo.
+// its first buy), a launch from a link. Then the refusals: another network, expired, used twice, connect (no action of
+// the app), a ticker that is not the token's, a floor the curve cannot meet, an unknown parameter, a launch file with
+// another logo.
 (async () => {
   const { host, rpc, sleep, T, waitFor, check, snapshot, finish } = E2E;
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -270,36 +270,15 @@
     await waitFor('the order in its book', async () => (await rpc('listorders', [], W)).length > 0 || null, 300000);
     await refused('curve of an asset on a curve', fromBrowser(link('curve', [['asset', reg.asset], ['ticker', 'REGONE'], ['amount', '8'], ['fee_bps', '100']])), 'was launched or put on a curve already');
 
-    // --- connect, from the browser: the callback with the address, the nonce and the network ---
-    const nonce = 'e2e0123456789abcdef01234';
-    const connect = link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://flush.markets/connect'], ['nonce', nonce]]);
-    let shared = '';
-    await confirmLink('connect', fromBrowser(connect), (s, rows) => {
-      const row = s.rows.find((r) => r.startsWith('Address shared'));
-      shared = row ? row.replace('Address shared', '').trim() : '';
-      return [
-        ['the site and where the answer goes', rows.includes('Site https://flush.markets') && rows.includes('The answer goes to https://flush.markets/connect')],
-        ['the address shared, whole', /^rflx1[a-z0-9]{20,}$|^[a-z]+1[a-z0-9]{20,}$/.test(shared)],
-        ['the title and the button', s.title === 'Share an address with flush.markets' && s.accept === 'Share'],
-      ];
-    });
-    const opened = await waitFor('the callback opened', async () => {
-      const list = await host('test.linksOpened');
-      return list.length ? list : null;
-    }, 30000);
-    await check('connect: the browser opens exactly the callback with the address, the nonce and the network', opened[0] === `https://flush.markets/connect#address=${shared}&nonce=${nonce}&network=${NET}`, JSON.stringify(opened));
-    await check('connect: the address is the wallet\'s', (await rpc('getaddressinfo', [shared], W)).ismine === true);
-
     // --- The refusals: nothing asked, the app says why ---
     await refused('network', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1']], { network: 'ecashbeta' })), 'This link is for the network ecashbeta, and this app runs regtest', true);
     await refused('expired', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1']], { exp: now() - 3600 })), 'This link has expired');
     await refused('used twice', fromBrowser(buy), 'This link was used already');
-    // The same connect, as another link (a later expiry): its nonce was answered.
-    await refused('connect answered', fromBrowser(link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://flush.markets/connect'], ['nonce', nonce]], { exp: now() + 900 })), 'This connect was answered already');
+    // connect is no action of the app (removed after 8.3.0): refused as any unknown verb, nothing shared or opened.
+    await refused('connect', fromBrowser(link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://flush.markets/connect'], ['nonce', 'e2e0123456789abcdef01234']])), '"connect" is not an action this app knows');
     await refused('ticker of another token', fromBrowser(link('buy', [['launch', 'GRAD'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1']])), 'the ticker and the id must be of one asset', true);
     await refused('floor the curve cannot meet', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '999999999']])), 'The curve moved', true);
     await refused('unknown parameter', fromBrowser(link('buy', [['launch', 'TIDE'], ['asset', tide], ['ecx', '1'], ['min_tokens', '1'], ['referrer', 'x']])), 'referrer is not a parameter of buy');
-    await refused('callback elsewhere', fromBrowser(link('connect', [['origin', 'https://flush.markets'], ['callback', 'https://evil.example/connect'], ['nonce', 'e2e0123456789abcdef09999']])), 'the app sends it to https://flush.markets/connect only', true);
     await refused('another logo', async () => drop('BAD.flushlaunch.json', JSON.stringify({ ...file, ticker: 'BADLOGO', logo: { ...file.logo, sha256: '0'.repeat(64) } })), 'do not have the SHA-256 the file says');
     await refused('pasted, wrong network', async () => {
       T().go('send', 'uri');
@@ -309,7 +288,6 @@
       await sleep(200);
       document.getElementById('uri-form').requestSubmit();
     }, 'This link is for the network ecash');
-    await check('nothing was opened but the one callback', (await host('test.linksOpened')).length === 1);
     await finish();
   } catch (e) {
     await finish(e);

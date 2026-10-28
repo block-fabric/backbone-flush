@@ -20,9 +20,9 @@
  * `flush:` URI or a launch file, which the app reads here, in the host, never in a page.
  *
  *   flush:<address>?amount=...                 a payment (BIP 21): the page's, as before (lib/uri.ts)
- *   flush:<verb>?v=1&network=<net>&exp=<t>&... an action: connect, launch, buy, sell, swap, register, curve, pool,
- *                                              auction, order, route, deposit, withdraw, position, reposition,
- *                                              settle, bid, collect, claim, pegin, pegout
+ *   flush:<verb>?v=1&network=<net>&exp=<t>&... an action: launch, buy, sell, swap, register, curve, pool, auction,
+ *                                              order, route, deposit, withdraw, position, reposition, settle, bid,
+ *                                              collect, claim, pegin, pegout
  *
  * The parser is strict: one version, the network of the app only, an expiry within a day, each parameter of the verb
  * once (a link of a launch up to MAX_LINKS times), no other parameter, values percent-encoded from a small alphabet,
@@ -37,7 +37,7 @@ struct LinkError : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-enum class Verb { CONNECT, LAUNCH, BUY, SELL, SWAP, REGISTER, CURVE, POOL, AUCTION, ORDER,
+enum class Verb { LAUNCH, BUY, SELL, SWAP, REGISTER, CURVE, POOL, AUCTION, ORDER,
                   // The DEX from the site (doc/flush-links.md): a swap through several pools, liquidity in and out of a pool, a
                   // position of concentrated liquidity opened and changed, an order settled or cancelled, a bid on an auction
                   // and its collection, a launch's creator paid, and the peg: a deposit from eCash, a withdrawal to it.
@@ -57,9 +57,6 @@ inline constexpr size_t MAX_LINK{512};
 inline constexpr size_t MAX_DESCRIPTION{512};
 //! A display name, in bytes (the chain's rules: bitassets::WhyNotDisplayName).
 inline constexpr size_t MAX_NAME{64};
-//! A nonce of connect: 16 to 64 characters of [A-Za-z0-9_-].
-inline constexpr size_t MIN_NONCE{16};
-inline constexpr size_t MAX_NONCE{64};
 //! The slippage a link may show, in basis points (display only: the floor binds).
 inline constexpr int MAX_SLIPPAGE_BPS{5000};
 //! The most slippage a link may give a call where it binds (position, reposition: no floor of the link's own), basis points.
@@ -68,23 +65,15 @@ inline constexpr int MAX_BINDING_SLIPPAGE_BPS{1000};
 inline constexpr int64_t MAX_LIFETIME{24 * 60 * 60};
 inline constexpr int64_t CLOCK_SKEW{120};
 
-//! The only site whose connect is answered, and the only callback: a constant list, never what a link says.
-inline constexpr std::string_view CONNECT_ORIGIN{"https://flush.markets"};
-inline constexpr std::string_view CONNECT_CALLBACK{"https://flush.markets/connect"};
-
 //! The ticker of the chain's coin in a swap (from, to): the chain's own (chain.json).
 inline constexpr std::string_view COIN_TICKER{chain::TICKER};
 
 /** A request read from a link or a launch file. Amounts are kept as their exact decimal text (Units converts them). */
 struct Request {
-    Verb verb{Verb::CONNECT};
+    Verb verb{Verb::LAUNCH};
     std::string network;
     //! Unix time after which the link is refused (0: none, a launch file).
     int64_t expires{0};
-    //! connect
-    std::string origin;
-    std::string callback;
-    std::string nonce;
     //! launch: the ticker; buy, sell: the ticker of the launch (`launch=`)
     std::string ticker;
     //! launch
@@ -216,23 +205,6 @@ enum class Rounding { EXACT, UP };
 std::optional<uint64_t> Units(const std::string& decimal, int decimals, Rounding rounding, uint64_t max = UINT64_MAX);
 /** Units as a decimal: 1.5 for 150 units of 2 places, without trailing zeros. */
 std::string Decimal(uint64_t units, int decimals);
-
-/** The most addresses a connect shares (7.0.1: a wallet's that hold something); more are left out, and the answer says so. */
-inline constexpr size_t MAX_CONNECT_ADDRESSES{200};
-
-/**
- * The answer of a connect: the callback, its fragment with the address, the nonce and the network (all checked text).
- * With `addresses` (7.0.1: the wallet's that hold something, the primary first; at most MAX_CONNECT_ADDRESSES), also
- * `addresses=a1,a2,...` and, if some were left out, `truncated=1`:
- *   <callback>#address=<primary>&addresses=<primary>,<a2>,...[&truncated=1]&nonce=<nonce>&network=<network>
- */
-std::string ConnectAnswer(const Request& request, const std::string& address, const std::vector<std::string>& addresses = {}, bool truncated = false);
-
-/**
- * The addresses a connect shares: `primary` first, then those of `holding` (the wallet's that hold something), each
- * once, in order, MAX_CONNECT_ADDRESSES at most; `truncated` whether some were left out.
- */
-std::vector<std::string> ConnectAddresses(const std::string& primary, const std::vector<std::string>& holding, bool& truncated);
 
 } // namespace webui::links
 

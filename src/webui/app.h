@@ -178,8 +178,6 @@ private:
     std::unique_ptr<confirm::ConfirmedRpc> m_confirmed_rpc;
     //! The action links of flush.markets (linkhost.h): read, resolved and confirmed by the host.
     std::unique_ptr<links::LinkHost> m_links;
-    //! The web addresses the links opened in a test run, in place of the browser (-webuitestscript).
-    std::vector<std::string> m_test_opened GUARDED_BY(m_mutex);
     //! The nodes of sidechains run from here.
     std::unique_ptr<SidechainNodes> m_sidechain_nodes;
     std::unique_ptr<SidechainApi> m_sidechain_api;

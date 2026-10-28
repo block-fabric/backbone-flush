@@ -1699,24 +1699,9 @@ void App::RegisterHostMethods()
         deps.node = need_node;
         deps.confirmed = [this](const UniValue& call) { return m_confirmed_rpc->Call(call); };
         deps.ask = [this](const Window::ConfirmDialog& dialog) { return AskHost(dialog); };
-        deps.open = [this](const std::string& url) {
-#ifdef WEBUI_TEST_HOOKS
-            if (!m_test_script.empty()) {
-                // A test run opens no browser: the address is kept for the test (test.linksOpened).
-                LOCK(m_mutex);
-                m_test_opened.push_back(url);
-                return true;
-            }
-#endif
-            auto done{std::make_shared<std::promise<bool>>()};
-            m_window->Post([this, url, done] { done->set_value(m_window->OpenExternal(url)); });
-            auto future{done->get_future()};
-            return future.wait_for(10s) == std::future_status::ready && future.get();
-        };
         deps.choose = [this](const Window::FileDialog& dialog) { return Choose(dialog); };
         // A link's logo where the link says the site hosts it (8.1.0, logo_url): on the thread of the link, never the UI's.
         deps.fetch = [](const std::string& url, size_t max_bytes, std::string& error) { return FetchUrl(url, max_bytes, error); };
-        deps.copy = [this](const std::string& text) { m_window->Post([this, text] { m_window->SetClipboard(text); }); };
         deps.inform = [this](const std::string& title, const std::string& message, bool error) {
             UniValue dialog{UniValue::VOBJ};
             dialog.pushKV("kind", "message");
@@ -1892,13 +1877,6 @@ void App::RegisterHostMethods()
             // A link as a second start of the app hands it over (SingleInstance: "uri <link>"), from the browser.
             OnInstanceMessage("uri " + ParamStr(params, "uri"));
             return UniValue{true};
-        });
-        b.RegisterHost("test.linksOpened", [this](const UniValue&) {
-            // The web addresses the links opened (the browser is not opened in a test run).
-            LOCK(m_mutex);
-            UniValue out{UniValue::VARR};
-            for (const std::string& url : m_test_opened) out.push_back(url);
-            return out;
         });
         b.RegisterHost("test.notifications", [this](const UniValue&) {
             LOCK(m_mutex);

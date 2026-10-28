@@ -3,10 +3,10 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 // The action links of flush.markets (webui/links.h, webui/linkhost.h): the strict parser (versions, networks, expiry,
-// unknown and repeated parameters, ids, amounts, sizes, characters), the launch files, the amounts in units, the answer of
-// a connect; then the host: each verb resolved by id against a chain (a pretend one), the floor checked against a fresh
-// quote, the question that says where the link comes from (confirm::Preface, through the confirmed RPC methods), a link
-// used once, a connect answered once and only to the one callback; and the handler of the links on a Linux desktop.
+// unknown and repeated parameters, ids, amounts, sizes, characters; connect, removed, refused as an unknown verb), the
+// launch files, the amounts in units; then the host: each verb resolved by id against a chain (a pretend one), the floor
+// checked against a fresh quote, the question that says where the link comes from (confirm::Preface, through the
+// confirmed RPC methods), a link used once; and the handler of the links on a Linux desktop.
 
 #include <bitassets/logo.h>
 #include <crypto/sha256.h>
@@ -94,10 +94,6 @@ BOOST_AUTO_TEST_CASE(each_verb_reads_exactly_its_parameters)
     BOOST_CHECK_EQUAL(launch.description, "Light for\nnight markets.");
     BOOST_CHECK_EQUAL(launch.links.size(), 2U);
     BOOST_CHECK_EQUAL(launch.links[0], "https://lumen.example/a");
-
-    const Request connect{Parse("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=9f2c0a1b2c3d4e5f60718293", NET, NOW)};
-    BOOST_CHECK(connect.verb == Verb::CONNECT);
-    BOOST_CHECK_EQUAL(ConnectAnswer(connect, "rflx1qexampleaddress0"), "https://flush.markets/connect#address=rflx1qexampleaddress0&nonce=9f2c0a1b2c3d4e5f60718293&network=regtest");
 
     // The scheme is not case-sensitive; a payment (an address has a "1") is not an action.
     BOOST_CHECK(IsAction("FLUSH:buy?v=1"));
@@ -219,25 +215,13 @@ BOOST_AUTO_TEST_CASE(ids_amounts_and_texts_are_exact)
     BOOST_CHECK_NE(launch("&desc=" + std::string(500, 'a') + "&link=https%3A%2F%2Fa.example"), "");
 }
 
-BOOST_AUTO_TEST_CASE(connect_answers_flush_markets_only)
+BOOST_AUTO_TEST_CASE(connect_is_not_an_action)
 {
-    const auto connect{[](const std::string& origin, const std::string& callback, const std::string& nonce) {
-        return Refused("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=" + origin + "&callback=" + callback + "&nonce=" + nonce);
-    }};
-    const std::string origin{"https%3A%2F%2Fflush.markets"}, callback{"https%3A%2F%2Fflush.markets%2Fconnect"}, nonce{"0123456789abcdef01234567"};
-    BOOST_CHECK_EQUAL(connect(origin, callback, nonce), "");
-    BOOST_CHECK_NE(connect("https%3A%2F%2Fflush.market", callback, nonce), "");
-    BOOST_CHECK_NE(connect(origin, "https%3A%2F%2Fevil.example%2Fconnect", nonce), "");
-    BOOST_CHECK_NE(connect(origin, "https%3A%2F%2Fflush.markets%2Fconnect%2F..%2Fx", nonce), "");
-    BOOST_CHECK_NE(connect(origin, "https%3A%2F%2Fflush.markets.evil.example%2Fconnect", nonce), "");
-    BOOST_CHECK_NE(connect(origin, "http%3A%2F%2F127.0.0.1%2Fconnect", nonce), "");
-    BOOST_CHECK_NE(connect(origin, callback, "short"), "");
-    BOOST_CHECK_NE(connect(origin, callback, "0123456789abcdef%26address%3Devil"), "");
-    BOOST_CHECK_NE(connect(origin, callback, std::string(MAX_NONCE + 1, 'a')), "");
-    // The answer: nothing but checked text in it.
-    Request r{Parse("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=" + origin + "&callback=" + callback + "&nonce=" + nonce, NET, NOW)};
-    BOOST_CHECK_THROW(ConnectAnswer(r, "rflx1q&x=evil"), LinkError);
-    BOOST_CHECK_THROW(ConnectAnswer(r, "RFLX1QABCDEFGH"), LinkError);
+    // connect (sharing the wallet's address with flush.markets) was removed after 8.3.0: refused as any unknown verb.
+    const std::string why{Refused("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=0123456789abcdef01234567")};
+    BOOST_CHECK_EQUAL(why.substr(0, why.find(" (")), "\"connect\" is not an action this app knows");
+    BOOST_CHECK_EQUAL(why.find("connect,"), std::string::npos);
+    BOOST_CHECK_EQUAL(Refused("flush:connect?v=1&network=regtest&exp=" + Exp()), why);
 }
 
 BOOST_AUTO_TEST_CASE(units_of_amounts)
@@ -628,12 +612,8 @@ struct LinkHostSetup : TestChain100Setup {
     std::unique_ptr<interfaces::Node> node;
     std::vector<webui::Window::ConfirmDialog> asked;
     std::vector<std::string> ran;
-    std::vector<std::string> opened;
     std::vector<std::string> informed;
-    std::vector<std::string> copied;
     bool accept{true};
-    //! Whether the browser opens (none under WSL without a handler, 7.0.1).
-    bool open_ok{true};
     //! While set, the host waits for the node (a link being handled for a long time).
     std::atomic<bool> hold{false};
     std::unique_ptr<webui::confirm::ConfirmedRpc> confirmed;
@@ -679,11 +659,6 @@ struct LinkHostSetup : TestChain100Setup {
             asked.push_back(d);
             return webui::dialog::Answer{accept, {}};
         };
-        deps.open = [this](const std::string& url) {
-            opened.push_back(url);
-            return open_ok;
-        };
-        deps.copy = [this](const std::string& text) { copied.push_back(text); };
         deps.choose = [this](const webui::Window::FileDialog& d) {
             choosers.push_back(d.title);
             return chosen;
@@ -845,83 +820,14 @@ BOOST_FIXTURE_TEST_CASE(a_logo_is_downloaded_from_the_links_logo_url, LinkHostSe
     BOOST_CHECK(ran.empty());
 }
 
-BOOST_FIXTURE_TEST_CASE(connect_shares_one_address_with_the_one_callback_once, LinkHostSetup)
+BOOST_FIXTURE_TEST_CASE(a_connect_link_is_refused_and_shares_nothing, LinkHostSetup)
 {
+    // No connect (removed after 8.3.0): refused before anything is asked, no address made or shared.
     CreateWallet();
     const std::string uri{"flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=0123456789abcdef01234567"};
-    // Declined: nothing opened.
-    accept = false;
-    BOOST_CHECK_THROW(host->Handle(uri, Source::BROWSER), webui::HostError);
-    BOOST_CHECK(opened.empty());
-    BOOST_REQUIRE_EQUAL(asked.size(), 1U);
-    const auto& q{asked.front()};
-    BOOST_CHECK_EQUAL(q.title, "Share an address with flush.markets");
-    BOOST_CHECK(HasRow(q.rows, "Site", "https://flush.markets"));
-    BOOST_CHECK(HasRow(q.rows, "The answer goes to", "https://flush.markets/connect"));
-    const auto address{std::find_if(q.rows.begin(), q.rows.end(), [](const auto& r) { return r.label == "Address shared"; })};
-    BOOST_REQUIRE(address != q.rows.end());
-    BOOST_CHECK(address->kind == webui::dialog::Row::Kind::ADDRESS);
-    // Accepted: the browser opens the callback with that address, the nonce and the network.
-    accept = true;
-    const UniValue result{host->Handle(uri, Source::BROWSER)};
-    BOOST_REQUIRE_EQUAL(opened.size(), 1U);
-    BOOST_CHECK_EQUAL(opened[0], "https://flush.markets/connect#address=" + address->value + "&nonce=0123456789abcdef01234567&network=regtest");
-    // The same address the next time (its label), and the nonce once.
-    BOOST_CHECK_THROW(host->Handle(uri, Source::BROWSER), LinkError);
-    host->Handle("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=1123456789abcdef01234567", Source::BROWSER);
-    BOOST_REQUIRE_EQUAL(opened.size(), 2U);
-    BOOST_CHECK_NE(opened[1].find("address=" + address->value + "&"), std::string::npos);
-}
-
-BOOST_AUTO_TEST_CASE(connect_shares_the_wallets_addresses)
-{
-    // 7.0.1: the primary first, then the wallet's addresses that hold something, each once, at most MAX_CONNECT_ADDRESSES.
-    bool truncated{true};
-    const auto list{ConnectAddresses("rflx1qprimary0", {"rflx1qbbbbbbbb", "rflx1qprimary0", "rflx1qaaaaaaaa", "rflx1qbbbbbbbb"}, truncated)};
-    BOOST_CHECK(list == (std::vector<std::string>{"rflx1qprimary0", "rflx1qbbbbbbbb", "rflx1qaaaaaaaa"}));
-    BOOST_CHECK(!truncated);
-    std::vector<std::string> many;
-    for (int i{0}; i < 250; ++i) many.push_back(strprintf("rflx1q%08d", i));
-    const auto capped{ConnectAddresses("rflx1qprimary0", many, truncated)};
-    BOOST_CHECK_EQUAL(capped.size(), MAX_CONNECT_ADDRESSES);
-    BOOST_CHECK(truncated);
-    // The fragment: address, the list, truncated, then the nonce and the network.
-    const std::string nonce{"0123456789abcdef01234567"};
-    const Request r{Parse("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=" + nonce, NET, NOW)};
-    BOOST_CHECK_EQUAL(ConnectAnswer(r, "rflx1qprimary0", list), "https://flush.markets/connect#address=rflx1qprimary0&addresses=rflx1qprimary0,rflx1qbbbbbbbb,rflx1qaaaaaaaa&nonce=" + nonce + "&network=regtest");
-    BOOST_CHECK_NE(ConnectAnswer(r, "rflx1qprimary0", capped, true).find("&truncated=1&nonce="), std::string::npos);
-    BOOST_CHECK_EQUAL(ConnectAnswer(r, "rflx1qprimary0"), "https://flush.markets/connect#address=rflx1qprimary0&nonce=" + nonce + "&network=regtest");
-    BOOST_CHECK_THROW(ConnectAnswer(r, "rflx1qprimary0", {"rflx1qprimary0", "rflx1q&x=evil"}), LinkError);
-    many.push_back("rflx1qprimary0");
-    BOOST_CHECK_THROW(ConnectAnswer(r, "rflx1qprimary0", many), LinkError);
-    // The question: the wallet named in the title and first, every address listed, the note that the site links them.
-    const auto q{webui::links::ConnectAllQuestion(r, Source::BROWSER, "validator", list, false, NOW)};
-    BOOST_CHECK_EQUAL(q.title, "Share 3 addresses of wallet validator");
-    BOOST_CHECK_EQUAL(q.accept, "Share all 3");
-    BOOST_CHECK(HasRow(q.rows, "Wallet", "validator"));
-    size_t shown{0};
-    for (const auto& row : q.rows) shown += row.kind == webui::dialog::Row::Kind::ADDRESS;
-    BOOST_CHECK_EQUAL(shown, 3U);
-    BOOST_CHECK_NE(q.message.find("validator"), std::string::npos);
-}
-
-BOOST_FIXTURE_TEST_CASE(connect_without_a_browser_shows_what_to_copy, LinkHostSetup)
-{
-    // No browser could be opened (7.0.1, WSL): the user is shown the address to paste on the site and the link, and
-    // copies the address; not a bare failure.
-    CreateWallet();
-    open_ok = false;
-    const UniValue result{host->Handle("flush:connect?v=1&network=regtest&exp=" + Exp() + "&origin=https%3A%2F%2Fflush.markets&callback=https%3A%2F%2Fflush.markets%2Fconnect&nonce=2123456789abcdef01234567", Source::BROWSER)};
-    BOOST_REQUIRE_EQUAL(opened.size(), 1U);
-    BOOST_REQUIRE_EQUAL(asked.size(), 2U);
-    const auto& copy{asked.back()};
-    BOOST_CHECK_EQUAL(copy.title, "Paste it on the site");
-    BOOST_CHECK_EQUAL(copy.details, opened[0]);
-    BOOST_REQUIRE_EQUAL(copy.rows.size(), 1U);
-    BOOST_CHECK(copy.rows[0].kind == webui::dialog::Row::Kind::ADDRESS);
-    BOOST_REQUIRE_EQUAL(copied.size(), 1U);
-    BOOST_CHECK_EQUAL(copied[0], copy.rows[0].value);
-    BOOST_CHECK_NE(opened[0].find("address=" + copied[0] + "&"), std::string::npos);
+    BOOST_CHECK_EXCEPTION(host->Handle(uri, Source::BROWSER), LinkError, [](const LinkError& e) { return std::string{e.what()}.starts_with("\"connect\" is not an action this app knows"); });
+    BOOST_CHECK(asked.empty());
+    BOOST_CHECK(ran.empty());
 }
 
 BOOST_FIXTURE_TEST_CASE(a_flood_of_links_is_bounded, LinkHostSetup)

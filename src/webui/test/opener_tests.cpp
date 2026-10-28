@@ -17,8 +17,8 @@ using webui::OpenSteps;
 using webui::OpenWithFallbacks;
 
 namespace {
-//! A connect callback: & and # that no shell may read.
-const std::string URI{"https://flush.markets/connect#address=bflx1qexample&nonce=abc-123_x"};
+//! An address with & and # that no shell may read.
+const std::string URI{"https://flush.markets/portfolio#address=bflx1qexample&nonce=abc-123_x"};
 
 /** The ways tried, in order; `works` the programs that start (and "gio" if GIO opens it). */
 struct Recorder {
@@ -108,12 +108,12 @@ BOOST_AUTO_TEST_CASE(logs_the_origin_only)
         {URI, "https://flush.markets"},
         {"https://flush.markets?nonce=n1&address=bflx1qsecret", "https://flush.markets"},
         {"https://flush.markets#address=bflx1qsecret&nonce=n1", "https://flush.markets"},
-        {"https://flush.markets\\connect#address=bflx1qsecret", "https://flush.markets"},
+        {"https://flush.markets\\portfolio#address=bflx1qsecret", "https://flush.markets"},
         {"https://flush.markets;address=bflx1qsecret", "https://flush.markets"},
-        {"https://user:pw@flush.markets:8443/connect?nonce=n1", "https://flush.markets"},
+        {"https://user:pw@flush.markets:8443/portfolio?nonce=n1", "https://flush.markets"},
         {"https://[::1]:8443/x#address=bflx1qsecret", "https://[::1]"},
-        {"flush:connect?address=bflx1qsecret&nonce=n1", "flush:connect"},
-        {"flush:connect#address=bflx1qsecret", "flush:connect"},
+        {"flush:buy?address=bflx1qsecret&nonce=n1", "flush:buy"},
+        {"flush:buy#address=bflx1qsecret", "flush:buy"},
         {"flush:launch;nonce=n1", "flush:launch"},
         {"file:///home/me/.flush/debug.log", "file://"},
         {"nothing", "(an address)"},

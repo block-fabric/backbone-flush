@@ -843,7 +843,7 @@ message Holdings {
 // What an address holds and made (GET addresses/{address}/portfolio): the site's portfolio after Connect.
 message GetPortfolioRequest {
   string address = 1;
-  // Several addresses at once (7.0.1: a wallet's, as flush:connect shares them), 1 to 200, with or without `address`:
+  // Several addresses at once (7.0.1: a wallet's), 1 to 200, with or without `address`:
   // the assets summed over them, the rest of each listed with its owner. REST: GET addresses/portfolio?addresses=a,b
   // (64 at most), or POST addresses/portfolio with {"addresses": [...]}.
   repeated string addresses = 2;
