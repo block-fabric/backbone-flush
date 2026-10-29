@@ -211,6 +211,7 @@ BASE_SCRIPTS = [
     'feature_bitassets_search.py',
     'feature_fastblocks_txindex.py',
     'feature_sidechain_ecash.py',
+    'feature_sidechain_ecash.py --mainchaingrpc',
     'feature_layers_ecash.py',
     'feature_layers_ecash_gap.py',
     'feature_layers_long_gap.py',
