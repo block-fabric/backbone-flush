@@ -32,6 +32,35 @@ std::vector<ChainAnchor> RecentAnchors(const FastBlocksHooks& hooks, const CBloc
     return anchors;
 }
 
+std::optional<int> FastBlocksHooks::FixedFrom(const CBlockIndex& block, const CChain& chain, const sidechain::Mainchain& record) const
+{
+    AssertLockHeld(::cs_main);
+    // A BMM block: the mainchain committed to it, to its hash alone; only a reorg of the mainchain drops it.
+    if (!block.m_ext) {
+        const auto committed{record.CommittedHeight(block.GetBlockHash())};
+        return committed && *committed > 0 ? committed : std::nullopt;
+    }
+    // A block of stake. Up from the block: the anchors are in the order of their commitments, so the first one found that covers
+    // it has the earliest. (Short: an anchor comes at least every max_unanchored_slots blocks of stake.)
+    for (int height{block.nHeight + 1}; height <= chain.Height(); ++height) {
+        const CBlockIndex* index{chain[height]};
+        const CBlockIndex* anchored{AnchoredBy(*index)};
+        if (!anchored || anchored->nHeight < block.nHeight) continue;
+        // The height of its commitment as the record has it now, never as the block index noted it: a BMM
+        // block's commitment to itself; an acknowledgement's to its ticket, at the height it names (nNonce).
+        // A commitment not on record (any more), or elsewhere: nothing fixes the block yet.
+        if (!index->m_ext) {
+            const auto committed{record.CommittedHeight(index->GetBlockHash())};
+            return committed && *committed > 0 ? committed : std::nullopt;
+        }
+        const auto commitment{CommitmentOf(*index)};
+        const auto committed{commitment ? record.CommittedHeight(*commitment) : std::nullopt};
+        if (!committed || *committed <= 0 || static_cast<int64_t>(index->nNonce) != *committed) return std::nullopt;
+        return committed;
+    }
+    return std::nullopt;
+}
+
 std::vector<int> NetAnchoredHeights(const std::vector<ChainAnchor>& anchors, const std::vector<SkippedCommitment>& skipped, int count, const std::optional<DeepForks>& deep)
 {
     std::vector<int> heights;

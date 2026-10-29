@@ -21,6 +21,7 @@
 
 class BlockValidationState;
 class CBlockIndex;
+class CChain;
 class ChainstateManager;
 class DataStream;
 namespace Consensus {
@@ -262,6 +263,13 @@ public:
      * out must not keep a block on a commitment the mainchain dropped while other nodes take it back.
      */
     virtual std::vector<uint256> BlocksCommittedBy(const uint256& commitment, std::optional<int> main_height) const;
+    /**
+     * The height of the mainchain block from which `block`, on the active chain `chain`, can be taken back only
+     * by a reorg of the mainchain; nullopt while nothing on record fixes it. By default that of its own
+     * commitment. A withdrawal bundle is handed to an enforcer once this is bundle_handoff_depth blocks deep
+     * (Follower::SendBundle). Called with cs_main held.
+     */
+    virtual std::optional<int> FixedFrom(const CBlockIndex& block, const CChain& chain, const Mainchain& record) const;
 
     //
     // Peg actions (sidechain/state.cpp)

@@ -26,6 +26,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <fstream>
+#include <limits>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -431,6 +432,21 @@ BOOST_AUTO_TEST_CASE(deposit_destination_any_bytes)
             BOOST_CHECK(script == CScript() << OP_RETURN);
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(bundle_handoff_depth)
+{
+    // Deep enough from a height known and on record; nothing else is.
+    BOOST_CHECK(Follower::HandOffDeep(100, 101, 2));
+    BOOST_CHECK(Follower::HandOffDeep(100, 243, 144));
+    BOOST_CHECK(!Follower::HandOffDeep(100, 242, 144));
+    BOOST_CHECK(!Follower::HandOffDeep(100, 100, 2));
+    BOOST_CHECK(!Follower::HandOffDeep(std::nullopt, 1000, 2));
+    BOOST_CHECK(!Follower::HandOffDeep(0, 1000, 2));
+    BOOST_CHECK(!Follower::HandOffDeep(-1, 1000, 2));
+    BOOST_CHECK(!Follower::HandOffDeep(std::numeric_limits<int>::min(), 1000, 2));
+    BOOST_CHECK(!Follower::HandOffDeep(1001, 1000, 0));
+    BOOST_CHECK(!Follower::HandOffDeep(std::numeric_limits<int>::max(), 1000, 0));
 }
 
 BOOST_AUTO_TEST_CASE(mainchain_addresses)

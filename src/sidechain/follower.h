@@ -188,6 +188,13 @@ public:
     const MainClient& Client() const { return m_client; }
 
     /**
+     * Whether a bundle whose block is fixed from mainchain height `fixed_at` (ChainHooks::FixedFrom) is deep
+     * enough to be handed to an enforcer, with the record at `record_height`: never for a height not known,
+     * not positive, or above the record.
+     */
+    static bool HandOffDeep(std::optional<int> fixed_at, int record_height, int depth);
+
+    /**
      * Let the next update of the record drop more commitments than a reorg of this chain can take
      * back (DRIVECHAIN_UNDO_DEPTH), once: the operator's word that the mainchain did reorganise so deep.
      * syncmainchain sets it for its update, and takes it back after.
