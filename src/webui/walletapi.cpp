@@ -887,14 +887,15 @@ std::string OperationName(const bitassets::Marker& marker)
     return NAMES[marker.operation->index()];
 }
 
-/** An asset as a confirmation shows it: its ticker, its number and its id, short; or its id whole if it is not registered. */
+/** An asset as a confirmation shows it: the chain's number and whole id first, then its name in quotes (a name is the
+ *  registrant's text: after them, it cannot pass for another asset's number or id); its id alone if it is not registered. */
 std::string AssetText(const TokenLookup& lookup, const bitassets::AssetId& asset)
 {
     if (asset.IsNull()) return bitassets::AssetLabel(asset, nullptr);
     const auto record{lookup.asset ? lookup.asset(asset) : std::nullopt};
     const std::string id{asset.GetHex()};
     if (!record) return strprintf("an asset not registered (0x%s)", id);
-    return strprintf("%s (#%s, 0x%s…%s)", record->text.empty() ? std::string{"(no published name)"} : record->text, bitassets::FormatSeq(record->seq), id.substr(0, 8), id.substr(56));
+    return strprintf("#%s, 0x%s, %s", bitassets::FormatSeq(record->seq), id, record->text.empty() ? std::string{"no published name"} : "named \u201c" + record->text + "\u201d");
 }
 
 /** A token as a confirmation shows it: an amount of an asset with its ticker, a control coin, a share of a pool... */
@@ -905,7 +906,7 @@ std::string TokenText(const TokenLookup& lookup, const bitassets::Token& token)
     switch (token.kind) {
     case bitassets::Token::Kind::ASSET: {
         const auto record{lookup.asset ? lookup.asset(token.id) : std::nullopt};
-        return strprintf("%s %s", bitassets::FormatUnits(token.amount, record ? record->decimals : 0), AssetText(lookup, token.id));
+        return strprintf("%s of %s", bitassets::FormatUnits(token.amount, record ? record->decimals : 0), AssetText(lookup, token.id));
     }
     case bitassets::Token::Kind::CONTROL: return "the control coin of " + AssetText(lookup, token.id);
     case bitassets::Token::Kind::RESERVATION: return "a reservation of an asset name (made by " + short_id + ")";

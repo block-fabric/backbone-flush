@@ -655,11 +655,11 @@ BOOST_AUTO_TEST_CASE(psbt_tokens_shown)
     const auto rows{webui::PsbtRows(holder.get(), psbtx, lookup)};
     webui::Window::ConfirmDialog dialog;
     dialog.rows = rows;
-    BOOST_CHECK_EQUAL(RowValue(dialog, "Spends this wallet's (input 2)"), "the control coin of GOLD (#" + bitassets::FormatSeq(7) + ", 0x" + gold.GetHex().substr(0, 8) + "…" + gold.GetHex().substr(56) + ")");
-    BOOST_CHECK(RowValue(dialog, "Spends this wallet's (input 3)").starts_with("123.45 GOLD (#"));
+    BOOST_CHECK_EQUAL(RowValue(dialog, "Spends this wallet's (input 2)"), "the control coin of #" + bitassets::FormatSeq(7) + ", 0x" + gold.GetHex() + ", named \u201cGOLD\u201d");
+    BOOST_CHECK(RowValue(dialog, "Spends this wallet's (input 3)").starts_with("123.45 of #"));
     bool control_warning{false}, tokens_warning{false};
     for (const auto& row : rows) {
-        control_warning |= row.kind == webui::dialog::Row::Kind::NOTE && row.value.starts_with("Warning: it spends the control coin of GOLD");
+        control_warning |= row.kind == webui::dialog::Row::Kind::NOTE && row.value.starts_with("Warning: it spends the control coin of #" + bitassets::FormatSeq(7) + ", 0x" + gold.GetHex() + ", named \u201cGOLD\u201d");
         tokens_warning |= row.kind == webui::dialog::Row::Kind::NOTE && row.value.starts_with("Warning: it spends tokens of this wallet");
     }
     BOOST_CHECK(control_warning);
@@ -667,8 +667,8 @@ BOOST_AUTO_TEST_CASE(psbt_tokens_shown)
     // Each output with the token it carries, after its destination.
     const int first{RowOf(dialog, "Carries")};
     BOOST_REQUIRE(first > RowOf(dialog, "Pay to"));
-    BOOST_CHECK(rows[first].value.starts_with("the control coin of GOLD"));
-    BOOST_CHECK(RowValue(webui::Window::ConfirmDialog{.rows = std::vector(rows.begin() + first + 1, rows.end())}, "Carries").starts_with("123.45 GOLD"));
+    BOOST_CHECK(rows[first].value.starts_with("the control coin of #"));
+    BOOST_CHECK(RowValue(webui::Window::ConfirmDialog{.rows = std::vector(rows.begin() + first + 1, rows.end())}, "Carries").starts_with("123.45 of #"));
     // The marker: its operation named, what it pays in said as such.
     BOOST_CHECK_EQUAL(RowValue(dialog, "Asset operation"), "none: it moves tokens only");
     BOOST_CHECK_EQUAL(RowValue(dialog, "Paid into the operation"), webui::confirm::Coins(COIN / 2));
