@@ -5,6 +5,7 @@
 #ifndef BITCOIN_WEBUI_WALLETAPI_H
 #define BITCOIN_WEBUI_WALLETAPI_H
 
+#include <bitassets/state.h>
 #include <consensus/amount.h>
 #include <primitives/transaction.h>
 #include <sync.h>
@@ -20,6 +21,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+class PartiallySignedTransaction;
 
 namespace interfaces {
 class Node;
@@ -186,6 +189,18 @@ struct ReceiveRequest {
 };
 std::string EncodeReceiveRequest(const ReceiveRequest& request);
 std::optional<ReceiveRequest> DecodeReceiveRequest(const std::string& data);
+
+/** What the chain says of tokens, for the confirmation of a PSBT: the token a coin carries, the record of an asset. */
+struct TokenLookup {
+    std::function<std::optional<bitassets::Token>(const COutPoint&)> token;
+    std::function<std::optional<bitassets::AssetRecord>(const bitassets::AssetId&)> asset;
+};
+/**
+ * The rows of a PSBT (wallet.psbt.sign, psbt.broadcast): what it spends of this wallet, the tokens each input spends (the
+ * wallet's said apart, with a warning), its asset operation and what it pays into it, each output (destination first) with
+ * the token it carries, the fee when known, the id.
+ */
+std::vector<dialog::Row> PsbtRows(interfaces::Wallet* wallet, const PartiallySignedTransaction& psbtx, const TokenLookup& lookup);
 
 } // namespace webui
 
