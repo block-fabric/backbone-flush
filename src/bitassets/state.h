@@ -1869,10 +1869,12 @@ public:
     /**
      * `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept
      * beyond the walk. `v9`: the rules from v9_height (the tick after a walk follows its last stretch's start; the rules
-     * of the next block for a quote).
+     * of the next block for a quote). `coin_fee`, if given: what more of asset0 the positions earn, from the round's outs
+     * (the providers' part of a fee on the coin's side: ClearCoinSide), credited with the roundings stretch by stretch;
+     * nullopt makes the round fail.
      */
     std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0},
-                                         bool v9 = true) const;
+                                         bool v9 = true, const std::function<std::optional<uint64_t>(const std::vector<uint64_t>&)>& coin_fee = {}) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
@@ -1919,7 +1921,9 @@ public:
      * kind at no fee on the buys' coin less their fee (rounded up) and the sales' units whole, all at that round's one
      * price; then each sale's fee (rounded up) out of the coin it gets. Of all the fees, `security_share` (millionths;
      * rounded down) leaves for the chain's security (`security`), the rest stays in the pool's coin (a concentrated
-     * pool: added to its fee growth in the coin, at the liquidity in range after the round; with none, to the pool).
+     * pool: added to its fee growth in the coin, at the liquidity in range after the round, with none to the pool; from
+     * v9_height (`v9`) credited stretch by stretch with the walk, as the other rounds' fees, and what no liquidity earned
+     * leaves with the security part).
      * Every order still gets the same price; min_out counts what it gets, net of the fee.
      */
     std::optional<dex::Clearing> ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
