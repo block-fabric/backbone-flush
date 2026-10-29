@@ -290,6 +290,8 @@ double CostOf(const std::string& method_path)
     if (method.starts_with("Quote") || method == "BuildAction" || method == "GetAsset" || method == "ListAssets") return 4;
     // 8.3.0: a PSBT reads the address's coins (a scan of the UTXO set when the client names none) and their transactions.
     if (method == "BuildPsbt") return 8;
+    // 8.3.2: a reservation's depth: lookups in the mempool, the UTXO set and the state.
+    if (method == "GetReservation") return 4;
     if (method == "GetPortfolio") return 4;
     if (method == "ListLaunches" || method == "ListPools" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
     if (method == "ServerReflectionInfo") return 2;
@@ -2307,6 +2309,46 @@ private:
         return {outpoint, coin->out, tx, static_cast<int>(coin->nHeight)};
     }
 
+    /**
+     * 8.3.2: how deep a reservation is, by its output alone (POST psbt/reservation): what a site polls before psbt/launch,
+     * which takes the ticker and the nonce, so that the node sees them only once the reservation can be revealed.
+     */
+    Message GetReservation(const Message& req, const Tip& tip) const
+    {
+        const COutPoint outpoint{ParseOutpoint(req.GetString("reservation"), "reservation")};
+        const int needed{std::max(1, Params().GetConsensus().sidechain.bitassets_reveal_depth)};
+        Message m{New("ReservationStatus")};
+        m.SetString("reservation", strprintf("%s:%u", outpoint.hash.GetHex(), outpoint.n));
+        m.SetUInt("needed", static_cast<uint32_t>(needed));
+        m.SetUInt("height", static_cast<uint32_t>(tip.height));
+        const auto status{[&](const char* text, int confirmations) {
+            m.SetString("status", text);
+            m.SetUInt("confirmations", static_cast<uint32_t>(std::max(0, confirmations)));
+            m.SetBool("ready", std::string_view{text} == "ready");
+            return m;
+        }};
+        // One lookup each, no scan: the mempool's (its own lock), then the coin's (cs_main).
+        bool spent_in_mempool, in_mempool;
+        {
+            LOCK(m_node.mempool->cs);
+            spent_in_mempool = m_node.mempool->isSpent(outpoint);
+            in_mempool = m_node.mempool->exists(outpoint.hash);
+        }
+        if (spent_in_mempool) return status("spent", 0);
+        const std::optional<::Coin> coin{WITH_LOCK(::cs_main, return m_node.chainman->ActiveChainstate().CoinsTip().GetCoin(outpoint))};
+        if (!coin) return status(in_mempool ? "mempool" : "unseen", 0);
+        const bitassets::State state{tip.State()};
+        const auto token{state.GetToken(outpoint)};
+        if (!token && static_cast<int>(coin->nHeight) > tip.height) return status("confirming", 0);
+        if (!token || token->kind != bitassets::Token::Kind::RESERVATION) Fail(Code::INVALID_ARGUMENT, "that output carries no reservation");
+        const auto origin{state.GetReservationOrigin(Txid::FromUint256(token->id))};
+        if (!origin) Fail(Code::INVALID_ARGUMENT, "that output carries no reservation the chain knows");
+        // As CheckedReservation: revealed only `reveal_depth` blocks after the block that made it.
+        const int confirmations{tip.height - origin->height + 1};
+        const bool deep{int64_t{tip.height + 1} - origin->height >= Params().GetConsensus().sidechain.bitassets_reveal_depth};
+        return status(deep ? "ready" : "confirming", confirmations);
+    }
+
     /** The build of build/launch or build/register for the same parameters (BuildPsbtRequest's are BuildActionRequest's). */
     Message BuildOf(const Message& req, const std::string& verb, const Tip& tip) const
     {
@@ -3499,6 +3541,7 @@ private:
 
         // 8.3.0: unsigned transactions of a launch's steps for a wallet that signs what it is given.
         Serve(server, "BuildPsbt", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip& tip) { return BuildPsbt(req, tip); });
+        Serve(server, "GetReservation", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip& tip) { return GetReservation(req, tip); });
 
         // 8.1.0: logos kept by their SHA-256 for a link to name (logo_url), checked with the chain's rules.
         const Policy logos{.cache = false, .cache_control = "no-store", .tip = false};

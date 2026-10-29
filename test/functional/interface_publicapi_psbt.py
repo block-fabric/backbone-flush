@@ -11,6 +11,8 @@ for a wallet that signs what it is given (the ECX Wallet extension), on a regtes
     refusals (a ticker taken, a bad ticker, a P2PKH address, an address without coins);
   - signed by that wallet without finalizing (partial signatures, as the extension), broadcast as {psbt}: the node
     finalizes it; an unsigned PSBT refused;
+  - POST psbt/reservation (8.3.2): how deep the reservation is, by its output alone: mempool, confirming, ready, spent;
+    the reservation in the query refused;
   - POST psbt/launch before the reservation is deep enough (in the mempool, then one block): 409, reason
     reservation_not_deep, its confirmations and the confirmations needed; a wrong nonce, another address, refused;
   - then the launch with build/launch's parameters in the query (a first buy, a description and links, a logo
@@ -210,6 +212,14 @@ class PublicApiPsbtTest(LayersTest):
         launch_query["logo_sha256"] = logo["sha256"]
         body = {"address": address, "nonce": nonce, "reservation": reserve["reservation"]}
 
+        self.log.info("psbt/reservation: how deep the reservation is, by its output alone (no ticker, no nonce)")
+        depth = self.ok(api.post("psbt/reservation", {"reservation": reserve["reservation"]}))
+        assert_equal((depth["status"], depth["confirmations"], depth["needed"], depth["ready"]), ("mempool", 0, 2, False))
+        assert_equal(self.ok(api.post("psbt/reservation", {"reservation": "11" * 32 + ":0"}))["status"], "unseen")
+        assert_equal(api.post("psbt/reservation?" + urlencode({"reservation": reserve["reservation"]}), {}).status, 400)
+        # Not a reservation: a coin of the address.
+        assert_equal(api.post("psbt/reservation", {"reservation": coins()[0]}).status, 400)
+
         self.log.info("psbt/launch: not deep enough (in the mempool, then one block): 409 and the confirmations")
         body["coins"] = coins()
         waiting = self.post(api, "psbt/launch", body, launch_query)
@@ -225,7 +235,11 @@ class PublicApiPsbtTest(LayersTest):
         # Not found at all: the same wait (the site may poll before its broadcast reached this node).
         missing = self.post(api, "psbt/launch", dict(body, reservation="11" * 32 + ":0"), launch_query)
         assert_equal((missing.status, missing.json()["error"]["confirmations"]), (409, 0))
+        depth = self.ok(api.post("psbt/reservation", {"reservation": reserve["reservation"]}))
+        assert_equal((depth["status"], depth["confirmations"], depth["ready"]), ("confirming", 1, False))
         self.bmm()
+        depth = self.ok(api.post("psbt/reservation", {"reservation": reserve["reservation"]}))
+        assert_equal((depth["status"], depth["confirmations"], depth["ready"]), ("ready", 2, True))
         body["coins"] = coins()
 
         self.log.info("psbt/launch: a wrong nonce, another address, secrets in the query, refused")
@@ -265,6 +279,7 @@ class PublicApiPsbtTest(LayersTest):
         # Spent in the mempool: a distinct refusal, never a wait.
         spent = self.post(api, "psbt/launch", dict(body, coins=coins()), launch_query)
         assert_equal((spent.status, spent.json()["error"].get("reason")), (409, "reservation_spent"))
+        assert_equal(self.ok(api.post("psbt/reservation", {"reservation": reserve["reservation"]}))["status"], "spent")
         self.bmm()
         self.bmm()
 

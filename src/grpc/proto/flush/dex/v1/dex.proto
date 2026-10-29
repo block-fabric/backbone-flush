@@ -1266,6 +1266,27 @@ message BuildPsbtRequest {
   string commitment = 104;
 }
 
+// 8.3.2: how deep a reservation is (POST /api/v1/psbt/reservation {reservation}): what a site polls while it waits to
+// reveal, naming the reservation's output only. The ticker and the nonce go to psbt/launch (or psbt/register) once
+// `ready`: the node sees them only then.
+message GetReservationRequest {
+  // The reservation's output (txid:vout), as psbt/reserve answered. The body only.
+  string reservation = 1;
+}
+
+message ReservationStatus {
+  string reservation = 1;
+  // unseen (not an unspent output in a block nor in this node's mempool: not relayed here yet, or spent in a block),
+  // mempool, confirming, ready (psbt/launch takes it now), spent (by a transaction in the mempool).
+  string status = 2;
+  uint32 confirmations = 3;
+  // The confirmations it needs before it can be revealed (the rules' bitassets_reveal_depth, at least 1).
+  uint32 needed = 4;
+  bool ready = 5;
+  // The tip it was read at.
+  uint32 height = 6;
+}
+
 message BuiltPsbt {
   string verb = 1;
   // The PSBT, base64: version 0, every input with its previous transaction (non_witness_utxo) and the output it spends
@@ -1497,6 +1518,8 @@ service DexService {
   rpc Broadcast(BroadcastRequest) returns (BroadcastReply);
   // 8.3.0: an unsigned transaction of a launch's steps (or a registration's) for a wallet that signs what it is given.
   rpc BuildPsbt(BuildPsbtRequest) returns (BuiltPsbt);
+  // 8.3.2: how deep a reservation is, by its output alone (what a site polls before psbt/launch).
+  rpc GetReservation(GetReservationRequest) returns (ReservationStatus) { option idempotency_level = NO_SIDE_EFFECTS; }
 
   // 8.1.0: logos kept for an hour by their SHA-256 (links name where they are: logo_url).
   rpc UploadLogo(UploadLogoRequest) returns (UploadLogoReply);

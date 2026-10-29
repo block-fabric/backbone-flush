@@ -423,6 +423,13 @@ BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
     BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(b));
     BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(b).request->GetString("max_burn_units"), "100000000");
     BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/BuildPsbt"), 8);
+    // 8.3.2: how deep a reservation is, by its output alone, in the body only.
+    auto depth{publicapi::Route(Pool(), "POST", "psbt/reservation", "", R"({"reservation":")" + txid + R"(:0"})")};
+    BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(depth));
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(depth).method_path, "/flush.dex.v1.DexService/GetReservation");
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(depth).request->GetString("reservation"), txid + ":0");
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "POST", "psbt/reservation", "reservation=" + txid + ":0", "{}")));
+    BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/GetReservation"), 4);
 
     // The launch the wallet's launchtoken and the API's psbt/launch both make (bitassets/launch.h).
     bitassets::LaunchRules rules;
