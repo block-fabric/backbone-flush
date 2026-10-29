@@ -17,6 +17,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -194,6 +195,17 @@ util::Result<std::string> ReadPasswordFile(const fs::path& path);
  * larger than `max_size`.
  */
 std::optional<std::string> DecodeChunked(const std::string& body, size_t max_size, std::string& error);
+
+/**
+ * `text` as well-formed UTF-8 (RFC 3629): every byte that does not start a well-formed sequence (one cut short,
+ * an overlong form, a surrogate, beyond U+10FFFF, a byte that never starts one) replaced by U+FFFD; well-formed
+ * text as it is. Text of the mainchain node is any bytes its writer passes on (a deposit destination is whatever
+ * the deposit's OP_RETURN carries): read so, it reads the same whichever way it came, through JSON-RPC or the
+ * enforcer's interface (as hex).
+ */
+std::string ValidUTF8(std::string_view text);
+/** Read a JSON reply of the mainchain node (or of the enforcer's interface), its text as ValidUTF8 gives it. */
+bool ReadReply(UniValue& value, std::string_view body);
 
 } // namespace sidechain
 

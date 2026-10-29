@@ -7,10 +7,12 @@
 #include <kernel/chainparams.h>
 #include <sidechain/follower.h>
 #include <sidechain/mainclient.h>
+#include <sidechain/state.h>
 #include <base58.h>
 #include <bech32.h>
 #include <core_io.h>
 #include <hash.h>
+#include <key_io.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <util/strencodings.h>
@@ -355,6 +357,80 @@ BOOST_AUTO_TEST_CASE(enforcer_block_events)
     BOOST_CHECK_EQUAL(MedianTime({5}), 5);
     BOOST_CHECK_EQUAL(MedianTime({3, 1}), 3);
     BOOST_CHECK_EQUAL(MedianTime({9, 1, 8, 2, 7, 3, 6, 4, 5, 10, 11}), 6);
+}
+
+BOOST_AUTO_TEST_CASE(deposit_destination_any_bytes)
+{
+    // Well-formed UTF-8 as it is; every other byte as U+FFFD.
+    const std::string replacement{"\xef\xbf\xbd"};
+    BOOST_CHECK_EQUAL(ValidUTF8("s3_abc_def"), "s3_abc_def");
+    BOOST_CHECK_EQUAL(ValidUTF8("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80 \xf4\x8f\xbf\xbf"), "caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x98\x80 \xf4\x8f\xbf\xbf");
+    BOOST_CHECK_EQUAL(ValidUTF8(std::string{"a\0b", 3}), std::string("a\0b", 3));
+    BOOST_CHECK_EQUAL(ValidUTF8("\xff\x01" "ab"), replacement + "\x01" "ab");
+    BOOST_CHECK_EQUAL(ValidUTF8("\x80"), replacement);
+    // Cut short (also at the end), overlong, a surrogate, beyond U+10FFFF, leads that start nothing.
+    BOOST_CHECK_EQUAL(ValidUTF8("\xe2\x82" "a"), replacement + replacement + "a");
+    BOOST_CHECK_EQUAL(ValidUTF8("a\xf0\x9f\x98"), "a" + replacement + replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xc1\xb3"), replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xe0\x81\xb3"), replacement + replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xf0\x80\x81\xb3"), replacement + replacement + replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xed\xa0\x80"), replacement + replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xf4\x90\x80\x80"), replacement + replacement + replacement + replacement);
+    BOOST_CHECK_EQUAL(ValidUTF8("\xf8\x88\x80\x80\x80"), replacement + replacement + replacement + replacement + replacement);
+
+    // A deposit destination of any bytes, as Backbone writes it in getsidechainevents (UniValue: bytes from 0x80
+    // as they are, control characters escaped), and as the enforcer's interface gives it (hex): the follower
+    // reads the reply, and both give the same destination, which credits no address (OP_RETURN).
+    const uint256 block{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000b1").value()};
+    const uint256 txid{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000d1").value()};
+    // An address of this chain, as text, and in an overlong form of its ASCII (two bytes a character).
+    const std::string address{EncodeDestination(PKHash{uint160{std::vector<unsigned char>(20, 0x07)}})};
+    BOOST_REQUIRE(DepositScript(address, 3) != CScript() << OP_RETURN);
+    std::string overlong;
+    for (const unsigned char c : address) overlong += {static_cast<char>(0xc0 | (c >> 6)), static_cast<char>(0x80 | (c & 0x3f))};
+    const uint256 prev{uint256::FromHex("00000000000000000000000000000000000000000000000000000000000000b0").value()};
+    // The address itself first, as a control: the same script both ways, one that credits it.
+    for (const std::string& destination : {address, std::string{"\xff\x01" "ab"}, "s3_" + address + "_\xff\xfe\xfd\xfc\xfb\xfa", overlong, std::string{"\xed\xa0\x80\xed\xb0\x80"}}) {
+        UniValue deposit(UniValue::VOBJ);
+        deposit.pushKV("destination", destination);
+        deposit.pushKV("amount", ValueFromAmount(1));
+        deposit.pushKV("txid", txid.GetHex());
+        deposit.pushKV("burnindex", 0);
+        UniValue deposits(UniValue::VARR);
+        deposits.push_back(std::move(deposit));
+        UniValue entry(UniValue::VOBJ);
+        entry.pushKV("height", 7);
+        entry.pushKV("deposits", std::move(deposits));
+        UniValue events(UniValue::VARR);
+        events.push_back(std::move(entry));
+        UniValue reply(UniValue::VOBJ);
+        reply.pushKV("result", std::move(events));
+        reply.pushKV("error", NullUniValue);
+        reply.pushKV("id", 1);
+        UniValue read;
+        BOOST_REQUIRE(ReadReply(read, reply.write()));
+        const std::string over_rpc{read["result"][0]["deposits"][0]["destination"].get_str()};
+        BOOST_CHECK_EQUAL(over_rpc, ValidUTF8(destination));
+
+        UniValue info;
+        // As the enforcer sends a block above genesis: with the hash of the block before it.
+        BOOST_REQUIRE(info.read(strprintf(R"({"headerInfo":{"blockHash":{"hex":"%s"},"prevBlockHash":{"hex":"%s"},"height":7},"blockInfo":{"events":[{"deposit":{"outpoint":{"txid":{"hex":"%s"},"vout":0},"output":{"address":{"hex":"%s"},"valueSats":"1"}}}]}})",
+                                          block.GetHex(), prev.GetHex(), txid.GetHex(), HexStr(destination))));
+        const UniValue from_block{EnforcerBlockEvents(info, 0)};
+        BOOST_CHECK_EQUAL(from_block["hash"].get_str(), block.GetHex());
+        BOOST_CHECK_EQUAL(from_block["previousblockhash"].get_str(), prev.GetHex());
+        const std::string from_enforcer{from_block["deposits"][0]["destination"].get_str()};
+        BOOST_CHECK_EQUAL(from_enforcer, over_rpc);
+        // The deposit script, which is what credits the deposit: the same through both transports.
+        const CScript script{DepositScript(over_rpc, 3)};
+        BOOST_CHECK(DepositScript(from_enforcer, 3) == script);
+        BOOST_CHECK(DepositScript(destination, 3) == script);
+        if (destination == address) {
+            BOOST_CHECK(script != CScript() << OP_RETURN);
+        } else {
+            BOOST_CHECK(script == CScript() << OP_RETURN);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(mainchain_addresses)
