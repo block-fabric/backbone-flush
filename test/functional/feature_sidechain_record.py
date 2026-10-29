@@ -16,6 +16,7 @@ mainchain and acting on it.
   checked again, blocks failed against the record that
   have their commitment again are checked again; rebuilt under other parameters, the sidechain database
   stops at the block (the chain goes back), and a block the operator invalidated stays invalid.
+- A deposit destination of any bytes (not UTF-8) is read, and credits no address.
 - A mainchain node that is syncing, too old, without the sidechain, refusing the credentials, answering
   what is no JSON-RPC or blocks that do not follow each other, refusing a bundle or the word of this chain.
 - Blind merged mining: the wallet named with characters to encode, requests that fail, an outbid node,
@@ -181,6 +182,21 @@ class SidechainRecordTest(BitcoinTestFramework):
         with main.lock:
             del main.blocks[-1]
         node.syncmainchain()
+
+        self.log.info("A deposit destination of any bytes, not UTF-8: read as the enforcer's interface gives it, it credits no address")
+        balance = node.getbalance()
+        # (The address of this node with its first character in a two-byte form, which is not UTF-8.)
+        first = ord(self.address[0])
+        overlong = bytes([0xc0 | (first >> 6), 0x80 | (first & 0x3f)]) + self.address[1:].encode()
+        with main.lock:
+            main.add_block(deposits=[{"destination": b"\xff\x01ab", "amount": "1", "txid": "ce" * 32, "burnindex": 0},
+                                     {"destination": overlong, "amount": "2", "txid": "ce" * 32, "burnindex": 1},
+                                     self.deposit(3)])
+        node.syncmainchain()
+        assert_equal(node.getmainchaininfo()["height"], main.height())
+        coinbase = node.getblock(self.mine(), 2)["tx"][0]
+        assert_equal(sorted(o["value"] for o in coinbase["vout"] if o["scriptPubKey"]["hex"] == "6a"), [1, 2])
+        assert_equal(node.getbalance(), balance + 3)
 
         self.log.info("A mainchain without the sidechain in its slot: the node waits")
         with main.lock:
