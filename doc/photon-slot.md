@@ -192,3 +192,18 @@ again every block: launches with dust waiting made every block's work grow witho
 
 A node of 7.0.1 forks off at the first block whose coinbase pays a sale on a curve it bought back differently (with more
 than 64 buybacks waiting in a block).
+
+## Upgrade v9 (the DEX rules of Flush 8.3.2)
+
+Branch `flush-betanet`, from block `SLOT99_V9_HEIGHT` (42,000; `v9_height`; in the fingerprint: a node of v9 rebuilds its
+sidechain state once). From v9:
+
+- a release waits for the unsettled orders of the asset's books (`bad-ba-release-alive`; getasset says whether it is
+  releasable), and an order placed in an earlier book of a pair is not settled against a book made since;
+- a concentrated pool's tick after a walk follows its last stretch's start (as Uniswap v3's), and a round of a
+  concentrated pool of the coin credits the providers' part of its fee stretch by stretch with its walk;
+- a deposit to "D" (`WITHDRAWAL_RETURN_DEST`) is credited as a deposit to no address of this chain; the change of a
+  withdrawal is told by the bundle that paid it out.
+
+A node of 8.3.1 forks off at the first block from 42,000 that one of these rules decides differently. Every node of
+slot 99 runs 8.3.2 before block 42,000.
