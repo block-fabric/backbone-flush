@@ -208,7 +208,8 @@ struct SidechainParams {
     bool BoundedBuybacksActive(int height) const { return FeeFlowActive(height) && height >= v8_height; }
     /**
      * Upgrade v9 (Flush 8.3.2): from this block the rules of the DEX of that release (where V9Active is read: the books'
-     * orders and releases, the walks of concentrated pools and their fees). Never (the maximum) unless a network sets it;
+     * orders and releases, the walks of concentrated pools and their fees), and a withdrawal's change told from a deposit
+     * by the bundle it paid out (sidechain::State::ApplyMainEvents). Never (the maximum) unless a network sets it;
      * regtest unless -testactivationheight=v9@<height>.
      */
     int v9_height{std::numeric_limits<int>::max()};

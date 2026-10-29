@@ -286,8 +286,13 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
                        "one bundle per slot, which the rules of this chain take for granted. A withdrawal may be paid twice; check the mainchain's software.",
                        main_block->hash.ToString(), h);
         }
+        // From v9_height the change of a withdrawal is told from a deposit by the bundle it paid out, as the mainchain
+        // knows it (Backbone's escrow changes of the withdrawal kind, the enforcer's payouts: never without their
+        // bundle), not by its destination, which a deposit may have too: a deposit to WITHDRAWAL_RETURN_DEST is
+        // credited as any deposit to no address of this chain (an OP_RETURN payout). Before it, by the destination.
+        const bool by_bundle{height >= params.v9_height};
         for (const MainDeposit& deposit : main_block->deposits) {
-            if (deposit.destination == drivechain::WITHDRAWAL_RETURN_DEST) {
+            if (by_bundle ? !deposit.bundle.IsNull() : deposit.destination == drivechain::WITHDRAWAL_RETURN_DEST) {
                 // The change of a withdrawal is an escrow change too, but no deposit. If it paid a
                 // bundle this chain does not have -- one committed on another branch of it -- the
                 // withdrawals it paid are paid all the same: those that pay the same output with
