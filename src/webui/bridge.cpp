@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <webui/bridge.h>
+#include <webui/guard.h>
 
 #include <algorithm>
 
@@ -263,6 +264,12 @@ void Bridge::Handle(const std::string& call_id, const std::string& args_json)
     UniValue args;
     if (!args.read(args_json) || !args.isArray() || args.size() != 1 || !args[0].isObject()) {
         ReplyError(*request, BRIDGE_INVALID_REQUEST, "A bridge call takes one request object");
+        return;
+    }
+    // A key given twice is refused, at any depth (as the remote host does): what is checked and what runs never read two
+    // values of it.
+    if (guard::HasDuplicateKeys(args)) {
+        ReplyError(*request, BRIDGE_INVALID_REQUEST, "The request names a key twice");
         return;
     }
     const UniValue& body{args[0]};

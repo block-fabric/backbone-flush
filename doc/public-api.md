@@ -130,6 +130,7 @@ quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ET
 | `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order\|position\|reposition\|settle\|bid\|collect\|claim\|pegin\|pegout}?…` | BuildAction | the action, unsigned (below); `facts` (what to show beside it), `deposit_address` (pegin with an address) |
 | POST `broadcast` `{"hex": "…"}` or (8.3.0) `{"psbt": "…", "max_burn_units": "…"}` | Broadcast | `{ txid }`; a PSBT whose inputs are all signed is finalized here (as `finalizepsbt`) and extracted, else 400 `the PSBT is not complete: input N not signed`; `max_burn_units` caps what an unspendable output holds (sendrawtransaction's `maxburnamount`): a launch's first buy, the `burn_units` of its build |
 | POST `psbt/reserve`, `psbt/launch`, `psbt/register` | BuildPsbt | 8.3.0: a launch's two steps (and a registration's) as unsigned PSBTs for a wallet that signs what it is given (below). Cost 8, `no-store` |
+| POST `psbt/reservation` `{"reservation": "txid:vout"}` | GetReservation | 8.3.2: how deep a reservation is, by its output alone: `{ reservation, status, confirmations, needed, ready, height }` (below). Cost 4, `no-store` |
 | POST `logos` `{"base64": "…"}` | UploadLogo | 8.1.0: `{ "sha256": "<64 hex>", "url": "/api/v1/logos/<sha256>" }` (200; `Cache-Control: no-store`), the logo kept in memory by its SHA-256 for an hour from its last upload (uploaded again, an hour from then), at most 1024 logos (the one uploaded longest ago dropped first). Checked with the chain's logo rules (`bitassets::CheckLogo`: PNG or JPEG, 256×256, at most 32 KiB, no metadata): else 400 with the reason (`bad-ba-logo-…`). The `url` is relative: the site prefixes its own origin and gives it as a link's `logo_url` (doc/flush-links.md). Charged as a broadcast: 6 a minute per client (3 at once), 120 in all (429, Retry-After), and 4 units of the client's rate |
 | `logos/{sha256}` | GetUploadedLogo | 8.1.0: the logo uploaded with that SHA-256 (any case), as the image (`image/png` or `image/jpeg`, the type its rules found), `Cache-Control: public, max-age=31536000, immutable` (its content is its hash's); 404 when none is kept (never uploaded, or more than an hour ago), 400 when not 64 hex digits |
 
@@ -248,7 +249,8 @@ the nonce, once the reservation is deep enough and bound to the address's script
 site: nonce = 32 random bytes (kept); commitment = HMAC-SHA256(nonce, SHA256(TICKER) || scriptPubKey(address))
      ──POST psbt/reserve {address, commitment, coins}──▶ node ◀── { psbt, reservation, confirmations_needed, … }
      ──wallet signs (partial signatures)──▶ POST broadcast {psbt} ──▶ { txid }
-     ──POST psbt/launch?<build/launch's query> {address, nonce, reservation, coins}──▶ node  (409 until deep enough: poll)
+     ──POST psbt/reservation {reservation}──▶ node ◀── { status, confirmations, needed, ready }  (poll until ready)
+     ──POST psbt/launch?<build/launch's query> {address, nonce, reservation, coins}──▶ node  (once ready: the reveal)
      ◀── { psbt, burn_units, summary, … } ──wallet signs──▶ POST broadcast {psbt, max_burn_units}
 ```
 
@@ -332,7 +334,7 @@ launch (register the same, `burn` 0):
 
 - `psbt`: base64, **version 0**; every input carries its previous transaction (`non_witness_utxo`, read from its block:
   no `-txindex` needed) and `witness_utxo`; no derivation, no unknown or proprietary field. Version 2, the tip's height
-  as lock time, every input replaceable (`0xfffffffd`), as the wallet makes them. At most 30 inputs and 400,000 bytes.
+  as lock time, every input replaceable (`0xfffffffd`), as the wallet makes them. At most 30 inputs and 180,000 bytes (signed, it fits in a body of `POST broadcast`).
 - `txid`: signing does not change it (every input is P2WPKH).
 - Outputs: the reservation, the marker, the change. A launch: its first buy's result output (if a first buy), its
   control coin (if kept), the marker (holding the first buy: `burn`), the change; its inputs the reservation first,
@@ -347,8 +349,23 @@ launch (register the same, `burn` 0):
 Before handing it out the node runs the asset rules on the unsigned transaction at the next block (`State::CheckTx`,
 the mempool's own check): a PSBT the rules would refuse is never built (400 with the reason).
 
-**Waiting for the reservation.** `psbt/launch` (and `psbt/register`) before the reservation can be revealed answers
-409 with a reason and the numbers, for the site to poll (every ~20 s) and show "waiting N of M blocks":
+**Waiting for the reservation.** Poll `POST psbt/reservation {"reservation": "txid:vout"}` (every ~20 s), which names
+the reservation's output only, and show "waiting N of M blocks"; send the ticker and the nonce (`psbt/launch`,
+`psbt/register`) only once it answers `ready`. Polling `psbt/launch` itself would show the node the ticker while the
+reservation is still young.
+
+```json
+{ "reservation": "4f1c…:0", "status": "confirming", "confirmations": 1, "needed": 2, "ready": false, "height": 51234 }
+```
+
+`status`: `unseen` (no unspent output in a block nor in this node's mempool: not relayed here yet, or spent in a
+block: see the launch's or registration's own transaction), `mempool`, `confirming`, `ready` (`psbt/launch` takes it
+now), `spent` (by a transaction in the mempool: the launch or registration sent already; stop polling). Cost 4.
+400 for an output that carries no reservation, or the reservation in the query string. It takes nothing else: send
+neither the ticker nor the nonce with it.
+
+`psbt/launch` (and `psbt/register`) sent before the reservation can be revealed (kept as in 8.3.0) answers 409 with a
+reason and the numbers:
 
 ```json
 { "error": { "code": "aborted", "message": "the reservation has 1 of the 2 confirmations it needs", "reason": "reservation_not_deep",
@@ -364,18 +381,19 @@ The same with `confirmations: 0` while the reservation waits in the mempool, or 
 - 400: a reservation not at the address, not a reservation, or whose commitment is not this ticker's, nonce's and
   address's.
 
-There is no transaction-status endpoint: poll `psbt/launch` itself.
+There is no transaction-status endpoint: poll `psbt/reservation`.
 
 **Coins.** Only the coins the client names (no scan of the UTXO set for a public call), each looked up once in the
 UTXO set: the address's, in a block, not spent in the mempool, with value, carrying no token, mature; others skipped.
 The largest first, until they pay the burn and the fee; never one worth no more than the fee of its own input (68 vB),
-at most 30 inputs, the PSBT at most 400,000 bytes (each input carries its whole previous transaction: a coin of a large
+at most 30 inputs, the PSBT at most 180,000 bytes (8.3.0: 400,000, more than a body of `broadcast` takes) (each input carries its whole previous transaction: a coin of a large
 transaction may need other coins named instead, 400). Each block read once per request. Too little: 400 with how much
 the usable coins hold and how many were left and why.
 
 **Fee.** The rate the node's wallet would pay (`wallet/fees.cpp`, `GetMinimumFeeRate` with its defaults): the estimate
 for 6 blocks (economical), else the wallet's fallback (20 sat/vB), at least the mempool's minimum, the relay's minimum
-and 1 sat/vB; the size counted with 72-byte signatures. A change below the dust of the wallet's discard rate (10 sat/vB)
+and 1 sat/vB, at most 200 sat/vB (8.3.2: an estimate above it is held to it; a mempool whose minimum is above it
+answers 503, try again later); the size counted with 72-byte signatures. A change below the dust of the wallet's discard rate (10 sat/vB)
 goes to the fee.
 
 ## Security
@@ -391,14 +409,14 @@ goes to the fee.
 | 7 | Injection into JSON consumers | replies | JSON written by UniValue (escaped); creators' text plain, control characters dropped; links only after the safe-link rule; logos served only as PNG/JPEG after their magic bytes, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` on every reply |
 | 8 | Broadcast abuse | broadcast | 6 a minute per client and 120 in all (429, Retry-After); ≤ 100,000 bytes; standard size; burns only in asset markers; the node's mempool policy and maximum fee rate; can be turned off |
 | 8b | Logo uploads as free hosting or a memory sink (8.1.0) | logos | Only what the chain's logo rules take (a 256×256 PNG/JPEG of at most 32 KiB, no metadata: no other content can be stored or served); at most 1024 kept (32 MiB at most), each for an hour; 6 uploads a minute per client and 120 in all, as broadcasts; served by hash only, as an image after its rules, `nosniff` and `default-src 'none'` |
-| 9 | Request floods, oversized requests and replies | server | Per-client token buckets (`-publicapirate`, `-publicapiburst`; 429 with Retry-After); requests ≤ 256 KiB; HTTP/2: 32 streams a connection, 1 MiB buffered a connection, 64 MiB in all; replies ≤ 4 MiB (else RESOURCE_EXHAUSTED, nothing sent) |
+| 9 | Request floods, oversized requests and replies | server | Per-client token buckets (`-publicapirate`, `-publicapiburst`; 429 with Retry-After), and the IPv6 clients of one /48 together at 64 times one client's (`-publicapiwideprefix`, `-publicapiwidemultiplier`; 8.3.2); broadcasts through a gate of their own, apart from builds and quotes; requests ≤ 256 KiB; HTTP/2: 32 streams a connection, 1 MiB buffered a connection, 64 MiB in all; replies ≤ 4 MiB (else RESOURCE_EXHAUSTED, nothing sent) |
 | 10 | Slow clients (slowloris, slow reads, Rapid Reset, MadeYouReset) | server | A request must be all in within 15 s of its first byte however slowly it trickles (HTTP/2: each stream from its own HEADERS); a connection with no running call that begins or completes no request for 30 s is closed with a GOAWAY (bytes alone, PINGs, are not activity); a client whose replies wait must take at least 4 KiB a second of them (or all that waited) over each 30 s, else it is closed, a byte now and then does not keep it open (in the socket, the calls or behind HTTP/2 flow control; a stream whose window stays closed 30 s is reset); above 1 MiB waiting for the socket nothing more is taken from the calls (backpressure), and a connection holding more than 32 MiB of replies in all is closed; past 100 streams reset before their call was over, by the client or by the server because of it (each counted once), closed with a GOAWAY (nghttp2's own reset rate limit too; an nghttp2 before 1.66, without its MadeYouReset fix, is warned about); past 10,000 requests no new one (GOAWAY), closed once its calls are over; 16 connections per address (IPv6 per /64, `-publicapiipv6prefix`; the named proxies excepted), 256 in all |
 | 11 | Spoofed client address (rate-limit bypass) | server | The client is the socket's peer unless the operator names both the proxy (`-publicapiproxy`) and its header (`-publicapiproxyheader`); X-Forwarded-For: the right-most entry only. The proxy must set the header itself (nginx below) |
 | 12 | Rate-limit bypass through a client stream | server | Each message of a client-streaming call (reflection) is charged by the guard again, at most 32 a stream; reflection off by default |
 | 13 | Reorgs serving stale or wrong market data | market index | Written in the block's journaled overlay: undone exactly with the block (tested byte for byte); the per-tip cache is keyed by the tip's hash |
 | 14b | A PSBT that spends or pays what the user did not ask (8.3.0) | psbt | Inputs only the one address's coins (the client's list, each checked against the UTXO set and that script), everything back to that address; every input's previous transaction in the PSBT (the wallet reads the amounts from it, checked against the txid); the rules run on it before it is handed out; the broadcast's `max_burn_units`. The wallet shows and signs it; the node holds no key |
-| 14c | Work and size of a build (8.3.0) | psbt | No scan of the UTXO set and no flush: the client names 1 to 50 coins, each looked up once; at most 30 inputs, each block read once, the PSBT at most 400,000 bytes; cost 8 of the client's rate and the gate of expensive calls |
-| 14d | The API's operator taking a reserved ticker first (8.3.0) | psbt | `psbt/reserve` takes the commitment only (the client computes it): the node sees the ticker and the nonce at the reveal, when the reservation is deep and bound to the address's script. The nonce and the reservation never in a URL (refused in the query string) |
+| 14c | Work and size of a build (8.3.0) | psbt | No scan of the UTXO set and no flush: the client names 1 to 50 coins, each looked up once; at most 30 inputs, each block read once, the PSBT at most 180,000 bytes; cost 8 of the client's rate and the gate of expensive calls |
+| 14d | The API's operator taking a reserved ticker first (8.3.0) | psbt | `psbt/reserve` takes the commitment only (the client computes it): the node sees the ticker and the nonce at the reveal, when the reservation is deep and bound to the address's script; the wait is polled with the reservation's output alone (`psbt/reservation`, 8.3.2). The nonce and the reservation never in a URL (refused in the query string) |
 | 14 | A build that misleads the signer | builds | Assets and pools by id with their tickers (the app checks both), the floor is the chain's quote less the slippage rounded down, `exp` bounded; the app quotes again and signs only for the floor or more; the payload hash binds what the page shows to what the extension signs |
 
 Backbone's enforcer interface (`~/skydoge/chains-ecash`, `src/grpc/server.cpp`) shares the server: it has no idle or

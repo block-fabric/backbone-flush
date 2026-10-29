@@ -20,6 +20,8 @@
 namespace publicapi {
 
 inline constexpr const char* REST_PREFIX{"/api/v1/"};
+//! The largest body of a request (a POST's JSON, a gRPC message): a PSBT built here fits in it signed (BuildPsbt).
+inline constexpr size_t MAX_BODY_BYTES{256 << 10};
 
 /** The REST face's routes, for grpcsrv::Options::rest. */
 grpcsrv::RestRouter MakeRestRouter(const pb::Pool& pool);

@@ -881,6 +881,7 @@ dialog::Answer App::AskHost(const Window::ConfirmDialog& confirm)
 {
     // Every fact of a confirmation shown, none cut: more than a dialog shows is refused instead.
     if (confirm.rows.size() > dialog::MAX_ROWS) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("Too much for one question (%u facts; at most %u): make it in parts", confirm.rows.size(), dialog::MAX_ROWS));
+    if (const auto why{dialog::WhyNotWhole(confirm.rows)}) throw HostError(BRIDGE_INVALID_REQUEST, *why);
     const std::string kind{confirm.kind.empty() ? confirm.title : confirm.kind};
     Window::ConfirmDialog shown{confirm};
     {
@@ -1702,6 +1703,13 @@ void App::RegisterHostMethods()
         deps.choose = [this](const Window::FileDialog& dialog) { return Choose(dialog); };
         // A link's logo where the link says the site hosts it (8.1.0, logo_url): on the thread of the link, never the UI's.
         deps.fetch = [](const std::string& url, size_t max_bytes, std::string& error) { return FetchUrl(url, max_bytes, error); };
+        // FetchUrl goes to the site directly: not while the node goes through a proxy or Tor.
+        deps.direct_downloads = [this] {
+            for (const char* arg : {"-proxy", "-onion", "-onlynet"}) {
+                if (m_args.IsArgSet(arg) && !m_args.IsArgNegated(arg)) return false;
+            }
+            return true;
+        };
         deps.inform = [this](const std::string& title, const std::string& message, bool error) {
             UniValue dialog{UniValue::VOBJ};
             dialog.pushKV("kind", "message");

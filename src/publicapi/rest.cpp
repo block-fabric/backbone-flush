@@ -85,6 +85,8 @@ const std::vector<RouteDef>& Routes()
         {"POST", {"psbt", "reserve"}, "BuildPsbt", {{"verb", "reserve"}}, false, {"nonce", "reservation", "commitment"}},
         {"POST", {"psbt", "launch"}, "BuildPsbt", {{"verb", "launch"}}, false, {"nonce", "reservation", "commitment"}},
         {"POST", {"psbt", "register"}, "BuildPsbt", {{"verb", "register"}}, false, {"nonce", "reservation", "commitment"}},
+        // 8.3.2: how deep a reservation is, by its output alone (in the body): what a site polls before psbt/launch.
+        {"POST", {"psbt", "reservation"}, "GetReservation", {}, false, {"reservation"}},
         // 8.1.0: a logo kept an hour by its SHA-256 (a body {"base64": ...}), and served as its image.
         {"POST", {"logos"}, "UploadLogo", {}},
         {"GET", {"logos", "{sha256}"}, "GetUploadedLogo", {}, true},
@@ -195,7 +197,7 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
         std::string error;
         if (http_method == "POST") {
             UniValue json;
-            if (body.size() > (256 << 10) || !json.read(body) || !json.isObject()) return Bad("the body is a JSON object");
+            if (body.size() > MAX_BODY_BYTES || !json.read(body) || !json.isObject()) return Bad("the body is a JSON object");
             if (!request->FromJson(json, error)) return Bad(error);
         }
         UniValue fields(UniValue::VOBJ);

@@ -9,6 +9,7 @@
 #include <webui/local.h>
 
 #include <addresstype.h>
+#include <bitassets/rpcutil.h>
 #include <bitassets/state.h>
 #include <pos/bond.h>
 #include <sidechain/state.h>
@@ -60,10 +61,13 @@
 #include <webui/rpcpolicy.h>
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 
 using wallet::AddressPurpose;
 using wallet::CCoinControl;
@@ -867,6 +871,52 @@ UniValue PsbtState(interfaces::Wallet* wallet, const PartiallySignedTransaction&
     return out;
 }
 
+/** What the operation of a marker is, in words: "none" when it only moves tokens. */
+std::string OperationName(const bitassets::Marker& marker)
+{
+    // In the order of bitassets::Operation.
+    static constexpr std::array<const char*, 30> NAMES{
+        "a reservation of an asset name", "a registration of an asset", "a mint", "an update of an asset", "a burn", "a swap",
+        "liquidity added to a pool", "liquidity taken out of a pool", "an auction created", "a bid in an auction", "an auction collected",
+        "an asset released", "a trade along a route", "an oracle registered", "an attestation of an oracle", "an oracle contract created",
+        "an oracle contract settled", "a logo set", "a display name set", "a pool created", "liquidity added to a pool",
+        "liquidity taken out of a pool", "a trade through pools", "a launch", "a launch's creator paid", "a position opened",
+        "a position changed", "a limit order placed", "a limit order settled", "an asset put on a bonding curve"};
+    static_assert(std::variant_size_v<bitassets::Operation> == NAMES.size());
+    if (!marker.operation) return "none: it moves tokens only";
+    return NAMES[marker.operation->index()];
+}
+
+/** An asset as a confirmation shows it: its ticker, its number and its id, short; or its id whole if it is not registered. */
+std::string AssetText(const TokenLookup& lookup, const bitassets::AssetId& asset)
+{
+    if (asset.IsNull()) return bitassets::AssetLabel(asset, nullptr);
+    const auto record{lookup.asset ? lookup.asset(asset) : std::nullopt};
+    const std::string id{asset.GetHex()};
+    if (!record) return strprintf("an asset not registered (0x%s)", id);
+    return strprintf("%s (#%s, 0x%s…%s)", record->text.empty() ? std::string{"(no published name)"} : record->text, bitassets::FormatSeq(record->seq), id.substr(0, 8), id.substr(56));
+}
+
+/** A token as a confirmation shows it: an amount of an asset with its ticker, a control coin, a share of a pool... */
+std::string TokenText(const TokenLookup& lookup, const bitassets::Token& token)
+{
+    const std::string id{token.id.GetHex()};
+    const std::string short_id{id.substr(0, 8) + "…" + id.substr(56)};
+    switch (token.kind) {
+    case bitassets::Token::Kind::ASSET: {
+        const auto record{lookup.asset ? lookup.asset(token.id) : std::nullopt};
+        return strprintf("%s %s", bitassets::FormatUnits(token.amount, record ? record->decimals : 0), AssetText(lookup, token.id));
+    }
+    case bitassets::Token::Kind::CONTROL: return "the control coin of " + AssetText(lookup, token.id);
+    case bitassets::Token::Kind::RESERVATION: return "a reservation of an asset name (made by " + short_id + ")";
+    case bitassets::Token::Kind::LP: return strprintf("%u shares of the pool %s", token.amount, short_id);
+    case bitassets::Token::Kind::RECEIPT: return "the receipt of the auction " + short_id;
+    case bitassets::Token::Kind::POSITION: return "the position " + short_id;
+    case bitassets::Token::Kind::ORDER: return "the limit order " + short_id;
+    }
+    return "a token";
+}
+
 /** A label of the page as a dialog of the host shows it: one line, cut (audit 7 #4). */
 std::string ShownLabel(const std::string& label)
 {
@@ -877,6 +927,14 @@ std::string ShownLabel(const std::string& label)
 void OutputRows(std::vector<dialog::Row>& rows, interfaces::Wallet* wallet, const CTxOut& out, const std::string& label, const std::string& to = "Pay to")
 {
     CTxDestination dest;
+    if (bitassets::IsMarkerScript(out.scriptPubKey)) {
+        // The marker of an asset operation: what it does, and what it pays into it (an order, a pool, a position, a launch),
+        // not burned.
+        const auto marker{bitassets::ParseMarkerScript(out.scriptPubKey)};
+        rows.push_back(confirm::Text("Asset operation", marker ? OperationName(*marker) : "a marker that cannot be read (the chain refuses the transaction)"));
+        if (out.nValue > 0) rows.push_back(confirm::Amount("Paid into the operation", out.nValue));
+        return;
+    }
     if (out.scriptPubKey.IsUnspendable()) {
         rows.push_back(confirm::Destination("Data", ScriptToAsmStr(out.scriptPubKey)));
         if (out.nValue > 0) rows.push_back(confirm::Amount("Amount (burned)", out.nValue));
@@ -928,33 +986,77 @@ std::vector<dialog::Row> PaymentRows(interfaces::Wallet& wallet, const CTransact
     return rows;
 }
 
-/** The rows of a PSBT: what it spends of this wallet, each output (destination first), the fee when known, the id. */
-std::vector<dialog::Row> PsbtRows(interfaces::Wallet* wallet, const PartiallySignedTransaction& psbtx)
+/** The tokens of the chain as it is, for PsbtRows: none without a chain. */
+TokenLookup ChainTokens(interfaces::Node& node)
+{
+    const node::NodeContext* context{node.context()};
+    interfaces::Chain* chain{context && context->chain ? context->chain.get() : nullptr};
+    if (!chain) return {};
+    return {[chain](const COutPoint& outpoint) { return chain->getBitAssetsToken(outpoint); }, [chain](const bitassets::AssetId& asset) { return chain->getBitAsset(asset); }};
+}
+
+} // namespace
+
+std::vector<dialog::Row> PsbtRows(interfaces::Wallet* wallet, const PartiallySignedTransaction& psbtx, const TokenLookup& lookup)
 {
     std::vector<dialog::Row> rows{wallet ? confirm::WalletRows(wallet->getWalletName()) : std::vector<dialog::Row>{confirm::Text("Network", confirm::NetworkName())}};
     CAmount mine_in{0};
-    size_t mine_n{0}, unknown{0};
-    for (const PSBTInput& input : psbtx.inputs) {
+    size_t mine_n{0}, unknown{0}, unseen{0};
+    // The tokens its inputs spend, as the chain knows them: each said, the wallet's apart (a token output carries no ECX:
+    // without them, a PSBT that gives away a control coin would read as a spend of a few satoshis).
+    std::vector<dialog::Row> token_rows;
+    std::vector<std::string> control_of;
+    bool mine_tokens{false};
+    for (size_t i{0}; i < psbtx.inputs.size(); ++i) {
+        const PSBTInput& input{psbtx.inputs[i]};
         CTxOut utxo;
-        if (!input.GetUTXO(utxo)) {
-            ++unknown;
-            continue;
-        }
-        if (wallet && wallet->txoutIsMine(utxo)) {
+        const bool known{input.GetUTXO(utxo)};
+        if (!known) ++unknown;
+        const bool mine{known && wallet && wallet->txoutIsMine(utxo)};
+        if (mine) {
             mine_in += utxo.nValue;
             ++mine_n;
+        }
+        const auto token{lookup.token ? lookup.token(input.GetOutPoint()) : std::nullopt};
+        if (token) {
+            const std::string label{psbtx.inputs.size() > 1 ? strprintf(" (input %u)", i + 1) : std::string{}};
+            token_rows.push_back(confirm::Text((mine ? "Spends this wallet's" : "Spends") + label, TokenText(lookup, *token)));
+            if (mine) mine_tokens = true;
+            if (mine && token->kind == bitassets::Token::Kind::CONTROL) control_of.push_back(AssetText(lookup, token->id));
+        } else if (mine && utxo.nValue == 0) {
+            ++unseen;
         }
     }
     if (wallet) {
         if (mine_n) rows.push_back({"Spends of this wallet", strprintf("%s (%u of %u inputs)", confirm::Coins(mine_in), mine_n, psbtx.inputs.size()), dialog::Row::Kind::AMOUNT});
         else rows.push_back(confirm::Note("None of its inputs is a coin of this wallet that it knows."));
     }
+    rows.insert(rows.end(), token_rows.begin(), token_rows.end());
+    for (const std::string& asset : control_of) {
+        rows.push_back(confirm::Note(strprintf("Warning: it spends the control coin of %s. Whoever gets it controls the asset (its supply, its data, its release).", asset)));
+    }
+    if (mine_tokens) rows.push_back(confirm::Note("Warning: it spends tokens of this wallet. Check below which output carries each of them, and to whom."));
+    if (unseen) rows.push_back(confirm::Note(strprintf("%u of the wallet's inputs hold no %s and no token the chain knows yet (a transaction not in a block?): what they carry is not shown.", unseen, CURRENCY_UNIT)));
     if (unknown) rows.push_back(confirm::Note(strprintf("%u of its inputs do not say what they spend.", unknown)));
+    // The marker of its asset operation, if any: which outputs carry tokens, and which take a result of the operation.
+    std::map<uint32_t, std::optional<bitassets::Token>> carried;
+    size_t markers{0};
+    for (const PSBTOutput& o : psbtx.outputs) {
+        if (!bitassets::IsMarkerScript(o.script)) continue;
+        ++markers;
+        if (const auto marker{bitassets::ParseMarkerScript(o.script)}) {
+            for (const bitassets::MarkerOutput& m : marker->outputs) carried.emplace(m.n, m.token);
+        }
+    }
+    if (markers > 1) rows.push_back(confirm::Note("It has several asset markers: the chain refuses the transaction."));
     CAmount sum{0};
     for (size_t n{0}; n < psbtx.outputs.size(); ++n) {
         const PSBTOutput& o{psbtx.outputs[n]};
         if (psbtx.outputs.size() > 1) rows.push_back(confirm::Heading(strprintf("Output %u of %u", n + 1, psbtx.outputs.size())));
         OutputRows(rows, wallet, CTxOut(o.amount, o.script), {});
+        if (const auto it{carried.find(n)}; it != carried.end()) {
+            rows.push_back(confirm::Text("Carries", it->second ? TokenText(lookup, *it->second) : std::string{"what the asset operation gives it (known once in a block)"}));
+        }
         sum += o.amount;
     }
     const node::PSBTAnalysis analysis{node::AnalyzePSBT(psbtx)};
@@ -969,7 +1071,6 @@ std::vector<dialog::Row> PsbtRows(interfaces::Wallet* wallet, const PartiallySig
     return rows;
 }
 
-} // namespace
 
 struct WalletApi::Prepared {
     std::string wallet;
@@ -1019,6 +1120,7 @@ dialog::Answer WalletApi::Ask(const Window::ConfirmDialog& dialog) const
 {
     // Every fact of a confirmation shown, none cut: more than a dialog shows is refused instead.
     if (dialog.rows.size() > dialog::MAX_ROWS) throw HostError(BRIDGE_INVALID_REQUEST, strprintf("Too much for one question (%u facts; at most %u): make it in parts", dialog.rows.size(), dialog::MAX_ROWS));
+    if (const auto why{dialog::WhyNotWhole(dialog.rows)}) throw HostError(BRIDGE_INVALID_REQUEST, *why);
     // Without a way to ask (a test that gives none), nothing is accepted.
     return m_ask ? m_ask(dialog) : dialog::Answer{};
 }
@@ -2403,7 +2505,7 @@ WalletApi::WalletApi(NodeFn node, FileFn may_use_file, guard::AskFn ask) : m_nod
                          "can broadcast it.\n\nSign it only if you asked for it.";
         dialog.accept = "Sign";
         dialog.kind = "psbt";
-        dialog.rows = PsbtRows(w.get(), psbtx);
+        dialog.rows = PsbtRows(w.get(), psbtx, ChainTokens(m_node()));
         const bool finalize{Bool(params, "finalize", true)};
         bool complete{false};
         size_t n_signed{0};
@@ -2451,7 +2553,7 @@ WalletApi::WalletApi(NodeFn node, FileFn may_use_file, guard::AskFn ask) : m_nod
         dialog.message = "The transaction goes to the network and cannot be taken back.\n\nBroadcast it only if you asked for it.";
         dialog.accept = "Broadcast";
         dialog.kind = "broadcast";
-        dialog.rows = PsbtRows(w.get(), psbtx);
+        dialog.rows = PsbtRows(w.get(), psbtx, ChainTokens(m_node()));
         if (!Ask(dialog).accepted) throw HostError(BRIDGE_CANCELLED, "The transaction was not broadcast: it was declined.");
         std::string err_string;
         const node::TransactionError error{m_node().broadcastTransaction(tx, node::DEFAULT_MAX_RAW_TX_FEE_RATE.GetFeePerK(), err_string)};

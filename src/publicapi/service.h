@@ -45,10 +45,16 @@ struct Options {
     double logo_global_per_minute{120};
     size_t logo_entries{1024};
     std::chrono::seconds logo_ttl{3600};
+    //! IPv6 clients of one network of `wide_prefix` bits (0: none) also limited together, at `wide_multiplier` times one
+    //! client's rate and burst: one client alone never spends a network's share.
+    int wide_prefix{48};
+    double wide_multiplier{64};
     //! Serve gRPC server reflection (a client stream: each message is charged as a call).
     bool reflection{false};
     //! Expensive calls (quotes, builds, the first page of a tip) running at once, at most.
     int max_expensive{4};
+    //! Broadcasts running at once, at most: a gate of their own.
+    int max_broadcasts{4};
     //! The cache of replies, per tip.
     size_t cache_entries{4096};
     size_t cache_bytes{64 << 20};

@@ -96,22 +96,6 @@ std::string Digest(const std::string& request, const Window::ConfirmDialog& dial
     return HexStr(hash);
 }
 
-bool HasDuplicateKeys(const UniValue& value)
-{
-    if (value.isObject()) {
-        std::set<std::string> seen;
-        for (size_t i{0}; i < value.size(); ++i) {
-            if (!seen.insert(value.getKeys()[i]).second) return true;
-            if (HasDuplicateKeys(value.getValues()[i])) return true;
-        }
-    } else if (value.isArray()) {
-        for (const UniValue& v : value.getValues()) {
-            if (HasDuplicateKeys(v)) return true;
-        }
-    }
-    return false;
-}
-
 std::string Bindings::CheckText(Check check)
 {
     switch (check) {
@@ -1019,6 +1003,7 @@ private:
             return answer;
         }
         if (dialog.rows.size() > dialog::MAX_ROWS) throw HostError(BRIDGE_INVALID_REQUEST, "Too much for one question");
+        if (const auto why{dialog::WhyNotWhole(dialog.rows)}) throw HostError(BRIDGE_INVALID_REQUEST, *why);
         UniValue description{DialogJson(dialog)};
         description.pushKV("token", m_bindings.Issue(context->request, digest, WalletId(context->wallet), now));
         description.pushKV("digest", digest);

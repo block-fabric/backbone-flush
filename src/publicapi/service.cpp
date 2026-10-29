@@ -32,6 +32,7 @@
 #include <drivechain/sidechain.h>
 #include <key_io.h>
 #include <logging.h>
+#include <netbase.h>
 #include <node/context.h>
 #include <node/transaction.h>
 #include <policy/policy.h>
@@ -52,6 +53,7 @@
 #include <util/string.h>
 #include <util/time.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <univalue.h>
 
@@ -289,6 +291,8 @@ double CostOf(const std::string& method_path)
     if (method.starts_with("Quote") || method == "BuildAction" || method == "GetAsset" || method == "ListAssets") return 4;
     // 8.3.0: a PSBT reads the address's coins (a scan of the UTXO set when the client names none) and their transactions.
     if (method == "BuildPsbt") return 8;
+    // 8.3.2: a reservation's depth: lookups in the mempool, the UTXO set and the state.
+    if (method == "GetReservation") return 4;
     if (method == "GetPortfolio") return 4;
     if (method == "ListLaunches" || method == "ListPools" || method == "GetVerifications" || method == "GetHoldings" || method == "GetLaunchLog") return 2;
     if (method == "ServerReflectionInfo") return 2;
@@ -311,11 +315,17 @@ public:
           m_logo_limits{options.logo_per_minute / 60.0, options.logo_burst},
           m_logo_global{options.logo_global_per_minute / 60.0, std::max(1.0, options.logo_global_per_minute / 6.0), 1},
           m_logos{options.logo_entries, options.logo_ttl},
-          m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}
+          m_wide_limits{options.rate * options.wide_multiplier, options.burst * options.wide_multiplier},
+          m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}, m_broadcast_gate{options.max_broadcasts}
     {
         RegisterAll(server);
         grpcsrv::RegisterHealth(server, pool, {SERVICE});
         if (options.reflection) grpcsrv::RegisterReflection(server, pool, {SERVICE});
+        if (m_node.validation_signals) m_node.validation_signals->RegisterSharedValidationInterface(m_tip_watch);
+    }
+    ~ServiceImpl() override
+    {
+        if (m_node.validation_signals) m_node.validation_signals->UnregisterSharedValidationInterface(m_tip_watch);
     }
 
     std::optional<Status> Guard(const grpcsrv::CallInfo& call) override
@@ -327,9 +337,20 @@ public:
         // A REST request is guarded once, decoded; a unary one before it is (its method's base), then after (the rest).
         const double cost{call.after_decode ? CostOf(call.path, call.request) - CostOf(call.path) : CostOf(call.path, call.request)};
         if (cost <= 0) return std::nullopt;
+        // An IPv6 client's network (Options::wide_prefix) as a whole too, looked at first: a call it refuses makes no
+        // bucket of the client's and takes nothing from it.
+        const auto wide{WideClient(call.client, m_options.wide_prefix)};
+        const auto wide_refused{[&](double wait) {
+            const int seconds{std::max(1, static_cast<int>(std::ceil(wait)))};
+            return Status{Code::RESOURCE_EXHAUSTED, strprintf("rate limit of the network %s (try again in %d s)", *wide, seconds), {{"retry-after", util::ToString(seconds)}}};
+        }};
+        if (wide && !m_wide_limits.Has(*wide, cost)) return wide_refused(1);
         if (const auto wait{m_limits.Take(call.client, cost)}) {
             const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
             return Status{Code::RESOURCE_EXHAUSTED, strprintf("rate limit: %g calls a second at most (try again in %d s)", m_options.rate, seconds), {{"retry-after", util::ToString(seconds)}}};
+        }
+        if (wide) {
+            if (const auto wait{m_wide_limits.Take(*wide, cost)}) return wide_refused(*wait);
         }
         if (call.path == std::string{"/"} + SERVICE + "/Broadcast") {
             if (!m_options.broadcast) return Status{Code::PERMISSION_DENIED, "this node does not broadcast for others (-publicapibroadcast=0)"};
@@ -360,11 +381,33 @@ private:
     // -----------------------------------------------------------------------------------------------------
     // Plumbing
 
+    /**
+     * The network of `prefix` bits of an IPv6 client, keyed by its address ("2001:db8::1", a /128) or by a longer prefix
+     * ("2001:db8:1:2::/64"); none for another client, or a key as short as the network already.
+     */
+    static std::optional<std::string> WideClient(const std::string& client, int prefix)
+    {
+        if (prefix <= 0) return std::nullopt;
+        const auto slash{client.find('/')};
+        const auto network{LookupHost(client.substr(0, slash), /*fAllowLookup=*/false)};
+        if (!network || !network->IsIPv6()) return std::nullopt;
+        int bits{128};
+        if (slash != std::string::npos) {
+            const auto given{ToIntegral<int>(client.substr(slash + 1))};
+            if (!given) return std::nullopt;
+            bits = *given;
+        }
+        if (bits <= prefix) return std::nullopt;
+        return CSubNet{*network, static_cast<uint8_t>(prefix)}.ToString();
+    }
+
     struct Policy {
         //! Replies cached per tip (the same request at the same tip: the same reply).
         bool cache{true};
         //! Taken through the gate of expensive calls.
         bool expensive{false};
+        //! Taken through the gate of broadcasts instead (builds and quotes never hold a broadcast up).
+        bool broadcast{false};
         std::string cache_control{"public, max-age=5"};
         //! Read at the chain's tip (false: a call that reads nothing of the chain, served while the node starts too).
         bool tip{true};
@@ -396,6 +439,10 @@ private:
             t.view = std::move(copy);
         }
         if (!t.view) Fail(Code::UNAVAILABLE, "the state cannot be read now");
+        // Kept while the state is this one: calls at the same state share this snapshot (SharedSnapshot holds it weakly),
+        // even one after the other, and the overlay's changes are copied once per state, not once per call. Let go of as
+        // the tip moves or the state is flushed (TipWatch), never held across states.
+        m_tip_watch->Keep(t.view);
         return t;
     }
 
@@ -425,8 +472,8 @@ private:
                     if (policy.cache) reply = m_cache.Get(key, tip.hash);
                     if (!reply) {
                         std::optional<Gate::Pass> pass;
-                        if (policy.expensive) {
-                            pass.emplace(m_gate.Enter());
+                        if (policy.expensive || policy.broadcast) {
+                            pass.emplace((policy.broadcast ? m_broadcast_gate : m_gate).Enter());
                             if (!*pass) return w->Finish(Status{Code::RESOURCE_EXHAUSTED, "busy: try again in a moment", {{"retry-after", "1"}}});
                         }
                         auto made{std::make_shared<const Message>(fn(req, tip))};
@@ -1959,7 +2006,13 @@ private:
     //! its whole previous transaction).
     static constexpr size_t MAX_PSBT_COINS{50};
     static constexpr size_t MAX_PSBT_INPUTS{30};
-    static constexpr size_t MAX_PSBT_BYTES{400'000};
+    static constexpr size_t MAX_PSBT_BYTES{180'000};
+    //! The highest fee rate a PSBT is built at: 200 sat/vB, ten times the wallet's fallback.
+    static constexpr CFeeRate MAX_PSBT_FEE_RATE{200'000};
+    //! What signing may add to each input (a partial signature and its key, or the witness; a derivation path).
+    static constexpr size_t SIGNED_INPUT_BYTES{256};
+    // Signed, in base64, in a body of POST broadcast {psbt, max_burn_units}: it fits.
+    static_assert((MAX_PSBT_BYTES + MAX_PSBT_INPUTS * SIGNED_INPUT_BYTES + 2) / 3 * 4 + 1024 <= MAX_BODY_BYTES);
     //! A P2WPKH input's virtual size (a 72-byte signature and a key): what spending a coin adds.
     static constexpr int32_t P2WPKH_INPUT_VSIZE{68};
 
@@ -2088,7 +2141,8 @@ private:
     /**
      * The fee rate the node's wallet would pay (wallet/fees.cpp, GetMinimumFeeRate, with the wallet's defaults): the
      * estimate for 6 blocks (economical), else the fallback (20 sat/vB), at least the mempool's minimum, the relay's
-     * minimum and the wallet's (1 sat/vB).
+     * minimum and the wallet's (1 sat/vB); never more than MAX_PSBT_FEE_RATE (the estimate held to it; a mempool whose
+     * minimum is above it: refused, try again later).
      */
     CFeeRate WalletFeeRate() const
     {
@@ -2098,9 +2152,14 @@ private:
             rate = CFeeRate{FeeRateEstimationRef(estimate).feerate};
         }
         if (rate == CFeeRate{0}) rate = CFeeRate{20'000};
+        rate = std::min(rate, MAX_PSBT_FEE_RATE);
         rate = std::max(rate, m_node.mempool->GetMinFee());
         rate = std::max(rate, m_node.mempool->m_opts.min_relay_feerate);
-        return std::max(rate, CFeeRate{1'000});
+        rate = std::max(rate, CFeeRate{1'000});
+        if (rate > MAX_PSBT_FEE_RATE) {
+            Fail(Code::UNAVAILABLE, strprintf("the network asks a fee rate of %s now, more than the %s this API builds at: try again later", rate.ToString(FeeRateFormat::SAT_VB), MAX_PSBT_FEE_RATE.ToString(FeeRateFormat::SAT_VB)));
+        }
+        return rate;
     }
 
     struct PsbtBuilt {
@@ -2290,6 +2349,46 @@ private:
         const CTransactionRef tx{TxOfCoin(outpoint, static_cast<int>(coin->nHeight), blocks)};
         if (!tx) Fail(Code::UNAVAILABLE, "the reservation's transaction cannot be read now");
         return {outpoint, coin->out, tx, static_cast<int>(coin->nHeight)};
+    }
+
+    /**
+     * 8.3.2: how deep a reservation is, by its output alone (POST psbt/reservation): what a site polls before psbt/launch,
+     * which takes the ticker and the nonce, so that the node sees them only once the reservation can be revealed.
+     */
+    Message GetReservation(const Message& req, const Tip& tip) const
+    {
+        const COutPoint outpoint{ParseOutpoint(req.GetString("reservation"), "reservation")};
+        const int needed{std::max(1, Params().GetConsensus().sidechain.bitassets_reveal_depth)};
+        Message m{New("ReservationStatus")};
+        m.SetString("reservation", strprintf("%s:%u", outpoint.hash.GetHex(), outpoint.n));
+        m.SetUInt("needed", static_cast<uint32_t>(needed));
+        m.SetUInt("height", static_cast<uint32_t>(tip.height));
+        const auto status{[&](const char* text, int confirmations) {
+            m.SetString("status", text);
+            m.SetUInt("confirmations", static_cast<uint32_t>(std::max(0, confirmations)));
+            m.SetBool("ready", std::string_view{text} == "ready");
+            return m;
+        }};
+        // One lookup each, no scan: the mempool's (its own lock), then the coin's (cs_main).
+        bool spent_in_mempool, in_mempool;
+        {
+            LOCK(m_node.mempool->cs);
+            spent_in_mempool = m_node.mempool->isSpent(outpoint);
+            in_mempool = m_node.mempool->exists(outpoint.hash);
+        }
+        if (spent_in_mempool) return status("spent", 0);
+        const std::optional<::Coin> coin{WITH_LOCK(::cs_main, return m_node.chainman->ActiveChainstate().CoinsTip().GetCoin(outpoint))};
+        if (!coin) return status(in_mempool ? "mempool" : "unseen", 0);
+        const bitassets::State state{tip.State()};
+        const auto token{state.GetToken(outpoint)};
+        if (!token && static_cast<int>(coin->nHeight) > tip.height) return status("confirming", 0);
+        if (!token || token->kind != bitassets::Token::Kind::RESERVATION) Fail(Code::INVALID_ARGUMENT, "that output carries no reservation");
+        const auto origin{state.GetReservationOrigin(Txid::FromUint256(token->id))};
+        if (!origin) Fail(Code::INVALID_ARGUMENT, "that output carries no reservation the chain knows");
+        // As CheckedReservation: revealed only `reveal_depth` blocks after the block that made it.
+        const int confirmations{tip.height - origin->height + 1};
+        const bool deep{int64_t{tip.height + 1} - origin->height >= Params().GetConsensus().sidechain.bitassets_reveal_depth};
+        return status(deep ? "ready" : "confirming", confirmations);
     }
 
     /** The build of build/launch or build/register for the same parameters (BuildPsbtRequest's are BuildActionRequest's). */
@@ -3431,7 +3530,7 @@ private:
 
         Serve(server, "BuildAction", fresh, [this](const Message& req, const Tip& tip) { return Build(req, tip); });
 
-        Serve(server, "Broadcast", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip&) {
+        Serve(server, "Broadcast", Policy{.cache = false, .broadcast = true, .cache_control = "no-store"}, [this](const Message& req, const Tip&) {
             const std::string& hex{req.GetString("hex")};
             const std::string& psbt_text{req.GetString("psbt")};
             if (hex.empty() == psbt_text.empty()) Fail(Code::INVALID_ARGUMENT, "hex (a signed transaction) or psbt (a PSBT whose inputs are all signed, base64): one of the two");
@@ -3484,6 +3583,7 @@ private:
 
         // 8.3.0: unsigned transactions of a launch's steps for a wallet that signs what it is given.
         Serve(server, "BuildPsbt", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip& tip) { return BuildPsbt(req, tip); });
+        Serve(server, "GetReservation", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip& tip) { return GetReservation(req, tip); });
 
         // 8.1.0: logos kept by their SHA-256 for a link to name (logo_url), checked with the chain's rules.
         const Policy logos{.cache = false, .cache_control = "no-store", .tip = false};
@@ -3524,16 +3624,22 @@ private:
 
     UniValue PegInfo() const
     {
-        // The mainchain node is asked at most every 30 seconds, by one call at a time; the others take the last answer.
-        LOCK(m_peg_mutex);
-        const int64_t now{GetTime()};
-        if (now - m_peg_time < 30) return m_peg;
-        m_peg_time = now;
-        try {
-            m_peg = Rpc("getpeginfo", UniValue{UniValue::VARR});
-        } catch (const std::exception&) {
-            m_peg = UniValue{};
+        // The mainchain node is asked at most every 30 seconds, by one call at a time, without the lock; the others take the
+        // last answer meanwhile.
+        {
+            LOCK(m_peg_mutex);
+            const int64_t now{GetTime()};
+            if (now - m_peg_time < 30) return m_peg;
+            // One call asks the mainchain node, without the lock: the others take what is known meanwhile.
+            m_peg_time = now;
         }
+        UniValue peg;
+        try {
+            peg = Rpc("getpeginfo", UniValue{UniValue::VARR});
+        } catch (const std::exception&) {
+        }
+        LOCK(m_peg_mutex);
+        m_peg = std::move(peg);
         return m_peg;
     }
 
@@ -3547,7 +3653,27 @@ private:
     RateLimiter m_logo_global;
     LogoStore m_logos;
     mutable ReplyCache m_cache;
+    RateLimiter m_wide_limits;
     mutable Gate m_gate;
+    mutable Gate m_broadcast_gate;
+    /** The last snapshot of the state a call read (TakeTip), kept until the tip moves or the state is flushed. */
+    class TipWatch final : public CValidationInterface
+    {
+    public:
+        //! A snapshot of another version of the state takes the place of the one kept.
+        void Keep(std::shared_ptr<const sidechain::StoreView> view) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { WITH_LOCK(m_mutex, m_view = std::move(view)); }
+
+    protected:
+        // Synchronous, as the tip changes.
+        void ActiveTipChange(const CBlockIndex&, bool) override { WITH_LOCK(m_mutex, Drop()); }
+        void ChainStateFlushed(const kernel::ChainstateRole&, const CBlockLocator&) override { WITH_LOCK(m_mutex, Drop()); }
+
+    private:
+        void Drop() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { m_view.reset(); }
+        mutable Mutex m_mutex;
+        std::shared_ptr<const sidechain::StoreView> m_view GUARDED_BY(m_mutex);
+    };
+    const std::shared_ptr<TipWatch> m_tip_watch{std::make_shared<TipWatch>()};
     mutable Mutex m_table_mutex;
     mutable std::shared_ptr<const LaunchTable> m_table GUARDED_BY(m_table_mutex);
     mutable Mutex m_peg_mutex;

@@ -22,6 +22,8 @@
 #include <publicapi/limits.h>
 #include <publicapi/rest.h>
 #include <publicapi/service.h>
+#include <sidechain/store.h>
+#include <validation.h>
 #include <crypto/sha256.h>
 #include <test/bitassets_logo_samples.h>
 #include <test/util/setup_common.h>
@@ -251,6 +253,24 @@ BOOST_AUTO_TEST_CASE(rate_limits_and_cache)
     BOOST_CHECK(!limits.Take("c", 1, t0));
     BOOST_CHECK(!limits.Take("d", 1, t0 + seconds{100}));
     BOOST_CHECK_LE(limits.Clients(), 3U);
+    // Past the bound, a bucket full again among those used longest ago goes (b, full by then); d stays, spent.
+    BOOST_CHECK(!limits.Take("e", 1, t0 + seconds{100}));
+    BOOST_CHECK_EQUAL(limits.Clients(), 3U);
+    BOOST_CHECK(limits.Take("d", 2, t0 + seconds{100}));
+    // A drained bucket is never dropped for a new key: new keys share one bucket meanwhile, and the drained stay drained.
+    publicapi::RateLimiter full{0.001, 1, 2};
+    BOOST_CHECK(!full.Take("x", 1, t0));
+    BOOST_CHECK(!full.Take("y", 1, t0));
+    BOOST_CHECK(!full.Take("z", 1, t0)); // the shared bucket's
+    BOOST_CHECK(full.Take("w", 1, t0));  // the shared bucket spent too
+    BOOST_CHECK(full.Take("x", 1, t0));  // x not started afresh
+    BOOST_CHECK_EQUAL(full.Clients(), 2U);
+    // Has: whether a call would be taken, taking nothing and making no bucket.
+    BOOST_CHECK(!full.Has("x", 1, t0));
+    publicapi::RateLimiter look{1, 2, 3};
+    BOOST_CHECK(look.Has("p", 2, t0));
+    BOOST_CHECK(!look.Has("p", 3, t0));
+    BOOST_CHECK_EQUAL(look.Clients(), 0U);
 
     publicapi::ReplyCache cache{2, 1 << 20};
     const uint256 tip1{1}, tip2{2};
@@ -421,6 +441,13 @@ BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
     BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(b));
     BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(b).request->GetString("max_burn_units"), "100000000");
     BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/BuildPsbt"), 8);
+    // 8.3.2: how deep a reservation is, by its output alone, in the body only.
+    auto depth{publicapi::Route(Pool(), "POST", "psbt/reservation", "", R"({"reservation":")" + txid + R"(:0"})")};
+    BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(depth));
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(depth).method_path, "/flush.dex.v1.DexService/GetReservation");
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(depth).request->GetString("reservation"), txid + ":0");
+    BOOST_CHECK(std::holds_alternative<grpcsrv::Status>(publicapi::Route(Pool(), "POST", "psbt/reservation", "reservation=" + txid + ":0", "{}")));
+    BOOST_CHECK_EQUAL(publicapi::CostOf("/flush.dex.v1.DexService/GetReservation"), 4);
 
     // The launch the wallet's launchtoken and the API's psbt/launch both make (bitassets/launch.h).
     bitassets::LaunchRules rules;
@@ -620,6 +647,70 @@ BOOST_AUTO_TEST_CASE(logo_uploads_through_the_service)
     BOOST_CHECK_EQUAL(StatusOf(r), 429);
     BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
     BOOST_CHECK_EQUAL(StatusOf(post(again, "198.51.100.7")), 200);
+}
+
+BOOST_FIXTURE_TEST_CASE(state_snapshot_kept_for_its_state_only, TestChain100Setup)
+{
+    // The snapshot of the state a call read is kept for the next calls at that state (its overlay copied once), and let
+    // go of as the tip moves: never held across states.
+    grpcsrv::Options options;
+    options.rest_prefix = publicapi::REST_PREFIX;
+    options.rest = publicapi::MakeRestRouter(Pool());
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    const auto shared{[&] { return WITH_LOCK(::cs_main, return m_node.chainman->ActiveChainstate().SideCache().SharedSnapshot()); }};
+    Http1(server, "GET /api/v1/tickers/MOON HTTP/1.1\r\n\r\n");
+    const std::weak_ptr<const sidechain::StoreView> kept{shared()};
+    BOOST_CHECK(!kept.expired());
+    Http1(server, "GET /api/v1/tickers/SUN HTTP/1.1\r\n\r\n");
+    BOOST_CHECK(shared() == kept.lock());
+    CreateAndProcessBlock({}, CScript{} << OP_TRUE);
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+    BOOST_CHECK(kept.expired());
+}
+
+BOOST_AUTO_TEST_CASE(ipv6_prefixes_of_one_network_limited_together)
+{
+    // The /64s of one /48 have their own rates, and so many of them together at most (wide_multiplier): a site's many
+    // prefixes are not as many clients, and one client alone never spends its network's share.
+    grpcsrv::Options options;
+    grpcsrv::Server server{Pool(), options}, other{Pool(), options};
+    const std::map<std::string, std::string> headers;
+    const auto service_with{[&](grpcsrv::Server& server, int prefix) {
+        publicapi::Options service_options;
+        service_options.network = "regtest";
+        service_options.rate = 0.001;
+        service_options.burst = 1;
+        service_options.wide_prefix = prefix;
+        service_options.wide_multiplier = 4;
+        return publicapi::RegisterService(server, Pool(), m_node, service_options);
+    }};
+    {
+        const auto service{service_with(server, 48)};
+        const auto call{[&](const std::string& client) { return service->Guard(grpcsrv::CallInfo{.path = "/flush.dex.v1.DexService/GetStatus", .headers = headers, .client = client}); }};
+        // One /64 at its own limit, the rest of its /48 not held up by it.
+        BOOST_CHECK(!call("2001:db8:1:0::/64"));
+        BOOST_CHECK(call("2001:db8:1:0::/64"));
+        for (int i{1}; i < 4; ++i) BOOST_CHECK_MESSAGE(!call(strprintf("2001:db8:1:%x::/64", i)), i);
+        // The fifth of the /48 at the network's limit; another /48 and an IPv4 client not held up.
+        const auto wide{call("2001:db8:1:ff::/64")};
+        BOOST_REQUIRE(wide);
+        BOOST_CHECK(wide->message.find("2001:db8:1::/48") != std::string::npos);
+        BOOST_CHECK(!call("2001:db8:2::/64"));
+        BOOST_CHECK(!call("203.0.113.9"));
+        // A client keyed by its whole address (-publicapiipv6prefix=128) is counted in its /48 too.
+        for (int i{1}; i <= 4; ++i) BOOST_CHECK_MESSAGE(!call(strprintf("2001:db8:3::%x", i)), i);
+        const auto bare{call("2001:db8:3::99")};
+        BOOST_REQUIRE(bare);
+        BOOST_CHECK(bare->message.find("2001:db8:3::/48") != std::string::npos);
+    }
+    {
+        // wide_prefix 0: no network limit.
+        const auto service{service_with(other, 0)};
+        for (int i{0}; i < 8; ++i) BOOST_CHECK(!service->Guard(grpcsrv::CallInfo{.path = "/flush.dex.v1.DexService/GetStatus", .headers = headers, .client = strprintf("2001:db8:4:%x::/64", i)}));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(portfolio_cost_scales_with_its_addresses)

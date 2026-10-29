@@ -103,6 +103,9 @@ const std::vector<std::string>& KnownLinks();
  */
 std::optional<Window::ConfirmDialog> OpenUrlConfirmation(std::string_view url);
 
+/** Whether an object or array, at any depth, names a key twice (refused: two readers could take two values). */
+bool HasDuplicateKeys(const UniValue& value);
+
 } // namespace webui::guard
 
 #endif // BITCOIN_WEBUI_GUARD_H

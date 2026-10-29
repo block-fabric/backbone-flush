@@ -416,12 +416,18 @@ BOOST_FIXTURE_TEST_CASE(confirmations_resolve_every_asset_and_pool, ReadingNode)
              {"addpoolliquidity", Arr({UniValue{std::string(64, 'a')}, Obj({{"GOLD", UniValue{"1"}}})})},
              {"buyfromlaunch", Arr({UniValue{"MOON"}, UniValue{"1"}})},
              {"claimlaunch", Arr({UniValue{"1739-0029"}})},
+             {"updateasset", Arr({UniValue{"0000-0012-0034"}, Obj({{"info", UniValue{"x"}}})})},
+             {"transferassetcontrol", Arr({UniValue{"GOLD"}, UniValue{"addr"}})},
+             {"fixassetsupply", Arr({UniValue{"gold"}, UniValue{true}})},
+             {"releaseasset", Arr({UniValue{"1739-0029"}})},
          }) {
         const std::string why{Refused(method, params)};
         BOOST_CHECK_MESSAGE(why.find("id") != std::string::npos || why.find("No such pool") != std::string::npos, method << ": " << why);
     }
     // An id no asset has (this chain has no assets at all): refused, never shown as given.
     BOOST_CHECK_NE(Refused("swapasset", Arr({UniValue{some_id}, UniValue{"1"}, UniValue{"CHN"}})), "");
+    BOOST_CHECK_NE(Refused("releaseasset", Arr({UniValue{some_id}})), "");
+    BOOST_CHECK_NE(Refused("updateasset", Arr({UniValue{some_id}, Obj({{"info", UniValue{"x"}}})})), "");
     BOOST_CHECK_NE(Refused("swappools", Arr({UniValue{"CHN"}, UniValue{"1"}, Arr({UniValue{std::string(64, 'b')}})})), "");
     BOOST_CHECK_NE(Refused("removepoolliquidity", Arr({UniValue{"not a pool"}})), "");
 }
