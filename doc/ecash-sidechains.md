@@ -129,7 +129,7 @@ betanet more than 1,008 in 2,016: a two-week commitment of a hashrate majority.
 
 Layers on eCash is its own product, **Flush** (this repository): slot **46** on `ecash`, `ecashbeta` (the
 default network) and `ecashtest`; RPC/P2P ports 8254/8255, 38254/38255, 48254/48255; message starts `666c7821`,
-`666c7822`, `666c7823`; address prefixes `flx`, `bflx`, `tflx`; first blocks `272c13b2c599343bde93ec8664df173ab036ed538448cffb390a762758f92108`, `7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75`,
+`666c7822`, `666c7823`; address prefixes `flx`, `bflx`, `tflx`; first blocks `19b25cff92c2beec1032a50d1eff87b01e1d67e658e25ca099fe599213843662`, `7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75`,
 `2ee6a1d1e193d4115dedda242b367454e028804ba88618ba96b728789466f38d`; data in `~/.flush` (`betanet/`, `testnet4/`; Windows `%LOCALAPPDATA%\Flush`), the
 Chains networks (development only, `-chainsnetworks`) in `~/.flush/chains`. Its coin is shown as eCash's,
 ECX. (Before the renames: Starbase `sbx`, `bsbx`, `tsbx`, `7362732x`, `~/.starbase`; Layers on eCash `lyx`, `blyx`, `tlyx`, `6c79722x`, `~/.backbone-layers`; never launched.) Its rules are those of its main network (`ecashtest`: of its test network), its blocks of

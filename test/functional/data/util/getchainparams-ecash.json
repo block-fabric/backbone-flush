@@ -1,7 +1,7 @@
 {
   "chain": "ecash",
   "test_chain": true,
-  "genesis": "272c13b2c599343bde93ec8664df173ab036ed538448cffb390a762758f92108",
+  "genesis": "19b25cff92c2beec1032a50d1eff87b01e1d67e658e25ca099fe599213843662",
   "subsidy_halving_interval": 210000,
   "pow": {
     "limit": "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"

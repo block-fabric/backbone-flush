@@ -46,8 +46,12 @@ A fresh chain with the final rules only: every rule is active from Flush's first
    nodes at port 8255. The API node and the site pointed at mainnet.
 4. **Release:** builds of the node and the app.
 
+Done:
+- **Step 1 (Flush 8.3.3):** slot 46 activated in eCash block 978,331
+  (`000000000000000021edfa06433c6e13d6a06d026d6fdc26b3b894e8b4bf1f65`, 2026-10-29 23:17:51 UTC). That is
+  `main_activation_height`, and the block's time (1793315871) is the genesis time.
+
 Not ready yet:
-- The mainnet genesis and activation height (step 1).
-- The genesis validator keys (step 2).
+- The genesis validator keys (step 2): none are listed; the chain is merged mined until validators bond.
 - Mainnet nodes behind the DNS seed (step 3).
 - A mainnet site deployment.

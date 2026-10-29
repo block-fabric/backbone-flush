@@ -178,7 +178,7 @@ BOOST_AUTO_TEST_CASE(genesis_hashes)
         {ChainType::SIGNET, "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101"},
         {ChainType::REGTEST, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"},
         // Flush on eCash (README.md).
-        {ChainType::ECASH, "272c13b2c599343bde93ec8664df173ab036ed538448cffb390a762758f92108"},
+        {ChainType::ECASH, "19b25cff92c2beec1032a50d1eff87b01e1d67e658e25ca099fe599213843662"},
         {ChainType::ECASH_BETANET, "7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75"},
         {ChainType::ECASH_TESTNET, "2ee6a1d1e193d4115dedda242b367454e028804ba88618ba96b728789466f38d"},
     };

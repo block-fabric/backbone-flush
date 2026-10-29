@@ -25,7 +25,7 @@ GENESIS = {
     "testnet": "6ad3a3ff068fecfba95fc4aeec8404ac1db31cb840b852164db054ff31daa382",
     "signet": "68c4854ae0f132e80760c9089066ffb4a7ef6ded09387e941f3430edbf45e101",
     "regtest": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
-    "ecash": "272c13b2c599343bde93ec8664df173ab036ed538448cffb390a762758f92108",
+    "ecash": "19b25cff92c2beec1032a50d1eff87b01e1d67e658e25ca099fe599213843662",
     "ecashbeta": "7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75",
     "ecashtest": "2ee6a1d1e193d4115dedda242b367454e028804ba88618ba96b728789466f38d",
 }
@@ -65,10 +65,10 @@ class FlushGenesisTest(BitcoinTestFramework):
             text = conf.read_text().replace("chainsnetworks=1\n", "", 1).replace("regtest=1\n[regtest]\n", f"chain={chain_arg}\n" + ("chainsnetworks=1\n" if chains_network else "") + f"[{section}]\n", 1)
             conf.write_text(text)
             node.chain = chain_dir
-            if name in ("main", "ecash"):
-                # The main networks refuse to start until the slot's activation height is named
-                # (doc/layers.md): their first block is checked against the chain parameters by the unit
-                # test layers_tests/genesis_hashes instead.
+            if name == "main":
+                # Chains' main network refuses to start until the slot's activation height is named
+                # (doc/layers.md): its first block is checked against the chain parameters by the unit
+                # test layers_tests/genesis_hashes instead. eCash mainnet names it (slot 46, block 978,331).
                 node.assert_start_raises_init_error(no_mainchain, "it must not run on the main network", match=ErrorMatch.PARTIAL_REGEX)
                 daemon = GENESIS[name]
             else:

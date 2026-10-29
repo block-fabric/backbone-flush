@@ -24,7 +24,7 @@ that eCash miners vote on. It follows its mainchain either through [Backbone](ht
 | P2P port | 8255 | 38255 | 48255 |
 | RPC port | 8254 | 38254 | 48254 |
 | Message start | `666c7821` | `666c7822` | `666c7823` |
-| First block | `272c13b2c599343bde93ec8664df173ab036ed538448cffb390a762758f92108` | `7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75` | `2ee6a1d1e193d4115dedda242b367454e028804ba88618ba96b728789466f38d` |
+| First block | `19b25cff92c2beec1032a50d1eff87b01e1d67e658e25ca099fe599213843662` | `7d66b10e351e5ad86c562ba761b5476f75c6f1b9f13aa7cf469df3a8d5701b75` | `2ee6a1d1e193d4115dedda242b367454e028804ba88618ba96b728789466f38d` |
 | Data folder | `~/.flush` | `~/.flush/betanet` | `~/.flush/testnet4` |
 
 None of these networks is launched yet: slot 46 has to be proposed and activated on eCash first (below). The

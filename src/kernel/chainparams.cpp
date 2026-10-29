@@ -930,8 +930,11 @@ public:
             // Flush on eCash: slot 46 (doc/ecash-sidechains.md). Its own identity on each eCash network (first
             // block, message start "flx" + 0x21/0x22/0x23, address prefixes flx, bflx, tflx); the ports of Layers on
             // eCash, which Flush (formerly Starbase) is.
-            MakeSidechain({.slot = 46, .genesis_message = "Flush: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1792540800,
+            // Genesis: the time of the eCash block that activated slot 46 (978,331, 2026-10-29 23:17:51 UTC).
+            MakeSidechain({.slot = 46, .genesis_message = "Flush: tokens, assets and a DEX on a fast chain over eCash", .genesis_time = 1793315871,
                            .message_start = {0x66, 0x6c, 0x78, 0x21}, .default_port = 8255, .bech32_hrp = "flx"});
+            // Slot 46 activated in eCash block 978,331 (000000000000000021edfa06433c6e13d6a06d026d6fdc26b3b894e8b4bf1f65).
+            consensus.sidechain.main_activation_height = 978'331;
             // A DNS seed (A records of the project's servers, at this network's P2P port 8255; not consensus). -addnode
             // stays the fallback (doc/mainnet-readiness.md).
             vSeeds.emplace_back("seed.mainnet.flush.markets.");
