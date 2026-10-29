@@ -96,22 +96,6 @@ std::string Digest(const std::string& request, const Window::ConfirmDialog& dial
     return HexStr(hash);
 }
 
-bool HasDuplicateKeys(const UniValue& value)
-{
-    if (value.isObject()) {
-        std::set<std::string> seen;
-        for (size_t i{0}; i < value.size(); ++i) {
-            if (!seen.insert(value.getKeys()[i]).second) return true;
-            if (HasDuplicateKeys(value.getValues()[i])) return true;
-        }
-    } else if (value.isArray()) {
-        for (const UniValue& v : value.getValues()) {
-            if (HasDuplicateKeys(v)) return true;
-        }
-    }
-    return false;
-}
-
 std::string Bindings::CheckText(Check check)
 {
     switch (check) {

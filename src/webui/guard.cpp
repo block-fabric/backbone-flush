@@ -14,10 +14,27 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <vector>
 
 namespace webui::guard {
+
+bool HasDuplicateKeys(const UniValue& value)
+{
+    if (value.isObject()) {
+        std::set<std::string> seen;
+        for (size_t i{0}; i < value.size(); ++i) {
+            if (!seen.insert(value.getKeys()[i]).second) return true;
+            if (HasDuplicateKeys(value.getValues()[i])) return true;
+        }
+    } else if (value.isArray()) {
+        for (const UniValue& v : value.getValues()) {
+            if (HasDuplicateKeys(v)) return true;
+        }
+    }
+    return false;
+}
 
 /** The next code point of UTF-8 text at `pos` (moved past it); nothing for an invalid sequence (pos moves one byte). */
 std::optional<uint32_t> NextCodePoint(std::string_view text, size_t& pos)
