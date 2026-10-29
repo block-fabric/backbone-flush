@@ -233,8 +233,9 @@ std::optional<std::vector<uint64_t>> QuoteRoutePools(const State& state, const A
     std::vector<uint64_t> outs;
     uint64_t amount{amount_in};
     for (size_t i{0}; i < pools.size(); ++i) {
-        const Pool pool{*Assert(state.GetPool(pools[i]))};
-        amount = HopAlone(state, pools[i], pool, state.GetPoolParams(pools[i]), (*path)[i], amount);
+        const auto pool{state.GetPool(pools[i])};
+        if (!pool) return std::nullopt;
+        amount = HopAlone(state, pools[i], *pool, state.GetPoolParams(pools[i]), (*path)[i], amount);
         if (amount == 0) return std::nullopt;
         outs.push_back(amount);
     }

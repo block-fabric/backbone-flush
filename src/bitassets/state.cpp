@@ -2160,13 +2160,21 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         std::map<AssetId, AssetRecord> others;
         // Its pools, in the order of their ids, through the index of pools by asset.
         std::vector<std::pair<uint256, Pool>> pools;
+        bool indexed_only{false};
         m_view->ForEach(Prefix(POOLS_BY_ASSET, release->asset), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
             std::span<const unsigned char> in{key};
             in = in.subspan(33);
             const uint256 id{sidechain::KeyCodec<uint256>::Decode(in)};
-            pools.emplace_back(id, *Assert(GetPool(id)));
+            const auto pool{GetPool(id)};
+            if (!pool) {
+                indexed_only = true;
+                return false;
+            }
+            pools.emplace_back(id, *pool);
             return true;
         });
+        // A pool in the index and not in the store: no release (no state has one).
+        if (indexed_only) return invalid("bad-ba-no-pool");
         for (const auto& [id, pool] : pools) {
             plan.pools_gone.push_back(id);
             // What the pool holds of the other asset: CHN for mainchain miners, any other asset burned.
@@ -2178,7 +2186,11 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
                 if (!MoneyRange(plan.released)) return invalid("bad-ba-release");
             } else if (left > 0) {
                 auto o{others.find(other)};
-                if (o == others.end()) o = others.emplace(other, *Assert(GetAsset(other))).first;
+                if (o == others.end()) {
+                    const auto record{GetAsset(other)};
+                    if (!record) return invalid("bad-ba-asset-unknown");
+                    o = others.emplace(other, *record).first;
+                }
                 o->second.supply -= std::min(o->second.supply, left);
                 o->second.burned = Add(o->second.burned, left).value_or(MAX_AMOUNT);
             }
@@ -2270,7 +2282,9 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             const auto path{dex::PathOfPools(*this, named->asset_in, named->pools)};
             if (!path) return invalid("bad-ba-no-pool");
             for (const uint256& id : named->pools) {
-                if (amm::Abandoned(*Assert(GetPool(id)))) return invalid("bad-ba-pool-closed");
+                const auto pool{GetPool(id)};
+                if (!pool) return invalid("bad-ba-no-pool");
+                if (amm::Abandoned(*pool)) return invalid("bad-ba-pool-closed");
             }
             order.path = *path;
             order.pools = named->pools;
@@ -2398,7 +2412,9 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     const PoolParams params{GetPoolParams(pool_id)};
     if (params.GetCurve() != Curve::CONCENTRATED) return invalid("bad-ba-not-cl");
     Pool pool{*found};
-    ClState cl{*Assert(GetClState(pool_id))};
+    const auto cl_found{GetClState(pool_id)};
+    if (!cl_found) return invalid("bad-ba-not-cl");
+    ClState cl{*cl_found};
     const arith_uint256 price{UintToArith256(cl.sqrt_price)};
     const int32_t spacing{cl::TickSpacing(params.fee)};
     // A tick's record after a change of the liquidity that starts (lower) or ends (upper) there by `delta` (Uniswap's Tick.update).
@@ -2507,7 +2523,9 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
         return true;
     }
     const ChangePosition& change{std::get<ChangePosition>(op)};
-    ClPosition position{*Assert(GetPosition(change.position))};
+    const auto position_found{GetPosition(change.position)};
+    if (!position_found) return invalid("bad-ba-no-position");
+    ClPosition position{*position_found};
     // Whoever spends its token: the books hold the token to an output, or to the close.
     const unsigned __int128 delta{change.close ? position.Liquidity() : change.Liquidity()};
     const arith_uint256 sa{cl::SqrtRatioAtTick(position.tick_lower)}, sb{cl::SqrtRatioAtTick(position.tick_upper)};
@@ -2790,7 +2808,10 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const auto found{GetOrder(settle->order)};
         if (!found) return invalid("bad-ba-no-order");
         BookOrder order{*found};
-        Pool book{*Assert(GetPool(order.book))};
+        // Its book gone (its asset released): nothing to settle against.
+        const auto book_found{GetPool(order.book)};
+        if (!book_found) return invalid("bad-ba-no-book");
+        Pool book{*book_found};
         // The token is taken in: whoever spends it (the books refuse anyone else).
         debit(Token::Kind::ORDER, settle->order, 1);
         const AssetId sold{order.sells0 ? book.asset0 : book.asset1}, bought{order.sells0 ? book.asset1 : book.asset0};
@@ -2853,7 +2874,9 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
             const uint64_t vested{record.AllocationVested(height)};
             const uint64_t units{vested - std::min(vested, record.allocation_paid)};
             if (units > 0) {
-                auto asset{*Assert(GetAsset(claim->token))};
+                const auto asset_found{GetAsset(claim->token)};
+                if (!asset_found) return invalid("bad-ba-asset-unknown");
+                auto asset{*asset_found};
                 asset.supply += units;
                 asset.minted += units;
                 plan.assets.emplace_back(claim->token, std::move(asset));
@@ -2881,9 +2904,15 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         // A token on its launch curve trades there alone until it graduates into its pool.
         if (Launching(create->asset_a) || Launching(create->asset_b)) return invalid("bad-ba-launch-pooled");
         // The decimals of each asset (CHN's 8): a stable pool counts their units alike.
-        const auto decimals{[&](const AssetId& asset) -> uint8_t { return asset.IsNull() ? 8 : Assert(GetAsset(asset))->decimals; }};
+        const auto decimals{[&](const AssetId& asset) -> std::optional<uint8_t> {
+            if (asset.IsNull()) return 8;
+            const auto record{GetAsset(asset)};
+            return record ? std::optional<uint8_t>{record->decimals} : std::nullopt;
+        }};
         const AssetId asset0{std::min(create->asset_a, create->asset_b)}, asset1{std::max(create->asset_a, create->asset_b)};
-        const PoolParams params{MakePoolParams(*create, decimals(asset0), decimals(asset1))};
+        const auto decimals0{decimals(asset0)}, decimals1{decimals(asset1)};
+        if (!decimals0 || !decimals1) return invalid("bad-ba-asset-unknown");
+        const PoolParams params{MakePoolParams(*create, *decimals0, *decimals1)};
         const uint256 id{PoolIdOf(asset0, asset1, params)};
         Pool pool;
         if (const auto found{GetPool(id)}) {
