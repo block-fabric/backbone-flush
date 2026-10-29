@@ -76,8 +76,10 @@ Why each change:
 
 ### Handing the bundle over (policy, `SidechainParams::bundle_handoff_depth`)
 
-With `-mainchaingrpc` the node hands its bundle to the block producer only once the mainchain block that
-committed to it is `bundle_handoff_depth` blocks deep: 144 (a day) on `ecash` and `ecashbeta`, 12 on
+With `-mainchaingrpc` the node hands its bundle to the block producer only once the block of this chain that
+made it is fixed on the mainchain `bundle_handoff_depth` blocks deep (`ChainHooks::FixedFrom`: for a block of
+stake, from the commitment of the first anchor that covers it; for a BMM block of the template, its own
+commitment): 144 (a day) on `ecash` and `ecashbeta`, 12 on
 `ecashtest`, 2 on regtest. A bundle takes at least six weeks of votes to be paid; a day is nothing next to it,
 and it means a reorg shallower than that can never leave a handed bundle on a branch the sidechain left.
 There is no vouching in this mode: the enforcer's interface cannot take a word back, and the rules need no
@@ -96,7 +98,7 @@ HTTP/1.1, `src/sidechain/mainclient.cpp`):
 | `getblockcount` | `GetChainTip` (UNAVAILABLE "Validator is not synced" read as syncing) |
 | `getsidechainevents slot height count` | `GetBlockHeaderInfo` (headers kept between calls, 2000 a call, each checked to follow the one before: hashes, heights, previous hashes), then `GetBlockInfo` of the last block with `max_ancestors` (at most 1000 a call), newest first, its count and each header checked against the headers; median times from the headers |
 | `getsidechain` (activation height, proposal hash) | `GetSidechains` (`activation_height`; SHA256d of the description without its compact size) |
-| `validateaddress` (withdrawal destinations) | decoded here: bech32/bech32m and base58 with eCash's (Bitcoin's) prefixes; `bcrt` and Backbone's `rchn` on regtest |
+| `validateaddress` (withdrawal destinations) | decoded here, as in every mode (`MainchainScript`): bech32/bech32m and base58 with eCash's (Bitcoin's) prefixes; `bcrt` and Backbone's `rchn` on regtest |
 | `createsidechaindeposit` (the app's deposit button) | `WalletService.CreateDepositTransaction` (fee 10,000 sats) |
 | BMM request | `GetChainTip`, `WalletService.CreateBmmCriticalDataTransaction` (already in `ecash-grpc`) |
 | withdrawal bundle | `BlockProducerService.ProposeWithdrawalBundle` (legacy serialization), after the hand-off depth |
@@ -145,7 +147,8 @@ calls). Tests: `peg_info_both_ways` (unit), `feature_sidechain_enforcer.py` and 
 Assumptions:
 
 - **A1** (finality): no reorg of the mainchain, or of this chain by BMM, takes back the block that committed
-  to a bundle after the bundle was handed over (`bundle_handoff_depth` mainchain blocks later).
+  to a bundle after the bundle was handed over (`bundle_handoff_depth` mainchain blocks after the block that
+  made it was fixed: the first anchor covering it, for a block of stake).
 - **A2** (honest majority): a bundle that no honest block producer holds does not get the votes to be paid
   (more than 6,048 in 12,096 blocks on `ecash`). An enforcer with the ALL policy upvotes the first pending bundle of
   anybody; such miners are not counted as honest here (that policy pays whatever a miner proposes, whatever

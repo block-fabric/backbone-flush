@@ -188,6 +188,13 @@ public:
     const MainClient& Client() const { return m_client; }
 
     /**
+     * Whether a bundle whose block is fixed from mainchain height `fixed_at` (ChainHooks::FixedFrom) is deep
+     * enough to be handed to an enforcer, with the record at `record_height`: never for a height not known,
+     * not positive, or above the record.
+     */
+    static bool HandOffDeep(std::optional<int> fixed_at, int record_height, int depth);
+
+    /**
      * Let the next update of the record drop more commitments than a reorg of this chain can take
      * back (DRIVECHAIN_UNDO_DEPTH), once: the operator's word that the mainchain did reorganise so deep.
      * syncmainchain sets it for its update, and takes it back after.
@@ -260,11 +267,12 @@ private:
     uint64_t m_mining_settings GUARDED_BY(m_mutex){0};
     //! The mainchain block for which a commitment was last asked.
     uint256 m_mining_requested_for GUARDED_BY(m_mutex);
-    //! The bundle the mainchain node was last given.
+    //! The bundle the mainchain node was last given; null once this chain has none, or the record closed it.
     uint256 m_bundle_sent GUARDED_BY(m_mutex);
     //! What the mainchain node was last told this chain vouches for: a bundle, or none (null); not told yet if empty.
     std::optional<uint256> m_vouched GUARDED_BY(m_mutex);
-    bool m_vouch_warned GUARDED_BY(m_mutex){false};
+    //! The word the mainchain node last refused, since it last took one, so that it is said once.
+    std::optional<uint256> m_vouch_refused GUARDED_BY(m_mutex);
     //! The bundle the mainchain node last refused, so that it is said once.
     uint256 m_bundle_refused GUARDED_BY(m_mutex);
     //! Held while acting on changes of the record, which Sync callers on several threads do.

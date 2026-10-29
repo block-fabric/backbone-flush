@@ -16,7 +16,8 @@ nodes of this sidechain run with -testmainenforcer: the parameters of a sidechai
 - Blocks by blind merged mining (M7/M8); a deposit (M5) into the OP_NOP8 treasury, paid on the sidechain.
 - A withdrawal goes in a bundle (M3), which the mainchain votes up (M4) and pays (M6); the escrow and the
   payout match the bundle.
-- A bundle the mainchain does not vote for fails at its maximum age; its withdrawal is refunded.
+- A bundle the mainchain does not vote for fails at its maximum age; its withdrawal is refunded (not with
+  --mainchaingrpc: the enforcer's block producer upvotes every bundle handed to it).
 - A bundle of another branch, left pending by a mainchain reorg with the same withdrawal: under the rules of the
   eCash networks (no scores, SidechainParams::main_events_only) it holds nothing back; the new bundle is vouched
   for and paid, the other downvoted and failed: the withdrawal is paid once, and the escrow pays it once.
@@ -257,8 +258,13 @@ class SidechainEcashTest(BitcoinTestFramework):
         self.bmm()
         bundle = side.getwithdrawalbundle()
         assert_equal(bundle["status"], "pending")
-        # The sidechain node gave the bundle to its mainchain node, which proposes it and upvotes it.
+        # The sidechain node gave the bundle to its mainchain node, which proposes it and upvotes it. Through the
+        # enforcer's interface, only once the block that made it is bundle_handoff_depth (2) mainchain blocks deep:
+        # handed after the next block, proposed in the one after.
         self.mine_main()
+        if self.options.mainchaingrpc:
+            assert_equal(main.listwithdrawalbundles(SLOT), [])
+            self.mine_main()
         pending = main.listwithdrawalbundles(SLOT)
         assert_equal([b["hash"] for b in pending], [bundle["hash"]])
         assert_equal(pending[0]["vote"], "upvote")
@@ -289,6 +295,19 @@ class SidechainEcashTest(BitcoinTestFramework):
         assert_equal(side.getwithdrawalbundle(), {"status": "none", "waiting": 0})
         self.check_in_sync()
 
+        if self.options.mainchaingrpc:
+            # The enforcer's block producer upvotes every bundle handed to it, whatever setwithdrawalvote says:
+            # a bundle of this chain does not fail for want of votes here.
+            self.log.info("(Not through the enforcer's interface: a bundle the mainchain does not vote for, whose producer upvotes what it is handed)")
+        else:
+            self.run_unvoted_bundle_test(payout_address)
+
+        self.run_single_payout_test()
+
+    def run_unvoted_bundle_test(self, payout_address):
+        """A bundle the mainchain does not vote for fails at its maximum age; its withdrawal is refunded."""
+        main = self.main
+        side = self.nodes[0]
         self.log.info("A bundle the mainchain does not vote for fails at its maximum age; the withdrawal is refunded")
         main.setwithdrawalvote(SLOT, "abstain")
         again = side.createwithdrawal(payout_address, 2)
@@ -314,8 +333,6 @@ class SidechainEcashTest(BitcoinTestFramework):
         main.setwithdrawalvote(SLOT, "default")
         self.check_in_sync()
 
-        self.run_single_payout_test()
-
     def run_single_payout_test(self):
         """A bundle left pending on the mainchain by a reorg holds nothing back; the new one is paid, the withdrawal once."""
         main = self.main
@@ -338,6 +355,10 @@ class SidechainEcashTest(BitcoinTestFramework):
         x = side.getwithdrawalbundle()
         assert_equal(x["status"], "pending")
         self.mine_main()
+        if self.options.mainchaingrpc:
+            # Handed over once deep enough, proposed in the next block (the reorg below is deeper still).
+            assert_equal(main.listwithdrawalbundles(SLOT), [])
+            self.mine_main()
         assert_equal([b["hash"] for b in main.listwithdrawalbundles(SLOT)], [x["hash"]])
 
         # The mainchain drops the blocks that committed to the blocks with the withdrawal and with X (as in
@@ -369,8 +390,14 @@ class SidechainEcashTest(BitcoinTestFramework):
         # it is handed over only once deep enough for no reorg to leave it behind: feature_sidechain_enforcer.py.)
         assert_equal(side.getwithdrawalbundle()["status"], "next")
         escrow = self.escrow()
-        self.bmm()
-        y = side.getwithdrawalbundle()
+        # Through the enforcer's interface, Y is handed over only once deep enough; meanwhile the mainchain node
+        # takes the word for none (it takes no word on a bundle it was not handed), and X stays not upvoted.
+        with side.assert_debug_log([], unexpected_msgs=["did not take the word of this chain"]):
+            self.bmm()
+            y = side.getwithdrawalbundle()
+            if self.options.mainchaingrpc:
+                side.syncmainchain()
+                assert_equal(main.listwithdrawalbundles(SLOT)[0]["vote"] != "upvote", True)
         assert_equal(y["status"], "pending")
         assert x["hash"] != y["hash"]
         for _ in range(3 * BUNDLE_MAX_AGE):
@@ -390,6 +417,11 @@ class SidechainEcashTest(BitcoinTestFramework):
         main.reconsiderblock(withdrawal_commitment)
         self.bmm()
         self.check_in_sync()
+        # Every word the sidechain nodes gave, the mainchain node took, all along: before a hand-off, the word for
+        # none (Backbone takes no word on a bundle it was not handed).
+        for node in self.nodes:
+            with open(node.debug_log_path, encoding="utf-8", errors="replace") as log:
+                assert "did not take the word of this chain" not in log.read()
 
 
 if __name__ == '__main__':

@@ -22,7 +22,8 @@ from decimal import Decimal
 from test_framework.blocktools import add_witness_commitment, create_block, create_coinbase
 from test_framework.messages import COIN, CBlock, CTransaction, CTxOut, from_hex, tx_from_hex
 from test_framework.script import CScript, OP_RETURN
-from test_framework.sidechain_standin import StandInMainchain
+from test_framework.segwit_addr import encode_segwit_address
+from test_framework.sidechain_standin import MAIN_ADDRESS, StandInMainchain
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error, rpc_port
 
@@ -161,7 +162,7 @@ class SidechainRulesTest(BitcoinTestFramework):
         self.log.info("A node that is no sidechain has no mainchain")
         assert_raises_rpc_error(-1, "This chain is not a sidechain", plain.getmainchaininfo)
         assert_raises_rpc_error(-1, "This chain is not running as a sidechain", plain.getdepositaddress)
-        assert_raises_rpc_error(-5, "This chain is not a sidechain", plain.createwithdrawal, "mainaddress", 1)
+        assert_raises_rpc_error(-5, "This chain is not a sidechain", plain.createwithdrawal, MAIN_ADDRESS, 1)
 
         self.log.info("The CPU miner is no way to mine a sidechain")
         assert_raises_rpc_error(-1, "use setbmm instead", node.setgenerate, True, self.address)
@@ -224,10 +225,11 @@ class SidechainRulesTest(BitcoinTestFramework):
 
         self.log.info("Withdrawals: the form of the output")
         assert_raises_rpc_error(-5, "Not an address of the mainchain", node.createwithdrawal, "nonsense", 1)
-        assert_raises_rpc_error(-5, "The mainchain node sent a malformed script", node.createwithdrawal, "malformed", 1)
-        main.errors["validateaddress"] = "no such wallet"
-        assert_raises_rpc_error(-5, "The mainchain node answered validateaddress with an error: no such wallet", node.createwithdrawal, "mainaddress", 1)
-        del main.errors["validateaddress"]
+        # Decoded by the node itself, for its own network: an address of another network is none, and the
+        # mainchain node is not asked what an address stands for.
+        assert_raises_rpc_error(-5, "Not an address of the mainchain", node.createwithdrawal, encode_segwit_address("bc", 0, bytes.fromhex("11" * 20)), 1)
+        assert_raises_rpc_error(-5, "Not an address of the mainchain", node.createwithdrawal, encode_segwit_address("tb", 0, bytes.fromhex("11" * 20)), 1)
+        assert_equal(main.calls.get("validateaddress", 0), 0)
         # Its fee is all of its value: no withdrawal.
         malformed = self.data_tx(withdrawal_data(COIN), COIN)
         assert_equal(self.reject_reason(malformed), "bad-sc-withdrawal")
@@ -241,7 +243,7 @@ class SidechainRulesTest(BitcoinTestFramework):
         assert self.accepted(self.data_tx(withdrawal_data(1000), MIN_WITHDRAWAL + 1000))
 
         self.log.info("Bundles: one, of the withdrawals the rules pick, not closed, not while one is pending")
-        withdrawal = node.createwithdrawal("mainaddress", 1)
+        withdrawal = node.createwithdrawal(MAIN_ADDRESS, 1)
         self.mine()
         bundle = node.getwithdrawalbundle()
         assert_equal(bundle["status"], "next")
@@ -272,7 +274,7 @@ class SidechainRulesTest(BitcoinTestFramework):
         self.refused(another, "bad-sc-bundle-not-allowed")
 
         self.log.info("Refunds: of a withdrawal there is, signed by its key, not in the bundle, not while another is pending")
-        waiting = node.createwithdrawal("mainaddress", 2)
+        waiting = node.createwithdrawal(MAIN_ADDRESS, 2)
         self.mine()
         statuses = {w["txid"]: w["status"] for w in node.listwithdrawals()}
         assert_equal((statuses[withdrawal["txid"]], statuses[waiting["txid"]]), ("bundled", "waiting"))

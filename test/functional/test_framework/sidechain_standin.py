@@ -14,8 +14,33 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from test_framework.segwit_addr import encode_segwit_address
+
+# A mainchain address of regtest (a bitcoind's, bcrt1), which the sidechain node decodes itself: the script
+# `main_script` of the stand-in.
+MAIN_ADDRESS = encode_segwit_address("bcrt", 0, bytes.fromhex("11" * 20))
 # Answered by createbmmrequest when a request for another block of the slot pays more.
 OUTBID = "Outbid: the mempool holds a request for another block of this sidechain paying 0.001 CHN"
+
+
+def univalue_json(value):
+    """JSON as the mainchain node writes it (UniValue): a value given as bytes (a deposit destination) is written
+    as it is, bytes from 0x80 on included, but for what JSON escapes."""
+    if isinstance(value, bytes):
+        text = bytearray(b'"')
+        for byte in value:
+            if byte in b'"\\':
+                text += b"\\" + bytes([byte])
+            elif byte < 0x20 or byte == 0x7f:
+                text += b"\\u%04x" % byte
+            else:
+                text.append(byte)
+        return bytes(text + b'"')
+    if isinstance(value, dict):
+        return b"{" + b",".join(json.dumps(k).encode() + b":" + univalue_json(v) for k, v in value.items()) + b"}"
+    if isinstance(value, (list, tuple)):
+        return b"[" + b",".join(univalue_json(v) for v in value) + b"]"
+    return json.dumps(value).encode()
 
 
 def block_hash(height, branch=0):
@@ -155,7 +180,7 @@ class StandInMainchain:
                     self.send_response(status)
                 else:
                     result, error = standin.call(method, request.get("params", []))
-                    body = json.dumps({"result": result, "error": error, "id": request.get("id")}).encode()
+                    body = univalue_json({"result": result, "error": error, "id": request.get("id")})
                     self.send_response(200 if error is None else 500)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))

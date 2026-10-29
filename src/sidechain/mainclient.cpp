@@ -205,6 +205,47 @@ std::string MainClient::Exchange(const std::string& host, uint16_t port, const s
     return reply;
 }
 
+std::string ValidUTF8(std::string_view text)
+{
+    std::string out;
+    out.reserve(text.size());
+    size_t i{0};
+    while (i < text.size()) {
+        const unsigned char lead{static_cast<unsigned char>(text[i])};
+        size_t length{0};
+        if (lead < 0x80) {
+            length = 1;
+        } else if (lead >= 0xc2 && lead <= 0xdf) {
+            length = 2;
+        } else if (lead >= 0xe0 && lead <= 0xef) {
+            length = 3;
+        } else if (lead >= 0xf0 && lead <= 0xf4) {
+            length = 4;
+        }
+        bool valid{length > 0 && length <= text.size() - i};
+        for (size_t k{1}; valid && k < length; ++k) valid = (static_cast<unsigned char>(text[i + k]) & 0xc0) == 0x80;
+        if (valid && length > 2) {
+            // The second byte's range after these leads (RFC 3629, section 4): no overlong form, no surrogate,
+            // nothing beyond U+10FFFF.
+            const unsigned char second{static_cast<unsigned char>(text[i + 1])};
+            if ((lead == 0xe0 && second < 0xa0) || (lead == 0xed && second > 0x9f) || (lead == 0xf0 && second < 0x90) || (lead == 0xf4 && second > 0x8f)) valid = false;
+        }
+        if (valid) {
+            out.append(text.substr(i, length));
+            i += length;
+        } else {
+            out.append("\xef\xbf\xbd");
+            ++i;
+        }
+    }
+    return out;
+}
+
+bool ReadReply(UniValue& value, std::string_view body)
+{
+    return value.read(ValidUTF8(body));
+}
+
 UniValue MainClient::CallEnforcer(const std::string& procedure, const UniValue& request) const
 {
     const std::string body{request.write()};
@@ -229,7 +270,7 @@ UniValue MainClient::CallEnforcer(const std::string& procedure, const UniValue& 
         payload = std::move(*joined);
     }
     UniValue answer;
-    if (!answer.read(payload) || !answer.isObject()) {
+    if (!ReadReply(answer, payload) || !answer.isObject()) {
         throw MainClientError{strprintf("The enforcer interface answered %s with HTTP status %s and no JSON", procedure, status), /*rpc_error_in=*/false};
     }
     if (status != "200") {
@@ -271,7 +312,8 @@ UniValue MainClient::Call(const std::string& method, const UniValue& params, boo
     if (status == "403") throw MainClientError{"The mainchain node does not allow connections from this address (rpcallowip)", /*rpc_error_in=*/false};
 
     UniValue answer;
-    if (!answer.read(reply.substr(header_end + 4)) || !answer.isObject()) {
+    // Text in any bytes, as a deposit destination can be, is read as the enforcer's interface gives it (ValidUTF8).
+    if (!ReadReply(answer, std::string_view{reply}.substr(header_end + 4)) || !answer.isObject()) {
         throw unreachable(strprintf("unexpected reply with HTTP status %s", status));
     }
     const UniValue& error{answer.find_value("error")};
@@ -413,13 +455,14 @@ UniValue EnforcerBlockEvents(const UniValue& info, int64_t median_time)
         if (const UniValue& deposit{Field(event, "deposit", "deposit")}; deposit.isObject()) {
             const UniValue& outpoint{Field(deposit, "outpoint", "outpoint")};
             const UniValue& output{Field(deposit, "output", "output")};
-            // The destination: the bytes the deposit's OP_RETURN carries, as text (Backbone's "destination").
+            // The destination: the bytes the deposit's OP_RETURN carries, as text (Backbone's "destination"), read
+            // as over JSON-RPC (ValidUTF8).
             const auto destination{TryParseHex<unsigned char>(HexField(output, "address", "address").value_or(""))};
             if (!destination) throw std::runtime_error("the enforcer sent a deposit address that is not hex");
             const uint64_t value{UIntField(output, "valueSats", "value_sats")};
             if (value > static_cast<uint64_t>(MAX_MONEY)) throw std::runtime_error("the enforcer sent a deposit of more than all the coins");
             UniValue entry(UniValue::VOBJ);
-            entry.pushKV("destination", std::string{destination->begin(), destination->end()});
+            entry.pushKV("destination", ValidUTF8(std::string{destination->begin(), destination->end()}));
             entry.pushKV("amount", ValueFromAmount(static_cast<CAmount>(value)));
             entry.pushKV("txid", ReverseHash(HexField(outpoint, "txid", "txid"), "txid").GetHex());
             entry.pushKV("burnindex", UIntField(outpoint, "vout", "vout"));
@@ -481,7 +524,14 @@ std::optional<CScript> MainchainScript(const std::string& address, ChainType cha
     case ChainType::ECASH_TESTNET: hrps = {"tb"}; break;
     // A bitcoind's regtest, and Backbone's (whose regtest addresses keep Chains' prefix).
     case ChainType::REGTEST: hrps = {"bcrt", "rchn"}; break;
-    default: return std::nullopt;
+    // The Chains networks (chainsd's own formats).
+    case ChainType::MAIN:
+        hrps = {"chn"};
+        pubkey_prefix = 28;
+        script_prefix = 88;
+        break;
+    case ChainType::TESTNET:
+    case ChainType::SIGNET: hrps = {"tchn"}; break;
     }
     const auto decoded{bech32::Decode(address)};
     if (decoded.encoding != bech32::Encoding::INVALID) {

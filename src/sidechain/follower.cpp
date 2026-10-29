@@ -709,13 +709,18 @@ void Follower::CheckActiveChain()
         // commitment moved is checked again, with all above it.
         if (!lowest) {
             int main_height{chainman.ActiveChainstate().SideState().MainHeight()};
+            // Where the record changed without the node acting on it, if it stopped in between (kept on disk):
+            // a block committed above it may have its commitment back at the same height, on another branch
+            // whose blocks before it did otherwise; the change the node did not act on is not known, so such
+            // a block is checked again too.
+            const std::optional<int> unacted{record.UnactedFrom()};
             for (CBlockIndex* pindex{chainman.ActiveChain().Tip()}; pindex && pindex->nHeight > 0; pindex = pindex->pprev) {
                 // A block that needs no commitment acts on nothing the mainchain did: its undo data
                 // leaves the height as it was.
                 if (const auto commitment{Hooks().CommitmentOf(*pindex)}) {
                     const auto bmm_height{record.CommittedHeight(*commitment)};
                     if (!bmm_height) break;
-                    if (*bmm_height - 1 != main_height) moved = pindex;
+                    if (*bmm_height - 1 != main_height || (unacted && *bmm_height - 1 > *unacted)) moved = pindex;
                     if (*bmm_height < top - MOVED_CHECK_DEPTH) break;
                 }
                 // What the mainchain had done before this block is what it had done after its parent.
@@ -802,6 +807,13 @@ bool Follower::CatchingUp() const
     return false;
 }
 
+bool Follower::HandOffDeep(std::optional<int> fixed_at, int record_height, int depth)
+{
+    // Only a height known and on record: anything else counts as not deep enough.
+    if (!fixed_at || *fixed_at <= 0 || *fixed_at > record_height) return false;
+    return record_height - *fixed_at + 1 >= depth;
+}
+
 void Follower::SendBundle()
 {
     ChainstateManager& chainman{*m_node.chainman};
@@ -844,12 +856,29 @@ void Follower::SendBundle()
     bool shallow{false};
     if (m_client.HasEnforcer() && !hash.IsNull()) {
         // An enforcer keeps a bundle handed to it, proposes and upvotes it, until the mainchain closes it: it cannot
-        // be told otherwise. Handed only once its commitment is deep enough that no reorg of the mainchain is
-        // expected to take it back (SidechainParams::bundle_handoff_depth): a bundle of a branch this chain left,
-        // kept by block producers, could be paid besides the one of the new branch with the same withdrawals.
-        // Also with -mainchaingrpcport: the word over JSON-RPC that would downvote it may not be taken.
-        const int depth{Assert(chainman.m_mainchain)->Height() - committed_at + 1};
-        shallow = committed_at < 0 || depth < chainman.GetConsensus().sidechain.bundle_handoff_depth;
+        // be told otherwise. Handed only once the block of this chain that made it is fixed deep enough that no
+        // reorg of the mainchain is expected to take it back (SidechainParams::bundle_handoff_depth): a bundle of a
+        // branch this chain left, kept by block producers, could be paid besides the one of the new branch with the
+        // same withdrawals. Also with -mainchaingrpcport: the word over JSON-RPC that would downvote it may not be
+        // taken. The depth counts from where that block is fixed (ChainHooks::FixedFrom: for a block of stake, the
+        // first anchor that covers it), not from the commitment it acted on: a block not covered yet can be left
+        // out by a branch of stake alone.
+        const Mainchain& record{*Assert(chainman.m_mainchain)};
+        std::optional<int> fixed_at;
+        if (committed_at >= 0) {
+            LOCK(::cs_main);
+            // The block that made the bundle: the one of the active chain that rests on the commitment at the
+            // height it acted on.
+            if (const auto bmm{record.BmmAt(committed_at)}) {
+                for (const uint256& block_hash : Hooks().BlocksCommittedBy(*bmm, committed_at)) {
+                    const CBlockIndex* pindex{chainman.m_blockman.LookupBlockIndex(block_hash)};
+                    if (!pindex || !chainman.ActiveChain().Contains(*pindex)) continue;
+                    fixed_at = Hooks().FixedFrom(*pindex, chainman.ActiveChain(), record);
+                    break;
+                }
+            }
+        }
+        shallow = !HandOffDeep(fixed_at, record.Height(), chainman.GetConsensus().sidechain.bundle_handoff_depth);
     }
     // Tell the mainchain node what this chain vouches for, when it changes: its miners upvote that
     // bundle, and downvote any other of this slot (one a reorg left behind) so that it fails.
@@ -868,23 +897,30 @@ void Follower::SendBundle()
                 m_client.Call("vouchwithdrawalbundle", Params({slot, bundle.GetHex()}));
             }
         } catch (const std::exception& e) {
-            if (WITH_LOCK(m_mutex, return !m_vouched.has_value() || !m_vouch_warned)) {
+            // Said once for each word not taken; the mainchain node keeps the word it took last (m_vouched).
+            if (WITH_LOCK(m_mutex, return m_vouch_refused != bundle)) {
                 LogWarning("The mainchain node did not take the word of this chain on its bundle (%s); it may be too old to vote by it", e.what());
                 LOCK(m_mutex);
-                m_vouch_warned = true;
+                m_vouch_refused = bundle;
             }
             return;
         }
         LOCK(m_mutex);
         m_vouched = bundle;
+        m_vouch_refused.reset();
     }};
     if (hash.IsNull()) {
+        // No bundle, or the mainchain closed it: a bundle handed before is handed again if a reorg of the
+        // mainchain brings it back (its node may have let it go once closed).
+        WITH_LOCK(m_mutex, m_bundle_sent.SetNull());
         vouch(uint256{});
         return;
     }
-    // Not handed to the enforcer yet; over JSON-RPC the word still moves to it, off any older bundle.
+    // Not handed to the enforcer yet. The mainchain node takes a word only on a bundle it was handed
+    // (vouchwithdrawalbundle): it is told to vouch for none until then, which moves its word off any
+    // older bundle of the slot (one a reorg of this chain left behind).
     if (shallow) {
-        vouch(hash);
+        vouch(uint256{});
         return;
     }
     if (!tx) return;

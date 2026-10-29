@@ -13,9 +13,10 @@ mainchain and acting on it.
 - A candidate block whose parent lost its commitment is not accepted.
 - At startup, with a record that disagrees: VerifyDB stops at the block; blocks without a commitment go
   with those above them (also below a block committed to again, lower), a block whose commitment moved is
-  checked again, blocks failed against the record that
+  checked again (also one committed to again at the same height after a record the node did not act on), blocks failed against the record that
   have their commitment again are checked again; rebuilt under other parameters, the sidechain database
   stops at the block (the chain goes back), and a block the operator invalidated stays invalid.
+- A deposit destination of any bytes (not UTF-8) is read, and credits no address.
 - A mainchain node that is syncing, too old, without the sidechain, refusing the credentials, answering
   what is no JSON-RPC or blocks that do not follow each other, refusing a bundle or the word of this chain.
 - Blind merged mining: the wallet named with characters to encode, requests that fail, an outbid node,
@@ -28,7 +29,7 @@ import os
 import time
 from decimal import Decimal
 
-from test_framework.sidechain_standin import OUTBID, StandInMainchain
+from test_framework.sidechain_standin import MAIN_ADDRESS, OUTBID, StandInMainchain
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework.authproxy import JSONRPCException
@@ -182,6 +183,21 @@ class SidechainRecordTest(BitcoinTestFramework):
             del main.blocks[-1]
         node.syncmainchain()
 
+        self.log.info("A deposit destination of any bytes, not UTF-8: read as the enforcer's interface gives it, it credits no address")
+        balance = node.getbalance()
+        # (The address of this node with its first character in a two-byte form, which is not UTF-8.)
+        first = ord(self.address[0])
+        overlong = bytes([0xc0 | (first >> 6), 0x80 | (first & 0x3f)]) + self.address[1:].encode()
+        with main.lock:
+            main.add_block(deposits=[{"destination": b"\xff\x01ab", "amount": "1", "txid": "ce" * 32, "burnindex": 0},
+                                     {"destination": overlong, "amount": "2", "txid": "ce" * 32, "burnindex": 1},
+                                     self.deposit(3)])
+        node.syncmainchain()
+        assert_equal(node.getmainchaininfo()["height"], main.height())
+        coinbase = node.getblock(self.mine(), 2)["tx"][0]
+        assert_equal(sorted(o["value"] for o in coinbase["vout"] if o["scriptPubKey"]["hex"] == "6a"), [1, 2])
+        assert_equal(node.getbalance(), balance + 3)
+
         self.log.info("A mainchain without the sidechain in its slot: the node waits")
         with main.lock:
             main.sidechain = None
@@ -256,7 +272,7 @@ class SidechainRecordTest(BitcoinTestFramework):
 
         self.log.info("The mainchain node refuses the bundle, or the word of this chain on it")
         main.errors.update({"vouchwithdrawalbundle": "unknown slot", "sendwithdrawalbundle": "not yet"})
-        withdrawal = node.createwithdrawal("mainaddress", 1)
+        withdrawal = node.createwithdrawal(MAIN_ADDRESS, 1)
         self.mine()
         with node.assert_debug_log(["did not take the word of this chain on its bundle", "did not broadcast the withdrawal of bundle"]):
             self.mine()
@@ -280,6 +296,20 @@ class SidechainRecordTest(BitcoinTestFramework):
         main.errors.clear()
         node.syncmainchain()
         assert_equal(main.received[-1], retry["hex"])
+
+        self.log.info("A bundle the mainchain paid, the payout taken back by a reorg of the mainchain: handed again")
+        handed = main.received.count(retry["hex"])
+        saved = [dict(b) for b in main.blocks]
+        main.add_block(bundles=[{"hash": retry["hash"], "paid": True}])
+        node.syncmainchain()
+        assert_equal(main.received.count(retry["hex"]), handed)
+        with main.lock:
+            main.blocks = saved
+            main.add_block(branch=8)
+        node.syncmainchain()
+        assert_equal(main.received.count(retry["hex"]), handed + 1)
+        # The tip of this chain committed to on top of the mainchain again, as the next steps take it.
+        self.mine()
 
         self.log.info("A block built for the mainchain is not accepted once its parent lost its commitment")
         tip = node.getbestblockhash()
@@ -335,6 +365,30 @@ class SidechainRecordTest(BitcoinTestFramework):
         self.stop_node(0)
         main.fail_from = None
         with node.assert_debug_log([f"The commitment of block {tip} moved on the mainchain"]):
+            self.start_node(0)
+            node.syncmainchain()
+        self.wait_until(lambda: node.getbestblockhash() == parent)
+        assert_equal(self.status(tip), "invalid")
+        # The next block pays the deposit.
+        balance = node.getbalance()
+        self.mine()
+        assert_equal(node.getbalance(), balance + 1)
+
+        self.log.info("At startup, a block committed to again at the same height, after a deposit the other branch did not have: checked again, it fails")
+        main.add_block()
+        node.syncmainchain()
+        parent = node.getbestblockhash()
+        tip = self.mine()
+        [committed_at] = [b["height"] for b in main.blocks if b.get("bmm") == tip]
+
+        def same_height():
+            del main.blocks[committed_at - 1:]
+            main.add_block(branch=7, deposits=[self.deposit(1)])
+            main.add_block(branch=7, bmm=tip)
+        self.change_unacted(same_height)
+        self.stop_node(0)
+        main.fail_from = None
+        with node.assert_debug_log([f"The commitment of block {tip} moved on the mainchain, or the record before it changed"]):
             self.start_node(0)
             node.syncmainchain()
         self.wait_until(lambda: node.getbestblockhash() == parent)

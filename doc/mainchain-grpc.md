@@ -22,9 +22,9 @@ JSON-RPC stays the default for everything.
 | Check its slot | `getsidechain` | the same |
 | Ask for blind merged mining | `createbmmrequest` (wallet) | `ValidatorService.GetChainTip` (the tip must be the block the commitment is for), `WalletService.CreateBmmCriticalDataTransaction`; INVALID_ARGUMENT naming `prev_bytes` read as "the mainchain moved", "Outbid:" kept |
 | Hand over a withdrawal bundle | `receivewithdrawalbundle` | `BlockProducerService.ProposeWithdrawalBundle` (the blind bundle, legacy serialization, base64) |
-| Vouch for its bundle, or for none | `vouchwithdrawalbundle slot [hash]` | **the same, over JSON-RPC** (security review 2026-10-20): the enforcer's interface cannot take a sidechain's word back (no "none", no per-sidechain alarm; its `SetWithdrawalBundleAck` is the operator's vote, over any policy), and a stale bundle left upvoted could be paid twice. The node remembers its word only once the mainchain took it |
+| Vouch for its bundle, or for none | `vouchwithdrawalbundle slot [hash]` | **the same, over JSON-RPC** (security review 2026-10-20): the enforcer's interface cannot take a sidechain's word back (no "none", no per-sidechain alarm; its `SetWithdrawalBundleAck` is the operator's vote, over any policy), and a stale bundle left upvoted could be paid twice. The node remembers its word only once the mainchain took it. Until its bundle is handed over (`bundle_handoff_depth`), it vouches for none: Backbone takes a word only on a bundle it was handed |
 | Broadcast the payout once the bundle has its votes | `sendwithdrawalbundle` | nothing: the block producer that holds the bundle pays it out (M6) itself |
-| Mainchain addresses of withdrawals | `validateaddress` | the same |
+| Mainchain addresses of withdrawals | decoded by the node itself (`MainchainScript`, the formats of its own network); the mainchain node is not asked | the same |
 
 Vouching stays on JSON-RPC, which following needs anyway: so a pure bitcoind + enforcer mainchain is not
 supported in this mode (it was not before: bitcoind has no `getsidechainevents`). A full gRPC mode would have to

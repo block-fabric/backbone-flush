@@ -314,8 +314,9 @@ struct SidechainParams {
     /** Mainchain blocks the record may be behind the mainchain node's headers before the link counts as syncing. */
     int main_behind_margin{6};
     /**
-     * Policy, not a rule (with main_events_only): mainchain blocks deep the commitment of this chain's bundle has
-     * to be before the bundle is handed to an enforcer (-mainchaingrpc), which cannot be told to drop it. A
+     * Policy, not a rule (with main_events_only): mainchain blocks deep the block that made this chain's bundle has
+     * to be fixed (sidechain::ChainHooks::FixedFrom: for a block of stake, the first anchor that covers it) before
+     * the bundle is handed to an enforcer (-mainchaingrpc), which cannot be told to drop it. A
      * reorg of the mainchain shallower than this cannot leave a bundle handed over on a branch this chain left.
      */
     int bundle_handoff_depth{6};
