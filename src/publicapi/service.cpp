@@ -3629,16 +3629,22 @@ private:
 
     UniValue PegInfo() const
     {
-        // The mainchain node is asked at most every 30 seconds, by one call at a time; the others take the last answer.
-        LOCK(m_peg_mutex);
-        const int64_t now{GetTime()};
-        if (now - m_peg_time < 30) return m_peg;
-        m_peg_time = now;
-        try {
-            m_peg = Rpc("getpeginfo", UniValue{UniValue::VARR});
-        } catch (const std::exception&) {
-            m_peg = UniValue{};
+        // The mainchain node is asked at most every 30 seconds, by one call at a time, without the lock; the others take the
+        // last answer meanwhile.
+        {
+            LOCK(m_peg_mutex);
+            const int64_t now{GetTime()};
+            if (now - m_peg_time < 30) return m_peg;
+            // One call asks the mainchain node, without the lock: the others take what is known meanwhile.
+            m_peg_time = now;
         }
+        UniValue peg;
+        try {
+            peg = Rpc("getpeginfo", UniValue{UniValue::VARR});
+        } catch (const std::exception&) {
+        }
+        LOCK(m_peg_mutex);
+        m_peg = std::move(peg);
         return m_peg;
     }
 
