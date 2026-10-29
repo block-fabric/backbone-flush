@@ -578,4 +578,117 @@ BOOST_FIXTURE_TEST_CASE(smaller_orders_and_payouts_from_their_height, SmallPayou
     BOOST_CHECK(paid || (order && order->proceeds == 5'000));
 }
 
+namespace {
+/** Regtest with the DEX from the first block and upgrade v9 from block 1000 (the Chain starts at 100). */
+struct V9BooksSetup : BasicTestingSetup {
+    V9BooksSetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=v9@1000"}}} {}
+};
+constexpr int V9_HEIGHT{1000};
+
+/** `name` issued as one coin of `amount` with its control coin burned (its supply fixed): the coin. */
+COutPoint Fixed(Chain& chain, const std::string& name, uint64_t amount)
+{
+    const auto coins{chain.Issue(name, {amount})};
+    const AssetId id{HashName(name)};
+    chain.Require(MakeTx({COutPoint{coins[0].hash, 0}}, Burn{{Token{Token::Kind::CONTROL, id, 1}}}, {}));
+    return coins[0];
+}
+
+bool Checks(const Chain& chain, const CTransaction& tx, int height, std::string& reason)
+{
+    return chain.Assets().CheckTx(tx, height, reason, nullptr, 0, nullptr, /*dex=*/true);
+}
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(settle_without_its_book_refused, V9BooksSetup)
+{
+    // Before v9: an asset whose book has no open order is released while an expired order of it is not settled.
+    Chain chain;
+    const AssetId DEAD{HashName("DEAD")}, Y{HashName("YYY")};
+    const COutPoint dead{Fixed(chain, "DEAD", 1000)};
+    chain.Issue("YYY", {1000});
+    const CTransaction ask{chain.Place(dead, DEAD, 1000, Y, 1, 1, chain.height)};
+    chain.EndBlock();
+    chain.EndBlock();
+    const uint256 book{BookId(DEAD, Y)};
+    BOOST_REQUIRE(chain.Assets().GetOrder(OrderId(ask.GetHash())));
+    BOOST_CHECK(chain.Assets().BookSide(book, DEAD < Y, 10, chain.height).empty());
+    std::string why;
+    BOOST_CHECK_MESSAGE(chain.Assets().Releasable(DEAD, &why, chain.height), why);
+    chain.Require(MakeTx({}, ReleaseAsset{DEAD}, {}));
+    BOOST_CHECK(!chain.Assets().GetPool(book));
+    // Its settle is refused: the order's book is gone (in the mempool and in a block alike, on both sides of v9).
+    const CTransaction settle{MakeTx({COutPoint{ask.GetHash(), 0}}, SettleOrder{OrderId(ask.GetHash()), false, PAYEE}, {std::nullopt})};
+    std::string reason;
+    BOOST_CHECK(!Checks(chain, settle, chain.height, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-no-book");
+    BOOST_CHECK(!Checks(chain, settle, V9_HEIGHT, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-no-book");
+    BOOST_CHECK_EQUAL(chain.Refused(settle), "bad-ba-no-book");
+
+    // The name registered again and a book of the pair made anew: before v9 the earlier order settles against it, from
+    // v9 it is refused. The new book's own orders are counted alone: its asset is released once they are settled.
+    const COutPoint again{Fixed(chain, "DEAD", 1000)};
+    const CTransaction fresh{chain.Place(again, DEAD, 1000, Y, 1, 1)};
+    BOOST_REQUIRE(chain.Assets().GetPool(book));
+    BOOST_CHECK_MESSAGE(Checks(chain, settle, V9_HEIGHT - 1, reason), reason);
+    BOOST_CHECK(!Checks(chain, settle, V9_HEIGHT, reason));
+    BOOST_CHECK_EQUAL(reason, "bad-ba-no-book");
+    chain.EndBlock();
+    chain.height = V9_HEIGHT;
+    BOOST_CHECK_EQUAL(chain.Refused(settle), "bad-ba-no-book");
+    BOOST_CHECK(!chain.Assets().Releasable(DEAD, &why, chain.height));
+    const CTransaction cancel{MakeTx({COutPoint{fresh.GetHash(), 0}}, SettleOrder{OrderId(fresh.GetHash()), true, PAYEE}, {std::nullopt})};
+    chain.Require(cancel);
+    BOOST_REQUIRE(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == AssetToken(DEAD, 1000));
+    chain.Require(MakeTx({COutPoint{cancel.GetHash(), 0}}, Burn{{AssetToken(DEAD, 1000)}}, {}));
+    BOOST_CHECK_MESSAGE(chain.Assets().Releasable(DEAD, &why, chain.height), why);
+    chain.Require(MakeTx({}, ReleaseAsset{DEAD}, {}));
+}
+
+BOOST_FIXTURE_TEST_CASE(release_waits_for_unsettled_orders, V9BooksSetup)
+{
+    Chain chain;
+    const AssetId DEAD{HashName("DEAD")}, Y{HashName("YYY")};
+    const auto y{chain.Issue("YYY", {1000, 1000})};
+    const COutPoint dead{Fixed(chain, "DEAD", 1000)};
+    // An ask of the whole supply, filled by a bid: the book has no open order, the bid's proceeds are its holder's.
+    const CTransaction ask{chain.Place(dead, DEAD, 1000, Y, 1, 1)};
+    const CTransaction bid{chain.Place(y[0], Y, 1000, DEAD, 1, 1)};
+    chain.EndBlock();
+    // An expired one too (a second book: DEAD for CHN would be another pair; here the same book, the other side).
+    const CTransaction late{chain.Place(y[1], Y, 1000, DEAD, 1, 2, chain.height)};
+    chain.EndBlock();
+    chain.EndBlock();
+    const uint256 book{BookId(DEAD, Y)};
+    BOOST_REQUIRE_EQUAL(chain.Assets().GetOrder(OrderId(ask.GetHash()))->remaining, 0U);
+    BOOST_REQUIRE_EQUAL(chain.Assets().GetOrder(OrderId(bid.GetHash()))->got, 1000U);
+    BOOST_CHECK(chain.Assets().BookSide(book, DEAD < Y, 10, chain.height).empty());
+    BOOST_CHECK(chain.Assets().BookSide(book, !(DEAD < Y), 10, chain.height).empty());
+    // Nobody holds DEAD outside the book. Before v9 it could be released (its orders left with nothing to settle against);
+    // from v9 the release waits for them, and so does anyone who asks without a height.
+    const CTransaction release{MakeTx({}, ReleaseAsset{DEAD}, {})};
+    std::string why, reason;
+    BOOST_CHECK_MESSAGE(chain.Assets().Releasable(DEAD, &why, V9_HEIGHT - 1), why);
+    BOOST_CHECK_MESSAGE(Checks(chain, release, V9_HEIGHT - 1, reason), reason);
+    BOOST_CHECK(!chain.Assets().Releasable(DEAD, &why, V9_HEIGHT));
+    BOOST_CHECK_EQUAL(why, "an order of its books is not settled");
+    BOOST_CHECK(!chain.Assets().Releasable(DEAD, &why));
+    chain.height = V9_HEIGHT;
+    BOOST_CHECK_EQUAL(chain.Refused(release), "bad-ba-release-alive");
+    // The bid collects its DEAD, burned; the filled ask and the expired bid are still to settle.
+    const CTransaction collect{MakeTx({COutPoint{bid.GetHash(), 0}}, SettleOrder{OrderId(bid.GetHash()), false, PAYEE}, {std::nullopt})};
+    chain.Require(collect);
+    BOOST_REQUIRE(chain.TokenAt(COutPoint{collect.GetHash(), 0}) == AssetToken(DEAD, 1000));
+    chain.Require(MakeTx({COutPoint{collect.GetHash(), 0}}, Burn{{AssetToken(DEAD, 1000)}}, {}));
+    BOOST_CHECK_EQUAL(chain.Refused(release), "bad-ba-release-alive");
+    chain.Require(MakeTx({COutPoint{ask.GetHash(), 0}}, SettleOrder{OrderId(ask.GetHash()), false, PAYEE}, {std::nullopt}));
+    BOOST_CHECK_EQUAL(chain.Refused(release), "bad-ba-release-alive");
+    chain.Require(MakeTx({COutPoint{late.GetHash(), 0}}, SettleOrder{OrderId(late.GetHash()), false, PAYEE}, {std::nullopt}));
+    // All settled: released, the book with it.
+    BOOST_CHECK_MESSAGE(chain.Assets().Releasable(DEAD, &why, chain.height), why);
+    chain.Require(release);
+    BOOST_CHECK(!chain.Assets().GetPool(book));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

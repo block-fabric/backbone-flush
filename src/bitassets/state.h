@@ -1741,8 +1741,11 @@ public:
     void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts, uint64_t queued = 0);
     /** Policy (the mempool): whether a transaction's order, alone against the pools as they are, gives its min_out (true if it has none). */
     bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const;
-    /** Whether an asset is dead and can be retired; if not, why (`why`). */
-    bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
+    /**
+     * Whether an asset is dead and can be retired; if not, why (`why`). By the rules of the block at `height` (without
+     * one, by every rule: from v9_height a release also waits for the unsettled orders of the asset's books).
+     */
+    bool Releasable(const AssetId& asset, std::string* why = nullptr, std::optional<int> height = std::nullopt) const;
     /**
      * Whether ApplyTx would accept the transaction now (in a block with room for its payouts);
      * `results`, if given, gets what it would pay out, and `payouts` how many CHN payouts it gives rise to.

@@ -1251,9 +1251,13 @@ const sidechain::Cell<AssetId> BUYBACK_CURSOR{0xa5, AssetId{}};
 const sidechain::Table<uint256, AssetId> GRAD_POOLS{0xa3};
 //! From v7_height: the launches whose split owes an address some coin (LaunchRecord::share_owed), by token (FinishBlock pays them).
 const sidechain::Table<AssetId, bool> FEE_PAYEES{0xa4};
-//! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent).
+//! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent);
+//! 2: with the counts of their unsettled orders (BOOK_UNSETTLED).
 const sidechain::Cell<uint32_t> BOOKS_LAYOUT{0x9d, 0};
-constexpr uint32_t BOOKS_LAYOUT_CURRENT{1};
+constexpr uint32_t BOOKS_LAYOUT_CURRENT{2};
+//! The orders of each book not settled yet, by book: those placed since the book was made (an order of an earlier book of
+//! the pair, before an asset of it was released, is not of it). From v9_height a release waits for them (Releasable).
+const sidechain::Table<uint256, uint32_t> BOOK_UNSETTLED{0xa6};
 const sidechain::TableId BOOK_INDEXES_TAKEN[]{sidechain::TableId{BOOK_INDEX}, sidechain::TableId{BOOK_EXPIRY}, sidechain::TableId{BOOK_COUNTS}};
 sidechain::StoreBytes CountKey(const uint256& book, bool asks)
 {
@@ -1691,7 +1695,7 @@ std::optional<AssetId> State::AssetOfSeq(uint32_t seq) const
     return asset;
 }
 
-bool State::Releasable(const AssetId& asset, std::string* why) const
+bool State::Releasable(const AssetId& asset, std::string* why, std::optional<int> height) const
 {
     const auto no{[&](const char* reason) {
         if (why) *why = reason;
@@ -1709,6 +1713,18 @@ bool State::Releasable(const AssetId& asset, std::string* why) const
     // one look, however many auctions quote it.
     if (record->holding_auctions > 0) return no("an auction of it is not collected");
     if (record->provided_pools > 0) return no("a pool of it has liquidity providers");
+    // From v9_height (and for whoever asks without a height): the orders of its books not settled yet. A book with no open
+    // order still holds what its filled, expired and evicted orders are owed until their holders settle them.
+    if (!height || Params().GetConsensus().sidechain.V9Active(*height)) {
+        bool unsettled{false};
+        m_view->ForEach(Prefix(POOLS_BY_ASSET, asset), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
+            std::span<const unsigned char> in{key};
+            in = in.subspan(33);
+            unsettled = BOOK_UNSETTLED.Get(*m_view, sidechain::KeyCodec<uint256>::Decode(in)).value_or(0) > 0;
+            return !unsettled;
+        });
+        if (unsettled) return no("an order of its books is not settled");
+    }
     // The DEX (none before its height): what an order of this block trades through, or a contract holds.
     if (OrderHolds(asset)) return no("an order of this block trades it");
     if (const sidechain::StoreBytes prefix{Prefix(CONTRACTS_BY_ASSET, asset)}; m_view->Next(prefix, prefix)) return no("an oracle contract holds some of it");
@@ -2155,7 +2171,7 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
 
     if (const auto* release{op ? std::get_if<ReleaseAsset>(op) : nullptr}) {
         std::string why;
-        if (!Releasable(release->asset, &why)) return invalid("bad-ba-release-alive");
+        if (!Releasable(release->asset, &why, height)) return invalid("bad-ba-release-alive");
         plan.asset_gone = release->asset;
         std::map<AssetId, AssetRecord> others;
         // Its pools, in the order of their ids, through the index of pools by asset.
@@ -2811,6 +2827,8 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         // Its book gone (its asset released): nothing to settle against.
         const auto book_found{GetPool(order.book)};
         if (!book_found) return invalid("bad-ba-no-book");
+        // From v9_height: nor against a book of the pair made since (the asset released and its name registered again).
+        if (Params().GetConsensus().sidechain.V9Active(height) && order.height < book_found->height) return invalid("bad-ba-no-book");
         Pool book{*book_found};
         // The token is taken in: whoever spends it (the books refuse anyone else).
         debit(Token::Kind::ORDER, settle->order, 1);
@@ -3098,6 +3116,7 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
                 if (!plan->evicted) AddCount(out, order->book, order->sells0, +1);
                 BOOKS_TOUCHED.Put(out, order->book, 1);
                 out.Put(ExpiryKey(id, order->expiry), {});
+                BOOK_UNSETTLED.Put(out, order->book, BOOK_UNSETTLED.Get(out, order->book).value_or(0) + 1);
                 if (BOOKS_LAYOUT.Get(out) != BOOKS_LAYOUT_CURRENT) BOOKS_LAYOUT.Put(out, BOOKS_LAYOUT_CURRENT);
             }
         } else {
@@ -3105,6 +3124,15 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             if (before && out.Get(BookKey(id, *before))) {
                 out.Erase(BookKey(id, *before));
                 AddCount(out, before->book, before->sells0, -1);
+            }
+            // One unsettled order less in its book, if it was placed in this one (not in an earlier book of the pair).
+            if (const auto book{before ? GetPool(before->book) : std::nullopt}; book && before->height >= book->height) {
+                const uint32_t unsettled{BOOK_UNSETTLED.Get(out, before->book).value_or(0)};
+                if (unsettled > 1) {
+                    BOOK_UNSETTLED.Put(out, before->book, unsettled - 1);
+                } else if (unsettled == 1) {
+                    BOOK_UNSETTLED.Erase(out, before->book);
+                }
             }
             BOOK_ORDERS.Erase(out, id);
         }
@@ -3164,8 +3192,10 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     }
     for (const uint256& id : plan->pools_gone) {
         SetPool(id, std::nullopt);
-        // Its kind goes with it (the pools AddLiquidity made have none recorded).
+        // Its kind goes with it (the pools AddLiquidity made have none recorded), and a book's count of unsettled orders
+        // (none from v9_height: the release waits for them).
         if (POOL_PARAMS.Contains(out, id)) POOL_PARAMS.Erase(out, id);
+        if (BOOK_UNSETTLED.Contains(out, id)) BOOK_UNSETTLED.Erase(out, id);
     }
     // The name is free again; its number is not given again (lists skip it). Its history goes with it.
     if (plan->asset_gone) {
