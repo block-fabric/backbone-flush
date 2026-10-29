@@ -1866,8 +1866,13 @@ public:
      * walked through the pool's ticks (at most MAX_CL_CROSSINGS of them), the round's fees and roundings credited to the
      * liquidity in range. nullopt as ClearPool's.
      */
-    /** `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept beyond the walk. */
-    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0}) const;
+    /**
+     * `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept
+     * beyond the walk. `v9`: the rules from v9_height (the tick after a walk follows its last stretch's start; the rules
+     * of the next block for a quote).
+     */
+    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0},
+                                         bool v9 = true) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
@@ -1918,7 +1923,7 @@ public:
      * Every order still gets the same price; min_out counts what it gets, net of the fee.
      */
     std::optional<dex::Clearing> ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
-                                               const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const;
+                                               const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security, bool v9 = true) const;
     /** Whether the pools of the chain's coin take their fees on its side (fee_flow_height reached: set by its first block's end). */
     bool CoinSideFees() const;
 private:

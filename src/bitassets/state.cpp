@@ -3528,7 +3528,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                         }
                     }
                     if (kind.params.GetCurve() != Curve::CONCENTRATED || cl) {
-                        cleared = ClearCoinSide(id, kind.params, kind.fee, *pool, cl, ticks, ins, rules.SwapSecurityShare(height), taken);
+                        cleared = ClearCoinSide(id, kind.params, kind.fee, *pool, cl, ticks, ins, rules.SwapSecurityShare(height), taken, rules.V9Active(height));
                         if (cleared) effects.parts[CHN].security += taken;
                     }
                 } else if (pool && !amm::Abandoned(*pool)) {
@@ -3543,7 +3543,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                         }
                         if (it != effects.cl.end()) {
                             const auto [p0, p1]{fee_parts(kind.fee, ins, pool->asset0.IsNull(), pool->asset1.IsNull())};
-                            cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins, {p0.security + p0.protocol, p1.security + p1.protocol});
+                            cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins, {p0.security + p0.protocol, p1.security + p1.protocol}, rules.V9Active(height));
                         }
                     } else if (kind.params.GetCurve() == Curve::LAUNCH) {
                         // A launch curve: its coin is asset0. A buy paying the coin in at its first hop pays directly.
@@ -3856,7 +3856,7 @@ uint64_t WalkOut(const std::vector<ClSegment>& segs, uint64_t x, bool zero_in)
 } // namespace
 
 std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
-                                                  const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const
+                                                  const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security, bool v9) const
 {
     security = 0;
     if (fee >= FEE_DENOMINATOR || security_share > FEE_DENOMINATOR || !pool.asset0.IsNull()) return std::nullopt;
@@ -3877,7 +3877,7 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
     std::optional<dex::Clearing> cleared;
     if (params.GetCurve() == Curve::CONCENTRATED) {
         if (!cl || !ticks) return std::nullopt;
-        cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net);
+        cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9);
     } else {
         cleared = curves::ClearPoolOf(params, /*fee=*/0, pool.reserve0, pool.reserve1, net);
     }
@@ -3908,7 +3908,8 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
     return cleared;
 }
 
-std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take) const
+std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take,
+                                           bool v9) const
 {
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     uint64_t in0{0}, in1{0};
@@ -4121,7 +4122,10 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
         if (price == seg.target && seg.cross) {
             if (!cross(*seg.cross)) return std::nullopt;
             tick = zero_walk ? *seg.cross - 1 : *seg.cross;
-        } else if (price != UintToArith256(cl.sqrt_price)) {
+        } else if (price != (v9 ? seg.start : UintToArith256(cl.sqrt_price))) {
+            // Moved within the stretch: the tick of where it stops. From v9_height compared with the stretch's start (as
+            // Uniswap v3 compares with its step's): a last stretch that cannot move the price off a tick a whole stretch
+            // crossed down to keeps the tick below it, the side whose liquidity is in range; before, with the round's start.
             tick = cl::TickAtSqrtRatio(price);
         }
     }
