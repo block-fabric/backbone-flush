@@ -267,7 +267,7 @@ private:
     uint64_t m_mining_settings GUARDED_BY(m_mutex){0};
     //! The mainchain block for which a commitment was last asked.
     uint256 m_mining_requested_for GUARDED_BY(m_mutex);
-    //! The bundle the mainchain node was last given.
+    //! The bundle the mainchain node was last given; null once this chain has none, or the record closed it.
     uint256 m_bundle_sent GUARDED_BY(m_mutex);
     //! What the mainchain node was last told this chain vouches for: a bundle, or none (null); not told yet if empty.
     std::optional<uint256> m_vouched GUARDED_BY(m_mutex);
