@@ -9,6 +9,7 @@
 #include <sync.h>
 #include <univalue.h>
 #include <util/fs.h>
+#include <webui/guard.h>
 #include <webui/window.h>
 
 #include <atomic>
@@ -66,7 +67,7 @@ UniValue DialogJson(const Window::ConfirmDialog& dialog);
 std::string Digest(const std::string& request, const Window::ConfirmDialog& dialog);
 
 /** Whether an object or array, at any depth, names a key twice (refused: two readers could take two values). */
-bool HasDuplicateKeys(const UniValue& value);
+using guard::HasDuplicateKeys;
 
 /**
  * The tokens of the questions described and not answered yet: each bound to one request (as text), one question (its

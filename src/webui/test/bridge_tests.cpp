@@ -159,7 +159,11 @@ BOOST_AUTO_TEST_CASE(invalid_requests)
     bridge.Handle("8", R"([{"kind":"rpc","method":"x","rid":7}])");
     bridge.Handle("9", R"([{"kind":"cancel"}])");
     bridge.Handle("10", R"([{"kind":"rpc","method":"x"},{"kind":"rpc","method":"y"}])");
-    for (const char* id : {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}) {
+    // A key given twice, at any depth: refused (the remote host's rule), never the last one taken.
+    bridge.Handle("11", R"([{"kind":"rpc","method":"getblockcount","method":"sendtoaddress"}])");
+    bridge.Handle("12", R"([{"kind":"host","method":"x","params":{"amount":1,"amount":2}}])");
+    bridge.Handle("13", R"([{"kind":"rpc","method":"x","params":[{"a":{"b":1,"b":2}}]}])");
+    for (const char* id : {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}) {
         BOOST_CHECK_EQUAL(ErrorCode(replies.Wait(id)), webui::BRIDGE_INVALID_REQUEST);
     }
     BOOST_CHECK_EQUAL(bridge.Pending(), 0U);
