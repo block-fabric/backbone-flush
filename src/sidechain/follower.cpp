@@ -709,13 +709,18 @@ void Follower::CheckActiveChain()
         // commitment moved is checked again, with all above it.
         if (!lowest) {
             int main_height{chainman.ActiveChainstate().SideState().MainHeight()};
+            // Where the record changed without the node acting on it, if it stopped in between (kept on disk):
+            // a block committed above it may have its commitment back at the same height, on another branch
+            // whose blocks before it did otherwise; the change the node did not act on is not known, so such
+            // a block is checked again too.
+            const std::optional<int> unacted{record.UnactedFrom()};
             for (CBlockIndex* pindex{chainman.ActiveChain().Tip()}; pindex && pindex->nHeight > 0; pindex = pindex->pprev) {
                 // A block that needs no commitment acts on nothing the mainchain did: its undo data
                 // leaves the height as it was.
                 if (const auto commitment{Hooks().CommitmentOf(*pindex)}) {
                     const auto bmm_height{record.CommittedHeight(*commitment)};
                     if (!bmm_height) break;
-                    if (*bmm_height - 1 != main_height) moved = pindex;
+                    if (*bmm_height - 1 != main_height || (unacted && *bmm_height - 1 > *unacted)) moved = pindex;
                     if (*bmm_height < top - MOVED_CHECK_DEPTH) break;
                 }
                 // What the mainchain had done before this block is what it had done after its parent.

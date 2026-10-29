@@ -13,7 +13,7 @@ mainchain and acting on it.
 - A candidate block whose parent lost its commitment is not accepted.
 - At startup, with a record that disagrees: VerifyDB stops at the block; blocks without a commitment go
   with those above them (also below a block committed to again, lower), a block whose commitment moved is
-  checked again, blocks failed against the record that
+  checked again (also one committed to again at the same height after a record the node did not act on), blocks failed against the record that
   have their commitment again are checked again; rebuilt under other parameters, the sidechain database
   stops at the block (the chain goes back), and a block the operator invalidated stays invalid.
 - A deposit destination of any bytes (not UTF-8) is read, and credits no address.
@@ -351,6 +351,30 @@ class SidechainRecordTest(BitcoinTestFramework):
         self.stop_node(0)
         main.fail_from = None
         with node.assert_debug_log([f"The commitment of block {tip} moved on the mainchain"]):
+            self.start_node(0)
+            node.syncmainchain()
+        self.wait_until(lambda: node.getbestblockhash() == parent)
+        assert_equal(self.status(tip), "invalid")
+        # The next block pays the deposit.
+        balance = node.getbalance()
+        self.mine()
+        assert_equal(node.getbalance(), balance + 1)
+
+        self.log.info("At startup, a block committed to again at the same height, after a deposit the other branch did not have: checked again, it fails")
+        main.add_block()
+        node.syncmainchain()
+        parent = node.getbestblockhash()
+        tip = self.mine()
+        [committed_at] = [b["height"] for b in main.blocks if b.get("bmm") == tip]
+
+        def same_height():
+            del main.blocks[committed_at - 1:]
+            main.add_block(branch=7, deposits=[self.deposit(1)])
+            main.add_block(branch=7, bmm=tip)
+        self.change_unacted(same_height)
+        self.stop_node(0)
+        main.fail_from = None
+        with node.assert_debug_log([f"The commitment of block {tip} moved on the mainchain, or the record before it changed"]):
             self.start_node(0)
             node.syncmainchain()
         self.wait_until(lambda: node.getbestblockhash() == parent)
