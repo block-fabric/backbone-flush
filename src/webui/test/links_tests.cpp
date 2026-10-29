@@ -625,6 +625,8 @@ struct LinkHostSetup : TestChain100Setup {
     std::vector<std::pair<std::string, size_t>> fetched;
     std::optional<std::vector<unsigned char>> fetch_answer;
     std::string fetch_error{"HTTP 404 (200 only)"};
+    //! Whether the app may connect to a site directly (no -proxy, -onion or -onlynet).
+    bool direct{true};
     LinkHostSetup()
     {
         m_node.wallet_loader = loader.get();
@@ -668,6 +670,7 @@ struct LinkHostSetup : TestChain100Setup {
             if (!fetch_answer) error = fetch_error;
             return fetch_answer;
         };
+        deps.direct_downloads = [this] { return direct; };
         deps.inform = [this](const std::string& title, const std::string& message, bool) { informed.push_back(title + ": " + message); };
         deps.wallet = [] { return std::string{}; };
         deps.network = [] { return NET; };
@@ -770,10 +773,33 @@ BOOST_FIXTURE_TEST_CASE(a_logo_is_downloaded_from_the_links_logo_url, LinkHostSe
     }};
     const auto cancelled{[](const webui::HostError& e) { return e.code == webui::BRIDGE_CANCELLED && std::string{e.what()}.find("No logo chosen") != std::string::npos; }};
 
-    // Downloaded with its hash: no file asked for. (The test methods have no second step: refused after, nothing ran.)
+    // Asked first: declined, nothing is downloaded and the file is asked for, its title plain.
     fetch_answer = logo;
+    accept = false;
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, cancelled);
+    accept = true;
+    BOOST_CHECK(fetched.empty());
+    BOOST_REQUIRE_EQUAL(asked.size(), 1U);
+    BOOST_CHECK_EQUAL(asked[0].kind, "link:logo");
+    BOOST_CHECK(HasRow(asked[0].rows, "Logo at", "https://cdn.flush.markets/logo.png"));
+    BOOST_REQUIRE_EQUAL(choosers.size(), 1U);
+    BOOST_CHECK(choosers[0].starts_with("The logo of LUMEN1 (SHA-256"));
+    // While the node goes through a proxy or Tor: neither downloaded nor asked, the file asked for with why.
+    direct = false;
+    BOOST_CHECK_EXCEPTION(host->Handle(link(), Source::BROWSER), webui::HostError, cancelled);
+    direct = true;
+    BOOST_CHECK(fetched.empty());
+    BOOST_CHECK_EQUAL(asked.size(), 1U);
+    BOOST_REQUIRE_EQUAL(choosers.size(), 2U);
+    BOOST_CHECK_NE(choosers[1].find("proxy or Tor"), std::string::npos);
+    choosers.clear();
+    asked.clear();
+
+    // Accepted, downloaded with its hash: no file asked for. (The test methods have no second step: refused after, nothing ran.)
     BOOST_CHECK_THROW(host->Handle(link(), Source::BROWSER), webui::HostError);
     BOOST_REQUIRE_EQUAL(fetched.size(), 1U);
+    BOOST_REQUIRE(!asked.empty());
+    BOOST_CHECK_EQUAL(asked[0].kind, "link:logo");
     BOOST_CHECK_EQUAL(fetched[0].first, "https://cdn.flush.markets/logo.png");
     BOOST_CHECK_EQUAL(fetched[0].second, bitassets::MAX_LOGO_BYTES);
     BOOST_CHECK(choosers.empty());

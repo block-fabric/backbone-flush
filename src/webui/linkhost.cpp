@@ -1061,13 +1061,33 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
     const std::string wallet{Wallet(node)};
     LogInfo("webui: a link (%s): %s", SourceText(source), VerbName(request.verb));
     // A logo the link names by its hash (it cannot carry 32 KB): downloaded from where the link says the site hosts it
-    // (8.1.0, logo_url) and kept only if it is that one; else, or if that fails, chosen by the user, refused if it is not.
+    // (8.1.0, logo_url), once the user accepted the download, and kept only if it is that one; else, or if that fails,
+    // chosen by the user, refused if it is not. Never downloaded while the node goes through a proxy or Tor: the download
+    // would not.
     std::string download_failed;
     if ((request.verb == Verb::LAUNCH || request.verb == Verb::REGISTER) && request.logo_sha256 && request.logo.empty() && !request.logo_url.empty()) {
         std::string error;
         std::optional<std::vector<unsigned char>> bytes;
-        if (m_deps.fetch) {
-            bytes = m_deps.fetch(request.logo_url, bitassets::MAX_LOGO_BYTES, error);
+        bool declined{false};
+        if (m_deps.direct_downloads && !m_deps.direct_downloads()) {
+            error = "the app does not download it while the node uses a proxy or Tor";
+        } else if (m_deps.fetch) {
+            Window::ConfirmDialog question;
+            question.title = strprintf("Download the logo of %s?", request.ticker);
+            question.message = strprintf("%s names the logo of %s by its SHA-256 and says where the site keeps it. The app can download it "
+                                         "from there, directly: that site then sees this computer's address. It keeps the file only if it "
+                                         "is the one the link names.\n\nOr choose the logo's file yourself.",
+                                         source == Source::FILE ? "The launch file" : "The link", request.ticker);
+            question.accept = "Download";
+            question.cancel = "Choose the file";
+            question.level = dialog::Level::INFO;
+            question.kind = "link:logo";
+            question.rows = {confirm::Destination("Logo at", request.logo_url), confirm::Text("Its SHA-256", *request.logo_sha256)};
+            if (m_deps.ask && m_deps.ask(question).accepted) {
+                bytes = m_deps.fetch(request.logo_url, bitassets::MAX_LOGO_BYTES, error);
+            } else {
+                declined = true;
+            }
         } else {
             error = "downloads are not supported here";
         }
@@ -1087,6 +1107,8 @@ UniValue LinkHost::Run(Request request, Source source, const std::string& uri)
             LogInfo("webui: the logo of the link was downloaded from %s (%u bytes, its SHA-256 the link's)", UrlHost(request.logo_url), bytes->size());
             request.logo = std::move(*bytes);
             request.logo_downloaded = true;
+        } else if (declined) {
+            LogInfo("webui: the logo of the link is not downloaded from %s (the user chooses the file)", UrlHost(request.logo_url));
         } else {
             if (error.empty()) error = "it could not be downloaded";
             LogInfo("webui: the logo of the link could not be downloaded from %s: %s; the file is asked for", UrlHost(request.logo_url), error);
