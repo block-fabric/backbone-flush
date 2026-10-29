@@ -22,6 +22,8 @@
 #include <publicapi/limits.h>
 #include <publicapi/rest.h>
 #include <publicapi/service.h>
+#include <sidechain/store.h>
+#include <validation.h>
 #include <crypto/sha256.h>
 #include <test/bitassets_logo_samples.h>
 #include <test/util/setup_common.h>
@@ -620,6 +622,28 @@ BOOST_AUTO_TEST_CASE(logo_uploads_through_the_service)
     BOOST_CHECK_EQUAL(StatusOf(r), 429);
     BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
     BOOST_CHECK_EQUAL(StatusOf(post(again, "198.51.100.7")), 200);
+}
+
+BOOST_FIXTURE_TEST_CASE(state_snapshot_kept_for_its_state_only, TestChain100Setup)
+{
+    // The snapshot of the state a call read is kept for the next calls at that state (its overlay copied once), and let
+    // go of as the tip moves: never held across states.
+    grpcsrv::Options options;
+    options.rest_prefix = publicapi::REST_PREFIX;
+    options.rest = publicapi::MakeRestRouter(Pool());
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    const auto shared{[&] { return WITH_LOCK(::cs_main, return m_node.chainman->ActiveChainstate().SideCache().SharedSnapshot()); }};
+    Http1(server, "GET /api/v1/tickers/MOON HTTP/1.1\r\n\r\n");
+    const std::weak_ptr<const sidechain::StoreView> kept{shared()};
+    BOOST_CHECK(!kept.expired());
+    Http1(server, "GET /api/v1/tickers/SUN HTTP/1.1\r\n\r\n");
+    BOOST_CHECK(shared() == kept.lock());
+    CreateAndProcessBlock({}, CScript{} << OP_TRUE);
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+    BOOST_CHECK(kept.expired());
 }
 
 BOOST_AUTO_TEST_CASE(portfolio_cost_scales_with_its_addresses)
