@@ -13,34 +13,49 @@ namespace publicapi {
 std::optional<double> RateLimiter::Take(const std::string& client, double cost, std::chrono::steady_clock::time_point now)
 {
     LOCK(m_mutex);
-    auto it{m_buckets.find(client)};
-    if (it == m_buckets.end()) {
-        if (m_buckets.size() >= m_max_clients) {
-            // Drop the buckets that are full again (their clients went quiet); if none, the oldest.
-            for (auto b{m_buckets.begin()}; b != m_buckets.end();) {
-                const double refill{std::chrono::duration<double>(now - b->second.at).count() * m_rate};
-                if (b->second.tokens + refill >= m_burst) {
-                    b = m_buckets.erase(b);
-                } else {
-                    ++b;
+    Bucket* bucket{nullptr};
+    if (const auto it{m_buckets.find(client)}; it != m_buckets.end()) {
+        m_order.splice(m_order.begin(), m_order, it->second);
+        bucket = &*it->second;
+    } else {
+        // Past the bound, room is made only by a bucket full again (its client went quiet), among those used longest ago:
+        // a drained one is never dropped, or a client could start afresh with another key.
+        bool room{m_buckets.size() < m_max_clients};
+        if (!room) {
+            size_t looked{0};
+            for (auto b{m_order.end()}; b != m_order.begin() && looked < EVICTION_CANDIDATES; ++looked) {
+                --b;
+                if (Level(*b, now) >= m_burst) {
+                    m_buckets.erase(b->client);
+                    m_order.erase(b);
+                    room = true;
+                    break;
                 }
             }
-            if (m_buckets.size() >= m_max_clients) {
-                m_buckets.erase(std::min_element(m_buckets.begin(), m_buckets.end(), [](const auto& a, const auto& b) { return a.second.at < b.second.at; }));
-            }
         }
-        it = m_buckets.emplace(client, Bucket{m_burst, now}).first;
+        if (room) {
+            m_order.push_front(Bucket{client, m_burst, now});
+            m_buckets.emplace(client, m_order.begin());
+            bucket = &m_order.front();
+        } else {
+            bucket = &m_overflow;
+        }
     }
-    Bucket& bucket{it->second};
-    if (now > bucket.at) {
-        bucket.tokens = std::min(m_burst, bucket.tokens + std::chrono::duration<double>(now - bucket.at).count() * m_rate);
-        bucket.at = now;
-    }
-    if (bucket.tokens >= cost) {
-        bucket.tokens -= cost;
+    bucket->tokens = Level(*bucket, now);
+    if (now > bucket->at) bucket->at = now;
+    if (bucket->tokens >= cost) {
+        bucket->tokens -= cost;
         return std::nullopt;
     }
-    return m_rate > 0 ? (cost - bucket.tokens) / m_rate : 3600.0;
+    return m_rate > 0 ? (cost - bucket->tokens) / m_rate : 3600.0;
+}
+
+bool RateLimiter::Has(const std::string& client, double cost, std::chrono::steady_clock::time_point now) const
+{
+    LOCK(m_mutex);
+    const auto it{m_buckets.find(client)};
+    if (it != m_buckets.end()) return Level(*it->second, now) >= cost;
+    return m_buckets.size() < m_max_clients ? m_burst >= cost : true;
 }
 
 size_t RateLimiter::Clients() const

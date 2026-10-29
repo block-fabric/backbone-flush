@@ -67,6 +67,9 @@ void AddPublicApiOptions(ArgsManager& args)
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiipv6prefix=<bits>", "IPv6 clients of the public API are counted by this prefix, for the 16 connections an address may hold and for its rate limits (one client usually has a /64 to rotate addresses in; 16 to 128, default: 64)",
                  ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    args.AddArg("-publicapiwideprefix=<bits>", "IPv6 clients of the public API in one network of this prefix are also limited together, at -publicapiwidemultiplier times one client's rate (0: not; 16 to 128, default: 48)",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
+    args.AddArg("-publicapiwidemultiplier=<n>", "How many clients' rate the IPv6 clients of one -publicapiwideprefix network share (at least 1, default: 64)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapireflection", "Serve gRPC server reflection on the public API (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapirate=<n>", "Calls a second each client of the public API may make on average (a quote counts 4, a list 2; default: 10)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
     args.AddArg("-publicapiburst=<n>", "And at once (default: 40)", ArgsManager::ALLOW_ANY, OptionsCategory::RPC);
@@ -184,6 +187,11 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     service_options.burst = number("-publicapiburst", 40);
     if (service_options.rate <= 0 || service_options.burst <= 0) return InitError(Untranslated("-publicapirate and -publicapiburst: numbers above 0"));
     service_options.broadcast = args.GetBoolArg("-publicapibroadcast", true);
+    const int64_t wide_prefix{args.GetIntArg("-publicapiwideprefix", 48)};
+    if (wide_prefix != 0 && (wide_prefix < 16 || wide_prefix > 128)) return InitError(Untranslated("-publicapiwideprefix: 0, or a prefix length from 16 to 128"));
+    service_options.wide_prefix = static_cast<int>(wide_prefix);
+    service_options.wide_multiplier = number("-publicapiwidemultiplier", 64);
+    if (service_options.wide_multiplier < 1) return InitError(Untranslated("-publicapiwidemultiplier: a number of at least 1"));
     service_options.reflection = args.GetBoolArg("-publicapireflection", false);
     g_service = publicapi::RegisterService(*g_server, *g_pool, node, service_options);
     publicapi::Service* service{g_service.get()};

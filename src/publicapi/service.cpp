@@ -32,6 +32,7 @@
 #include <drivechain/sidechain.h>
 #include <key_io.h>
 #include <logging.h>
+#include <netbase.h>
 #include <node/context.h>
 #include <node/transaction.h>
 #include <policy/policy.h>
@@ -314,7 +315,8 @@ public:
           m_logo_limits{options.logo_per_minute / 60.0, options.logo_burst},
           m_logo_global{options.logo_global_per_minute / 60.0, std::max(1.0, options.logo_global_per_minute / 6.0), 1},
           m_logos{options.logo_entries, options.logo_ttl},
-          m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}
+          m_wide_limits{options.rate * options.wide_multiplier, options.burst * options.wide_multiplier},
+          m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}, m_broadcast_gate{options.max_broadcasts}
     {
         RegisterAll(server);
         grpcsrv::RegisterHealth(server, pool, {SERVICE});
@@ -335,9 +337,20 @@ public:
         // A REST request is guarded once, decoded; a unary one before it is (its method's base), then after (the rest).
         const double cost{call.after_decode ? CostOf(call.path, call.request) - CostOf(call.path) : CostOf(call.path, call.request)};
         if (cost <= 0) return std::nullopt;
+        // An IPv6 client's network (Options::wide_prefix) as a whole too, looked at first: a call it refuses makes no
+        // bucket of the client's and takes nothing from it.
+        const auto wide{WideClient(call.client, m_options.wide_prefix)};
+        const auto wide_refused{[&](double wait) {
+            const int seconds{std::max(1, static_cast<int>(std::ceil(wait)))};
+            return Status{Code::RESOURCE_EXHAUSTED, strprintf("rate limit of the network %s (try again in %d s)", *wide, seconds), {{"retry-after", util::ToString(seconds)}}};
+        }};
+        if (wide && !m_wide_limits.Has(*wide, cost)) return wide_refused(1);
         if (const auto wait{m_limits.Take(call.client, cost)}) {
             const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
             return Status{Code::RESOURCE_EXHAUSTED, strprintf("rate limit: %g calls a second at most (try again in %d s)", m_options.rate, seconds), {{"retry-after", util::ToString(seconds)}}};
+        }
+        if (wide) {
+            if (const auto wait{m_wide_limits.Take(*wide, cost)}) return wide_refused(*wait);
         }
         if (call.path == std::string{"/"} + SERVICE + "/Broadcast") {
             if (!m_options.broadcast) return Status{Code::PERMISSION_DENIED, "this node does not broadcast for others (-publicapibroadcast=0)"};
@@ -368,11 +381,33 @@ private:
     // -----------------------------------------------------------------------------------------------------
     // Plumbing
 
+    /**
+     * The network of `prefix` bits of an IPv6 client, keyed by its address ("2001:db8::1", a /128) or by a longer prefix
+     * ("2001:db8:1:2::/64"); none for another client, or a key as short as the network already.
+     */
+    static std::optional<std::string> WideClient(const std::string& client, int prefix)
+    {
+        if (prefix <= 0) return std::nullopt;
+        const auto slash{client.find('/')};
+        const auto network{LookupHost(client.substr(0, slash), /*fAllowLookup=*/false)};
+        if (!network || !network->IsIPv6()) return std::nullopt;
+        int bits{128};
+        if (slash != std::string::npos) {
+            const auto given{ToIntegral<int>(client.substr(slash + 1))};
+            if (!given) return std::nullopt;
+            bits = *given;
+        }
+        if (bits <= prefix) return std::nullopt;
+        return CSubNet{*network, static_cast<uint8_t>(prefix)}.ToString();
+    }
+
     struct Policy {
         //! Replies cached per tip (the same request at the same tip: the same reply).
         bool cache{true};
         //! Taken through the gate of expensive calls.
         bool expensive{false};
+        //! Taken through the gate of broadcasts instead (builds and quotes never hold a broadcast up).
+        bool broadcast{false};
         std::string cache_control{"public, max-age=5"};
         //! Read at the chain's tip (false: a call that reads nothing of the chain, served while the node starts too).
         bool tip{true};
@@ -437,8 +472,8 @@ private:
                     if (policy.cache) reply = m_cache.Get(key, tip.hash);
                     if (!reply) {
                         std::optional<Gate::Pass> pass;
-                        if (policy.expensive) {
-                            pass.emplace(m_gate.Enter());
+                        if (policy.expensive || policy.broadcast) {
+                            pass.emplace((policy.broadcast ? m_broadcast_gate : m_gate).Enter());
                             if (!*pass) return w->Finish(Status{Code::RESOURCE_EXHAUSTED, "busy: try again in a moment", {{"retry-after", "1"}}});
                         }
                         auto made{std::make_shared<const Message>(fn(req, tip))};
@@ -3488,7 +3523,7 @@ private:
 
         Serve(server, "BuildAction", fresh, [this](const Message& req, const Tip& tip) { return Build(req, tip); });
 
-        Serve(server, "Broadcast", Policy{.cache = false, .expensive = true, .cache_control = "no-store"}, [this](const Message& req, const Tip&) {
+        Serve(server, "Broadcast", Policy{.cache = false, .broadcast = true, .cache_control = "no-store"}, [this](const Message& req, const Tip&) {
             const std::string& hex{req.GetString("hex")};
             const std::string& psbt_text{req.GetString("psbt")};
             if (hex.empty() == psbt_text.empty()) Fail(Code::INVALID_ARGUMENT, "hex (a signed transaction) or psbt (a PSBT whose inputs are all signed, base64): one of the two");
@@ -3605,7 +3640,9 @@ private:
     RateLimiter m_logo_global;
     LogoStore m_logos;
     mutable ReplyCache m_cache;
+    RateLimiter m_wide_limits;
     mutable Gate m_gate;
+    mutable Gate m_broadcast_gate;
     /** The last snapshot of the state a call read (TakeTip), kept until the tip moves or the state is flushed. */
     class TipWatch final : public CValidationInterface
     {
