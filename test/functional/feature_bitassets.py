@@ -414,6 +414,12 @@ class BitAssetsTest(SidechainTest):
         side.releaseassetreservation("SPARE")
         self.mine_txs()
         assert_equal(side.listmyassets()["reservations"], [])
+        # Named in lower case, as the wallet reserves names from ticker_height (uppercased).
+        side.reserveasset("SPARETWO")
+        self.mine_txs()
+        side.releaseassetreservation("sparetwo")
+        self.mine_txs()
+        assert_equal(side.listmyassets()["reservations"], [])
         assert_equal(side.getbitassetsinfo()["reservations"], 0)
         activity = side.listassetactivity()
         assert_greater_than(len(activity), 10)
