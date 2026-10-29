@@ -4,6 +4,7 @@
 
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
+#include <bitassets/state.h>
 #include <consensus/amount.h>
 #include <interfaces/chain.h>
 #include <interfaces/node.h>
@@ -11,6 +12,7 @@
 #include <key_io.h>
 #include <node/context.h>
 #include <policy/feerate.h>
+#include <psbt.h>
 #include <rpc/server.h>
 #include <txmempool.h>
 #include <script/script.h>
@@ -609,6 +611,85 @@ BOOST_AUTO_TEST_CASE(psbt_round_trip)
     Answer(true);
     UniValue sent{Call("psbt.broadcast", Obj({{"psbt", signed_psbt["psbt"]}}))};
     BOOST_CHECK_EQUAL(sent["txid"].get_str(), prepared["txid"].get_str());
+}
+
+BOOST_AUTO_TEST_CASE(psbt_tokens_shown)
+{
+    // A PSBT that moves tokens: its sign dialog says which tokens each input spends and each output carries, by ticker and
+    // amount, names the asset operation, warns when the wallet's tokens or its control coin go, and says what is paid into
+    // the operation (not burned).
+    Call("wallets.create", Obj({{"name", "holder"}}));
+    std::unique_ptr<interfaces::Wallet> holder;
+    for (auto& w : loader->getWallets()) {
+        if (w->getWalletName() == "holder") holder = std::move(w);
+    }
+    BOOST_REQUIRE(holder);
+    const CScript mine{GetScriptForDestination(DecodeDestination(Call("wallet.newAddress", Obj({{"wallet", "holder"}})).get_str()))};
+    const CScript other{CScript{} << OP_0 << std::vector<unsigned char>(20, 0x42)};
+    const bitassets::AssetId gold{bitassets::HashName("GOLD")};
+    bitassets::AssetRecord record;
+    record.seq = 7;
+    record.text = "GOLD";
+    record.decimals = 2;
+    const COutPoint fee_coin{Txid::FromUint256(uint256{1}), 0}, control_coin{Txid::FromUint256(uint256{2}), 0}, gold_coin{Txid::FromUint256(uint256{3}), 1};
+    webui::TokenLookup lookup{
+        [&](const COutPoint& o) -> std::optional<bitassets::Token> {
+            if (o == control_coin) return bitassets::Token{bitassets::Token::Kind::CONTROL, gold, 1};
+            if (o == gold_coin) return bitassets::Token{bitassets::Token::Kind::ASSET, gold, 12345};
+            return std::nullopt;
+        },
+        [&](const bitassets::AssetId& a) -> std::optional<bitassets::AssetRecord> { return a == gold ? std::optional{record} : std::nullopt; }};
+
+    // The wallet's control coin and 123.45 GOLD to an address that is not the wallet's, with a marker that pays 0.5 ECX in.
+    bitassets::Marker marker;
+    marker.outputs.push_back({0, bitassets::Token{bitassets::Token::Kind::CONTROL, gold, 1}});
+    marker.outputs.push_back({1, bitassets::Token{bitassets::Token::Kind::ASSET, gold, 12345}});
+    CMutableTransaction mtx;
+    for (const COutPoint& o : {fee_coin, control_coin, gold_coin}) mtx.vin.emplace_back(o);
+    mtx.vout = {CTxOut{0, other}, CTxOut{0, other}, CTxOut{COIN / 2, bitassets::MarkerScript(marker)}};
+    PartiallySignedTransaction psbtx{mtx};
+    psbtx.inputs[0].witness_utxo = CTxOut{COIN, mine};
+    psbtx.inputs[1].witness_utxo = CTxOut{0, mine};
+    psbtx.inputs[2].witness_utxo = CTxOut{0, mine};
+    const auto rows{webui::PsbtRows(holder.get(), psbtx, lookup)};
+    webui::Window::ConfirmDialog dialog;
+    dialog.rows = rows;
+    BOOST_CHECK_EQUAL(RowValue(dialog, "Spends this wallet's (input 2)"), "the control coin of GOLD (#" + bitassets::FormatSeq(7) + ", 0x" + gold.GetHex().substr(0, 8) + "…" + gold.GetHex().substr(56) + ")");
+    BOOST_CHECK(RowValue(dialog, "Spends this wallet's (input 3)").starts_with("123.45 GOLD (#"));
+    bool control_warning{false}, tokens_warning{false};
+    for (const auto& row : rows) {
+        control_warning |= row.kind == webui::dialog::Row::Kind::NOTE && row.value.starts_with("Warning: it spends the control coin of GOLD");
+        tokens_warning |= row.kind == webui::dialog::Row::Kind::NOTE && row.value.starts_with("Warning: it spends tokens of this wallet");
+    }
+    BOOST_CHECK(control_warning);
+    BOOST_CHECK(tokens_warning);
+    // Each output with the token it carries, after its destination.
+    const int first{RowOf(dialog, "Carries")};
+    BOOST_REQUIRE(first > RowOf(dialog, "Pay to"));
+    BOOST_CHECK(rows[first].value.starts_with("the control coin of GOLD"));
+    BOOST_CHECK(RowValue(webui::Window::ConfirmDialog{.rows = std::vector(rows.begin() + first + 1, rows.end())}, "Carries").starts_with("123.45 GOLD"));
+    // The marker: its operation named, what it pays in said as such.
+    BOOST_CHECK_EQUAL(RowValue(dialog, "Asset operation"), "none: it moves tokens only");
+    BOOST_CHECK_EQUAL(RowValue(dialog, "Paid into the operation"), webui::confirm::Coins(COIN / 2));
+    BOOST_CHECK_EQUAL(RowOf(dialog, "Amount (burned)"), -1);
+
+    // An operation is named; an output that takes its result says so; a coin of no value the chain knows no token on is said.
+    bitassets::Marker swap;
+    swap.operation = bitassets::Swap{};
+    swap.outputs.push_back({0, std::nullopt});
+    mtx.vin.resize(1);
+    mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{4}), 0});
+    mtx.vout = {CTxOut{0, mine}, CTxOut{COIN, bitassets::MarkerScript(swap)}};
+    PartiallySignedTransaction swap_psbt{mtx};
+    swap_psbt.inputs[0].witness_utxo = CTxOut{2 * COIN, mine};
+    swap_psbt.inputs[1].witness_utxo = CTxOut{0, mine};
+    dialog.rows = webui::PsbtRows(holder.get(), swap_psbt, lookup);
+    BOOST_CHECK_EQUAL(RowValue(dialog, "Asset operation"), "a swap");
+    BOOST_CHECK(RowValue(dialog, "Carries").starts_with("what the asset operation gives it"));
+    bool unseen{false};
+    for (const auto& row : dialog.rows) unseen |= row.value.find("no token the chain knows yet") != std::string::npos;
+    BOOST_CHECK(unseen);
+    BOOST_CHECK_EQUAL(RowOf(dialog, "Spends this wallet's"), -1);
 }
 
 BOOST_AUTO_TEST_CASE(address_book_requests_and_messages)
