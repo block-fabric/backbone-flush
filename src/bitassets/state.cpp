@@ -3874,10 +3874,29 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
             net.push_back(order);
         }
     }
+    // All the fees: the buys' and each sale's out of what it gets; `security_share` of them to the chain's security.
+    const auto split{[&](const std::vector<uint64_t>& outs) -> std::optional<std::pair<uint64_t, uint64_t>> {
+        unsigned __int128 all{fees};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!orders[i].zero_in) all += fee_of(outs[i]);
+        }
+        if (all > MAX_AMOUNT) return std::nullopt;
+        const uint64_t to_security{static_cast<uint64_t>(all * security_share / FEE_DENOMINATOR)};
+        return std::make_pair(to_security, static_cast<uint64_t>(all) - to_security);
+    }};
     std::optional<dex::Clearing> cleared;
     if (params.GetCurve() == Curve::CONCENTRATED) {
         if (!cl || !ticks) return std::nullopt;
-        cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9);
+        if (v9) {
+            // From v9_height the providers' part is credited with the walk, stretch by stretch.
+            cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9, [&](const std::vector<uint64_t>& outs) -> std::optional<uint64_t> {
+                const auto parts{split(outs)};
+                if (!parts) return std::nullopt;
+                return parts->second;
+            });
+        } else {
+            cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9);
+        }
     } else {
         cleared = curves::ClearPoolOf(params, /*fee=*/0, pool.reserve0, pool.reserve1, net);
     }
@@ -3895,21 +3914,25 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
     const uint64_t providers{all - to_security};
     // The providers' part into the pool's coin (the buys' fees never went in, the sales' went out with what they got).
     if (providers > MAX_AMOUNT - cleared->reserve0) return std::nullopt;
-    cleared->reserve0 += providers;
-    // A concentrated pool: its in-range positions' fee growth in the coin (Q128 per unit of liquidity in range after the round).
-    if (cl && providers > 0) {
+    // From v9_height a concentrated pool's walk credited it (ClearCl's coin_fee): what no liquidity earned leaves with the
+    // security part rather than stay in the pool, nobody's.
+    const uint64_t uncredited{cl && v9 ? std::min(cleared->uncredited0, providers) : 0};
+    cleared->reserve0 += providers - uncredited;
+    // A concentrated pool before v9_height: its in-range positions' fee growth in the coin (Q128 per unit of liquidity in
+    // range after the round).
+    if (cl && !v9 && providers > 0) {
         const unsigned __int128 liquidity{cl->Liquidity()};
         if (liquidity > 0) {
             const arith_uint256 l{(arith_uint256{static_cast<uint64_t>(liquidity >> 64)} << 64) | arith_uint256{static_cast<uint64_t>(liquidity)}};
             cl->fee_growth0 = ArithToUint256(UintToArith256(cl->fee_growth0) + (arith_uint256{providers} << 128) / l);
         }
     }
-    security = to_security;
+    security = to_security + uncredited;
     return cleared;
 }
 
 std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take,
-                                           bool v9) const
+                                           bool v9, const std::function<std::optional<uint64_t>(const std::vector<uint64_t>&)>& coin_fee) const
 {
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     uint64_t in0{0}, in1{0};
@@ -4034,6 +4057,13 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
     const __int128 surplus1{zero_walk ? net1 + static_cast<__int128>(swapped_out) : net1 - static_cast<__int128>(swapped_in)};
     if (surplus0 < 0 || surplus1 < 0) return std::nullopt;
     if (broken) return std::nullopt;
+    // A round with its fee on the coin's side (ClearCoinSide, from v9_height): the providers' part, out of the outs.
+    uint64_t coin_part{0};
+    if (coin_fee) {
+        const auto part{coin_fee(clearing.outs)};
+        if (!part) return std::nullopt;
+        coin_part = *part;
+    }
     // The fees and roundings, credited to the liquidity of each stretch the walk went through, in proportion to the input
     // it took there, before the tick at its end is crossed (Uniswap v3 credits a step's fee to its liquidity, then
     // crosses): a position earns what the walk traded in its range. With no walk (the orders crossed each other), all to
@@ -4048,7 +4078,7 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
     const uint64_t taken0{static_cast<uint64_t>(std::min<__int128>(surplus0, take.first))}, taken1{static_cast<uint64_t>(std::min<__int128>(surplus1, take.second))};
     clearing.taken0 = taken0;
     clearing.taken1 = taken1;
-    const unsigned __int128 s0{static_cast<unsigned __int128>(surplus0) - taken0}, s1{static_cast<unsigned __int128>(surplus1) - taken1};
+    const unsigned __int128 s0{static_cast<unsigned __int128>(surplus0) - taken0 + coin_part}, s1{static_cast<unsigned __int128>(surplus1) - taken1};
     // What each stretch took of the input, as the walk goes: its share of the surplus, the last the rest.
     std::vector<std::pair<size_t, uint64_t>> taken;
     {
@@ -4129,8 +4159,11 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
             tick = cl::TickAtSqrtRatio(price);
         }
     }
-    // No walk (or none of it with liquidity): all to the liquidity in range.
-    if (!any_credit) credit(liquidity, s0, s1);
+    // No walk (or none of it with liquidity): all to the liquidity in range; with none, the coin's part is nobody's.
+    if (!any_credit) {
+        credit(liquidity, s0, s1);
+        if (liquidity == 0) clearing.uncredited0 = coin_part;
+    }
     cl.sqrt_price = ArithToUint256(price);
     cl.tick = tick;
     cl.SetLiquidity(liquidity);

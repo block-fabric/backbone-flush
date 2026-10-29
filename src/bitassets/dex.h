@@ -180,6 +180,9 @@ struct Clearing {
     //! takes those parts out itself: ClearOrders).
     uint64_t taken0{0};
     uint64_t taken1{0};
+    //! A concentrated pool's round with `coin_fee` (State::ClearCl): the part of it no liquidity earned (the round did not
+    //! walk and none is in range), credited to nobody.
+    uint64_t uncredited0{0};
     //! A launch curve (curves::ClearLaunch): its fees, in the chain's coin, taken out of the curve (to the
     //! creator and to the liquidity of the pool it graduates to), what each order gets back of what it paid
     //! when the round reached the curve's end (in the chain's coin), and whether it did.
