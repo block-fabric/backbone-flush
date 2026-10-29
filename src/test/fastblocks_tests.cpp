@@ -2334,6 +2334,8 @@ BOOST_AUTO_TEST_CASE(staking_parameters)
         BOOST_CHECK_EQUAL(pos.slots_per_epoch, 40);
         BOOST_CHECK_EQUAL(pos.slots_per_epoch * pos.slot_seconds, 10 * 60);
     }
+    // Flush on eCash mainnet: 0.25 ECX (Flush 8.3.4).
+    BOOST_CHECK_EQUAL(CChainParams::Ecash(ChainType::ECASH)->GetConsensus().pos.min_stake, COIN / 4);
     CChainParams::RegTestOptions options;
     options.sidechain_slot = 5;
     const auto regtest{CChainParams::RegTest(options)};

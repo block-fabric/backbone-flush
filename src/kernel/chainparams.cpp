@@ -1033,6 +1033,8 @@ public:
             consensus.pos.evidence_window_anchors = 1007; // until the stake is paid back
             consensus.pos.pot_reserve_anchors = 144;      // a day: each anchor pays 1/144 of the reserve
         }
+        // A minimum stake of 0.25 ECX on eCash mainnet (user decision, 2026-10-29, before any bond: Flush 8.3.4).
+        if (chain == ChainType::ECASH) consensus.pos.min_stake = COIN / 4;
     }
 };
 
