@@ -435,7 +435,7 @@ BOOST_AUTO_TEST_CASE(deposit_destination_any_bytes)
 
 BOOST_AUTO_TEST_CASE(mainchain_addresses)
 {
-    // eCash's node takes Bitcoin's address formats; validateaddress without it, for withdrawals (-mainchaingrpc).
+    // eCash's node takes Bitcoin's address formats; decoded here, for withdrawals in every mode.
     const auto hex{[](const std::optional<CScript>& script) { return script ? HexStr(*script) : std::string{"none"}; }};
     // BIP173/BIP350 test vectors.
     BOOST_CHECK_EQUAL(hex(MainchainScript("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", ChainType::ECASH)), "0014751e76e8199196d454941c45d1b3a323f1433bd6");
@@ -461,7 +461,25 @@ BOOST_AUTO_TEST_CASE(mainchain_addresses)
         BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, hrp, data), ChainType::REGTEST)), "0014" + HexStr(std::vector<unsigned char>(20, 0x07)));
     }
     BOOST_CHECK_EQUAL(hex(MainchainScript("not an address", ChainType::ECASH)), "none");
-    // Not for the Chains networks, whose node is asked.
+    // The Chains networks: chainsd's formats, each network its own.
+    const std::vector<unsigned char> program(20, 0x07);
+    std::vector<unsigned char> data{0};
+    ConvertBits<8, 5, true>([&](unsigned char c) { data.push_back(c); }, program.begin(), program.end());
+    const std::string p2wpkh{"0014" + HexStr(program)};
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "chn", data), ChainType::MAIN)), p2wpkh);
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "tchn", data), ChainType::TESTNET)), p2wpkh);
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "tchn", data), ChainType::SIGNET)), p2wpkh);
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "tchn", data), ChainType::MAIN)), "none");
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "chn", data), ChainType::ECASH)), "none");
+    BOOST_CHECK_EQUAL(hex(MainchainScript(bech32::Encode(bech32::Encoding::BECH32, "bc", data), ChainType::MAIN)), "none");
+    for (const auto& [prefix, chain, script] : std::vector<std::tuple<unsigned char, ChainType, std::string>>{
+             {28, ChainType::MAIN, "76a914" + HexStr(program) + "88ac"}, {88, ChainType::MAIN, "a914" + HexStr(program) + "87"},
+             {111, ChainType::TESTNET, "76a914" + HexStr(program) + "88ac"}, {196, ChainType::SIGNET, "a914" + HexStr(program) + "87"},
+             {0, ChainType::MAIN, "none"}, {28, ChainType::ECASH, "none"}, {111, ChainType::MAIN, "none"}}) {
+        std::vector<unsigned char> payload{prefix};
+        payload.insert(payload.end(), program.begin(), program.end());
+        BOOST_CHECK_EQUAL(hex(MainchainScript(EncodeBase58Check(payload), chain)), script);
+    }
     BOOST_CHECK_EQUAL(hex(MainchainScript("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", ChainType::MAIN)), "none");
 }
 

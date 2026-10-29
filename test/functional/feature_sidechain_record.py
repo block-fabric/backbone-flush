@@ -29,7 +29,7 @@ import os
 import time
 from decimal import Decimal
 
-from test_framework.sidechain_standin import OUTBID, StandInMainchain
+from test_framework.sidechain_standin import MAIN_ADDRESS, OUTBID, StandInMainchain
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework.authproxy import JSONRPCException
@@ -272,7 +272,7 @@ class SidechainRecordTest(BitcoinTestFramework):
 
         self.log.info("The mainchain node refuses the bundle, or the word of this chain on it")
         main.errors.update({"vouchwithdrawalbundle": "unknown slot", "sendwithdrawalbundle": "not yet"})
-        withdrawal = node.createwithdrawal("mainaddress", 1)
+        withdrawal = node.createwithdrawal(MAIN_ADDRESS, 1)
         self.mine()
         with node.assert_debug_log(["did not take the word of this chain on its bundle", "did not broadcast the withdrawal of bundle"]):
             self.mine()

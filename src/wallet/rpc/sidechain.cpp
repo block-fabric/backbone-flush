@@ -141,7 +141,7 @@ RPCMethod createwithdrawal()
     const CAmount main_fee{request.params[2].isNull() ? 10000 : AmountFromValue(request.params[2])};
     if (amount <= 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The amount must be positive");
 
-    // Only the mainchain node knows what an address of the mainchain stands for.
+    // Decoded by this node for its mainchain network (MainchainScript), never taken from the mainchain node.
     const auto main_script{pwallet->chain().getMainchainScript(request.params[0].get_str())};
     if (!main_script) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, util::ErrorString(main_script).original);
     if (main_script->size() > sidechain::MAX_MAIN_SCRIPT_SIZE) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "The script of this mainchain address is too long for a withdrawal");

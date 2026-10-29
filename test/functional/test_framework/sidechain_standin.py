@@ -14,6 +14,11 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from test_framework.segwit_addr import encode_segwit_address
+
+# A mainchain address of regtest (a bitcoind's, bcrt1), which the sidechain node decodes itself: the script
+# `main_script` of the stand-in.
+MAIN_ADDRESS = encode_segwit_address("bcrt", 0, bytes.fromhex("11" * 20))
 # Answered by createbmmrequest when a request for another block of the slot pays more.
 OUTBID = "Outbid: the mempool holds a request for another block of this sidechain paying 0.001 CHN"
 
