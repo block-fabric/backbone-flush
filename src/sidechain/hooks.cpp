@@ -55,6 +55,12 @@ std::optional<uint256> ChainHooks::CommitmentOf(const CBlockIndex& index) const 
 
 std::vector<uint256> ChainHooks::BlocksCommittedBy(const uint256& commitment, std::optional<int>) const { return {commitment}; }
 
+std::optional<int> ChainHooks::FixedFrom(const CBlockIndex& block, const CChain&, const Mainchain& record) const
+{
+    const auto commitment{CommitmentOf(block)};
+    return commitment ? record.CommittedHeight(*commitment) : std::nullopt;
+}
+
 bool ChainHooks::GetPegStep(const CBlock& block, const Mainchain& mainchain, std::optional<PegStep>& step, std::string& reject_reason) const
 {
     // The block follows the mainchain up to the block before the one that committed to it.

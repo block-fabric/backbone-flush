@@ -280,6 +280,13 @@ public:
 
     std::optional<uint256> CommitmentOf(const CBlockIndex& index) const override EXCLUSIVE_LOCKS_REQUIRED(!m_acks_mutex);
     std::vector<uint256> BlocksCommittedBy(const uint256& commitment, std::optional<int> main_height) const override EXCLUSIVE_LOCKS_REQUIRED(!m_acks_mutex);
+    /**
+     * For a BMM block, the height on record of its own commitment. For a block of stake, the height on record of
+     * the commitment of the first anchor that covers it (anchors it, or a block above it): until then, stake alone
+     * could build a branch without it. Nothing if that commitment is not on record at the height the anchor
+     * names. Defined in finality.cpp.
+     */
+    std::optional<int> FixedFrom(const CBlockIndex& block, const CChain& chain, const sidechain::Mainchain& record) const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_acks_mutex);
 
     bool CheckExtension(const sidechain::State& state, const CBlock& block, std::string& reject_reason) const override;
     bool GetPegStep(const CBlock& block, const sidechain::Mainchain& mainchain, std::optional<sidechain::PegStep>& step, std::string& reject_reason) const override;

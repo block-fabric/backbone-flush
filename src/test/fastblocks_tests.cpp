@@ -1514,6 +1514,55 @@ BOOST_FIXTURE_TEST_CASE(finality, FastBlocksSetup)
     BOOST_CHECK(WITH_LOCK(::cs_main, return Hooks().AnchoredBy(*q1)) == p2);
 }
 
+BOOST_FIXTURE_TEST_CASE(fixed_from_first_covering_anchor, FastBlocksSetup)
+{
+    // Where a block is fixed on the mainchain (ChainHooks::FixedFrom, the hand-off depth of a bundle): the
+    // commitment of the first anchor that covers it, not that of the acknowledgement in it.
+    StartPos();
+    Take(PosBlock(1));
+    const CBlockIndex* p1{Tip()};
+    Take(PosBlock(2));
+    const CBlockIndex* p2{Tip()};
+    Take(PosBlock(3));
+    const CBlockIndex* p3{Tip()};
+    const auto fixed{[&](const CBlockIndex* block) { return WITH_LOCK(::cs_main, return Hooks().FixedFrom(*block, Chainman().ActiveChain(), Record())); }};
+    BOOST_CHECK(!fixed(p1));
+    const pos::AnchorAck first{Anchor(Ticket(p2->GetBlockHash(), script))};
+    Take(PosBlock(4, first));
+    const CBlockIndex* q1{Tip()};
+    BOOST_CHECK_EQUAL(fixed(p1).value_or(-1), static_cast<int>(first.main_height));
+    BOOST_CHECK_EQUAL(fixed(p2).value_or(-1), static_cast<int>(first.main_height));
+    // The acknowledgement itself (a block that takes the peg actions, and may make a bundle), and the block
+    // after the one it anchors: covered by no anchor yet, though the acknowledgement's commitment is on record.
+    BOOST_CHECK(Record().CommittedHeight(first.ticket.Hash()));
+    BOOST_CHECK(!fixed(q1));
+    BOOST_CHECK(!fixed(p3));
+    const pos::AnchorAck second{Anchor(Ticket(q1->GetBlockHash(), script))};
+    Take(PosBlock(5, second));
+    BOOST_CHECK_EQUAL(fixed(q1).value_or(-1), static_cast<int>(second.main_height));
+    BOOST_CHECK_EQUAL(fixed(p3).value_or(-1), static_cast<int>(second.main_height));
+    BOOST_CHECK_EQUAL(fixed(p1).value_or(-1), static_cast<int>(first.main_height));
+    BOOST_CHECK(!fixed(Tip()));
+    // A BMM block anchors its parent, and is fixed by its own commitment.
+    MineBmm(BmmBlock(/*use_mempool=*/false));
+    BOOST_CHECK_EQUAL(fixed(Tip()->pprev).value_or(-1), Record().Height());
+    BOOST_CHECK_EQUAL(fixed(Tip()).value_or(-1), Record().Height());
+    // From the record as it is now, never from what the block index noted: a commitment the record no longer
+    // has, or has at another height than the anchor names, fixes nothing.
+    Record().Truncate(Record().Height() - 1);
+    BOOST_CHECK(!fixed(Tip()));
+    BOOST_CHECK(!fixed(Tip()->pprev));
+    BOOST_CHECK_EQUAL(fixed(q1).value_or(-1), static_cast<int>(second.main_height));
+    Record().Truncate(static_cast<int>(second.main_height) - 1);
+    BOOST_CHECK(!fixed(q1));
+    BOOST_CHECK(!fixed(p3));
+    Main();
+    Commit(second.ticket.Hash());
+    BOOST_CHECK_EQUAL(Record().CommittedHeight(second.ticket.Hash()).value_or(-1), static_cast<int>(second.main_height) + 1);
+    BOOST_CHECK(!fixed(q1));
+    BOOST_CHECK_EQUAL(fixed(p1).value_or(-1), static_cast<int>(first.main_height));
+}
+
 BOOST_FIXTURE_TEST_CASE(unanchored_headers, FastBlocksSetup)
 {
     StartPos();

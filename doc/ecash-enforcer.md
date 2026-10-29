@@ -76,8 +76,10 @@ Why each change:
 
 ### Handing the bundle over (policy, `SidechainParams::bundle_handoff_depth`)
 
-With `-mainchaingrpc` the node hands its bundle to the block producer only once the mainchain block that
-committed to it is `bundle_handoff_depth` blocks deep: 144 (a day) on `ecash` and `ecashbeta`, 12 on
+With `-mainchaingrpc` the node hands its bundle to the block producer only once the block of this chain that
+made it is fixed on the mainchain `bundle_handoff_depth` blocks deep (`ChainHooks::FixedFrom`: for a block of
+stake, from the commitment of the first anchor that covers it; for a BMM block of the template, its own
+commitment): 144 (a day) on `ecash` and `ecashbeta`, 12 on
 `ecashtest`, 2 on regtest. A bundle takes at least six weeks of votes to be paid; a day is nothing next to it,
 and it means a reorg shallower than that can never leave a handed bundle on a branch the sidechain left.
 There is no vouching in this mode: the enforcer's interface cannot take a word back, and the rules need no
@@ -145,7 +147,8 @@ calls). Tests: `peg_info_both_ways` (unit), `feature_sidechain_enforcer.py` and 
 Assumptions:
 
 - **A1** (finality): no reorg of the mainchain, or of this chain by BMM, takes back the block that committed
-  to a bundle after the bundle was handed over (`bundle_handoff_depth` mainchain blocks later).
+  to a bundle after the bundle was handed over (`bundle_handoff_depth` mainchain blocks after the block that
+  made it was fixed: the first anchor covering it, for a block of stake).
 - **A2** (honest majority): a bundle that no honest block producer holds does not get the votes to be paid
   (more than 6,048 in 12,096 blocks on `ecash`). An enforcer with the ALL policy upvotes the first pending bundle of
   anybody; such miners are not counted as honest here (that policy pays whatever a miner proposes, whatever
