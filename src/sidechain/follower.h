@@ -264,7 +264,8 @@ private:
     uint256 m_bundle_sent GUARDED_BY(m_mutex);
     //! What the mainchain node was last told this chain vouches for: a bundle, or none (null); not told yet if empty.
     std::optional<uint256> m_vouched GUARDED_BY(m_mutex);
-    bool m_vouch_warned GUARDED_BY(m_mutex){false};
+    //! The word the mainchain node last refused, since it last took one, so that it is said once.
+    std::optional<uint256> m_vouch_refused GUARDED_BY(m_mutex);
     //! The bundle the mainchain node last refused, so that it is said once.
     uint256 m_bundle_refused GUARDED_BY(m_mutex);
     //! Held while acting on changes of the record, which Sync callers on several threads do.
