@@ -709,6 +709,8 @@ public:
             consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v8 only if a test asks (-testactivationheight=v8@<height>).
             consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v9 only if a test asks (-testactivationheight=v9@<height>).
+            consensus.sidechain.v9_height = opts.dep_opts.v9_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -906,6 +908,9 @@ public:
         // The fee-flow release (graduation into a locked concentrated position, assets' security parts sold for ECX,
         // launches' fee destinations, vesting, control): never on the eCash networks until a height is decided.
         consensus.sidechain.fee_flow_height = std::numeric_limits<int>::max();
+        // Upgrade v9 (the DEX rules of Flush 8.3.2): never on the eCash networks until a height is decided; slot 99
+        // takes it at a height of its own (below).
+        consensus.sidechain.v9_height = std::numeric_limits<int>::max();
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;
@@ -984,6 +989,11 @@ public:
                 // number a block, those that cannot buy yet out of the index. In the fingerprint.
                 static constexpr int SLOT99_V8_HEIGHT{24000};
                 consensus.sidechain.v8_height = SLOT99_V8_HEIGHT;
+                // Upgrade v9 (the DEX rules of Flush 8.3.2), from block SLOT99_V9_HEIGHT: a release waits for the unsettled
+                // orders of the asset's books, a concentrated pool's tick and coin fees stretch by stretch, a deposit to "D"
+                // credited as one to no address of this chain. In the fingerprint.
+                static constexpr int SLOT99_V9_HEIGHT{42000};
+                consensus.sidechain.v9_height = SLOT99_V9_HEIGHT;
                 // The long-gap rule (doc/photon-slot.md, "The halt of 2026-10-24"), from epoch SLOT99_GAP_EPOCH: the first
                 // epoch with no block (the chain stopped at the end of epoch 66, block 8964, when eCash betanet had gone
                 // four hours without a block and its median time lagged by 5 h 20 min). Its epochs before keep their seeds

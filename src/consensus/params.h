@@ -206,6 +206,13 @@ struct SidechainParams {
      */
     int v8_height{std::numeric_limits<int>::max()};
     bool BoundedBuybacksActive(int height) const { return FeeFlowActive(height) && height >= v8_height; }
+    /**
+     * Upgrade v9 (Flush 8.3.2): from this block the rules of the DEX of that release (where V9Active is read: the books'
+     * orders and releases, the walks of concentrated pools and their fees). Never (the maximum) unless a network sets it;
+     * regtest unless -testactivationheight=v9@<height>.
+     */
+    int v9_height{std::numeric_limits<int>::max()};
+    bool V9Active(int height) const { return DexActive(height) && height >= v9_height; }
     //! The parts of a launch's curve fee for a launch made at `height`.
     uint32_t LaunchSecurityShare(int height) const { return FeeSplitActive(height) ? launch_security_share_v7 : launch_security_share; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.
