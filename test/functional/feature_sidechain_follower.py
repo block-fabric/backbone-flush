@@ -243,8 +243,8 @@ class SidechainFollowerTest(BitcoinTestFramework):
         self.on_record(10)
 
         self.log.info("A reorg that drops more commitments than the node can take back waits for the operator")
-        # DRIVECHAIN_UNDO_DEPTH: 5760 in FastBlocks (a day of 15-second slots; 2880 in the template).
-        deeper = 5760 + 5
+        # DRIVECHAIN_UNDO_DEPTH: 12960 (src/validation.h: two runs of the long-gap rule and a margin).
+        deeper = 12960 + 5
         with main.lock:
             for i in range(deeper):
                 main.add_block(bmm=f"{0xdd:02x}{i:062x}")

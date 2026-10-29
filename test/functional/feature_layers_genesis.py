@@ -89,9 +89,9 @@ class FlushGenesisTest(BitcoinTestFramework):
                 write_config(conf, n=0, chain="regtest")
                 conf.write_text(conf.read_text().replace("chainsnetworks=1\n", "", 1).replace("regtest=1\n[regtest]\n", f"chain={chain_arg}\n[{section}]\n", 1))
                 node.assert_start_raises_init_error(no_mainchain, "needs -chainsnetworks", match=ErrorMatch.PARTIAL_REGEX)
-        # Without a network, ecashbeta (Flush's default): the util says so.
+        # Without a network, ecash (Flush's default: its mainnet): the util says so.
         util = json.loads(subprocess.run(self.get_binaries().util_argv() + ["getchainparams"], capture_output=True, text=True, check=True).stdout)
-        assert_equal(util["genesis"], GENESIS["ecashbeta"])
+        assert_equal(util["genesis"], GENESIS["ecash"])
         # Back to the test's network, for the framework's end of the test.
         write_config(node.datadir_path / "flush.conf", n=0, chain=self.chain)
         node.chain = self.chain
