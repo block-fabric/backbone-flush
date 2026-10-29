@@ -170,6 +170,8 @@ public:
         std::optional<int> v7_height{};
         //! Upgrade v8 (bounded buybacks): Consensus::SidechainParams::v8_height (-testactivationheight=v8@<height>; regtest only).
         std::optional<int> v8_height{};
+        //! Upgrade v9 (the DEX rules of Flush 8.3.2): Consensus::SidechainParams::v9_height (-testactivationheight=v9@<height>; regtest only).
+        std::optional<int> v9_height{};
     };
 
     /**
