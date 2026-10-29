@@ -64,7 +64,12 @@ class FastBlocksAnchorActivityTest(FastBlocksAnchorPolicyTest):
 
         self.log.info("Withdrawals keep peg work active even without relying on a fee pot")
         n0.createwithdrawal(main.getnewaddress(), 1, Decimal("0.01"))
-        self.next_slot(settle=1)
+        # Whichever validator leads the slot mines it: one that has not had the withdrawal yet (relayed as the clock
+        # moves on) leaves it to a later slot.
+        for _ in range(4):
+            self.next_slot(settle=1)
+            if n0.getanchorinfo()["bid"]["pendingactions"]:
+                break
         self.wait_until(lambda: n0.getanchorinfo()["bid"]["pendingactions"])
         assert sats(n0.getanchorinfo()["bid"]["effective"]) > 0
         for _ in range(3):
