@@ -197,7 +197,7 @@ std::variant<grpcsrv::RestMatch, Status> Route(const pb::Pool& pool, const std::
         std::string error;
         if (http_method == "POST") {
             UniValue json;
-            if (body.size() > (256 << 10) || !json.read(body) || !json.isObject()) return Bad("the body is a JSON object");
+            if (body.size() > MAX_BODY_BYTES || !json.read(body) || !json.isObject()) return Bad("the body is a JSON object");
             if (!request->FromJson(json, error)) return Bad(error);
         }
         UniValue fields(UniValue::VOBJ);

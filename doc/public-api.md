@@ -334,7 +334,7 @@ launch (register the same, `burn` 0):
 
 - `psbt`: base64, **version 0**; every input carries its previous transaction (`non_witness_utxo`, read from its block:
   no `-txindex` needed) and `witness_utxo`; no derivation, no unknown or proprietary field. Version 2, the tip's height
-  as lock time, every input replaceable (`0xfffffffd`), as the wallet makes them. At most 30 inputs and 400,000 bytes.
+  as lock time, every input replaceable (`0xfffffffd`), as the wallet makes them. At most 30 inputs and 180,000 bytes (signed, it fits in a body of `POST broadcast`).
 - `txid`: signing does not change it (every input is P2WPKH).
 - Outputs: the reservation, the marker, the change. A launch: its first buy's result output (if a first buy), its
   control coin (if kept), the marker (holding the first buy: `burn`), the change; its inputs the reservation first,
@@ -386,7 +386,7 @@ There is no transaction-status endpoint: poll `psbt/reservation`.
 **Coins.** Only the coins the client names (no scan of the UTXO set for a public call), each looked up once in the
 UTXO set: the address's, in a block, not spent in the mempool, with value, carrying no token, mature; others skipped.
 The largest first, until they pay the burn and the fee; never one worth no more than the fee of its own input (68 vB),
-at most 30 inputs, the PSBT at most 400,000 bytes (each input carries its whole previous transaction: a coin of a large
+at most 30 inputs, the PSBT at most 180,000 bytes (8.3.0: 400,000, more than a body of `broadcast` takes) (each input carries its whole previous transaction: a coin of a large
 transaction may need other coins named instead, 400). Each block read once per request. Too little: 400 with how much
 the usable coins hold and how many were left and why.
 
@@ -414,7 +414,7 @@ goes to the fee.
 | 12 | Rate-limit bypass through a client stream | server | Each message of a client-streaming call (reflection) is charged by the guard again, at most 32 a stream; reflection off by default |
 | 13 | Reorgs serving stale or wrong market data | market index | Written in the block's journaled overlay: undone exactly with the block (tested byte for byte); the per-tip cache is keyed by the tip's hash |
 | 14b | A PSBT that spends or pays what the user did not ask (8.3.0) | psbt | Inputs only the one address's coins (the client's list, each checked against the UTXO set and that script), everything back to that address; every input's previous transaction in the PSBT (the wallet reads the amounts from it, checked against the txid); the rules run on it before it is handed out; the broadcast's `max_burn_units`. The wallet shows and signs it; the node holds no key |
-| 14c | Work and size of a build (8.3.0) | psbt | No scan of the UTXO set and no flush: the client names 1 to 50 coins, each looked up once; at most 30 inputs, each block read once, the PSBT at most 400,000 bytes; cost 8 of the client's rate and the gate of expensive calls |
+| 14c | Work and size of a build (8.3.0) | psbt | No scan of the UTXO set and no flush: the client names 1 to 50 coins, each looked up once; at most 30 inputs, each block read once, the PSBT at most 180,000 bytes; cost 8 of the client's rate and the gate of expensive calls |
 | 14d | The API's operator taking a reserved ticker first (8.3.0) | psbt | `psbt/reserve` takes the commitment only (the client computes it): the node sees the ticker and the nonce at the reveal, when the reservation is deep and bound to the address's script; the wait is polled with the reservation's output alone (`psbt/reservation`, 8.3.2). The nonce and the reservation never in a URL (refused in the query string) |
 | 14 | A build that misleads the signer | builds | Assets and pools by id with their tickers (the app checks both), the floor is the chain's quote less the slippage rounded down, `exp` bounded; the app quotes again and signs only for the floor or more; the payload hash binds what the page shows to what the extension signs |
 

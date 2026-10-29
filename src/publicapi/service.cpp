@@ -2011,7 +2011,11 @@ private:
     //! its whole previous transaction).
     static constexpr size_t MAX_PSBT_COINS{50};
     static constexpr size_t MAX_PSBT_INPUTS{30};
-    static constexpr size_t MAX_PSBT_BYTES{400'000};
+    static constexpr size_t MAX_PSBT_BYTES{180'000};
+    //! What signing may add to each input (a partial signature and its key, or the witness; a derivation path).
+    static constexpr size_t SIGNED_INPUT_BYTES{256};
+    // Signed, in base64, in a body of POST broadcast {psbt, max_burn_units}: it fits.
+    static_assert((MAX_PSBT_BYTES + MAX_PSBT_INPUTS * SIGNED_INPUT_BYTES + 2) / 3 * 4 + 1024 <= MAX_BODY_BYTES);
     //! A P2WPKH input's virtual size (a 72-byte signature and a key): what spending a coin adds.
     static constexpr int32_t P2WPKH_INPUT_VSIZE{68};
 
