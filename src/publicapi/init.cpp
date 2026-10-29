@@ -138,7 +138,7 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     options.allowed_origins = origins;
     for (const std::string& h : args.GetArgs("-publicapihost")) options.allowed_hosts.push_back(ToLower(h));
     options.cors = true;
-    options.max_request_bytes = 256 << 10;
+    options.max_request_bytes = publicapi::MAX_BODY_BYTES;
     options.max_connection_buffer = 1 << 20;
     options.max_total_buffer = 64 << 20;
     options.max_response_bytes = 4 << 20;
