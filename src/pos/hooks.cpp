@@ -223,7 +223,9 @@ bool FastBlocksHooks::CheckHeader(const CBlockHeader& header, const CBlockIndex&
     // A second header the leader signed for this slot is the proof that it signed twice, whatever
     // else is wrong with it.
     if (leader.status == LeaderStatus::OK && !spare) {
-        if (const auto proof{m_evidence.NoteSigned(header, slot, leader.pubkey)}) {
+        // (Not kept of a validator the active chain banned already: punished once, it takes nothing more.)
+        // (Nor of one it keeps a proof of already: one per offender, all slashing takes.)
+        if (const auto proof{m_evidence.NoteSigned(header, slot, leader.pubkey)}; proof && !Banned(chainman, leader.pubkey) && !m_evidence.HasOffender(leader.pubkey)) {
             std::string reason;
             if (const auto offence{CheckEvidence(*proof, leader.pubkey, Genesis(), m_params, reason)}) {
                 if (m_evidence.Add(*offence, *proof)) LogWarning("FastBlocks: validator %s signed two blocks for slot %d", HexStr(offence->pubkey), offence->slot);
@@ -1694,16 +1696,30 @@ bool FastBlocksHooks::ProcessMessage(int64_t peer, const std::string& msg_type, 
     return false;
 }
 
+bool FastBlocksHooks::Banned(const ChainstateManager& chainman, const uint256& pubkey)
+{
+    AssertLockHeld(::cs_main);
+    const auto record{GetValidator(chainman.ActiveChainstate().SideState().View(), pubkey)};
+    return record && record->tombstoned;
+}
+
 std::optional<Offence> FastBlocksHooks::AddEvidence(const DoubleProposal& proof, std::string& reason, std::optional<int64_t> except) const
 {
     if (!CheckEvidenceForm(proof, m_params, reason)) return std::nullopt;
     // One this node keeps already: nothing to check again (two signatures), nothing to relay.
     if (const auto known{m_evidence.Known(proof)}) return known;
+    // Of a slot to come (beyond the headers' margin and a slot): no block of it can be on any chain yet, and none
+    // of a later slot is taken. Not the peer's fault (its clock may be ahead).
+    if (proof.a.Time() > NodeClock::now() + std::chrono::seconds{m_params.max_future_seconds + m_params.slot_seconds}) {
+        reason = "pos-evidence-future";
+        return std::nullopt;
+    }
     // The leader of the slot: as the chain below either header says, or the active chain.
     std::optional<Offence> offence;
     bool unknown{false};
     // (Each leader once: the chains below both headers and the active one most often name one.)
     std::set<uint256> checked;
+    bool banned{false};
     if (ChainstateManager* chainman{Chainman()}) {
         LOCK(::cs_main);
         const int64_t slot{SlotOf(proof.a.nTime, m_params)};
@@ -1717,6 +1733,11 @@ std::optional<Offence> FastBlocksHooks::AddEvidence(const DoubleProposal& proof,
             if (leader.status == LeaderStatus::SET_UNKNOWN || leader.status == LeaderStatus::SEED_UNKNOWN) unknown = true;
             if (leader.status != LeaderStatus::OK || checked.contains(leader.pubkey)) continue;
             checked.insert(leader.pubkey);
+            // A leader the active chain banned already: punished once, its proofs are of no use (nor kept).
+            if (Banned(*chainman, leader.pubkey)) {
+                banned = true;
+                continue;
+            }
             // (Checked once per proof and leader: a proof sent again costs no signature check.)
             if (m_evidence.CheckSigs(proof, leader.pubkey, Genesis())) {
                 offence = Offence{.pubkey = leader.pubkey, .slot = slot};
@@ -1725,11 +1746,13 @@ std::optional<Offence> FastBlocksHooks::AddEvidence(const DoubleProposal& proof,
         }
     }
     if (!offence) {
-        // Not the peer's fault if this node cannot tell the leader yet.
-        reason = unknown ? "pos-evidence-unknown" : "bad-pos-evidence-sig";
+        // Not the peer's fault if this node cannot tell the leader yet, nor if it banned the leader already.
+        reason = banned ? "pos-evidence-banned" : unknown ? "pos-evidence-unknown" : "bad-pos-evidence-sig";
         return std::nullopt;
     }
-    if (!m_evidence.Add(*offence, proof)) return offence;
+    // One proof per offender: one is all slashing takes (an offender is punished once), so that no validator's own
+    // proofs of many slots fill the pool. A second one is a proof all the same, not kept nor relayed.
+    if (m_evidence.HasOffender(offence->pubkey) || !m_evidence.Add(*offence, proof)) return offence;
     LogWarning("FastBlocks: validator %s signed two blocks for slot %d", HexStr(offence->pubkey), offence->slot);
     m_evidence.MarkRelayed(*offence);
     if (m_node && m_node->peerman) {

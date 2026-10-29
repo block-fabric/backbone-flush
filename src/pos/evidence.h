@@ -120,6 +120,8 @@ public:
      * hide the other's two.)
      */
     std::optional<DoubleProposal> NoteSigned(const CBlockHeader& header, int64_t slot, const uint256& signer) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** Whether the pool keeps a proof of an offence of `pubkey` (the node keeps one per offender: FastBlocksHooks::AddEvidence). */
+    bool HasOffender(const uint256& pubkey) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     /** The offence of a proof this node keeps already (in either order), if it does: no signature to check again. */
     std::optional<Offence> Known(const DoubleProposal& proof) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     /**

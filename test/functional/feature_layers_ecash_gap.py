@@ -29,6 +29,7 @@ from test_framework.fastblocks import SLOT, PosBlock, assert_peg_balance
 from test_framework.key import compute_xonly_pubkey
 from test_framework.messages import CTxIn
 from test_framework.script import CScript
+from test_framework.authproxy import JSONRPCException
 from test_framework.util import assert_equal, assert_greater_than
 
 XONLY = [compute_xonly_pubkey(key)[0].hex() for key in KEYS]
@@ -178,7 +179,11 @@ class LayersEcashGapTest(LayersEcashTest):
         assert_peg_balance(main, self.nodes)
 
         self.log.info("A proof long out of its window is never carried")
-        n0.submitevidence(old_proof["hex"])
+        # (Not even kept if its offender is the one slashed above: a banned validator's proofs are of no use.)
+        try:
+            n0.submitevidence(old_proof["hex"])
+        except JSONRPCException as e:
+            assert "pos-evidence-banned" in e.error["message"], e.error
         self.tick(3)
         assert not self.carried(n0, old_proof["slot"])
         n0.setbmm(False)
