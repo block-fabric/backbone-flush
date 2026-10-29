@@ -170,6 +170,9 @@ public:
         //! FETCH_TIMEOUT, at most max_bytes + 1 bytes read, HTTP 200 only; nullopt with why in `error` otherwise. Called on
         //! the thread that handles the link (never the UI thread). Unset: no download, the file is asked for.
         std::function<std::optional<std::vector<unsigned char>>(const std::string& url, size_t max_bytes, std::string& error)> fetch;
+        //! Whether the app may connect to a site directly: false when the node goes through a proxy or Tor (-proxy, -onion,
+        //! -onlynet), and `fetch` (which uses none) is not called; the file is asked for instead. Unset: it may.
+        std::function<bool()> direct_downloads;
         //! Tell the user (a message of the app): a link refused, a launch done.
         std::function<void(const std::string& title, const std::string& message, bool error)> inform;
         //! The wallet the app shows (its preferences); empty if none chosen.
