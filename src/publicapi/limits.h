@@ -28,29 +28,47 @@ namespace publicapi {
 
 /**
  * Token buckets by client (its address, or what the proxy in front says): each holds at most `burst` tokens and gains
- * `rate` a second; a call takes its cost (a quote more than a page). At most `max_clients` are kept: past them, the
- * buckets that are full again (nobody spent from them for a while) are dropped first, then the oldest.
+ * `rate` a second; a call takes its cost (a quote more than a page). At most `max_clients` are kept: past them, a bucket
+ * full again (its client went quiet) among the few used longest ago is dropped for the new client (in constant time: they
+ * are kept in the order of their last use); if none of them is full, the new client's calls are taken from one bucket that
+ * all such clients share, so that new keys never bring fresh limits while the others are spent.
  */
 class RateLimiter
 {
 public:
-    RateLimiter(double rate, double burst, size_t max_clients = 50'000) : m_rate{rate}, m_burst{burst}, m_max_clients{max_clients} {}
+    RateLimiter(double rate, double burst, size_t max_clients = 50'000) : m_rate{rate}, m_burst{burst}, m_max_clients{max_clients}, m_overflow{{}, burst, {}} {}
     /** Take `cost` from the client's bucket; if it has not that many, nothing is taken and the seconds to wait are given. */
     std::optional<double> Take(const std::string& client, double cost, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now())
         EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** Whether Take would take `cost` from the client's bucket now (nothing taken, no bucket made). */
+    bool Has(const std::string& client, double cost, std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     size_t Clients() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    //! How many of the buckets used longest ago are looked at for one full again.
+    static constexpr size_t EVICTION_CANDIDATES{8};
     double Rate() const { return m_rate; }
     double Burst() const { return m_burst; }
 
 private:
     struct Bucket {
+        std::string client;
         double tokens;
         std::chrono::steady_clock::time_point at;
     };
     const double m_rate, m_burst;
     const size_t m_max_clients;
     mutable Mutex m_mutex;
-    std::unordered_map<std::string, Bucket> m_buckets GUARDED_BY(m_mutex);
+    //! Used most recently first.
+    std::list<Bucket> m_order GUARDED_BY(m_mutex);
+    std::unordered_map<std::string, std::list<Bucket>::iterator> m_buckets GUARDED_BY(m_mutex);
+    //! The bucket of the clients that found no room (none of the oldest buckets full again).
+    Bucket m_overflow GUARDED_BY(m_mutex);
+    /** What a bucket holds at `now`. */
+    double Level(const Bucket& bucket, std::chrono::steady_clock::time_point now) const
+    {
+        if (now <= bucket.at) return bucket.tokens;
+        return std::min(m_burst, bucket.tokens + std::chrono::duration<double>(now - bucket.at).count() * m_rate);
+    }
 };
 
 /**
