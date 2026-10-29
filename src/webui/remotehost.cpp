@@ -1019,6 +1019,7 @@ private:
             return answer;
         }
         if (dialog.rows.size() > dialog::MAX_ROWS) throw HostError(BRIDGE_INVALID_REQUEST, "Too much for one question");
+        if (const auto why{dialog::WhyNotWhole(dialog.rows)}) throw HostError(BRIDGE_INVALID_REQUEST, *why);
         UniValue description{DialogJson(dialog)};
         description.pushKV("token", m_bindings.Issue(context->request, digest, WalletId(context->wallet), now));
         description.pushKV("digest", digest);

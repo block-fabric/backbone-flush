@@ -105,6 +105,23 @@ BOOST_AUTO_TEST_CASE(page_data_is_text)
     BOOST_CHECK_EQUAL(other.find_value("cancel").get_str(), "Keep it");
 }
 
+BOOST_AUTO_TEST_CASE(a_fact_too_long_is_refused_not_cut)
+{
+    // A value of more characters (not bytes) than a dialog shows: the question is refused, never asked with it cut.
+    std::vector<dialog::Row> rows{{"Pay to", std::string(dialog::MAX_ROW_VALUE, 'a'), dialog::Row::Kind::ADDRESS}};
+    BOOST_CHECK(!dialog::WhyNotWhole(rows));
+    std::string accents;
+    for (size_t i{0}; i < dialog::MAX_ROW_VALUE; ++i) accents += "\xC3\xA9";
+    rows.push_back({"Note", accents, dialog::Row::Kind::TEXT});
+    BOOST_CHECK(!dialog::WhyNotWhole(rows));
+    rows.push_back({"Options", std::string(dialog::MAX_ROW_VALUE + 1, 'x'), dialog::Row::Kind::TEXT});
+    const auto why{dialog::WhyNotWhole(rows)};
+    BOOST_REQUIRE(why);
+    BOOST_CHECK(why->find("\"Options\"") != std::string::npos);
+    // A picture has its own bound (MAX_IMAGE_URL).
+    BOOST_CHECK(!dialog::WhyNotWhole({{"Logo", std::string(dialog::MAX_ROW_VALUE * 4, 'x'), dialog::Row::Kind::IMAGE}}));
+}
+
 BOOST_AUTO_TEST_CASE(look_from_prefs)
 {
     const UniValue prefs{Obj(R"({"theme":"custom-abc","fontAdjust":40,"fontFamily":"nunito","moneyFont":"system","unit":"CHN",
