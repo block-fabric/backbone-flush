@@ -85,6 +85,8 @@ const std::vector<RouteDef>& Routes()
         {"POST", {"psbt", "reserve"}, "BuildPsbt", {{"verb", "reserve"}}, false, {"nonce", "reservation", "commitment"}},
         {"POST", {"psbt", "launch"}, "BuildPsbt", {{"verb", "launch"}}, false, {"nonce", "reservation", "commitment"}},
         {"POST", {"psbt", "register"}, "BuildPsbt", {{"verb", "register"}}, false, {"nonce", "reservation", "commitment"}},
+        // 8.3.2: how deep a reservation is, by its output alone (in the body): what a site polls before psbt/launch.
+        {"POST", {"psbt", "reservation"}, "GetReservation", {}, false, {"reservation"}},
         // 8.1.0: a logo kept an hour by its SHA-256 (a body {"base64": ...}), and served as its image.
         {"POST", {"logos"}, "UploadLogo", {}},
         {"GET", {"logos", "{sha256}"}, "GetUploadedLogo", {}, true},
