@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <ios>
+#include <limits>
 
 namespace pos {
 
@@ -125,6 +126,14 @@ bool EvidencePool::Add(const Offence& offence, DoubleProposal proof)
         m_proofs.erase(oldest);
     }
     return true;
+}
+
+bool EvidencePool::HasOffender(const uint256& pubkey) const
+{
+    LOCK(m_mutex);
+    // By key, then slot: the first entry at or after the key's lowest slot is of it, if any is.
+    const auto kept{m_proofs.lower_bound(Offence{.pubkey = pubkey, .slot = std::numeric_limits<int64_t>::min()})};
+    return kept != m_proofs.end() && kept->first.pubkey == pubkey;
 }
 
 std::optional<Offence> EvidencePool::Known(const DoubleProposal& proof) const

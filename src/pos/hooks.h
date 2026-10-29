@@ -361,9 +361,14 @@ public:
     EvidencePool& Evidence() const { return m_evidence; }
     /**
      * Check a proof that a leader signed two blocks for one slot, keep it and relay it (but to `except`).
+     * Not taken: one of a slot after now, the headers' margin and a slot (pos-evidence-future), of a leader
+     * the active chain banned (pos-evidence-banned); one of an offender the pool keeps a proof of is a proof
+     * (the offence returned), not kept (one per offender).
      * @return the offence; nothing, with `reason` set, if the proof is not one
      */
     std::optional<Offence> AddEvidence(const DoubleProposal& proof, std::string& reason, std::optional<int64_t> except = std::nullopt) const EXCLUSIVE_LOCKS_REQUIRED(!m_sets_mutex);
+    /** Whether the active chain banned a validator (tombstoned: punished once, its further proofs of no use). */
+    static bool Banned(const ChainstateManager& chainman, const uint256& pubkey) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     /** Relay the proofs found since the last call (by watching headers). */
     void RelayNewEvidence() const;
     /**

@@ -10,6 +10,7 @@
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <addresstype.h>
+#include <arith_uint256.h>
 #include <blockencodings.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -1607,6 +1608,15 @@ BOOST_FIXTURE_TEST_CASE(evidence, FastBlocksSetup)
     // Relayed when added (none to relay later); not if it is no proof.
     BOOST_CHECK(Hooks().Evidence().TakeUnrelayed().empty());
     BOOST_CHECK(!Hooks().AddEvidence({.a = first, .b = first}, reason));
+    // A proof of a slot to come, beyond the headers' margin: not taken, whatever it is.
+    {
+        CBlockHeader a{first}, b{second};
+        const int64_t later{(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()) + Pos().max_future_seconds - Pos().genesis_time) / Pos().slot_seconds + 2};
+        a.nTime = b.nTime = static_cast<uint32_t>(Pos().genesis_time + later * Pos().slot_seconds);
+        BOOST_CHECK(!Hooks().AddEvidence({.a = a, .b = b}, reason));
+        BOOST_CHECK_EQUAL(reason, "pos-evidence-future");
+        BOOST_CHECK_EQUAL(Hooks().Evidence().Size(), 1U);
+    }
 
     // A node finds proofs itself, in the headers it is given: two of slot 2 on the first.
     Take(first);
@@ -1627,13 +1637,20 @@ BOOST_FIXTURE_TEST_CASE(evidence, FastBlocksSetup)
     BOOST_REQUIRE_EQUAL(unrelayed.size(), 1U);
     BOOST_CHECK(std::min(child.GetHash(), rival.GetHash()) == unrelayed[0].a.GetHash());
 
-    // Bounded: the proofs of the oldest slots go first, and so do the headers noted.
-    for (int64_t i{0}; i < static_cast<int64_t>(pos::MAX_EVIDENCE) + 5; ++i) Hooks().Evidence().Add({.pubkey = uint256{2}, .slot = slot + 1000 + i}, proof);
+    // One proof per offender: the pool keeps the leaders' (a second of one is not kept: below, and the proofs of one validator's many slots).
+    BOOST_CHECK(Hooks().Evidence().HasOffender(offence->pubkey));
+    BOOST_CHECK(Hooks().Evidence().HasOffender(found.pubkey));
+    BOOST_CHECK(!Hooks().Evidence().HasOffender(uint256{2}));
+    // Bounded, the pool itself (proofs of many offenders added to it as checked): the proofs of the oldest slots go first,
+    // and so do the headers noted.
+    const auto key{[](int64_t i) { return ArithToUint256(arith_uint256{static_cast<uint64_t>(1'000'000 + i)}); }};
+    for (int64_t i{0}; i < static_cast<int64_t>(pos::MAX_EVIDENCE) + 5; ++i) Hooks().Evidence().Add({.pubkey = key(i), .slot = slot + 1000 + i}, proof);
     BOOST_CHECK_EQUAL(Hooks().Evidence().Size(), pos::MAX_EVIDENCE);
     BOOST_CHECK(!Hooks().Evidence().Get(*offence));
     BOOST_CHECK(!Hooks().Evidence().Get(found));
-    BOOST_CHECK(!Hooks().Evidence().Get({.pubkey = uint256{2}, .slot = slot + 1000 + 4}));
-    BOOST_CHECK(Hooks().Evidence().Get({.pubkey = uint256{2}, .slot = slot + 1000 + 5}));
+    BOOST_CHECK(!Hooks().Evidence().HasOffender(offence->pubkey));
+    BOOST_CHECK(!Hooks().Evidence().Get({.pubkey = key(4), .slot = slot + 1000 + 4}));
+    BOOST_CHECK(Hooks().Evidence().Get({.pubkey = key(5), .slot = slot + 1000 + 5}));
     pos::EvidencePool pool;
     CBlockHeader header{first};
     for (int64_t i{0}; i <= static_cast<int64_t>(pos::MAX_SIGNED_HEADERS); ++i) BOOST_CHECK(!pool.NoteSigned(header, i, uint256{1}));
@@ -3685,9 +3702,11 @@ BOOST_FIXTURE_TEST_CASE(slashed_once_and_out_of_the_schedule, FastBlocksSetup)
         BOOST_CHECK(!producer->Produce(slot_j, error));
         BOOST_CHECK(error.find("banned") != std::string::npos);
     }
-    // The producer leaves the second proof out; the others' blocks go on. Nothing more is taken.
+    // The second proof is not kept (the active chain banned its offender), nor would a producer put it in a block; the
+    // others' blocks go on. Nothing more is taken.
     std::string reason;
-    BOOST_REQUIRE_MESSAGE(Hooks().AddEvidence(second_offence, reason), reason);
+    BOOST_CHECK(!Hooks().AddEvidence(second_offence, reason));
+    BOOST_CHECK_EQUAL(reason, "pos-evidence-banned");
     std::string error;
     BOOST_REQUIRE_MESSAGE(producer->Produce(Slot(m), error), error);
     CBlock made;
@@ -5053,15 +5072,33 @@ BOOST_FIXTURE_TEST_CASE(attack4_evicted_proof_relayed_again, FastBlocksSetup)
         proofs.push_back({.a = a, .b = b});
     }
     BOOST_REQUIRE_EQUAL(proofs.size(), pos::MAX_EVIDENCE + 1);
+    // Each when its slot has come: a proof of each, and one per offender kept (the first).
     std::string reason;
-    for (const auto& proof : proofs) BOOST_REQUIRE_MESSAGE(Hooks().AddEvidence(proof, reason), reason);
-    BOOST_REQUIRE_EQUAL(Hooks().Evidence().Size(), pos::MAX_EVIDENCE);
-    // The oldest one, sent again (by the attacker, or by an honest peer that relays it on).
+    for (const auto& proof : proofs) {
+        Mock(proof.a.nTime);
+        BOOST_REQUIRE_MESSAGE(Hooks().AddEvidence(proof, reason), reason);
+    }
+    BOOST_REQUIRE_EQUAL(Hooks().Evidence().Size(), 1U);
+    BOOST_CHECK(Hooks().Evidence().Get({.pubkey = attacker, .slot = proofs[0].Slot(Pos())}));
+    // Of a slot to come, beyond the headers' margin and a slot: not taken.
+    {
+        CBlock a{base};
+        a.nTime = pos::SlotTime(pos::SlotOf(GetTime(), Pos()) + 1 + (Pos().max_future_seconds + Pos().slot_seconds) / Pos().slot_seconds, Pos());
+        BOOST_REQUIRE(pos::Producer::Sign(a, keys[0], Genesis()));
+        CBlock b{a};
+        b.hashMerkleRoot = uint256::ONE;
+        BOOST_REQUIRE(pos::Producer::Sign(b, keys[0], Genesis()));
+        BOOST_CHECK(!Hooks().AddEvidence({.a = a, .b = b}, reason));
+        BOOST_CHECK_EQUAL(reason, "pos-evidence-future");
+    }
+    // The first one, sent again (by its signer, or by an honest peer that relays it on), and the others.
     std::atomic<int> taken{0};
     const auto callback{LogInstance().PushBackCallback([&](const std::string& line) {
         if (line.find("signed two blocks for slot") != std::string::npos) ++taken;
     })};
     for (int i{0}; i < 3; ++i) BOOST_CHECK(Hooks().AddEvidence(proofs[0], reason));
+    for (const auto& proof : proofs) BOOST_CHECK(Hooks().AddEvidence(proof, reason));
+    BOOST_CHECK_EQUAL(Hooks().Evidence().Size(), 1U);
     LogInstance().DeleteCallback(callback);
     BOOST_TEST_MESSAGE("the oldest proof, sent 3 times more, was taken as new (logged and relayed) " << taken.load() << " times");
     BOOST_CHECK_MESSAGE(taken.load() == 0, "attack works: a proof pushed out of the pool is relayed again each time it comes back");
@@ -5600,6 +5637,9 @@ BOOST_FIXTURE_TEST_CASE(evidence_true_proof_among_a_flood, FastBlocksSetup)
         BOOST_REQUIRE(pos::Producer::Sign(b, signer, Genesis()));
         return pos::DoubleProposal{.a = a, .b = b};
     }};
+    // The offender of the true proof, whose key signs none of the useless ones (one proof per offender).
+    const CKey& offender_key{keys[0]};
+    const uint256 offender{XOnly(offender_key)};
     //! Each useless proof, its slot, and its signer.
     std::vector<std::tuple<pos::DoubleProposal, int64_t, uint256>> junk;
     int64_t slot{base_slot + 2};
@@ -5607,16 +5647,17 @@ BOOST_FIXTURE_TEST_CASE(evidence_true_proof_among_a_flood, FastBlocksSetup)
         const auto leader{Hooks().ActiveLeaderOf(slot)};
         BOOST_REQUIRE(leader.status == pos::FastBlocksHooks::LeaderStatus::OK);
         for (const CKey& k : keys) {
-            if (XOnly(k) == leader.pubkey || junk.size() >= pos::MAX_EVIDENCE) continue;
+            if (XOnly(k) == leader.pubkey || XOnly(k) == offender || junk.size() >= pos::MAX_EVIDENCE) continue;
             const pos::DoubleProposal proof{proof_at(slot, k, junk.size())};
             BOOST_REQUIRE(Hooks().Evidence().Add({.pubkey = XOnly(k), .slot = slot}, proof));
             junk.emplace_back(proof, slot, XOnly(k));
         }
     }
-    // The true proof: the leader of a slot after them signed twice (the oldest junk one goes).
-    const int64_t offence_slot{slot};
-    const CKey& offender_key{Leader(offence_slot)};
-    const uint256 offender{XOnly(offender_key)};
+    // The true proof: the offender, leader of a slot after them, signed twice (the oldest junk one goes); taken once the
+    // slot has come.
+    int64_t offence_slot{slot};
+    while (XOnly(Leader(offence_slot)) != offender) ++offence_slot;
+    Mock(pos::SlotTime(offence_slot, Pos()));
     std::string reason;
     BOOST_REQUIRE_MESSAGE(Hooks().AddEvidence(proof_at(offence_slot, offender_key, 1u << 20), reason), reason);
     BOOST_REQUIRE_EQUAL(Hooks().Evidence().Size(), pos::MAX_EVIDENCE);
