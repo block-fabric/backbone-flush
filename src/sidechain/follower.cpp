@@ -868,23 +868,27 @@ void Follower::SendBundle()
                 m_client.Call("vouchwithdrawalbundle", Params({slot, bundle.GetHex()}));
             }
         } catch (const std::exception& e) {
-            if (WITH_LOCK(m_mutex, return !m_vouched.has_value() || !m_vouch_warned)) {
+            // Said once for each word not taken; the mainchain node keeps the word it took last (m_vouched).
+            if (WITH_LOCK(m_mutex, return m_vouch_refused != bundle)) {
                 LogWarning("The mainchain node did not take the word of this chain on its bundle (%s); it may be too old to vote by it", e.what());
                 LOCK(m_mutex);
-                m_vouch_warned = true;
+                m_vouch_refused = bundle;
             }
             return;
         }
         LOCK(m_mutex);
         m_vouched = bundle;
+        m_vouch_refused.reset();
     }};
     if (hash.IsNull()) {
         vouch(uint256{});
         return;
     }
-    // Not handed to the enforcer yet; over JSON-RPC the word still moves to it, off any older bundle.
+    // Not handed to the enforcer yet. The mainchain node takes a word only on a bundle it was handed
+    // (vouchwithdrawalbundle): it is told to vouch for none until then, which moves its word off any
+    // older bundle of the slot (one a reorg of this chain left behind).
     if (shallow) {
-        vouch(hash);
+        vouch(uint256{});
         return;
     }
     if (!tx) return;
