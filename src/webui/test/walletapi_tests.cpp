@@ -16,6 +16,7 @@
 #include <rpc/server.h>
 #include <txmempool.h>
 #include <script/script.h>
+#include <streams.h>
 #include <test/util/setup_common.h>
 #include <tinyformat.h>
 #include <util/moneystr.h>
@@ -690,6 +691,20 @@ BOOST_AUTO_TEST_CASE(psbt_tokens_shown)
     for (const auto& row : dialog.rows) unseen |= row.value.find("no token the chain knows yet") != std::string::npos;
     BOOST_CHECK(unseen);
     BOOST_CHECK_EQUAL(RowOf(dialog, "Spends this wallet's"), -1);
+
+    // A PSBT whose facts cannot all be shown whole (a data output of 1500 bytes, its hex past what a fact shows): refused,
+    // never asked with it cut.
+    mtx.vout = {CTxOut{0, CScript{} << OP_RETURN << std::vector<unsigned char>(1500, 0xab)}};
+    PartiallySignedTransaction long_psbt{mtx};
+    long_psbt.inputs[0].witness_utxo = CTxOut{2 * COIN, mine};
+    long_psbt.inputs[1].witness_utxo = CTxOut{0, mine};
+    DataStream ss{};
+    ss << long_psbt;
+    asked.clear();
+    std::string message;
+    BOOST_CHECK_EQUAL(ErrorOf("wallet.psbt.sign", Obj({{"wallet", "holder"}, {"psbt", EncodeBase64(ss.str())}}), &message), webui::BRIDGE_INVALID_REQUEST);
+    BOOST_CHECK(message.find("too long to be shown whole") != std::string::npos);
+    BOOST_CHECK(asked.empty());
 }
 
 BOOST_AUTO_TEST_CASE(address_book_requests_and_messages)

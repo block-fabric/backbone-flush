@@ -96,6 +96,12 @@ struct Row {
 //! The name of a kind of row, as the page reads it.
 std::string_view RowKindName(Row::Kind kind);
 
+//! The most characters a fact's value has (a picture apart: MAX_IMAGE_URL): a question with a longer one is refused
+//! rather than cut (App::AskHost, WalletApi::Ask, the remote host), so that nothing it holds is off the dialog.
+constexpr size_t MAX_ROW_VALUE{2000};
+/** Why a question's facts cannot all be shown whole (a value over MAX_ROW_VALUE characters), or nothing. */
+std::optional<std::string> WhyNotWhole(const std::vector<Row>& rows);
+
 //! The longest data: URL of a picture in a dialog (a logo of 32768 bytes in base64, and its prefix).
 constexpr size_t MAX_IMAGE_URL{44 * 1024};
 /** Whether a value is a picture a dialog shows: "data:image/png;base64," or "data:image/jpeg;base64," and base64 only, of at most MAX_IMAGE_URL. */

@@ -24,7 +24,6 @@ constexpr size_t MAX_BUTTON{60};
 constexpr size_t MAX_LABEL{200};
 //! The facts of a dialog (Row): at most MAX_ROWS (dialog.h), their labels and values cut to so many characters.
 constexpr size_t MAX_ROW_LABEL{60};
-constexpr size_t MAX_ROW_VALUE{2000};
 constexpr size_t MAX_ERROR{400};
 //! The longest passphrase taken (bytes), as the page's own fields.
 constexpr size_t MAX_PASSPHRASE{1024};
@@ -165,6 +164,22 @@ std::string Shown(std::string_view text, size_t max_chars)
         ++chars;
     }
     return out;
+}
+
+std::optional<std::string> WhyNotWhole(const std::vector<Row>& rows)
+{
+    for (const Row& row : rows) {
+        if (row.kind == Row::Kind::IMAGE) continue;
+        size_t pos{0}, chars{0};
+        while (pos < row.value.size() && chars <= MAX_ROW_VALUE) {
+            guard::NextCodePoint(row.value, pos);
+            ++chars;
+        }
+        if (chars > MAX_ROW_VALUE) {
+            return strprintf("A fact of this question is too long to be shown whole (\"%s\": more than %u characters): it is not asked", guard::OneLine(row.label, 60), MAX_ROW_VALUE);
+        }
+    }
+    return std::nullopt;
 }
 
 UniValue PageData(const Request& request)
