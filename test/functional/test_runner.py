@@ -201,6 +201,7 @@ BASE_SCRIPTS = [
     'feature_layers_v8.py',
     'feature_layers_cl.py',
     'feature_layers_book.py',
+    'feature_layers_release_book.py',
     'interface_publicapi.py',
     'interface_publicapi_psbt.py',
     'feature_layers_logo.py',
