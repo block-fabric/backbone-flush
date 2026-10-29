@@ -613,9 +613,11 @@ std::string ResolvedAsset(const confirm::Call& call, const UniValue& value)
     const UniValue& name{asset.find_value("name")};
     const UniValue& display{asset.find_value("display_name")};
     const std::string id{text.substr(2)};
-    std::string shown{name.isStr() ? name.get_str() : "(no published name)"};
-    if (display.isStr()) shown += " — " + display.get_str();
-    return strprintf("%s (#%s, 0x%s…%s)", shown, asset.find_value("seq").isStr() ? asset.find_value("seq").get_str() : "?", id.substr(0, 8), id.substr(56));
+    // The chain's number and whole id first, the registrant's texts after them, in quotes: a display name is free text
+    // and must not pass for another asset's number or id.
+    std::string shown{name.isStr() ? "named \u201c" + name.get_str() + "\u201d" : "no published name"};
+    if (display.isStr()) shown += ", displayed as \u201c" + display.get_str() + "\u201d";
+    return strprintf("#%s, 0x%s, %s", asset.find_value("seq").isStr() ? asset.find_value("seq").get_str() : "?", id, shown);
 }
 
 /** A pool as a confirmation shows it: its two assets, resolved, its kind and its id, short. Throws if there is none. */
