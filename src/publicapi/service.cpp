@@ -52,6 +52,7 @@
 #include <util/string.h>
 #include <util/time.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <univalue.h>
 
@@ -316,6 +317,11 @@ public:
         RegisterAll(server);
         grpcsrv::RegisterHealth(server, pool, {SERVICE});
         if (options.reflection) grpcsrv::RegisterReflection(server, pool, {SERVICE});
+        if (m_node.validation_signals) m_node.validation_signals->RegisterSharedValidationInterface(m_tip_watch);
+    }
+    ~ServiceImpl() override
+    {
+        if (m_node.validation_signals) m_node.validation_signals->UnregisterSharedValidationInterface(m_tip_watch);
     }
 
     std::optional<Status> Guard(const grpcsrv::CallInfo& call) override
@@ -396,6 +402,10 @@ private:
             t.view = std::move(copy);
         }
         if (!t.view) Fail(Code::UNAVAILABLE, "the state cannot be read now");
+        // Kept while the state is this one: calls at the same state share this snapshot (SharedSnapshot holds it weakly),
+        // even one after the other, and the overlay's changes are copied once per state, not once per call. Let go of as
+        // the tip moves or the state is flushed (TipWatch), never held across states.
+        m_tip_watch->Keep(t.view);
         return t;
     }
 
@@ -3553,6 +3563,24 @@ private:
     LogoStore m_logos;
     mutable ReplyCache m_cache;
     mutable Gate m_gate;
+    /** The last snapshot of the state a call read (TakeTip), kept until the tip moves or the state is flushed. */
+    class TipWatch final : public CValidationInterface
+    {
+    public:
+        //! A snapshot of another version of the state takes the place of the one kept.
+        void Keep(std::shared_ptr<const sidechain::StoreView> view) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { WITH_LOCK(m_mutex, m_view = std::move(view)); }
+
+    protected:
+        // Synchronous, as the tip changes.
+        void ActiveTipChange(const CBlockIndex&, bool) override { WITH_LOCK(m_mutex, Drop()); }
+        void ChainStateFlushed(const kernel::ChainstateRole&, const CBlockLocator&) override { WITH_LOCK(m_mutex, Drop()); }
+
+    private:
+        void Drop() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { m_view.reset(); }
+        mutable Mutex m_mutex;
+        std::shared_ptr<const sidechain::StoreView> m_view GUARDED_BY(m_mutex);
+    };
+    const std::shared_ptr<TipWatch> m_tip_watch{std::make_shared<TipWatch>()};
     mutable Mutex m_table_mutex;
     mutable std::shared_ptr<const LaunchTable> m_table GUARDED_BY(m_table_mutex);
     mutable Mutex m_peg_mutex;
