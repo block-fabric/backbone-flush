@@ -2322,8 +2322,11 @@ private:
             coin = tip_coins.GetCoin(outpoint);
             if (!coin) {
                 if (m_node.mempool->exists(outpoint.hash)) NotDeep(0, needed, strprintf("the reservation is waiting in the mempool: it needs %d confirmations", needed));
-                // Its transaction in a block (another of its outputs, its change, unspent) and the reservation gone: spent.
-                if (!AccessByTxid(tip_coins, outpoint.hash).IsSpent()) Spent("the reservation was spent (by a launch or a registration in a block?)");
+                // Its transaction in a block (another of its first outputs, its change, unspent) and the reservation gone:
+                // spent. A few single lookups, not AccessByTxid's walk over every possible output under cs_main.
+                for (const uint32_t n : {0u, 1u, 2u, 3u, outpoint.n + 1}) {
+                    if (n != outpoint.n && tip_coins.HaveCoin(COutPoint{outpoint.hash, n})) Spent("the reservation was spent (by a launch or a registration in a block?)");
+                }
                 NotDeep(0, needed, strprintf("no reservation %s:%u in a block or the mempool (yet): it needs %d confirmations", outpoint.hash.GetHex(), outpoint.n, needed));
             }
         }
