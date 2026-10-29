@@ -910,6 +910,9 @@ void Follower::SendBundle()
         m_vouch_refused.reset();
     }};
     if (hash.IsNull()) {
+        // No bundle, or the mainchain closed it: a bundle handed before is handed again if a reorg of the
+        // mainchain brings it back (its node may have let it go once closed).
+        WITH_LOCK(m_mutex, m_bundle_sent.SetNull());
         vouch(uint256{});
         return;
     }

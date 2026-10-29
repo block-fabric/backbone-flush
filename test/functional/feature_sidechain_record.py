@@ -297,6 +297,20 @@ class SidechainRecordTest(BitcoinTestFramework):
         node.syncmainchain()
         assert_equal(main.received[-1], retry["hex"])
 
+        self.log.info("A bundle the mainchain paid, the payout taken back by a reorg of the mainchain: handed again")
+        handed = main.received.count(retry["hex"])
+        saved = [dict(b) for b in main.blocks]
+        main.add_block(bundles=[{"hash": retry["hash"], "paid": True}])
+        node.syncmainchain()
+        assert_equal(main.received.count(retry["hex"]), handed)
+        with main.lock:
+            main.blocks = saved
+            main.add_block(branch=8)
+        node.syncmainchain()
+        assert_equal(main.received.count(retry["hex"]), handed + 1)
+        # The tip of this chain committed to on top of the mainchain again, as the next steps take it.
+        self.mine()
+
         self.log.info("A block built for the mainchain is not accepted once its parent lost its commitment")
         tip = node.getbestblockhash()
         parent = node.getblockheader(tip)["previousblockhash"]
