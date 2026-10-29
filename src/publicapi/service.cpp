@@ -2007,6 +2007,8 @@ private:
     static constexpr size_t MAX_PSBT_COINS{50};
     static constexpr size_t MAX_PSBT_INPUTS{30};
     static constexpr size_t MAX_PSBT_BYTES{180'000};
+    //! The highest fee rate a PSBT is built at: 200 sat/vB, ten times the wallet's fallback.
+    static constexpr CFeeRate MAX_PSBT_FEE_RATE{200'000};
     //! What signing may add to each input (a partial signature and its key, or the witness; a derivation path).
     static constexpr size_t SIGNED_INPUT_BYTES{256};
     // Signed, in base64, in a body of POST broadcast {psbt, max_burn_units}: it fits.
@@ -2139,7 +2141,8 @@ private:
     /**
      * The fee rate the node's wallet would pay (wallet/fees.cpp, GetMinimumFeeRate, with the wallet's defaults): the
      * estimate for 6 blocks (economical), else the fallback (20 sat/vB), at least the mempool's minimum, the relay's
-     * minimum and the wallet's (1 sat/vB).
+     * minimum and the wallet's (1 sat/vB); never more than MAX_PSBT_FEE_RATE (the estimate held to it; a mempool whose
+     * minimum is above it: refused, try again later).
      */
     CFeeRate WalletFeeRate() const
     {
@@ -2149,9 +2152,14 @@ private:
             rate = CFeeRate{FeeRateEstimationRef(estimate).feerate};
         }
         if (rate == CFeeRate{0}) rate = CFeeRate{20'000};
+        rate = std::min(rate, MAX_PSBT_FEE_RATE);
         rate = std::max(rate, m_node.mempool->GetMinFee());
         rate = std::max(rate, m_node.mempool->m_opts.min_relay_feerate);
-        return std::max(rate, CFeeRate{1'000});
+        rate = std::max(rate, CFeeRate{1'000});
+        if (rate > MAX_PSBT_FEE_RATE) {
+            Fail(Code::UNAVAILABLE, strprintf("the network asks a fee rate of %s now, more than the %s this API builds at: try again later", rate.ToString(FeeRateFormat::SAT_VB), MAX_PSBT_FEE_RATE.ToString(FeeRateFormat::SAT_VB)));
+        }
+        return rate;
     }
 
     struct PsbtBuilt {

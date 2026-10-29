@@ -392,7 +392,8 @@ the usable coins hold and how many were left and why.
 
 **Fee.** The rate the node's wallet would pay (`wallet/fees.cpp`, `GetMinimumFeeRate` with its defaults): the estimate
 for 6 blocks (economical), else the wallet's fallback (20 sat/vB), at least the mempool's minimum, the relay's minimum
-and 1 sat/vB; the size counted with 72-byte signatures. A change below the dust of the wallet's discard rate (10 sat/vB)
+and 1 sat/vB, at most 200 sat/vB (8.3.2: an estimate above it is held to it; a mempool whose minimum is above it
+answers 503, try again later); the size counted with 72-byte signatures. A change below the dust of the wallet's discard rate (10 sat/vB)
 goes to the fee.
 
 ## Security
