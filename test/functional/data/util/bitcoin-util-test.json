@@ -53,8 +53,18 @@
       "getchainparams"
     ],
     "return_code": 0,
+    "output_cmp": "getchainparams-ecash.json",
+    "description": "getchainparams returns ecash info (Flush's default network: its mainnet)"
+  },
+  {
+    "exec": "./bitcoin-util",
+    "args": [
+      "-chain=ecashbeta",
+      "getchainparams"
+    ],
+    "return_code": 0,
     "output_cmp": "getchainparams-ecashbeta.json",
-    "description": "getchainparams returns ecashbeta info (Flush's default network)"
+    "description": "getchainparams returns ecashbeta info"
   },
   {
     "exec": "./bitcoin-util",

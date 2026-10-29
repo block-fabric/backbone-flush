@@ -10,6 +10,7 @@
     "default_port": 8255,
     "magic": "666c7821",
     "dns_seeds": [
+      "seed.mainnet.flush.markets."
     ]
   },
   "addresses": {
