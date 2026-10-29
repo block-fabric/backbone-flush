@@ -1251,9 +1251,13 @@ const sidechain::Cell<AssetId> BUYBACK_CURSOR{0xa5, AssetId{}};
 const sidechain::Table<uint256, AssetId> GRAD_POOLS{0xa3};
 //! From v7_height: the launches whose split owes an address some coin (LaunchRecord::share_owed), by token (FinishBlock pays them).
 const sidechain::Table<AssetId, bool> FEE_PAYEES{0xa4};
-//! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent).
+//! Written with the first order: a store with orders and without it was made before the books' counts (StoreLayoutCurrent);
+//! 2: with the counts of their unsettled orders (BOOK_UNSETTLED).
 const sidechain::Cell<uint32_t> BOOKS_LAYOUT{0x9d, 0};
-constexpr uint32_t BOOKS_LAYOUT_CURRENT{1};
+constexpr uint32_t BOOKS_LAYOUT_CURRENT{2};
+//! The orders of each book not settled yet, by book: those placed since the book was made (an order of an earlier book of
+//! the pair, before an asset of it was released, is not of it). From v9_height a release waits for them (Releasable).
+const sidechain::Table<uint256, uint32_t> BOOK_UNSETTLED{0xa6};
 const sidechain::TableId BOOK_INDEXES_TAKEN[]{sidechain::TableId{BOOK_INDEX}, sidechain::TableId{BOOK_EXPIRY}, sidechain::TableId{BOOK_COUNTS}};
 sidechain::StoreBytes CountKey(const uint256& book, bool asks)
 {
@@ -1691,7 +1695,7 @@ std::optional<AssetId> State::AssetOfSeq(uint32_t seq) const
     return asset;
 }
 
-bool State::Releasable(const AssetId& asset, std::string* why) const
+bool State::Releasable(const AssetId& asset, std::string* why, std::optional<int> height) const
 {
     const auto no{[&](const char* reason) {
         if (why) *why = reason;
@@ -1709,6 +1713,18 @@ bool State::Releasable(const AssetId& asset, std::string* why) const
     // one look, however many auctions quote it.
     if (record->holding_auctions > 0) return no("an auction of it is not collected");
     if (record->provided_pools > 0) return no("a pool of it has liquidity providers");
+    // From v9_height (and for whoever asks without a height): the orders of its books not settled yet. A book with no open
+    // order still holds what its filled, expired and evicted orders are owed until their holders settle them.
+    if (!height || Params().GetConsensus().sidechain.V9Active(*height)) {
+        bool unsettled{false};
+        m_view->ForEach(Prefix(POOLS_BY_ASSET, asset), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
+            std::span<const unsigned char> in{key};
+            in = in.subspan(33);
+            unsettled = BOOK_UNSETTLED.Get(*m_view, sidechain::KeyCodec<uint256>::Decode(in)).value_or(0) > 0;
+            return !unsettled;
+        });
+        if (unsettled) return no("an order of its books is not settled");
+    }
     // The DEX (none before its height): what an order of this block trades through, or a contract holds.
     if (OrderHolds(asset)) return no("an order of this block trades it");
     if (const sidechain::StoreBytes prefix{Prefix(CONTRACTS_BY_ASSET, asset)}; m_view->Next(prefix, prefix)) return no("an oracle contract holds some of it");
@@ -2155,18 +2171,26 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
 
     if (const auto* release{op ? std::get_if<ReleaseAsset>(op) : nullptr}) {
         std::string why;
-        if (!Releasable(release->asset, &why)) return invalid("bad-ba-release-alive");
+        if (!Releasable(release->asset, &why, height)) return invalid("bad-ba-release-alive");
         plan.asset_gone = release->asset;
         std::map<AssetId, AssetRecord> others;
         // Its pools, in the order of their ids, through the index of pools by asset.
         std::vector<std::pair<uint256, Pool>> pools;
+        bool indexed_only{false};
         m_view->ForEach(Prefix(POOLS_BY_ASSET, release->asset), [&](const sidechain::StoreBytes& key, const sidechain::StoreBytes&) {
             std::span<const unsigned char> in{key};
             in = in.subspan(33);
             const uint256 id{sidechain::KeyCodec<uint256>::Decode(in)};
-            pools.emplace_back(id, *Assert(GetPool(id)));
+            const auto pool{GetPool(id)};
+            if (!pool) {
+                indexed_only = true;
+                return false;
+            }
+            pools.emplace_back(id, *pool);
             return true;
         });
+        // A pool in the index and not in the store: no release (no state has one).
+        if (indexed_only) return invalid("bad-ba-no-pool");
         for (const auto& [id, pool] : pools) {
             plan.pools_gone.push_back(id);
             // What the pool holds of the other asset: CHN for mainchain miners, any other asset burned.
@@ -2178,7 +2202,11 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
                 if (!MoneyRange(plan.released)) return invalid("bad-ba-release");
             } else if (left > 0) {
                 auto o{others.find(other)};
-                if (o == others.end()) o = others.emplace(other, *Assert(GetAsset(other))).first;
+                if (o == others.end()) {
+                    const auto record{GetAsset(other)};
+                    if (!record) return invalid("bad-ba-asset-unknown");
+                    o = others.emplace(other, *record).first;
+                }
                 o->second.supply -= std::min(o->second.supply, left);
                 o->second.burned = Add(o->second.burned, left).value_or(MAX_AMOUNT);
             }
@@ -2270,7 +2298,9 @@ bool State::PlanDex(const CTransaction& tx, const Operation& op, int height, Pla
             const auto path{dex::PathOfPools(*this, named->asset_in, named->pools)};
             if (!path) return invalid("bad-ba-no-pool");
             for (const uint256& id : named->pools) {
-                if (amm::Abandoned(*Assert(GetPool(id)))) return invalid("bad-ba-pool-closed");
+                const auto pool{GetPool(id)};
+                if (!pool) return invalid("bad-ba-no-pool");
+                if (amm::Abandoned(*pool)) return invalid("bad-ba-pool-closed");
             }
             order.path = *path;
             order.pools = named->pools;
@@ -2398,7 +2428,9 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     const PoolParams params{GetPoolParams(pool_id)};
     if (params.GetCurve() != Curve::CONCENTRATED) return invalid("bad-ba-not-cl");
     Pool pool{*found};
-    ClState cl{*Assert(GetClState(pool_id))};
+    const auto cl_found{GetClState(pool_id)};
+    if (!cl_found) return invalid("bad-ba-not-cl");
+    ClState cl{*cl_found};
     const arith_uint256 price{UintToArith256(cl.sqrt_price)};
     const int32_t spacing{cl::TickSpacing(params.fee)};
     // A tick's record after a change of the liquidity that starts (lower) or ends (upper) there by `delta` (Uniswap's Tick.update).
@@ -2507,7 +2539,9 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
         return true;
     }
     const ChangePosition& change{std::get<ChangePosition>(op)};
-    ClPosition position{*Assert(GetPosition(change.position))};
+    const auto position_found{GetPosition(change.position)};
+    if (!position_found) return invalid("bad-ba-no-position");
+    ClPosition position{*position_found};
     // Whoever spends its token: the books hold the token to an output, or to the close.
     const unsigned __int128 delta{change.close ? position.Liquidity() : change.Liquidity()};
     const arith_uint256 sa{cl::SqrtRatioAtTick(position.tick_lower)}, sb{cl::SqrtRatioAtTick(position.tick_upper)};
@@ -2790,7 +2824,12 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         const auto found{GetOrder(settle->order)};
         if (!found) return invalid("bad-ba-no-order");
         BookOrder order{*found};
-        Pool book{*Assert(GetPool(order.book))};
+        // Its book gone (its asset released): nothing to settle against.
+        const auto book_found{GetPool(order.book)};
+        if (!book_found) return invalid("bad-ba-no-book");
+        // From v9_height: nor against a book of the pair made since (the asset released and its name registered again).
+        if (Params().GetConsensus().sidechain.V9Active(height) && order.height < book_found->height) return invalid("bad-ba-no-book");
+        Pool book{*book_found};
         // The token is taken in: whoever spends it (the books refuse anyone else).
         debit(Token::Kind::ORDER, settle->order, 1);
         const AssetId sold{order.sells0 ? book.asset0 : book.asset1}, bought{order.sells0 ? book.asset1 : book.asset0};
@@ -2853,7 +2892,9 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
             const uint64_t vested{record.AllocationVested(height)};
             const uint64_t units{vested - std::min(vested, record.allocation_paid)};
             if (units > 0) {
-                auto asset{*Assert(GetAsset(claim->token))};
+                const auto asset_found{GetAsset(claim->token)};
+                if (!asset_found) return invalid("bad-ba-asset-unknown");
+                auto asset{*asset_found};
                 asset.supply += units;
                 asset.minted += units;
                 plan.assets.emplace_back(claim->token, std::move(asset));
@@ -2881,9 +2922,15 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         // A token on its launch curve trades there alone until it graduates into its pool.
         if (Launching(create->asset_a) || Launching(create->asset_b)) return invalid("bad-ba-launch-pooled");
         // The decimals of each asset (CHN's 8): a stable pool counts their units alike.
-        const auto decimals{[&](const AssetId& asset) -> uint8_t { return asset.IsNull() ? 8 : Assert(GetAsset(asset))->decimals; }};
+        const auto decimals{[&](const AssetId& asset) -> std::optional<uint8_t> {
+            if (asset.IsNull()) return 8;
+            const auto record{GetAsset(asset)};
+            return record ? std::optional<uint8_t>{record->decimals} : std::nullopt;
+        }};
         const AssetId asset0{std::min(create->asset_a, create->asset_b)}, asset1{std::max(create->asset_a, create->asset_b)};
-        const PoolParams params{MakePoolParams(*create, decimals(asset0), decimals(asset1))};
+        const auto decimals0{decimals(asset0)}, decimals1{decimals(asset1)};
+        if (!decimals0 || !decimals1) return invalid("bad-ba-asset-unknown");
+        const PoolParams params{MakePoolParams(*create, *decimals0, *decimals1)};
         const uint256 id{PoolIdOf(asset0, asset1, params)};
         Pool pool;
         if (const auto found{GetPool(id)}) {
@@ -3069,6 +3116,7 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
                 if (!plan->evicted) AddCount(out, order->book, order->sells0, +1);
                 BOOKS_TOUCHED.Put(out, order->book, 1);
                 out.Put(ExpiryKey(id, order->expiry), {});
+                BOOK_UNSETTLED.Put(out, order->book, BOOK_UNSETTLED.Get(out, order->book).value_or(0) + 1);
                 if (BOOKS_LAYOUT.Get(out) != BOOKS_LAYOUT_CURRENT) BOOKS_LAYOUT.Put(out, BOOKS_LAYOUT_CURRENT);
             }
         } else {
@@ -3076,6 +3124,15 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             if (before && out.Get(BookKey(id, *before))) {
                 out.Erase(BookKey(id, *before));
                 AddCount(out, before->book, before->sells0, -1);
+            }
+            // One unsettled order less in its book, if it was placed in this one (not in an earlier book of the pair).
+            if (const auto book{before ? GetPool(before->book) : std::nullopt}; book && before->height >= book->height) {
+                const uint32_t unsettled{BOOK_UNSETTLED.Get(out, before->book).value_or(0)};
+                if (unsettled > 1) {
+                    BOOK_UNSETTLED.Put(out, before->book, unsettled - 1);
+                } else if (unsettled == 1) {
+                    BOOK_UNSETTLED.Erase(out, before->book);
+                }
             }
             BOOK_ORDERS.Erase(out, id);
         }
@@ -3135,8 +3192,10 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
     }
     for (const uint256& id : plan->pools_gone) {
         SetPool(id, std::nullopt);
-        // Its kind goes with it (the pools AddLiquidity made have none recorded).
+        // Its kind goes with it (the pools AddLiquidity made have none recorded), and a book's count of unsettled orders
+        // (none from v9_height: the release waits for them).
         if (POOL_PARAMS.Contains(out, id)) POOL_PARAMS.Erase(out, id);
+        if (BOOK_UNSETTLED.Contains(out, id)) BOOK_UNSETTLED.Erase(out, id);
     }
     // The name is free again; its number is not given again (lists skip it). Its history goes with it.
     if (plan->asset_gone) {
@@ -3469,7 +3528,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                         }
                     }
                     if (kind.params.GetCurve() != Curve::CONCENTRATED || cl) {
-                        cleared = ClearCoinSide(id, kind.params, kind.fee, *pool, cl, ticks, ins, rules.SwapSecurityShare(height), taken);
+                        cleared = ClearCoinSide(id, kind.params, kind.fee, *pool, cl, ticks, ins, rules.SwapSecurityShare(height), taken, rules.V9Active(height));
                         if (cleared) effects.parts[CHN].security += taken;
                     }
                 } else if (pool && !amm::Abandoned(*pool)) {
@@ -3484,7 +3543,7 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
                         }
                         if (it != effects.cl.end()) {
                             const auto [p0, p1]{fee_parts(kind.fee, ins, pool->asset0.IsNull(), pool->asset1.IsNull())};
-                            cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins, {p0.security + p0.protocol, p1.security + p1.protocol});
+                            cleared = ClearCl(id, kind.fee, *pool, it->second, effects.ticks[id], ins, {p0.security + p0.protocol, p1.security + p1.protocol}, rules.V9Active(height));
                         }
                     } else if (kind.params.GetCurve() == Curve::LAUNCH) {
                         // A launch curve: its coin is asset0. A buy paying the coin in at its first hop pays directly.
@@ -3797,7 +3856,7 @@ uint64_t WalkOut(const std::vector<ClSegment>& segs, uint64_t x, bool zero_in)
 } // namespace
 
 std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
-                                                  const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const
+                                                  const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security, bool v9) const
 {
     security = 0;
     if (fee >= FEE_DENOMINATOR || security_share > FEE_DENOMINATOR || !pool.asset0.IsNull()) return std::nullopt;
@@ -3815,10 +3874,29 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
             net.push_back(order);
         }
     }
+    // All the fees: the buys' and each sale's out of what it gets; `security_share` of them to the chain's security.
+    const auto split{[&](const std::vector<uint64_t>& outs) -> std::optional<std::pair<uint64_t, uint64_t>> {
+        unsigned __int128 all{fees};
+        for (size_t i{0}; i < orders.size(); ++i) {
+            if (!orders[i].zero_in) all += fee_of(outs[i]);
+        }
+        if (all > MAX_AMOUNT) return std::nullopt;
+        const uint64_t to_security{static_cast<uint64_t>(all * security_share / FEE_DENOMINATOR)};
+        return std::make_pair(to_security, static_cast<uint64_t>(all) - to_security);
+    }};
     std::optional<dex::Clearing> cleared;
     if (params.GetCurve() == Curve::CONCENTRATED) {
         if (!cl || !ticks) return std::nullopt;
-        cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net);
+        if (v9) {
+            // From v9_height the providers' part is credited with the walk, stretch by stretch.
+            cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9, [&](const std::vector<uint64_t>& outs) -> std::optional<uint64_t> {
+                const auto parts{split(outs)};
+                if (!parts) return std::nullopt;
+                return parts->second;
+            });
+        } else {
+            cleared = ClearCl(id, /*fee=*/0, pool, *cl, *ticks, net, {0, 0}, v9);
+        }
     } else {
         cleared = curves::ClearPoolOf(params, /*fee=*/0, pool.reserve0, pool.reserve1, net);
     }
@@ -3836,20 +3914,25 @@ std::optional<dex::Clearing> State::ClearCoinSide(const uint256& id, const PoolP
     const uint64_t providers{all - to_security};
     // The providers' part into the pool's coin (the buys' fees never went in, the sales' went out with what they got).
     if (providers > MAX_AMOUNT - cleared->reserve0) return std::nullopt;
-    cleared->reserve0 += providers;
-    // A concentrated pool: its in-range positions' fee growth in the coin (Q128 per unit of liquidity in range after the round).
-    if (cl && providers > 0) {
+    // From v9_height a concentrated pool's walk credited it (ClearCl's coin_fee): what no liquidity earned leaves with the
+    // security part rather than stay in the pool, nobody's.
+    const uint64_t uncredited{cl && v9 ? std::min(cleared->uncredited0, providers) : 0};
+    cleared->reserve0 += providers - uncredited;
+    // A concentrated pool before v9_height: its in-range positions' fee growth in the coin (Q128 per unit of liquidity in
+    // range after the round).
+    if (cl && !v9 && providers > 0) {
         const unsigned __int128 liquidity{cl->Liquidity()};
         if (liquidity > 0) {
             const arith_uint256 l{(arith_uint256{static_cast<uint64_t>(liquidity >> 64)} << 64) | arith_uint256{static_cast<uint64_t>(liquidity)}};
             cl->fee_growth0 = ArithToUint256(UintToArith256(cl->fee_growth0) + (arith_uint256{providers} << 128) / l);
         }
     }
-    security = to_security;
+    security = to_security + uncredited;
     return cleared;
 }
 
-std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take) const
+std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take,
+                                           bool v9, const std::function<std::optional<uint64_t>(const std::vector<uint64_t>&)>& coin_fee) const
 {
     if (fee >= FEE_DENOMINATOR) return std::nullopt;
     uint64_t in0{0}, in1{0};
@@ -3974,6 +4057,13 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
     const __int128 surplus1{zero_walk ? net1 + static_cast<__int128>(swapped_out) : net1 - static_cast<__int128>(swapped_in)};
     if (surplus0 < 0 || surplus1 < 0) return std::nullopt;
     if (broken) return std::nullopt;
+    // A round with its fee on the coin's side (ClearCoinSide, from v9_height): the providers' part, out of the outs.
+    uint64_t coin_part{0};
+    if (coin_fee) {
+        const auto part{coin_fee(clearing.outs)};
+        if (!part) return std::nullopt;
+        coin_part = *part;
+    }
     // The fees and roundings, credited to the liquidity of each stretch the walk went through, in proportion to the input
     // it took there, before the tick at its end is crossed (Uniswap v3 credits a step's fee to its liquidity, then
     // crosses): a position earns what the walk traded in its range. With no walk (the orders crossed each other), all to
@@ -3988,7 +4078,7 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
     const uint64_t taken0{static_cast<uint64_t>(std::min<__int128>(surplus0, take.first))}, taken1{static_cast<uint64_t>(std::min<__int128>(surplus1, take.second))};
     clearing.taken0 = taken0;
     clearing.taken1 = taken1;
-    const unsigned __int128 s0{static_cast<unsigned __int128>(surplus0) - taken0}, s1{static_cast<unsigned __int128>(surplus1) - taken1};
+    const unsigned __int128 s0{static_cast<unsigned __int128>(surplus0) - taken0 + coin_part}, s1{static_cast<unsigned __int128>(surplus1) - taken1};
     // What each stretch took of the input, as the walk goes: its share of the surplus, the last the rest.
     std::vector<std::pair<size_t, uint64_t>> taken;
     {
@@ -4062,12 +4152,18 @@ std::optional<dex::Clearing> State::ClearCl(const uint256& id, uint32_t fee, con
         if (price == seg.target && seg.cross) {
             if (!cross(*seg.cross)) return std::nullopt;
             tick = zero_walk ? *seg.cross - 1 : *seg.cross;
-        } else if (price != UintToArith256(cl.sqrt_price)) {
+        } else if (price != (v9 ? seg.start : UintToArith256(cl.sqrt_price))) {
+            // Moved within the stretch: the tick of where it stops. From v9_height compared with the stretch's start (as
+            // Uniswap v3 compares with its step's): a last stretch that cannot move the price off a tick a whole stretch
+            // crossed down to keeps the tick below it, the side whose liquidity is in range; before, with the round's start.
             tick = cl::TickAtSqrtRatio(price);
         }
     }
-    // No walk (or none of it with liquidity): all to the liquidity in range.
-    if (!any_credit) credit(liquidity, s0, s1);
+    // No walk (or none of it with liquidity): all to the liquidity in range; with none, the coin's part is nobody's.
+    if (!any_credit) {
+        credit(liquidity, s0, s1);
+        if (liquidity == 0) clearing.uncredited0 = coin_part;
+    }
     cl.sqrt_price = ArithToUint256(price);
     cl.tick = tick;
     cl.SetLiquidity(liquidity);

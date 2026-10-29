@@ -709,6 +709,8 @@ public:
             consensus.sidechain.v7_height = opts.dep_opts.v7_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v8 only if a test asks (-testactivationheight=v8@<height>).
             consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v9 only if a test asks (-testactivationheight=v9@<height>).
+            consensus.sidechain.v9_height = opts.dep_opts.v9_height.value_or(std::numeric_limits<int>::max());
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -910,6 +912,10 @@ public:
         consensus.sidechain.v7_height = 0;
         // Upgrade v8 from the first block: the buybacks scanned a bounded number a block (bitassets::MAX_BUYBACK_SCAN).
         consensus.sidechain.v8_height = 0;
+        // Upgrade v9 (the DEX rules of Flush 8.3.2): from the first block on mainnet and the test network, whose Flush chains
+        // have no block yet (slot 46 is not active on eCash: the node does not start without its activation block); on
+        // betanet from block 42,000, the height the betanet chain takes it at.
+        consensus.sidechain.v9_height = chain == ChainType::ECASH_BETANET ? 42'000 : 0;
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

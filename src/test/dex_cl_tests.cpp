@@ -555,4 +555,122 @@ BOOST_AUTO_TEST_CASE(extremes_and_tokens)
     BOOST_CHECK(chain.TokenAt(COutPoint{sell1.GetHash(), 0}).has_value());
 }
 
+namespace {
+/** Regtest with the DEX from the first block and upgrade v9 from block 1000 (the Chain starts at 100). */
+struct V9ClSetup : BasicTestingSetup {
+    V9ClSetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=v9@1000"}}} {}
+};
+constexpr int V9_HEIGHT{1000};
+
+struct Range {
+    int32_t lower, upper;
+    unsigned __int128 liquidity;
+};
+
+/** Whether a concentrated pool is consistent: its tick the price's (or the one below a tick a walk crossed down to and
+ * stopped on), its liquidity that of the positions in range by that tick. */
+bool Consistent(const Chain& chain, const uint256& id, const std::vector<Range>& ranges)
+{
+    const auto cl{*chain.Assets().GetClState(id)};
+    const arith_uint256 price{UintToArith256(cl.sqrt_price)};
+    const bool tick_ok{cl.tick == cl::TickAtSqrtRatio(price) || price == cl::SqrtRatioAtTick(cl.tick + 1)};
+    unsigned __int128 in_range{0};
+    for (const Range& r : ranges) {
+        if (r.lower <= cl.tick && cl.tick < r.upper) in_range += r.liquidity;
+    }
+    return tick_ok && cl.Liquidity() == in_range;
+}
+
+/**
+ * A pool at a raw price of 1e-16 (asset1 per asset0), at fee 100 (tick spacing 1), with two ranges of unequal liquidity on
+ * either side of a tick t ([t, t+10) with the price in it, [t-1, t) twice as deep), and a sale of asset0 that crosses t
+ * whole and walks one unit further, which cannot move the price off t (the walk's last stretch). Then more trades each way.
+ * Returns whether the pool was consistent after every round.
+ */
+bool WalkAcrossUnequalLiquidity(int start_height)
+{
+    Chain chain;
+    chain.height = start_height;
+    const AssetId A{HashName("AAA")}, B{HashName("BBB")};
+    const AssetId A0{std::min(A, B)}, A1{std::max(A, B)};
+    const uint64_t big{uint64_t{1} << 61};
+    const auto c0{chain.Issue(A0 == A ? "AAA" : "BBB", MAX_AMOUNT, {big, big, big})};
+    const auto c1{chain.Issue(A1 == A ? "AAA" : "BBB", MAX_AMOUNT, {big, big, 10})};
+    CreatePool create;
+    create.asset_a = A0;
+    create.asset_b = A1;
+    create.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    create.fee = 100;
+    create.amount_a = 10'000'000'000'000'000;
+    create.amount_b = 1;
+    chain.Require(MakeTx({}, create, {}));
+    PoolParams kind;
+    kind.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    kind.fee = 100;
+    const uint256 id{PoolIdOf(A0, A1, kind)};
+    const auto start{*chain.Assets().GetClState(id)};
+    const arith_uint256 p0{UintToArith256(start.sqrt_price)};
+    const int32_t t{start.tick - 5};
+    const unsigned __int128 la{20'000'000'000'000}, lb{40'000'000'000'000};
+    std::vector<Range> ranges{{t, t + 10, la}, {t - 1, t, lb}};
+    for (size_t i{0}; i < ranges.size(); ++i) {
+        const Range& r{ranges[i]};
+        OpenPosition open;
+        open.pool = id;
+        open.tick_lower = r.lower;
+        open.tick_upper = r.upper;
+        open.liquidity_hi = static_cast<uint64_t>(r.liquidity >> 64);
+        open.liquidity_lo = static_cast<uint64_t>(r.liquidity);
+        open.max0 = big;
+        open.max1 = big;
+        const auto needed{cl::AmountsForLiquidity(p0, cl::SqrtRatioAtTick(r.lower), cl::SqrtRatioAtTick(r.upper), r.liquidity, true)};
+        BOOST_REQUIRE(needed);
+        std::vector<std::optional<Token>> outs{std::nullopt};
+        if (needed->first < big) outs.emplace_back();
+        if (needed->second < big) outs.emplace_back();
+        chain.Require(MakeTx({c0[i], c1[i]}, open, outs));
+    }
+    chain.EndBlock();
+    bool consistent{Consistent(chain, id, ranges)};
+    // What crossing t takes, and the one unit more that cannot move the price off it in the range below.
+    const arith_uint256 at_t{cl::SqrtRatioAtTick(t)};
+    const uint64_t cross{cl::SwapStep(p0, at_t, la, MAX_AMOUNT, /*zero_in=*/true).amount_in};
+    BOOST_REQUIRE(cl::SwapStep(p0, at_t, la, MAX_AMOUNT, true).sqrt_next == at_t);
+    BOOST_REQUIRE(cl::SwapStep(at_t, cl::SqrtRatioAtTick(t - 1), lb, 1, true).sqrt_next == at_t);
+    // The sale's input net of the fee (100 millionths, rounded down) is cross + 1.
+    uint64_t sale{static_cast<uint64_t>((static_cast<unsigned __int128>(cross) + 1) * 1'000'000 / 999'900)};
+    const auto net{[](uint64_t x) { return static_cast<uint64_t>(static_cast<unsigned __int128>(x) * 999'900 / 1'000'000); }};
+    while (net(sale) < cross + 1) ++sale;
+    BOOST_REQUIRE_EQUAL(net(sale), cross + 1);
+    BOOST_REQUIRE_LT(sale, big);
+    const CTransaction cut{MakeTx({c0[2]}, std::nullopt, {AssetToken(A0, sale), AssetToken(A0, big - sale)})};
+    chain.Require(cut);
+    chain.Require(MakeTx({COutPoint{cut.GetHash(), 0}}, SwapPools{A0, {id}, sale, 1, CScript{}}, {std::nullopt}));
+    chain.EndBlock();
+    const auto after{*chain.Assets().GetClState(id)};
+    BOOST_REQUIRE(UintToArith256(after.sqrt_price) == at_t);
+    BOOST_CHECK(after.Liquidity() == lb);
+    consistent &= Consistent(chain, id, ranges);
+    // More rounds both ways: a buy of asset0 back into the upper range, a sale down again.
+    const CTransaction buy{MakeTx({c1[2]}, SwapPools{A1, {id}, 10, 1, CScript{}}, {std::nullopt})};
+    chain.Require(buy);
+    chain.EndBlock();
+    consistent &= Consistent(chain, id, ranges);
+    const CTransaction again{MakeTx({COutPoint{cut.GetHash(), 1}}, SwapPools{A0, {id}, cross, 1, CScript{}}, {std::nullopt, AssetToken(A0, big - sale - cross)})};
+    chain.Require(again);
+    chain.EndBlock();
+    consistent &= Consistent(chain, id, ranges);
+    return consistent;
+}
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(tick_follows_the_last_stretchs_start, V9ClSetup)
+{
+    // From v9: after every round the tick is the price's (or the one below a tick crossed down to) and the liquidity is
+    // that of the positions in range. Before it, the tick after that walk was the price's tick, t, with the liquidity of
+    // the range below it in range.
+    BOOST_CHECK(WalkAcrossUnequalLiquidity(V9_HEIGHT));
+    BOOST_CHECK(!WalkAcrossUnequalLiquidity(100));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -1741,8 +1741,11 @@ public:
     void FinishBlock(int height, uint32_t time, std::vector<CTxOut>& payouts, uint64_t queued = 0);
     /** Policy (the mempool): whether a transaction's order, alone against the pools as they are, gives its min_out (true if it has none). */
     bool OrderFillsAlone(const CTransaction& tx, std::string& reject_reason, int height) const;
-    /** Whether an asset is dead and can be retired; if not, why (`why`). */
-    bool Releasable(const AssetId& asset, std::string* why = nullptr) const;
+    /**
+     * Whether an asset is dead and can be retired; if not, why (`why`). By the rules of the block at `height` (without
+     * one, by every rule: from v9_height a release also waits for the unsettled orders of the asset's books).
+     */
+    bool Releasable(const AssetId& asset, std::string* why = nullptr, std::optional<int> height = std::nullopt) const;
     /**
      * Whether ApplyTx would accept the transaction now (in a block with room for its payouts);
      * `results`, if given, gets what it would pay out, and `payouts` how many CHN payouts it gives rise to.
@@ -1863,8 +1866,15 @@ public:
      * walked through the pool's ticks (at most MAX_CL_CROSSINGS of them), the round's fees and roundings credited to the
      * liquidity in range. nullopt as ClearPool's.
      */
-    /** `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept beyond the walk. */
-    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0}) const;
+    /**
+     * `take`: what the round takes out of its fees, of each asset (the security and protocol parts), at most what it kept
+     * beyond the walk. `v9`: the rules from v9_height (the tick after a walk follows its last stretch's start; the rules
+     * of the next block for a quote). `coin_fee`, if given: what more of asset0 the positions earn, from the round's outs
+     * (the providers' part of a fee on the coin's side: ClearCoinSide), credited with the roundings stretch by stretch;
+     * nullopt makes the round fail.
+     */
+    std::optional<dex::Clearing> ClearCl(const uint256& id, uint32_t fee, const Pool& pool, ClState& cl, std::map<int32_t, ClTick>& ticks, const std::vector<dex::HopIn>& orders, std::pair<uint64_t, uint64_t> take = {0, 0},
+                                         bool v9 = true, const std::function<std::optional<uint64_t>(const std::vector<uint64_t>&)>& coin_fee = {}) const;
     /** Oracles by id, from `from` on, until `fn` returns false. */
     void ForEachOracle(const std::function<bool(const uint256&, const OracleRecord&)>& fn, const std::optional<uint256>& from = std::nullopt) const;
     void ForEachContract(const std::function<bool(const Txid&, const OracleContract&)>& fn) const;
@@ -1911,11 +1921,13 @@ public:
      * kind at no fee on the buys' coin less their fee (rounded up) and the sales' units whole, all at that round's one
      * price; then each sale's fee (rounded up) out of the coin it gets. Of all the fees, `security_share` (millionths;
      * rounded down) leaves for the chain's security (`security`), the rest stays in the pool's coin (a concentrated
-     * pool: added to its fee growth in the coin, at the liquidity in range after the round; with none, to the pool).
+     * pool: added to its fee growth in the coin, at the liquidity in range after the round, with none to the pool; from
+     * v9_height (`v9`) credited stretch by stretch with the walk, as the other rounds' fees, and what no liquidity earned
+     * leaves with the security part).
      * Every order still gets the same price; min_out counts what it gets, net of the fee.
      */
     std::optional<dex::Clearing> ClearCoinSide(const uint256& id, const PoolParams& params, uint32_t fee, const Pool& pool, ClState* cl, std::map<int32_t, ClTick>* ticks,
-                                               const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security) const;
+                                               const std::vector<dex::HopIn>& orders, uint32_t security_share, uint64_t& security, bool v9 = true) const;
     /** Whether the pools of the chain's coin take their fees on its side (fee_flow_height reached: set by its first block's end). */
     bool CoinSideFees() const;
 private:

@@ -138,7 +138,8 @@ class FastBlocksSlashingTest(SidechainTest):
         assert_raises_rpc_error(-26, "bad-pos-evidence-sig", n0.submitevidence, bytes(original.header).hex() + bytes(forged.header).hex())
         # The rival block, on the same parent: a branch; the node sees two headers its leader signed.
         assert_equal(n1.submitblock(rival.serialize().hex()), "inconclusive")
-        self.wait_until(lambda: all(len(n.listevidence()) == 1 for n in self.nodes), timeout=60)
+        # (A node the proof reaches after a block carried it and banned the offender does not keep it.)
+        self.wait_until(lambda: all(len(n.listevidence()) == 1 or n.getvalidator(offender)["bond"]["banned"] for n in self.nodes), timeout=60)
 
         self.log.info("A leader puts the proof in a block: 10 % of the offender's stake goes, the rest is unbonded, it is banned")
         self.wait_until(lambda: all(n.getvalidator(offender)["bond"]["banned"] for n in self.nodes), timeout=60)
@@ -182,13 +183,13 @@ class FastBlocksSlashingTest(SidechainTest):
             assert block.get("proposer") != offender
             blockhash = block["previousblockhash"]
 
-        self.log.info("Slashed once: a proof of another of its offences takes nothing more")
+        self.log.info("Slashed once: a proof of another of its offences is not kept, and takes nothing more")
         earlier = n0.getblock(carrying["previousblockhash"])
         while earlier.get("proposer") != offender or earlier["slot"] == tip["slot"]:
             earlier = n0.getblock(earlier["previousblockhash"])
         first, second = self.rival(n0, earlier["hash"])
-        n0.submitevidence(bytes(first.header).hex() + bytes(second.header).hex())
-        self.wait_until(lambda: all(len(n.listevidence()) == 2 for n in self.nodes), timeout=60)
+        assert_raises_rpc_error(-26, "pos-evidence-banned", n0.submitevidence, bytes(first.header).hex() + bytes(second.header).hex())
+        assert all(len(n.listevidence()) <= 1 for n in self.nodes)
         after = n0.getblockcount()
         self.wait_until(lambda: n0.getblockcount() >= after + 4, timeout=120)
         self.wait_in_sync()

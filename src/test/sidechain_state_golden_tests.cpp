@@ -14,6 +14,7 @@
 #include <common/signmessage.h>
 #include <consensus/merkle.h>
 #include <consensus/params.h>
+#include <drivechain/sidechain.h>
 #include <hash.h>
 #include <key.h>
 #include <primitives/block.h>
@@ -354,6 +355,53 @@ BOOST_AUTO_TEST_CASE(own_peg_actions_take_no_room_of_the_assets)
     BOOST_REQUIRE_EQUAL(chain.paid.size(), 7 + MAX_TX_PAYOUTS_PER_BLOCK);
     for (size_t i{0}; i < 7; ++i) BOOST_CHECK(chain.paid[i] == (CTxOut{static_cast<CAmount>(7 + i), CScript() << OP_2}));
     for (size_t i{7}; i < chain.paid.size(); ++i) BOOST_CHECK(chain.paid[i].scriptPubKey == holder);
+}
+
+BOOST_AUTO_TEST_CASE(deposit_to_the_change_destination)
+{
+    // A deposit whose destination is the text of a withdrawal's change (drivechain::WITHDRAWAL_RETURN_DEST), with no bundle
+    // paid: from v9_height a deposit, credited as one to no address of this chain (an OP_RETURN payout); before it, taken
+    // for a withdrawal's change and credited nothing. The change of a withdrawal (its bundle paid) credits nothing either
+    // way. (Over JSON-RPC, a mainchain node that reports a deposit to "D" with an all-zero bundle gives a null bundle.)
+    for (const int height : {4, 5}) {
+        Consensus::SidechainParams params;
+        params.v9_height = 5;
+        sidechain::EmptyStore empty;
+        sidechain::StoreOverlay store{empty, /*journal=*/true};
+        sidechain::State state{store};
+        sidechain::Mainchain mainchain;
+        for (int h{0}; h < 2; ++h) {
+            sidechain::MainBlock block;
+            block.hash = ArithToUint256(arith_uint256{static_cast<uint64_t>(0x20000 + h)} << 128);
+            block.prev_hash = mainchain.TipHash();
+            block.time = 1'700'000'000 + h;
+            if (h == 1) {
+                sidechain::MainDeposit deposit;
+                deposit.destination = drivechain::WITHDRAWAL_RETURN_DEST;
+                deposit.amount = COIN;
+                deposit.txid = uint256{0xd1};
+                block.deposits.push_back(deposit);
+                sidechain::MainDeposit change;
+                change.destination = drivechain::WITHDRAWAL_RETURN_DEST;
+                change.amount = 3 * COIN;
+                change.txid = uint256{0xd2};
+                change.bundle = uint256{0xb0};
+                change.payouts.emplace_back(2 * COIN, CScript() << OP_TRUE);
+                block.deposits.push_back(change);
+            }
+            BOOST_REQUIRE(mainchain.Append(block));
+        }
+        std::vector<CTxOut> payouts;
+        std::string reason;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(mainchain.Height(), mainchain, height, params, payouts, reason), reason);
+        if (height < params.v9_height) {
+            BOOST_CHECK(payouts.empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(payouts.size(), 1U);
+            BOOST_CHECK_EQUAL(payouts[0].nValue, COIN);
+            BOOST_CHECK(payouts[0].scriptPubKey == CScript() << OP_RETURN);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

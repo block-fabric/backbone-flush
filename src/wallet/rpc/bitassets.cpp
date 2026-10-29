@@ -625,10 +625,13 @@ RPCMethod releaseassetreservation()
 {
     const auto pwallet{ReadyWallet(request)};
     if (!pwallet) return UniValue::VNULL;
-    const AssetId asset{bitassets::HashName(request.params[0].get_str())};
-    const auto reservation{FindReservation(*pwallet, asset)};
+    const std::string given{request.params[0].get_str()};
+    auto reservation{FindReservation(*pwallet, bitassets::HashName(given))};
+    // The name as the wallet reserves it from ticker_height (NewAssetName): "gold" is GOLD.
+    if (!reservation) reservation = FindReservation(*pwallet, bitassets::HashName(ToUpper(given)));
     if (!reservation) throw JSONRPCError(RPC_INVALID_PARAMETER, "This wallet has no reservation of the name in a block");
     const auto token{pwallet->chain().getBitAssetsToken(reservation->outpoint)};
+    if (!token) throw JSONRPCError(RPC_WALLET_ERROR, "The reservation's coin is not in the chain's state (spent, or not in a block yet)");
     bitassets::Burn burn;
     burn.tokens.push_back(*token);
     return TxResult(Send(*pwallet, burn, {}, {reservation->outpoint}));

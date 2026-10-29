@@ -24,8 +24,10 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <cmath>
 #include <map>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace bitassets;
@@ -434,6 +436,138 @@ BOOST_AUTO_TEST_CASE(marker_encoding_one_way)
     BOOST_CHECK_EQUAL(back->destination, launch.destination);
     BOOST_CHECK_EQUAL(back->burn_bps, launch.burn_bps);
     BOOST_CHECK(back->keep_control);
+}
+
+namespace {
+/** The fee-flow release from the first block, upgrade v9 from block 1000 (the Chain starts at 100). */
+struct V9FeeSetup : BasicTestingSetup {
+    V9FeeSetup() : BasicTestingSetup{ChainType::REGTEST, {.extra_args = {"-sidechainslot=7", "-testactivationheight=dex@0", "-testactivationheight=dexcurves@0", "-testactivationheight=feeflow@0", "-testactivationheight=v9@1000"}}} {}
+};
+constexpr int V9_HEIGHT{1000};
+
+/** A concentrated pool of the coin and GOLD at 1 % (tick spacing 200), made at a price of 1: its id; GOLD's coin of the rest. */
+std::pair<uint256, COutPoint> CoinClPool(Chain& chain)
+{
+    const AssetId GOLD{HashName("GOLD")};
+    const uint256 nonce{HashName("nonce GOLD")};
+    const CTransaction reserved{MakeTx({}, Reserve{ReservationCommitment(GOLD, nonce, HOLDER)}, {Token{Token::Kind::RESERVATION, uint256{}, 1}})};
+    chain.Require(reserved);
+    Register reg;
+    reg.name = GOLD;
+    reg.nonce = nonce;
+    reg.supply = 1'000'000 * COIN_UNITS;
+    reg.decimals = 8;
+    reg.text = "GOLD";
+    const CTransaction issued{MakeTx({COutPoint{reserved.GetHash(), 0}}, reg, {Token{Token::Kind::CONTROL, GOLD, 1}, Token{Token::Kind::ASSET, GOLD, reg.supply}})};
+    chain.Require(issued);
+    CreatePool create;
+    create.asset_a = CHN;
+    create.asset_b = GOLD;
+    create.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    create.fee = 10'000;
+    create.amount_a = 1000;
+    create.amount_b = 1000;
+    chain.Require(MakeTx({}, create, {}));
+    PoolParams kind;
+    kind.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    kind.fee = 10'000;
+    return {PoolIdOf(CHN, GOLD, kind), COutPoint{issued.GetHash(), 1}};
+}
+
+/** A position of `liquidity` in [lo, hi): its id; `gold` becomes the coin of GOLD left. */
+uint256 Open(Chain& chain, const uint256& pool, int32_t lo, int32_t hi, unsigned __int128 liquidity, COutPoint& gold)
+{
+    const AssetId GOLD{HashName("GOLD")};
+    const auto needed{cl::AmountsForLiquidity(UintToArith256(chain.Assets().GetClState(pool)->sqrt_price), cl::SqrtRatioAtTick(lo), cl::SqrtRatioAtTick(hi), liquidity, true)};
+    BOOST_REQUIRE(needed);
+    const uint64_t held{chain.TokenAt(gold)->amount};
+    OpenPosition open;
+    open.pool = pool;
+    open.tick_lower = lo;
+    open.tick_upper = hi;
+    open.liquidity_hi = static_cast<uint64_t>(liquidity >> 64);
+    open.liquidity_lo = static_cast<uint64_t>(liquidity);
+    open.max0 = needed->first;
+    open.max1 = held;
+    open.chn_to = PAYEE;
+    const CTransaction tx{MakeTx({gold}, open, {std::nullopt, std::nullopt}, static_cast<CAmount>(needed->first))};
+    chain.Require(tx);
+    gold = COutPoint{tx.GetHash(), 1};
+    BOOST_REQUIRE(chain.TokenAt(gold) == (Token{Token::Kind::ASSET, GOLD, held - needed->second}));
+    return PositionId(tx.GetHash());
+}
+
+/** Two adjacent ranges, [-1200, -600) and [-600, 600) with the price at 0 in the upper, and a buy that crosses -600: the
+ * coin fees each position earned (lower, upper), and what crossing -600 took of the walk's input against all of it. */
+struct CoinFees {
+    uint64_t lower, upper, fee, to_cross, used;
+};
+CoinFees BuyAcrossTwoRanges(int start_height)
+{
+    Chain chain;
+    chain.height = start_height;
+    auto [pool, gold]{CoinClPool(chain)};
+    const unsigned __int128 l{static_cast<unsigned __int128>(1) << 40};
+    const uint256 lower{Open(chain, pool, -1200, -600, l, gold)};
+    const uint256 upper{Open(chain, pool, -600, 600, l, gold)};
+    chain.EndBlock();
+    BOOST_REQUIRE(chain.Assets().CoinSideFees());
+    const uint64_t to_cross{static_cast<uint64_t>(*cl::Amount0Delta(cl::SqrtRatioAtTick(-600), cl::SqrtRatioAtTick(0), l, true).ToU128())};
+    // Half again what crossing the upper range takes, net of the fee: the walk ends inside the lower range.
+    const uint64_t used{to_cross * 3 / 2};
+    const uint64_t coin{used * 100 / 99 + 1};
+    const uint64_t fee{(coin * 10'000 + 999'999) / 1'000'000};
+    chain.Buy(pool, coin);
+    chain.EndBlock();
+    BOOST_REQUIRE_LT(chain.Assets().GetClState(pool)->tick, -600);
+    return {chain.Assets().PositionFees(*chain.Assets().GetPosition(lower)).first, chain.Assets().PositionFees(*chain.Assets().GetPosition(upper)).first,
+            fee - fee * 150'000 / 1'000'000, to_cross, coin - fee};
+}
+
+/** An empty concentrated pool of the coin, a buy and a sale in the same block that cross each other (no walk, no
+ * liquidity in range): the pool's coin and the chain's security fees of that block, the pool's coin before. */
+std::tuple<uint64_t, uint64_t, int64_t> CrossInAnEmptyPool(int start_height)
+{
+    Chain chain;
+    chain.height = start_height;
+    auto [pool, gold]{CoinClPool(chain)};
+    chain.EndBlock();
+    const uint64_t before{chain.Assets().GetPool(pool)->reserve0};
+    const int64_t security{chain.security};
+    chain.Buy(pool, 10 * COIN_UNITS);
+    chain.Sell(gold, HashName("GOLD"), pool, 10 * COIN_UNITS);
+    chain.EndBlock();
+    return {before, chain.Assets().GetPool(pool)->reserve0, chain.security - security};
+}
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(coin_side_fees_by_the_ranges_the_walk_went_through, V9FeeSetup)
+{
+    // From v9: a round of a concentrated pool of the coin credits the providers' part of its coin fee stretch by stretch,
+    // each position earning what the walk took in its range (as the rounds of other pools do).
+    const CoinFees now{BuyAcrossTwoRanges(V9_HEIGHT)};
+    BOOST_CHECK_GT(now.upper, 0U);
+    BOOST_CHECK_GT(now.lower, 0U);
+    const double expect_upper{double(now.fee) * now.to_cross / now.used}, expect_lower{double(now.fee) - expect_upper};
+    BOOST_CHECK_MESSAGE(std::abs(double(now.upper) - expect_upper) <= 2 + double(now.fee) / 1000, now.upper << " vs " << expect_upper);
+    BOOST_CHECK_MESSAGE(std::abs(double(now.lower) - expect_lower) <= 2 + double(now.fee) / 1000, now.lower << " vs " << expect_lower);
+    BOOST_CHECK_LE(now.lower + now.upper, now.fee);
+    BOOST_CHECK_GE(now.lower + now.upper + 2, now.fee);
+    // Before it: the whole of it to the liquidity in range at the round's end (the lower range).
+    const CoinFees before{BuyAcrossTwoRanges(V9_HEIGHT - 200)};
+    BOOST_CHECK_GE(before.lower + 2, before.fee);
+    BOOST_CHECK_LE(before.upper, before.fee / 1000);
+}
+
+BOOST_FIXTURE_TEST_CASE(coin_side_fees_nobody_earned_go_to_security, V9FeeSetup)
+{
+    // From v9: the providers' part of a round that nobody's liquidity earned leaves with the security part; before it, it
+    // stayed in the pool's coin, nobody's. The coin the assets hold is checked every block (Chain::EndBlock).
+    const auto [b_before, b_after, b_security]{CrossInAnEmptyPool(V9_HEIGHT - 200)};
+    const auto [n_before, n_after, n_security]{CrossInAnEmptyPool(V9_HEIGHT)};
+    BOOST_CHECK_EQUAL(b_before, n_before);
+    BOOST_CHECK_GT(b_after, n_after);
+    BOOST_CHECK_EQUAL(b_after - n_after, static_cast<uint64_t>(n_security - b_security));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

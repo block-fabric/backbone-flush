@@ -79,6 +79,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     if (sidechain.graduation100_height != std::numeric_limits<int>::max()) hasher << std::string{"graduation100"} << sidechain.graduation100_height << sidechain.launch_graduation_v6;
     if (sidechain.v7_height != std::numeric_limits<int>::max()) hasher << std::string{"v7"} << sidechain.v7_height << sidechain.launch_security_share_v7;
     if (sidechain.v8_height != std::numeric_limits<int>::max()) hasher << std::string{"v8"} << sidechain.v8_height;
+    if (sidechain.v9_height != std::numeric_limits<int>::max()) hasher << std::string{"v9"} << sidechain.v9_height;
     return hasher.GetHash();
 }
 
