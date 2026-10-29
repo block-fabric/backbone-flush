@@ -3580,6 +3580,17 @@ private:
             }
             const CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
             if (GetVirtualTransactionSize(*tx) > MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR) Fail(Code::FAILED_PRECONDITION, "the transaction is larger than the mempool takes");
+            // 8.3.2: never a replacement. A coin a transaction in the mempool spends already is refused here, even at a higher
+            // fee: two builds from the same coins (two clicks, two tabs) keep the first one sent, not the last.
+            {
+                LOCK(m_node.mempool->cs);
+                for (const CTxIn& in : tx->vin) {
+                    const CTransaction* other{m_node.mempool->GetConflictTx(in.prevout)};
+                    if (other && other->GetHash() != tx->GetHash()) {
+                        Fail(Code::FAILED_PRECONDITION, strprintf("refused: coin %s:%u is spent already by %s, waiting in the mempool (no replacement here)", in.prevout.hash.GetHex(), in.prevout.n, other->GetHash().GetHex()));
+                    }
+                }
+            }
             std::string error;
             const CAmount max_fee{node::DEFAULT_MAX_RAW_TX_FEE_RATE.GetFee(GetVirtualTransactionSize(*tx))};
             const node::TransactionError result{node::BroadcastTransaction(m_node, tx, error, max_fee, node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL, /*wait_callback=*/true)};

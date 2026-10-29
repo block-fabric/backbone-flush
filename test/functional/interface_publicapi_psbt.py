@@ -205,6 +205,18 @@ class PublicApiPsbtTest(LayersTest):
         sent = self.ok(self.broadcast(api, {"psbt": signed}))
         assert_equal(sent["txid"], reserve["txid"])
 
+        self.log.info("Broadcast: the same transaction again taken, one spending its coin refused, even at a higher fee")
+        assert_equal(self.ok(self.broadcast(api, {"psbt": signed}))["txid"], reserve["txid"])
+        spent = decoded["tx"]["vin"][0]
+        value = Decimal(decoded["inputs"][0]["witness_utxo"]["amount"]) if "witness_utxo" in decoded["inputs"][0] else \
+            Decimal(decoded["inputs"][0]["non_witness_utxo"]["vout"][spent["vout"]]["value"])
+        rival = n0.createpsbt([{"txid": spent["txid"], "vout": spent["vout"]}], [{address: value - Decimal("0.01")}])
+        rival = self.sign(ext, n0.utxoupdatepsbt(rival))
+        refused = self.broadcast(api, {"psbt": rival})
+        assert_equal(refused.status, 400)
+        assert "spent already by " + reserve["txid"] in refused.json()["error"]["message"], refused.json()
+        assert reserve["txid"] in n0.getrawmempool()
+
         launch_query = {"ticker": "PSBTX", "name": "Psbt Coin", "description": "Launched from an external wallet", "links": ["https://example.org/psbtx"],
                         "first_buy_ecx": "1", "slippage_bps": "100"}
         png = make_png([10, 120, 200, 240, 240, 10])
