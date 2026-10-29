@@ -22,7 +22,7 @@ from decimal import Decimal
 
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxOut, tx_from_hex
 from test_framework.script import CScript, OP_RETURN
-from test_framework.sidechain_standin import StandInMainchain
+from test_framework.sidechain_standin import MAIN_ADDRESS, StandInMainchain
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error, rpc_port
 
@@ -101,7 +101,7 @@ class SidechainPayoutsTest(BitcoinTestFramework):
         self.mine()
 
         self.log.info("A bundle pending, so that new withdrawals wait and can be taken back")
-        node.createwithdrawal("mainaddress", 1)
+        node.createwithdrawal(MAIN_ADDRESS, 1)
         self.mine()
         self.mine()
         assert_equal(node.getwithdrawalbundle()["status"], "pending")

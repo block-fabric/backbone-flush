@@ -96,7 +96,7 @@ HTTP/1.1, `src/sidechain/mainclient.cpp`):
 | `getblockcount` | `GetChainTip` (UNAVAILABLE "Validator is not synced" read as syncing) |
 | `getsidechainevents slot height count` | `GetBlockHeaderInfo` (headers kept between calls, 2000 a call, each checked to follow the one before: hashes, heights, previous hashes), then `GetBlockInfo` of the last block with `max_ancestors` (at most 1000 a call), newest first, its count and each header checked against the headers; median times from the headers |
 | `getsidechain` (activation height, proposal hash) | `GetSidechains` (`activation_height`; SHA256d of the description without its compact size) |
-| `validateaddress` (withdrawal destinations) | decoded here: bech32/bech32m and base58 with eCash's (Bitcoin's) prefixes; `bcrt` and Backbone's `rchn` on regtest |
+| `validateaddress` (withdrawal destinations) | decoded here, as in every mode (`MainchainScript`): bech32/bech32m and base58 with eCash's (Bitcoin's) prefixes; `bcrt` and Backbone's `rchn` on regtest |
 | `createsidechaindeposit` (the app's deposit button) | `WalletService.CreateDepositTransaction` (fee 10,000 sats) |
 | BMM request | `GetChainTip`, `WalletService.CreateBmmCriticalDataTransaction` (already in `ecash-grpc`) |
 | withdrawal bundle | `BlockProducerService.ProposeWithdrawalBundle` (legacy serialization), after the hand-off depth |

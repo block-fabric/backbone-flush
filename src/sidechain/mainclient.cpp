@@ -524,7 +524,14 @@ std::optional<CScript> MainchainScript(const std::string& address, ChainType cha
     case ChainType::ECASH_TESTNET: hrps = {"tb"}; break;
     // A bitcoind's regtest, and Backbone's (whose regtest addresses keep Chains' prefix).
     case ChainType::REGTEST: hrps = {"bcrt", "rchn"}; break;
-    default: return std::nullopt;
+    // The Chains networks (chainsd's own formats).
+    case ChainType::MAIN:
+        hrps = {"chn"};
+        pubkey_prefix = 28;
+        script_prefix = 88;
+        break;
+    case ChainType::TESTNET:
+    case ChainType::SIGNET: hrps = {"tchn"}; break;
     }
     const auto decoded{bech32::Decode(address)};
     if (decoded.encoding != bech32::Encoding::INVALID) {

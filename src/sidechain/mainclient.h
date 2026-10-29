@@ -173,8 +173,10 @@ UniValue PegInfoFromEnforcer(uint32_t slot, const EnforcerPegReplies& replies);
 /** The median of the times of a block and of the (up to) 10 before it, as a node computes it (GetMedianTimePast). */
 int64_t MedianTime(std::vector<int64_t> times);
 /**
- * The output script of a mainchain address of the eCash networks (eCash's node uses Bitcoin's formats: bc1/1/3,
- * tb1/m/n/2 on its test network; on regtest bcrt1 and Backbone's rchn1), for validateaddress without the node.
+ * The output script of a mainchain address of this node's network, decoded here (withdrawal destinations, and
+ * validateaddress through the enforcer's interface): the eCash networks use Bitcoin's formats (bc1/1/3, tb1/m/n/2
+ * on its test network; on regtest bcrt1 and Backbone's rchn1), the Chains networks chainsd's (chn1, base58
+ * prefixes 28 and 88; tchn1/m/n/2 on its test networks). nullopt for anything else, or an address of another network.
  */
 std::optional<CScript> MainchainScript(const std::string& address, ChainType chain);
 
