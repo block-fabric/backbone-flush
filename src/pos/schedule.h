@@ -9,6 +9,7 @@
 #include <uint256.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -34,21 +35,28 @@ public:
 
     const std::vector<Consensus::PosValidator>& Validators() const { return m_validators; }
     int64_t TotalStake() const { return m_total; }
-    /** Whether PoS blocks can be made: enough validators. */
-    bool Active() const { return m_active; }
+    /** Whether PoS blocks can be made in `epoch` with this set: enough validators for it (PosParams::MinActiveValidators). */
+    bool Active(int64_t epoch) const { return m_size_ok && m_validators.size() >= m_min.At(epoch); }
     /** The position of a key in the set, if it is in it. */
     std::optional<size_t> Find(const uint256& pubkey) const;
-    friend bool operator==(const ValidatorSet& a, const ValidatorSet& b) { return a.m_validators == b.m_validators && a.m_active == b.m_active; }
+    friend bool operator==(const ValidatorSet& a, const ValidatorSet& b)
+    {
+        return a.m_validators == b.m_validators && a.m_min == b.m_min;
+    }
 
     /** The seed of an epoch: from the epoch and the hash of a mainchain block (SeedHeight). */
     static uint256 Seed(int64_t epoch, const uint256& main_hash);
-    /** The leader of a slot: picked by stake, with its epoch's seed. Nothing if the set is not active. */
+    /** The leader of a slot: picked by stake, with its epoch's seed. Nothing if the set is not active in the slot's epoch. */
     std::optional<size_t> Leader(int64_t slot, const uint256& seed) const;
 
 private:
     std::vector<Consensus::PosValidator> m_validators;
     int64_t m_total{0};
-    bool m_active{false};
+    //! Not empty (Active is false for an empty set, whatever the parameters).
+    bool m_size_ok{false};
+    //! PosParams::MinValidators and slots_per_epoch, as made with.
+    Consensus::MinValidatorsRule m_min;
+    int64_t m_slots_per_epoch{1};
 };
 
 /** The time the seed of an epoch is taken at: the start of the epoch, less seed_lookahead_seconds. */

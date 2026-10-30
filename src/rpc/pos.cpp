@@ -620,7 +620,7 @@ RPCMethod getposinfo()
     const int64_t now{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
     const int64_t slot{pos::SlotOf(now, params)};
     const EpochSchedule schedule{ScheduleOf(*hooks, chainman, pos::EpochOf(slot, params))};
-    const bool active{schedule.set && schedule.set->Active()};
+    const bool active{schedule.set && schedule.set->Active(pos::EpochOf(slot, params))};
     UniValue result(UniValue::VOBJ);
     result.pushKV("active", active);
     result.pushKV("slotseconds", params.slot_seconds);
@@ -761,7 +761,7 @@ RPCMethod getvalidators()
     result.pushKV("firstslot", epoch * params.slots_per_epoch);
     result.pushKV("known", schedule.set != nullptr);
     result.pushKV("seedknown", schedule.seed.has_value());
-    result.pushKV("active", schedule.set && schedule.set->Active());
+    result.pushKV("active", schedule.set && schedule.set->Active(epoch));
     result.pushKV("totalstake", schedule.set ? schedule.set->TotalStake() : 0);
     UniValue validators(UniValue::VARR);
     for (size_t i{0}; schedule.set && i < schedule.set->Validators().size(); ++i) {

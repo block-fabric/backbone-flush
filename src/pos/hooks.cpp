@@ -440,7 +440,9 @@ int64_t FastBlocksHooks::MaxFutureBlockTime() const
     // While the network has blocks of stake: from the start (genesis validators), or while the set the
     // newest anchor of the active chain made is active (bonds) -- the state of the tip's, not what this
     // node saw since it started: a node that restarts, or reorgs, agrees with the others.
-    if (m_genesis_set.Active()) return MAX_FUTURE_BLOCK_TIME_POS;
+    // (Active as of the epoch of the clock: PosParams::MinActiveValidators.)
+    const int64_t now_epoch{EpochOf(SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params), m_params)};
+    if (m_genesis_set.Active(now_epoch)) return MAX_FUTURE_BLOCK_TIME_POS;
     ChainstateManager* chainman{Chainman()};
     if (!chainman) return ChainHooks::MaxFutureBlockTime();
     LOCK(::cs_main);
@@ -455,7 +457,7 @@ int64_t FastBlocksHooks::MaxFutureBlockTime() const
         const sidechain::StoreView& view{chainman->ActiveChainstate().SideCache()};
         const FastState fast{FAST_STATE.Get(view)};
         const auto set{fast.anchor_point_height >= 0 ? AnchorSetOf(fast.anchor_point, view, nullptr, /*from_state=*/true) : nullptr};
-        active = set && set->Active();
+        active = set && set->Active(now_epoch);
     }
     LOCK(m_staking_mutex);
     m_staking_for = tip->GetBlockHash();
@@ -1060,7 +1062,7 @@ bool FastBlocksHooks::AfterBlock(sidechain::State& state, const CBlock& block, i
         // for its epoch, or, as of the mainchain block before its commitment, none for stall_seconds.
         if (block.vtx.size() > 1) {
             const auto set{SetFor(*prev, EpochOf(slot, m_params), &state.View())};
-            const bool pos_active{!set || set->Active()};
+            const bool pos_active{!set || set->Active(EpochOf(slot, m_params))};
             // (A BMM block's commitment is on record, so is the block before.)
             const auto main{step && chainman->m_mainchain ? chainman->m_mainchain->GetBlock(step->main_height) : std::nullopt};
             if (pos_active && (!main || !Stalled(fast, main->time, pos_active))) return Fail(reject_reason, "bad-pos-bmm-not-stalled");
@@ -1233,7 +1235,7 @@ FastBlocksHooks::SlotLeader FastBlocksHooks::LeaderOf(const CBlockIndex& prev, i
         return leader;
     }
     // Below fork_height no block of stake (eCash mainnet: the blocks of 8.3.4, all merged mined, stay as they were).
-    if (!leader.set->Active() || prev.nHeight + 1 < m_params.fork_height) {
+    if (!leader.set->Active(epoch) || prev.nHeight + 1 < m_params.fork_height) {
         leader.status = LeaderStatus::INACTIVE;
         return leader;
     }
@@ -1267,13 +1269,14 @@ FastBlocksHooks::SlotLeader FastBlocksHooks::ActiveLeaderOf(int64_t slot) const
 bool FastBlocksHooks::PosActiveNow() const
 {
     ChainstateManager* chainman{Chainman()};
-    if (!chainman) return m_genesis_set.Active();
     const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
+    const int64_t epoch{EpochOf(slot, m_params)};
+    if (!chainman) return m_genesis_set.Active(epoch);
     LOCK(::cs_main);
     const CBlockIndex* tip{chainman->ActiveChain().Tip()};
-    if (!tip) return m_genesis_set.Active();
-    const auto set{SetFor(*tip, EpochOf(slot, m_params))};
-    return set && set->Active();
+    if (!tip) return m_genesis_set.Active(epoch);
+    const auto set{SetFor(*tip, epoch)};
+    return set && set->Active(epoch);
 }
 
 std::optional<Offence> FastBlocksHooks::CheckChainEvidence(const DoubleProposal& proof, const CBlockIndex& prev, int64_t slot, const sidechain::StoreView& view,

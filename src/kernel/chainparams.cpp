@@ -785,6 +785,14 @@ public:
                     pos.evidence_window_anchors = value;
                 } else if (name == "pot_reserve_anchors" && value >= 1) {
                     pos.pot_reserve_anchors = value;
+                } else if (name == "min_active_validators" && value >= 1 && value <= std::numeric_limits<uint32_t>::max()) {
+                    // The fewer-validators fork, tried on regtest (PosParams::MinActiveValidators): the rule before it,
+                    // the one after it, and the epoch it takes effect at.
+                    pos.min_active_validators = static_cast<uint32_t>(value);
+                } else if (name == "min_active_validators_after" && value >= 1 && value <= std::numeric_limits<uint32_t>::max()) {
+                    pos.min_active_validators_after = static_cast<uint32_t>(value);
+                } else if (name == "min_validators_fork_epoch" && value >= 0) {
+                    pos.min_validators_fork_epoch = value;
                 } else {
                     throw std::runtime_error(strprintf("Invalid name or value (%s@%d) for -testposparam=name@value.", name, value));
                 }
@@ -977,6 +985,14 @@ public:
         consensus.sidechain.refund_grace_blocks = base->GetConsensus().sidechain.refund_grace_blocks;
         consensus.sidechain.bundle_retry_delay = base->GetConsensus().sidechain.bundle_retry_delay;
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
+        if (chain == ChainType::ECASH) {
+            // Hard fork, eCash mainnet (Flush 8.3.6, user decision 2026-10-30): from epoch 19 (one-hour epochs from the genesis
+            // time, 2026-10-29 23:17:51 UTC: 2026-10-30 18:17:51 UTC) a validator set of 3 is active, 4 before
+            // (PosParams::MinActiveValidators). A node without the fork refuses blocks of stake of a set of 3 from it on.
+            consensus.pos.min_active_validators = 4;
+            consensus.pos.min_active_validators_after = 3;
+            consensus.pos.min_validators_fork_epoch = 19;
+        }
         // The anchoring of the blocks of stake, for an anchor (a mainchain block) every ten minutes rather than
         // every minute (doc/ecash-sidechains.md, "Layers"): what counts anchors as long in time as on Chains,
         // what counts time with room for eCash's gaps between blocks (an hour without one is not rare) and
