@@ -24,6 +24,18 @@ struct PosValidator {
 };
 
 /**
+ * The least validators a set needs to make blocks of stake in an epoch (PosParams::MinActiveValidators): `before` up to
+ * the fewer-validators fork (PosParams::min_validators_fork_epoch), `after` from it.
+ */
+struct MinValidatorsRule {
+    uint32_t before{4};
+    uint32_t after{3};
+    int64_t fork_epoch{std::numeric_limits<int64_t>::max()};
+    uint32_t At(int64_t epoch) const { return epoch >= fork_epoch ? after : before; }
+    friend bool operator==(const MinValidatorsRule&, const MinValidatorsRule&) = default;
+};
+
+/**
  * The parameters of FastBlocks' blocks of stake (PoS blocks), next to the merged mined blocks of the
  * sidechain template (BMM blocks). See doc/fastblocks.md. Integers only.
  */
@@ -34,8 +46,21 @@ struct PosParams {
     int64_t slot_seconds{30};
     //! Slots per epoch (the leader seed changes every epoch).
     int64_t slots_per_epoch{120};
-    //! PoS blocks are valid only with at least this many validators.
+    //! PoS blocks are valid only with at least this many validators (before min_validators_fork_epoch: MinActiveValidators).
     uint32_t min_active_validators{4};
+    /**
+     * Hard fork (the fewer-validators fork): from this epoch a validator set counts as active with
+     * min_active_validators_after validators, rather than min_active_validators. Every set, those of the bootstrap
+     * included, is judged by the epoch it is used for (ValidatorSet::Active(epoch)). A node without the fork refuses the
+     * blocks of stake of a smaller set from it on. Never (the largest int64) unless a network sets it; regtest unless
+     * -testactivationheight=minvalidators@<epoch> (an epoch, not a height).
+     */
+    int64_t min_validators_fork_epoch{std::numeric_limits<int64_t>::max()};
+    uint32_t min_active_validators_after{3};
+    /** The rule of the least validators, as these parameters set it (what a ValidatorSet keeps). */
+    MinValidatorsRule MinValidators() const { return {.before = min_active_validators, .after = min_active_validators_after, .fork_epoch = min_validators_fork_epoch}; }
+    /** The least validators a set used for `epoch` needs to make blocks of stake: the one rule every check takes. */
+    uint32_t MinActiveValidators(int64_t epoch) const { return MinValidators().At(epoch); }
     //! At most this many validators take part; the rest are ignored (highest stake first, then lower key).
     uint32_t max_validators{100};
     /**

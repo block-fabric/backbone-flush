@@ -392,7 +392,7 @@ Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint
     }
     // From jail_fix_height: no liveness jails that would leave the set too few validators to make blocks of stake (they
     // would stop for good: who is jailed makes no block, and is charged again). (Their liveness of those epochs is dropped all the same.)
-    if (keep_active && !unjailed.empty() && !MakeSet(out, set_epoch).Active()) {
+    if (keep_active && !unjailed.empty() && !MakeSet(out, set_epoch).Active(set_epoch)) {
         for (const auto& [pubkey, record] : unjailed) PutValidator(out, pubkey, VALIDATORS.Get(out, pubkey), record);
     }
 
@@ -434,7 +434,7 @@ Staking::PegStepResult Staking::PegStep(sidechain::StoreOverlay& out, const uint
     }
 
     STAKE_STATE.Put(out, stake);
-    return PegStepResult{.release = release, .set_active = set.Active()};
+    return PegStepResult{.release = release, .set_active = set.Active(set_epoch)};
 }
 
 void Staking::ToReserve(sidechain::StoreOverlay& out, CAmount amount) const

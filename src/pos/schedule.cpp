@@ -29,7 +29,9 @@ ValidatorSet::ValidatorSet(std::vector<Consensus::PosValidator> all, const Conse
         m_validators.push_back(validator);
         m_total += validator.stake;
     }
-    m_active = !m_validators.empty() && m_validators.size() >= params.min_active_validators;
+    m_size_ok = !m_validators.empty();
+    m_min = params.MinValidators();
+    m_slots_per_epoch = std::max<int64_t>(params.slots_per_epoch, 1);
 }
 
 std::optional<size_t> ValidatorSet::Find(const uint256& pubkey) const
@@ -47,7 +49,7 @@ uint256 ValidatorSet::Seed(int64_t epoch, const uint256& main_hash)
 
 std::optional<size_t> ValidatorSet::Leader(int64_t slot, const uint256& seed) const
 {
-    if (!m_active || m_total <= 0) return std::nullopt;
+    if (!Active(slot / m_slots_per_epoch) || m_total <= 0) return std::nullopt; // (EpochOf)
     const arith_uint256 draw{UintToArith256((TaggedHash("hpos/leader") << seed << slot).GetSHA256())};
     // draw mod total, in integers.
     const arith_uint256 total{static_cast<uint64_t>(m_total)};

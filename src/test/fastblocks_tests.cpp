@@ -849,7 +849,7 @@ BOOST_AUTO_TEST_CASE(leader_schedule)
     BOOST_CHECK_EQUAL(set.Validators()[0].stake, 8);
     BOOST_CHECK(!set.Find(uint256{4}));
     BOOST_CHECK_EQUAL(set.TotalStake(), 10);
-    BOOST_CHECK(set.Active());
+    BOOST_CHECK(set.Active(0));
     std::vector<int> led(3, 0);
     for (int64_t slot{0}; slot < 2000; ++slot) {
         const auto leader{set.Leader(slot, pos::ValidatorSet::Seed(pos::EpochOf(slot, params), uint256{9}))};
@@ -862,8 +862,51 @@ BOOST_AUTO_TEST_CASE(leader_schedule)
     BOOST_CHECK_GT(led[2], 100);
     // Too few validators: no leader.
     params.min_active_validators = 4;
-    BOOST_CHECK(!pos::ValidatorSet{params}.Active());
+    BOOST_CHECK(!pos::ValidatorSet{params}.Active(0));
     BOOST_CHECK(!pos::ValidatorSet{params}.Leader(1, uint256{9}));
+}
+
+BOOST_AUTO_TEST_CASE(min_validators_fork)
+{
+    // The fewer-validators fork (PosParams::min_validators_fork_epoch): a set of 3 with a minimum of 4 is active only from
+    // the fork's epoch, and leads slots only from it; a node without the fork (the fork epoch never) never takes it as
+    // active, so it refuses the blocks of stake of that set (LeaderOf: bad-pos-inactive).
+    Consensus::PosParams params;
+    params.slots_per_epoch = 20;
+    params.min_active_validators = 4;
+    params.min_active_validators_after = 3;
+    params.genesis_validators = {{.pubkey = uint256{1}, .stake = 1}, {.pubkey = uint256{2}, .stake = 1}, {.pubkey = uint256{3}, .stake = 1}};
+    const pos::ValidatorSet old_node{params};
+    params.min_validators_fork_epoch = 10;
+    const pos::ValidatorSet forked{params};
+    BOOST_CHECK_EQUAL(params.MinActiveValidators(9), 4U);
+    BOOST_CHECK_EQUAL(params.MinActiveValidators(10), 3U);
+    BOOST_CHECK(!forked.Active(9));
+    BOOST_CHECK(forked.Active(10));
+    BOOST_CHECK(forked.Active(1000));
+    BOOST_CHECK(!forked.Leader(10 * 20 - 1, uint256{9}));
+    BOOST_CHECK(forked.Leader(10 * 20, uint256{9}));
+    for (const int64_t epoch : {int64_t{0}, int64_t{9}, int64_t{10}, int64_t{1000}}) {
+        BOOST_CHECK(!old_node.Active(epoch));
+        BOOST_CHECK(!old_node.Leader(epoch * 20, uint256{9}));
+    }
+    // A set of 2 stays inactive after the fork; an empty one whatever the minimum.
+    params.genesis_validators.pop_back();
+    BOOST_CHECK(!pos::ValidatorSet{params}.Active(10));
+    params.min_active_validators_after = 0;
+    const pos::ValidatorSet empty{std::vector<Consensus::PosValidator>{}, params};
+    BOOST_CHECK(!empty.Active(10));
+    // The sets differ by their rule too.
+    BOOST_CHECK(!(old_node == forked));
+    // eCash mainnet: 4 up to epoch 18, 3 from epoch 19 (2026-10-30 18:17:51 UTC); the other eCash networks keep 4.
+    const Consensus::PosParams e{CChainParams::Ecash(ChainType::ECASH)->GetConsensus().pos};
+    BOOST_CHECK_EQUAL(e.min_validators_fork_epoch, 19);
+    BOOST_CHECK_EQUAL(e.MinActiveValidators(18), 4U);
+    BOOST_CHECK_EQUAL(e.MinActiveValidators(19), 3U);
+    BOOST_CHECK_EQUAL(pos::SlotTime(19 * e.slots_per_epoch, e), 1793315871 + 19 * 3600);
+    for (const ChainType chain : {ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        BOOST_CHECK_EQUAL(CChainParams::Ecash(chain)->GetConsensus().pos.min_validators_fork_epoch, std::numeric_limits<int64_t>::max());
+    }
 }
 
 BOOST_AUTO_TEST_CASE(slashing_protection)
@@ -1033,7 +1076,7 @@ BOOST_FIXTURE_TEST_CASE(header_rules, FastBlocksSetup)
 BOOST_FIXTURE_TEST_CASE(no_validators, NoValidatorsSetup)
 {
     // Without validators the chain is the template's: merged mined blocks only, which carry transactions.
-    BOOST_CHECK(!Hooks().GenesisSet().Active());
+    BOOST_CHECK(!Hooks().GenesisSet().Active(0));
     BOOST_CHECK(!Hooks().PosActiveNow());
     COutPoint coin;
     const CTxOut spent{Fund(COIN, coin)};
@@ -1450,7 +1493,7 @@ BOOST_AUTO_TEST_CASE(hooks_without_context)
         SetBlockExtensions(false);
     }
     // Without validators, no block of stake.
-    BOOST_CHECK(!hooks.GenesisSet().Active());
+    BOOST_CHECK(!hooks.GenesisSet().Active(0));
 }
 
 BOOST_FIXTURE_TEST_CASE(finality, FastBlocksSetup)
@@ -2362,7 +2405,7 @@ BOOST_AUTO_TEST_CASE(staking_parameters)
     for (const auto& params : {CChainParams::Main(), CChainParams::TestNet(), CChainParams::SigNet({})}) {
         const Consensus::PosParams& pos{params->GetConsensus().pos};
         BOOST_CHECK(pos.genesis_validators.empty());
-        BOOST_CHECK(!pos::ValidatorSet{pos}.Active());
+        BOOST_CHECK(!pos::ValidatorSet{pos}.Active(0));
         BOOST_CHECK_EQUAL(pos.slash_bps, 1000);
         BOOST_CHECK_EQUAL(pos.reporter_share_divisor, 8);
         // A proof lands while the stake is still bonded or unbonding (the eCash networks: sidechain_mainclient_tests).
@@ -3545,7 +3588,7 @@ BOOST_FIXTURE_TEST_CASE(jailed_validator_back_after_pos_stops, NoJailFixSetup)
     AckTip(at((e0 + 1) * spe + 1));
     const int64_t jailed_until{Validator(absent)->jailed_until_epoch};
     BOOST_REQUIRE_EQUAL(jailed_until, e0 + 2 + params.jail_epochs);
-    BOOST_REQUIRE(!WITH_LOCK(::cs_main, return Hooks().SetFor(*Tip(), e0 + 3))->Active());
+    BOOST_REQUIRE(!WITH_LOCK(::cs_main, return Hooks().SetFor(*Tip(), e0 + 3))->Active(e0 + 3));
     // Blocks of stake stop; BMM blocks, one an epoch, at the clock's time.
     bool back{false};
     for (int64_t epoch{e0 + 2}; epoch <= e0 + 1 + params.jail_epochs + 2 && !back; ++epoch) {
@@ -3553,7 +3596,7 @@ BOOST_FIXTURE_TEST_CASE(jailed_validator_back_after_pos_stops, NoJailFixSetup)
         MineBmm(BmmBlock(/*use_mempool=*/false));
         const auto set{WITH_LOCK(::cs_main, return Hooks().SetFor(*Tip(), epoch + 2))};
         BOOST_REQUIRE(set);
-        back = set->Active() && set->Find(absent);
+        back = set->Active(epoch + 2) && set->Find(absent);
         BOOST_TEST_MESSAGE("epoch " << epoch << ": the set of epoch " << epoch + 2 << (back ? " has" : " has not") << " the validator back");
     }
     BOOST_CHECK(back);
