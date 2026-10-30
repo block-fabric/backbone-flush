@@ -172,6 +172,8 @@ public:
         std::optional<int> v8_height{};
         //! Upgrade v9 (the DEX rules of Flush 8.3.2): Consensus::SidechainParams::v9_height (-testactivationheight=v9@<height>; regtest only).
         std::optional<int> v9_height{};
+        //! The peg fix (Flush 8.3.6): Consensus::SidechainParams::peg_fix_height (-testactivationheight=pegfix@<height>; regtest only).
+        std::optional<int> peg_fix_height{};
     };
 
     /**

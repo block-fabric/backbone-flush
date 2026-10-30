@@ -253,9 +253,14 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
         reject_reason = "bad-sc-main-height";
         return false;
     }
-    // What the mainchain did up to the block that activated this sidechain in its slot, deposits
-    // included, was for whatever held the slot before.
-    const int first{std::max(from + 1, params.main_activation_height + 1)};
+    // What the mainchain did before the block that activated this sidechain in its slot, deposits
+    // included, was for whatever held the slot before. From peg_fix_height the activating block itself is
+    // this chain's: the mainchain activates the slot in its coinbase (M2), before it checks its
+    // transactions, so the deposits (M5) it has to the slot are to this sidechain, a replacement's as a
+    // fresh one's; before peg_fix_height that block was left out with them. (The record starts at that
+    // block: Follower::UpdateRecord. 0, an activation not known, is as before: from mainchain block 1.)
+    const bool peg_fix{params.PegFixActive(height)};
+    const int first{std::max(from + 1, params.main_activation_height > 0 && peg_fix ? params.main_activation_height : params.main_activation_height + 1)};
     for (int h{first}; h <= main_height; ++h) {
         const auto main_block{mainchain.GetBlock(h)};
         if (!main_block) {
@@ -317,7 +322,14 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
                             next = m_view->Next(after, prefix);
                             if (next && !InBundle(OutpointOf(next->first))) first = next;
                         }
-                        Remove(OutpointOf(first->first));
+                        // From peg_fix_height: matched to a withdrawal of this chain's bundle all the same (none
+                        // other pays that), the bundle can no longer be paid as it is (BundleTx has nothing to hand
+                        // to the mainchain) and is dropped, as without main_events_only: its other withdrawals wait
+                        // for the next bundle, or for their owners to take them back. Before, it stayed pending for
+                        // ever, with them in it.
+                        const COutPoint matched{OutpointOf(first->first)};
+                        if (peg_fix && InBundle(matched)) SetBundle(std::nullopt);
+                        Remove(matched);
                         continue;
                     }
                     const COutPoint outpoint{OutpointOf(first->first)};
@@ -327,6 +339,10 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
                 }
                 continue;
             }
+            // No least deposit (decided with the peg fix, Flush 8.3.6): a deposit below one would sit in the escrow
+            // for ever, credited to nobody, and a bucket of such coins would be a new rule with a payee to pick. Dust
+            // deposits cost their mainchain fee each, are paid in order at MAX_PAYOUTS_PER_BLOCK a block (they delay,
+            // and never lose, the deposits after them), and their outputs are coins of their depositors.
             if (deposit.amount <= 0) continue;
             if (!MoneyRange(deposit.amount)) {
                 reject_reason = "bad-sc-deposit-amount";
@@ -339,11 +355,18 @@ bool State::ApplyMainEvents(int main_height, const Mainchain& mainchain, int hei
         // take back while it is pending, would wait for ever. A proposal made before the commitment,
         // by someone who worked the hash out ahead, counts if the bundle is still pending then: the
         // mainchain would refuse it a second proposal, and the bundle would fail although pending.
-        // (Not where the rules take only the enforcer's events: a bundle handed to an enforcer's block
-        // producer stays there, to be proposed whenever it mines, until the mainchain closes it. Failed
-        // here, its withdrawals could go in another bundle, and both be paid.)
+        // (Before peg_fix_height, not where the rules take only the enforcer's events: a bundle handed to an
+        // enforcer's block producer stays there, to be proposed whenever it mines, until the mainchain closes
+        // it. Failed here, its withdrawals could go in another bundle, and both be paid.)
+        // From peg_fix_height, where the rules take only the enforcer's events, after
+        // events_unproposed_expiry_blocks: well after the bundle is handed to an enforcer (bundle_handoff_depth),
+        // which proposes it in the first block it mines. One not proposed by then was not handed over, or the
+        // enforcer lost it; held for ever, its withdrawals could be neither paid nor taken back. (Proposed at
+        // last after that, it could be paid next to the bundle that takes its withdrawals after it, as a
+        // bundle of another branch can: ApplyMainEvents matches the payouts, the oldest withdrawals first.)
         const int32_t committed{BUNDLE_MAIN_HEIGHT.Get(*m_view)};
-        if (const auto bundle{Bundle()}; bundle && committed >= 0 && !params.main_events_only && int64_t{h} - committed >= params.unproposed_expiry_blocks &&
+        const int expiry{params.main_events_only ? params.events_unproposed_expiry_blocks : params.unproposed_expiry_blocks};
+        if (const auto bundle{Bundle()}; bundle && committed >= 0 && (!params.main_events_only || peg_fix) && int64_t{h} - committed >= expiry &&
                                          !mainchain.ProposedSince(bundle->hash, committed, h)) {
             LAST_FAILURE.Put(Writable(), height);
             SetBundle(std::nullopt);
