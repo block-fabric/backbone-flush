@@ -1915,9 +1915,10 @@ bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Main
 
 bool NeedsAnchor(const sidechain::State& side, const sidechain::Mainchain& record, const Staking& staking, int64_t epoch)
 {
-    // A bond, an unbond or a jail in a block no anchor covers yet: the set the state makes differs from the last anchor's
-    // (Staking::SetChanged), until an anchor's peg step makes it.
-    return HasPendingAnchorActions(side, record) || staking.SetChanged(side.View(), epoch);
+    // A bond, an unbond or a jail in a block no anchor covers yet: the set the state makes differs from the last anchor's,
+    // until an anchor's peg step makes it -- a validator joining or leaving, or a stake moved by 10 % (or min_stake)
+    // at least (Staking::SetChangedMaterially): a small top-up anyone can make every block sets off no bid.
+    return HasPendingAnchorActions(side, record) || staking.SetChangedMaterially(side.View(), epoch);
 }
 
 bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
@@ -1993,13 +1994,29 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         m_bid_inputs.spent_in_period = SpentInPeriod(policy, now);
         const BidTriggers triggers{.anchor = validator.has_value(), .mine = mining.enabled, .mine_always = mining.enabled && mining.always,
                                    .mine_amount = mining.amount, .stale = StaleLocked(now)};
-        return DecideNodeBid(policy, m_bid_inputs, triggers);
+        BidDecision d{DecideNodeBid(policy, m_bid_inputs, triggers)};
+        // Work waiting without fees (peg work, set changes: anyone can make them cheaply): one such bid a mainchain block at
+        // most, and while the last did not land (pending, or missed), one in 3 mainchain blocks. A stall bid is never held.
+        if (d.bid && d.work) {
+            const auto last{std::find_if(m_bid_history.rbegin(), m_bid_history.rend(), [](const AnchorBidRecord& r) { return r.work; })};
+            if (last != m_bid_history.rend()) {
+                const bool unsettled{last->status == AnchorBidRecord::Status::PENDING || last->status == AnchorBidRecord::Status::MISSED};
+                if (last->main_tip == main_tip || (unsettled && main_height < last->main_height + WORK_BID_SPACING)) {
+                    d.bid = false;
+                    d.amount = 0;
+                    d.kind = "throttled";
+                    d.reason = strprintf("no bid: work waits, but a bid for it was made for mainchain block %d and did not land: one in %d mainchain blocks (%s)",
+                                         last->main_height + 1, WORK_BID_SPACING, d.reason);
+                }
+            }
+        }
+        return d;
     }};
     // A bid made, in the history (settled with the record, counted in the period's spending).
     const auto note{[&](int height, const uint256& tip, const uint256& commitment, CAmount offer, const BidDecision& decision) EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex) {
         m_bid_history.push_back(AnchorBidRecord{.main_height = height, .main_tip = tip, .ticket = commitment, .offer = offer,
                                                 .kind = decision.kind, .reason = decision.reason, .pressure = decision.pressure,
-                                                .time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), .trigger = decision.trigger});
+                                                .time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), .trigger = decision.trigger, .work = decision.work});
         while (m_bid_history.size() > BID_HISTORY) m_bid_history.pop_front();
         SaveBidsLocked();
     }};
@@ -2142,7 +2159,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     // (Made again: more than the bid it replaces in the mainchain's mempool, within max and the period's cap.)
     if (again || raise) {
         const auto replacement{WITH_LOCK(m_anchor_mutex, return ReplacementBid(policy, offer, last_offer,
-            SpentInPeriod(policy, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()))))};
+            SpentInPeriod(policy, TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())), decision.stall))};
         if (!replacement) return true;
         offer = *replacement;
     }
@@ -2293,7 +2310,8 @@ AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain
              {"-validatoranchorbidstrategy", "strategy"}, {"-validatoranchorbidpreventstall", "preventstall"}, {"-validatoranchorbidmax", "max"}, {"-validatoranchorbidfixed", "fixed"},
              {"-validatoranchorbidshare", "feeshare"}, {"-validatoranchorbidescalation", "escalationstart"}, {"-validatoranchorbidcurve", "curve"},
              {"-validatoranchorbidinterpolate", "interpolate"}, {"-validatoranchorbidfeeestimate", "usefeeestimate"}, {"-validatoranchorbidrebid", "rebidafter"},
-             {"-validatoranchorbidperiodcap", "periodcap"}, {"-validatoranchorbidlowbalance", "lowbalanceblocks"}}) {
+             {"-validatoranchorbidperiodcap", "periodcap"}, {"-validatoranchorbidlowbalance", "lowbalanceblocks"},
+             {"-validatoranchorbidstallreserve", "stallreserve"}}) {
         if (!args.IsArgSet(option)) continue;
         UniValue one{UniValue::VOBJ};
         // (-novalidatoranchorbidpreventstall: false.)
@@ -2446,6 +2464,7 @@ void FastBlocksHooks::SaveBidsLocked() const
         entry.pushKV("status", static_cast<int>(bid.status));
         entry.pushKV("time", bid.time);
         entry.pushKV("trigger", bid.trigger);
+        entry.pushKV("work", bid.work);
         history.push_back(std::move(entry));
     }
     UniValue out{UniValue::VOBJ};
@@ -2525,7 +2544,8 @@ void FastBlocksHooks::LoadBids(const fs::path& path) const
             const auto text{[&](const char* key) { const UniValue& v{entry.find_value(key)}; return v.isStr() ? v.get_str() : std::string{}; }};
             m_bid_history.push_back(AnchorBidRecord{.main_height = static_cast<int>(*height), .main_tip = *tip_hash, .ticket = *ticket_hash, .offer = *offer,
                                                     .kind = text("kind"), .reason = text("reason"), .pressure = pressure.isNum() ? pressure.get_real() : 0,
-                                                    .status = static_cast<AnchorBidRecord::Status>(*status), .time = *time, .trigger = text("trigger")});
+                                                    .status = static_cast<AnchorBidRecord::Status>(*status), .time = *time, .trigger = text("trigger"),
+                                                    .work = entry.find_value("work").isTrue()});
         }
     }
     while (m_bid_history.size() > BID_HISTORY) m_bid_history.pop_front();

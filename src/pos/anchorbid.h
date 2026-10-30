@@ -132,6 +132,10 @@ struct AnchorBidPolicy {
     //! The most the landed bids may cost in period_hours (0: no cap).
     CAmount period_cap{DEFAULT_ANCHOR_BID_PERIOD_CAP};
     int period_hours{24};
+    //! The share of the period's cap kept for stall prevention's bids, in percent: every other bid (fees, the minimum,
+    //! fixed, work waiting, setbmm's always) spends at most the cap less it, a stall bid the whole cap. Peg work and set
+    //! changes anyone can make cheaply cannot spend what keeps the chain from halting.
+    int stall_reserve_pct{50};
     //! A warning when the bid wallet covers fewer mainchain blocks than this at the current bid (0: none).
     int low_balance_blocks{1008};
 
@@ -229,10 +233,20 @@ struct BidDecision {
     double multiplier{1};
     //! What set it off (DecideNodeBid): "anchor", "mine", or "anchor+mine" (one request serves both); "hand" for one by hand.
     std::string trigger;
+    //! A stall prevention bid (the stall boost or the curve): it may spend the whole cap, the stall reserve too.
+    bool stall{false};
+    //! A bid for work waiting without fees (kind "pending" before the limits): throttled by the node (FollowerRound).
+    bool work{false};
 };
 
+/**
+ * What is left of the period's cap for a bid (MAX_MONEY without a cap): for a stall bid the whole cap less what was
+ * spent; for any other, the cap less the stall reserve (stall_reserve_pct) less what was spent.
+ */
+CAmount CapLeft(const AnchorBidPolicy& policy, CAmount spent, bool stall);
+
 /** Replacement requests need a higher offer; refuse one that would exceed the configured limits. */
-std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent);
+std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent, bool stall = false);
 
 /** The bid of `policy` for these inputs. */
 BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs);

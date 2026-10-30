@@ -451,21 +451,24 @@ BOOST_FIXTURE_TEST_CASE(set_change_needs_an_anchor, BasicTestingSetup)
     bond.vout.emplace_back(10000, BondScript(pubkey, owner_hash, pop, owner_sig));
     std::string reason;
     BOOST_REQUIRE_MESSAGE(staking.ApplyTx(store, CTransaction{bond}, 1, 1, reason, uint256{9}), reason);
+    // (A validator joins the set: a change worth an anchor.)
     BOOST_CHECK(needs());
     const BidDecision once{bid()};
     BOOST_CHECK(once.bid);
     BOOST_CHECK_EQUAL(once.kind, "pending");
+    BOOST_CHECK(once.work);
+    BOOST_CHECK(!once.stall);
     BOOST_CHECK_GE(once.amount, 250);
     // The anchor makes the new set: nothing waits, no bid.
     staking.PegStep(store, uint256{6}, 2, 0, 0, 0, owed);
     BOOST_CHECK(!needs());
     BOOST_CHECK(!bid().bid);
-    // An unbond: a change of the set, one bid; then its release counting down over the anchors (unbonding > 0): none.
+    // An unbond of half the stake: a change of the set, one bid; then its release counting down over the anchors (unbonding > 0): none.
     Unbond u;
     u.pubkey = pubkey;
-    u.amount = 10000;
+    u.amount = 5000;
     u.sequence = 0;
-    BOOST_REQUIRE(owner.SignCompact(MessageHash(UnbondMessage(pubkey, 10000, 0, bond.vin[0].prevout, uint256{9}, genesis)), u.signature));
+    BOOST_REQUIRE(owner.SignCompact(MessageHash(UnbondMessage(pubkey, 5000, 0, bond.vin[0].prevout, uint256{9}, genesis)), u.signature));
     CMutableTransaction unbond;
     unbond.vout.emplace_back(0, UnbondScript(u));
     BOOST_REQUIRE_MESSAGE(staking.ApplyTx(store, CTransaction{unbond}, 2, 2, reason, uint256{9}), reason);
@@ -473,10 +476,75 @@ BOOST_FIXTURE_TEST_CASE(set_change_needs_an_anchor, BasicTestingSetup)
     staking.PegStep(store, uint256{7}, 3, 0, 0, 0, owed);
     BOOST_CHECK_GT(GetStakeState(store).unbonding, 0);
     BOOST_CHECK(!needs());
+    // Tiny top-ups of the 5000 left, again and again (anyone can make one every block): below 10 % of the stake and min_stake (100), no
+    // change worth an anchor, no bid (they take effect with the next anchor all the same).
+    const auto top_up{[&](CAmount amount, uint32_t n) {
+        CMutableTransaction tx;
+        tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{100 + n}), 0});
+        std::vector<unsigned char> sig;
+        BOOST_REQUIRE(owner.SignCompact(MessageHash(BondMessage(pubkey, amount, tx.vin[0].prevout, genesis)), sig));
+        tx.vout.emplace_back(amount, BondScript(pubkey, owner_hash, pop, sig));
+        BOOST_REQUIRE_MESSAGE(staking.ApplyTx(store, CTransaction{tx}, 3, 3, reason, uint256{9}), reason);
+    }};
+    for (uint32_t n{0}; n < 5; ++n) {
+        top_up(10, n);
+        BOOST_CHECK(staking.SetChanged(store, 0)); // the set does differ
+        BOOST_CHECK(!needs());
+        BOOST_CHECK(!bid().bid);
+    }
+    // Together they reach min_stake (100): a change worth an anchor.
+    for (uint32_t n{5}; n < 10; ++n) top_up(10, n);
+    BOOST_CHECK(needs());
+    staking.PegStep(store, uint256{8}, 4, 0, 0, 0, owed);
+    BOOST_CHECK(!needs());
     // Off still bids nothing.
     BidInputs in{At(0.1)};
     in.pending_actions = true;
     BOOST_CHECK(!DecideNodeBid(With(BidStrategy::OFF), in, BidTriggers{.anchor = true}).bid);
+}
+
+// The stall reserve: every other bid spends at most the cap less it (50 % by default); a stall bid the whole cap.
+BOOST_AUTO_TEST_CASE(stall_reserve)
+{
+    AnchorBidPolicy policy{With(BidStrategy::MINIMUM)};
+    policy.floor = 1000;
+    policy.period_cap = 10'000;
+    BOOST_CHECK_EQUAL(policy.stall_reserve_pct, 50);
+    BOOST_CHECK_EQUAL(CapLeft(policy, 0, false), 5000);
+    BOOST_CHECK_EQUAL(CapLeft(policy, 0, true), 10'000);
+    BidInputs in{At(0.1)};
+    in.spent_in_period = 4'500;
+    BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK_EQUAL(d.amount, 500); // cut to the cap less the reserve
+    BOOST_CHECK_EQUAL(d.kind, "periodcap");
+    in.spent_in_period = 5'000;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    // Work waiting without fees too.
+    in.pending_actions = true;
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.anchor = true}).bid);
+    // setbmm's always too.
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 1000}).bid);
+    // A stall bid spends the reserve.
+    BidInputs stall{At(0.6)};
+    stall.spent_in_period = 5'000;
+    d = DecideNodeBid(policy, stall, BidTriggers{.anchor = true});
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK(d.stall);
+    BOOST_CHECK_GT(d.amount, 0);
+    stall.spent_in_period = 9'500;
+    BOOST_CHECK_EQUAL(DecideNodeBid(policy, stall, BidTriggers{.anchor = true}).amount, 500);
+    stall.spent_in_period = 10'000;
+    BOOST_CHECK(!DecideNodeBid(policy, stall, BidTriggers{.anchor = true}).bid);
+    // 0 %: the whole cap for every bid; the field read and said.
+    policy.stall_reserve_pct = 0;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    BOOST_CHECK_EQUAL(Applied(R"({"stallreserve":20})").stall_reserve_pct, 20);
+    BOOST_CHECK_EQUAL(PolicyToUniValue(Applied(R"({"stallreserve":20})")).find_value("stallreserve").getInt<int>(), 20);
+    AnchorBidPolicy p;
+    UniValue bad;
+    BOOST_REQUIRE(bad.read(R"({"stallreserve":101})"));
+    std::string error;
+    BOOST_CHECK(!ApplyPolicyFields(p, bad, error));
 }
 
 // rebidafter 0: no raises after missed blocks, with the flat boost too; unset (3), the flat raises as before.
@@ -921,6 +989,7 @@ BOOST_AUTO_TEST_CASE(node_bid_period_cap)
     AnchorBidPolicy policy;
     policy.max = 50'000;
     policy.period_cap = 120'000;
+    policy.stall_reserve_pct = 0; // (the whole cap for every bid: stall_reserve below)
     BidInputs in{At(0, std::nullopt, 100'000)};
     in.spent_in_period = 100'000;
     BidDecision d{DecideNodeBid(policy, in, BidTriggers{.mine = true})};
@@ -941,6 +1010,7 @@ BOOST_AUTO_TEST_CASE(node_bid_stale_rule)
     policy.fixed = 10'000;
     policy.max = 50'000;
     policy.period_cap = 0;
+    policy.stall_reserve_pct = 0; // (the cap's rest below is the whole cap's)
     BidInputs in{At(0)};
     // A bid of 10'000 did not land, and may still be held: the next one, on the same coin, must pay more.
     BidDecision d{DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 10'000})};

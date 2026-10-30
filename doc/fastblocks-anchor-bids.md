@@ -37,7 +37,8 @@ makes a bid smaller.
   bid if higher (a large fee share is never multiplied). With `flatboost=false`, the legacy curve instead (below).
 - **Work waiting for an anchor** (deposits, withdrawals, and bonds, unbonds and jails waiting for an anchor: a deposit
   to credit, withdrawals or a bundle, or a bond, an unbond or a jail in a block no anchor covers yet, until an anchor
-  makes the new validator set): the competitive base, fees or not, as 8.3.5's feespreventstall did; otherwise a
+  makes the new validator set; a set change counts only when a validator joins or leaves the set, or a stake moves by
+  10 % or by `min_stake`, whichever is less: a small top-up does not): the competitive base, fees or not, as 8.3.5's feespreventstall did; otherwise a
   deposit would wait for fees or for the stall bid, hours on mainnet. (Flat policy only.) Nothing else counts as work
   (the owner's rule, 2026-10-30): not the staking accounting, the pot's reserve, the fee pool, the rewards owed or the
   unbond release countdown, nor a stall of blocks of stake by itself. A fee pool of 0.0001479 ECX counted as work made
@@ -57,6 +58,18 @@ competitive rate (`min_bid_rate_per_kvb`, 2 sat/vB on eCash). The estimate comes
 
 **Off means off**: no stall prevention either. The checkbox keeps its value and is greyed out in the app; choosing a
 strategy again brings it back. A node that wants bids only for its validator's stalls has Fees with Prevent stalling.
+
+**Anyone can make work cheaply** (a dust deposit, a tiny top-up every block), and without care it would spend the cap
+and leave stall prevention nothing, the chain then halting at the unanchored limit. So:
+
+- **The stall reserve** (`stallreserve`, 50 % of the cap by default, `-validatoranchorbidstallreserve`): every bid that
+  is not a stall bid (fees, the minimum, fixed, work waiting, `setbmm`'s always, and their stale raises) spends at most
+  the cap less the reserve; a stall bid (the boost, or the curve) the whole cap. `getbmminfo`'s `bidpolicy` shows
+  `leftordinary` and `leftstall`.
+- **A throttle on work bids**: at most one bid for work waiting without fees a mainchain block, and while the last did
+  not land (still pending, or missed; one outbid by another commitment of the chain anchored it all the same), one in 3
+  mainchain blocks (`kind` `throttled`). A stall bid is never held.
+- **Only real set changes** count (above).
 
 **Within the limits, always**: every bid, the stall bid too, is at most `max` and within what is left of the period's
 cap. The cap is the user's word on what the wallet spends; a stall bid past it would make it a soft limit. And past it
@@ -221,6 +234,7 @@ without a restart, and keeps the fields it changed in the node's settings
 | `warnmissed` | | 3 |
 | `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 (no cap on regtest unless an anchor option is given) |
 | `lowbalanceblocks` | `-validatoranchorbidlowbalance` | 1008 |
+| `stallreserve` (% of the cap kept for stall bids) | `-validatoranchorbidstallreserve` | 50 |
 
 Checks: `floor ≤ max`, `fixed ≤ max`, amounts within `MAX_MONEY`, `feeshare`
 0–100, `escalationstart` in (0, 1], the curve 1–8 points with pressures in [0, 1]
@@ -235,7 +249,7 @@ ascending and multipliers 1–1000 not falling, `requestvsize` 50–10000,
 - `setanchorbidpolicy {fields} (reset)`: the fields given change, the others stay;
   returns as `getanchorbidpolicy`. `flush-cli setanchorbidpolicy '{"strategy":"fees","preventstall":true}'`, `flush-cli -named setanchorbidpolicy floor=0.00001 max=0.0005`.
 - `getanchorinfo`'s `bid`: `effective` (the bid now) and `kind`/`reason` (`fees`,
-  `minimum`, `fixed`, `rebid`, `pending`, `stall`, `escalation`, `max`, `periodcap`, `replace`, `always`, `idle`, `off`), `normal`,
+  `minimum`, `fixed`, `rebid`, `pending`, `stall`, `escalation`, `max`, `periodcap`, `replace`, `always`, `idle`, `throttled`, `off`), `normal`,
   `pressure`, `multiplier`, `escalationstart`, `firstunanchoredslot`,
   `unanchoredslots`, `maxunanchoredslots`, `pot`, `feerate` (sat/vB) and
   `feesource`, `missed`, `balance` and `coverblocks`, `spentperiod`, `periodcap`,

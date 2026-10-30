@@ -30,6 +30,7 @@
     periodcap: number;
     periodhours: number;
     lowbalanceblocks: number;
+    stallreserve?: number;
   }
 
   export interface BidPolicyInfo {
@@ -375,7 +376,8 @@
               <AmountInput id="bid-max" label="Maximum per bid" bind:value={max} />
               <AmountInput id="bid-periodcap" label={hours === 24 ? t('Daily cap (0: none)') : t('Cap per %1 h (0: none)', hours)} bind:value={periodcap} />
             </div>
-            <p class="side-note fb-small" id="bid-wallet">Paid from your mainchain wallet ({mainName}). Only bids that land count in the cap; stall prevention stays within it too.</p>
+            <div class="field"><label for="bid-stallreserve">Kept for stall prevention (% of the cap)</label><input id="bid-stallreserve" type="number" min="0" max="100" step="1" value={form.stallreserve ?? 50} oninput={(e) => { form!.stallreserve = Number((e.currentTarget as HTMLInputElement).value); dirty = true; }} /></div>
+            <p class="side-note fb-small" id="bid-wallet">Paid from your mainchain wallet ({mainName}). Only bids that land count in the cap; stall prevention stays within it too. Every other bid (fees, the minimum, deposits, withdrawals, bonds, unbonds and jails waiting) spends at most the cap less the share kept, so cheap work on the chain cannot spend what keeps it from halting.</p>
 
             <h3 class="bid-sub">What starts a bid</h3>
             {@render mineTrigger()}

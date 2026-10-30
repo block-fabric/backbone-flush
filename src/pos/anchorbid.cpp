@@ -166,7 +166,7 @@ const std::vector<std::string>& PolicyFieldNames()
 {
     static const std::vector<std::string> names{"strategy", "preventstall", "anchor", "floor", "max", "fixed", "feeshare", "escalationstart", "curve", "interpolate",
                                                 "usefeeestimate", "requestvsize", "rebidafter", "rebidstep", "rebidmax", "warnmissed",
-                                                "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost"};
+                                                "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost", "stallreserve"};
     return names;
 }
 
@@ -197,6 +197,7 @@ std::string CheckPolicy(const AnchorBidPolicy& policy)
     if (policy.period_hours < 1 || policy.period_hours > 24 * 31) return "periodhours: from 1 to 744";
     if (policy.low_balance_blocks < 0 || policy.low_balance_blocks > 1'000'000) return "lowbalanceblocks: from 0 (no warning) to 1000000";
     if (!(policy.boost >= 1) || policy.boost > 1000) return "boost: a multiplier of the floor from 1 to 1000";
+    if (policy.stall_reserve_pct < 0 || policy.stall_reserve_pct > 100) return "stallreserve: a percentage of the cap from 0 to 100";
     return "";
 }
 
@@ -230,6 +231,7 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy)
     out.pushKV("warnmissed", policy.warn_missed);
     out.pushKV("periodcap", ValueFromAmount(policy.period_cap));
     out.pushKV("periodhours", policy.period_hours);
+    out.pushKV("stallreserve", policy.stall_reserve_pct);
     out.pushKV("lowbalanceblocks", policy.low_balance_blocks);
     return out;
 }
@@ -330,6 +332,10 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
             ok = boolean(policy.flat_boost);
         } else if (key == "boost") {
             ok = real(policy.boost);
+        } else if (key == "stallreserve") {
+            const auto percent{Integer(value)};
+            if (!percent || *percent < 0 || *percent > 100) return bad("a whole percentage from 0 to 100");
+            policy.stall_reserve_pct = static_cast<int>(*percent);
         } else {
             error = strprintf("%s: not a field of the policy (%s)", key, util::Join(PolicyFieldNames(), ", "));
             return false;
@@ -404,11 +410,18 @@ double EscalationMultiplier(const AnchorBidPolicy& policy, double p)
     return curve.back().multiplier;
 }
 
-std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent)
+CAmount CapLeft(const AnchorBidPolicy& policy, CAmount spent, bool stall)
+{
+    if (policy.period_cap <= 0) return MAX_MONEY;
+    const CAmount reserve{stall ? 0 : policy.period_cap / 100 * policy.stall_reserve_pct + policy.period_cap % 100 * policy.stall_reserve_pct / 100};
+    return std::max<CAmount>(policy.period_cap - reserve - spent, 0);
+}
+
+std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amount, CAmount previous, CAmount spent, bool stall)
 {
     const CAmount replacement{std::max(amount, previous + 500)};
     if (replacement > policy.max) return std::nullopt;
-    if (policy.period_cap > 0 && replacement > std::max<CAmount>(policy.period_cap - spent, 0)) return std::nullopt;
+    if (replacement > CapLeft(policy, spent, stall)) return std::nullopt;
     return replacement;
 }
 
@@ -537,6 +550,7 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
                 d.amount = pending;
                 d.multiplier = factor;
                 d.kind = "pending";
+                d.work = true;
                 bids = true;
             }
         }
@@ -565,6 +579,8 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
                 d.amount = stall;
                 d.multiplier = multiplier;
                 d.kind = policy.flat_boost ? "stall" : "escalation";
+                d.stall = true;
+                d.work = false;
                 bids = true;
             }
         }
@@ -577,18 +593,19 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         d.reason += strprintf(", capped at max %s", FormatMoney(policy.max));
     }
     if (policy.period_cap > 0) {
-        const CAmount left{std::max<CAmount>(policy.period_cap - inputs.spent_in_period, 0)};
+        const CAmount left{CapLeft(policy, inputs.spent_in_period, d.stall)};
+        const std::string of{d.stall || policy.stall_reserve_pct == 0 ? std::string{} : strprintf(" (%d %% kept for stall prevention)", policy.stall_reserve_pct)};
         if (left == 0 && d.amount > 0) {
             d.bid = false;
             d.kind = "periodcap";
-            d.reason = strprintf("no bid: the cap of %s in %d h is spent", FormatMoney(policy.period_cap), policy.period_hours);
+            d.reason = strprintf("no bid: the cap of %s in %d h is spent%s", FormatMoney(policy.period_cap), policy.period_hours, of);
             d.amount = 0;
             return d;
         }
         if (d.amount > left) {
             d.amount = left;
             d.kind = "periodcap";
-            d.reason += strprintf(", cut to what is left of the cap of %s in %d h", FormatMoney(policy.period_cap), policy.period_hours);
+            d.reason += strprintf(", cut to what is left of the cap of %s in %d h%s", FormatMoney(policy.period_cap), policy.period_hours, of);
         }
     }
     return d;
@@ -610,10 +627,10 @@ void Limit(const AnchorBidPolicy& policy, CAmount spent, BidDecision& d)
         d.reason += strprintf(", capped at max %s", FormatMoney(policy.max));
     }
     if (policy.period_cap > 0) {
-        const CAmount left{std::max<CAmount>(policy.period_cap - spent, 0)};
+        const CAmount left{CapLeft(policy, spent, d.stall)};
         if (left == 0 && d.amount > 0) {
             d.kind = "periodcap";
-            d.reason = strprintf("no bid: the cap of %s in %d h is spent", FormatMoney(policy.period_cap), policy.period_hours);
+            d.reason = strprintf("no bid: the cap of %s in %d h is spent (less the stall reserve)", FormatMoney(policy.period_cap), policy.period_hours);
             d.amount = 0;
             d.bid = false;
             return;
@@ -631,7 +648,7 @@ void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, Bid
 {
     if (!d.bid || stale <= 0 || d.amount > stale + REPLACEMENT_BUMP - 1) return;
     const CAmount raised{stale + REPLACEMENT_BUMP};
-    const bool fits{raised <= policy.max && (policy.period_cap == 0 || raised <= policy.period_cap - spent)};
+    const bool fits{raised <= policy.max && raised <= CapLeft(policy, spent, d.stall)};
     if (fits) {
         d.amount = raised;
         d.kind = "replace";

@@ -75,6 +75,7 @@ std::vector<RPCResult> PolicyFieldsDoc()
         {RPCResult::Type::NUM, "warnmissed", "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
         {RPCResult::Type::STR_AMOUNT, "periodcap", "The most the landed bids cost in periodhours (0: no cap)"},
         {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
+        {RPCResult::Type::NUM, "stallreserve", "The percentage of the cap kept for stall prevention's bids (the others spend the cap less it)"},
         {RPCResult::Type::NUM, "lowbalanceblocks", "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
     };
 }
@@ -218,7 +219,7 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::STR, "trigger", "What sets off the bid now: anchor, mine, anchor+mine, or empty"},
         {RPCResult::Type::STR_AMOUNT, "effective", "What it bids now for the next mainchain block"},
         {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before stall prevention"},
-        {RPCResult::Type::STR, "kind", "fees, minimum, fixed, rebid (the minimum raised after missed blocks), pending (work waiting for an anchor: deposits, withdrawals, and bonds, unbonds and jails), stall (the stall boost), escalation (the legacy curve), max, periodcap, replace (above a stale bid), always (setbmm's always), idle (Fees without fees that pay) or off"},
+        {RPCResult::Type::STR, "kind", "fees, minimum, fixed, rebid (the minimum raised after missed blocks), pending (work waiting for an anchor: deposits, withdrawals, and bonds, unbonds and jails), stall (the stall boost), escalation (the legacy curve), max, periodcap, replace (above a stale bid), always (setbmm's always), idle (Fees without fees that pay), throttled (work waiting, but its last bid did not land: one in 3 mainchain blocks) or off"},
         {RPCResult::Type::STR, "reason", "Why, in words"},
         {RPCResult::Type::NUM, "pressure", "Stall pressure p: unanchoredslots / maxunanchoredslots (the chain halts at 1)"},
         {RPCResult::Type::NUM, "multiplier", "The escalation (or rebid) multiplier applied"},
@@ -1106,6 +1107,7 @@ RPCMethod setanchorbidpolicy()
                 {"warnmissed", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
                 {"periodcap", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The most the landed bids cost in periodhours (0: no cap)"},
                 {"periodhours", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The period of the cap, in hours (1-744)"},
+                {"stallreserve", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The percentage of the cap kept for stall prevention's bids (0-100; 50 by default): every other bid spends at most the cap less it"},
                 {"lowbalanceblocks", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
             }},
             {"reset", RPCArg::Type::BOOL, RPCArg::Default{false}, "Back to the options' policy first (the settings forgotten)"},

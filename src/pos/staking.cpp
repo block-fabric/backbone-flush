@@ -14,6 +14,7 @@
 #include <util/strencodings.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <map>
 #include <limits>
 
@@ -309,6 +310,25 @@ bool Staking::SetChanged(const sidechain::StoreView& view, int64_t epoch) const
     if (!stake.genesis_loaded) return true;
     const auto last{SETS.Get(view, stake.set_version)};
     return !last || *last != MakeSet(view, epoch).Validators();
+}
+
+bool Staking::SetChangedMaterially(const sidechain::StoreView& view, int64_t epoch) const
+{
+    const StakeState stake{STAKE_STATE.Get(view)};
+    if (!stake.genesis_loaded) return true;
+    const auto last{SETS.Get(view, stake.set_version)};
+    if (!last) return true;
+    const ValidatorSet now{MakeSet(view, epoch)};
+    if (now.Validators().size() != last->size()) return true;
+    std::map<uint256, CAmount> before;
+    for (const Consensus::PosValidator& v : *last) before.emplace(v.pubkey, v.stake);
+    for (const Consensus::PosValidator& v : now.Validators()) {
+        const auto it{before.find(v.pubkey)};
+        if (it == before.end()) return true;
+        const CAmount threshold{std::max<CAmount>(std::min<CAmount>(it->second / 10, m_params.min_stake), 1)};
+        if (std::abs(v.stake - it->second) >= threshold) return true;
+    }
+    return false;
 }
 
 ValidatorSet Staking::MakeSet(const sidechain::StoreView& view, int64_t epoch) const

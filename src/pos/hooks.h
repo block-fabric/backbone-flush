@@ -445,6 +445,8 @@ public:
         int64_t time{0};
         //! What set it off: "anchor" (the validator's anchorer), "mine" (setbmm), "anchor+mine", or "hand" (requestbmmblock).
         std::string trigger;
+        //! A bid for work waiting without fees (BidDecision::work): the throttle counts these.
+        bool work{false};
     };
     /** What the anchorer bids now, and why; what it bid; what its wallet covers. */
     struct AnchorBidReport {
@@ -704,6 +706,8 @@ private:
 
 /** The bids an anchorer remembers. */
 inline constexpr size_t BID_HISTORY{50};
+/** While the last bid for work waiting without fees did not land, the next such bid waits this many mainchain blocks. */
+inline constexpr int WORK_BID_SPACING{3};
 /** The file, in the network's data directory beside settings.json, that keeps the node's bids across restarts: the history
  * (the stale rule, the pages) and what the landed ones cost (the period's cap, "spent" and "left"). */
 inline constexpr const char* BID_FILE{"anchorbids.json"};

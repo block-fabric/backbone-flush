@@ -426,6 +426,9 @@ RPCMethod getbmminfo()
                 {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
                 {RPCResult::Type::STR_AMOUNT, "spentperiod", "What the landed bids of the node (both triggers, and by hand) cost in the period"},
                 {RPCResult::Type::STR_AMOUNT, "left", /*optional=*/true, "What is left of the cap (absent without a cap)"},
+                {RPCResult::Type::NUM, "stallreserve", /*optional=*/true, "The percentage of the cap kept for stall prevention's bids"},
+                {RPCResult::Type::STR_AMOUNT, "leftordinary", /*optional=*/true, "What is left for the other bids (fees, minimum, fixed, work waiting, always): the cap less the reserve less what was spent"},
+                {RPCResult::Type::STR_AMOUNT, "leftstall", /*optional=*/true, "What is left for a stall prevention bid: the whole cap less what was spent"},
                 {RPCResult::Type::STR_AMOUNT, "stalebid", /*optional=*/true, "A bid that did not land, which other nodes may still hold: the next one is raised above it, within max and the cap"},
             }},
         }},
@@ -467,7 +470,12 @@ RPCMethod getbmminfo()
         bid.pushKV("periodcap", ValueFromAmount(report.policy.period_cap));
         bid.pushKV("periodhours", report.policy.period_hours);
         bid.pushKV("spentperiod", ValueFromAmount(report.spent));
-        if (report.policy.period_cap > 0) bid.pushKV("left", ValueFromAmount(std::max<CAmount>(report.policy.period_cap - report.spent, 0)));
+        if (report.policy.period_cap > 0) {
+            bid.pushKV("left", ValueFromAmount(std::max<CAmount>(report.policy.period_cap - report.spent, 0)));
+            bid.pushKV("stallreserve", report.policy.stall_reserve_pct);
+            bid.pushKV("leftordinary", ValueFromAmount(pos::CapLeft(report.policy, report.spent, /*stall=*/false)));
+            bid.pushKV("leftstall", ValueFromAmount(pos::CapLeft(report.policy, report.spent, /*stall=*/true)));
+        }
         if (report.stale > 0) bid.pushKV("stalebid", ValueFromAmount(report.stale));
         result.pushKV("bidpolicy", std::move(bid));
     }

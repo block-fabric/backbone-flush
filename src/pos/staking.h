@@ -198,6 +198,12 @@ public:
     ValidatorSet MakeSet(const sidechain::StoreView& view, int64_t epoch) const;
     /** Whether the set the state makes now differs from the last set an anchor made (a bond, an unbond or a jail waits for one). */
     bool SetChanged(const sidechain::StoreView& view, int64_t epoch) const;
+    /**
+     * Whether it differs enough to be worth an anchor of its own (the anchor bid, not consensus): a validator joins or
+     * leaves the set, or one's stake changes by 10 % at least, or by min_stake if that is less. A small top-up does not
+     * (anyone can make one every block); it takes effect with the next anchor all the same.
+     */
+    bool SetChangedMaterially(const sidechain::StoreView& view, int64_t epoch) const;
     /** Put the genesis validators in the table, once. */
     void LoadGenesis(sidechain::StoreOverlay& out) const;
 
