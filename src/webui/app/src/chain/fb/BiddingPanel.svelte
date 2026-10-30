@@ -344,7 +344,7 @@
               <input id="bid-preventstall" type="checkbox" bind:checked={form.preventstall} disabled={off} onchange={() => (dirty = true)} />
               <span>
                 <strong>Prevent stalling</strong>
-                <span class="faint">{#if off}Off means off: no stall prevention either.{:else}As the chain nears its limit without an anchor ({bid ? formatCount(bid.maxunanchoredslots) : '–'} slots), and when a deposit or a withdrawal waits for one, bids enough to land an anchor, whatever the strategy, within the limits.{/if}</span>
+                <span class="faint">{#if off}Off means off: no stall prevention either.{:else}As the chain nears its limit without an anchor ({bid ? formatCount(bid.maxunanchoredslots) : '–'} slots), and when a deposit or a withdrawal waits for one, bids enough to land an anchor, whatever the strategy, within the limits. Nothing else bids without fees: staking payouts and unbonds wait for the anchors that land.{/if}</span>
               </span>
             </label>
             {#if off}
@@ -401,9 +401,14 @@
             <label class="check"><input id="bid-interpolate" type="checkbox" bind:checked={form.interpolate} onchange={() => (dirty = true)} /><span>Interpolate between points (else steps)</span></label>
             <label class="check"><input id="bid-estimate" type="checkbox" bind:checked={form.usefeeestimate} onchange={() => (dirty = true)} /><span>Use the next-block fee estimate of {mainName} for stall prevention</span></label>
             <div class="field"><label for="bid-vsize">Request size (vB)</label><input id="bid-vsize" type="number" min="50" max="10000" bind:value={form.requestvsize} oninput={() => (dirty = true)} /></div>
-            <div class="field"><label for="bid-rebid">Raise after missed blocks (0: never)</label><input id="bid-rebid" type="number" min="0" max="1000" bind:value={form.rebidafter} oninput={() => (dirty = true)} /></div>
-            <div class="field"><label for="bid-rebidstep">Raise by (x)</label><input id="bid-rebidstep" type="number" min="1" max="100" step="0.1" bind:value={form.rebidstep} oninput={() => (dirty = true)} /></div>
-            <div class="field"><label for="bid-rebidmax">Raises at most (x)</label><input id="bid-rebidmax" type="number" min="1" max="1000" step="0.1" bind:value={form.rebidmax} oninput={() => (dirty = true)} /></div>
+            {#if form.flatboost === false}
+              <!-- The rebids are the legacy curve's: with the flat boost the minimum is raised x2 for every two missed blocks, at most the boost. -->
+              <div class="field"><label for="bid-rebid">Raise after missed blocks (0: never)</label><input id="bid-rebid" type="number" min="0" max="1000" bind:value={form.rebidafter} oninput={() => (dirty = true)} /></div>
+              <div class="field"><label for="bid-rebidstep">Raise by (x)</label><input id="bid-rebidstep" type="number" min="1" max="100" step="0.1" bind:value={form.rebidstep} oninput={() => (dirty = true)} /></div>
+              <div class="field"><label for="bid-rebidmax">Raises at most (x)</label><input id="bid-rebidmax" type="number" min="1" max="1000" step="0.1" bind:value={form.rebidmax} oninput={() => (dirty = true)} /></div>
+            {:else}
+              <p class="side-note fb-small" id="bid-rebid-flat">After missed blocks the flat boost raises the minimum x2 for every two missed, at most the boost (the rebid settings are the curve's).</p>
+            {/if}
             <div class="field"><label for="bid-warn">Warn after missed blocks (0: never)</label><input id="bid-warn" type="number" min="0" max="1000" bind:value={form.warnmissed} oninput={() => (dirty = true)} /></div>
             <div class="field"><label for="bid-periodhours">Period of the cap (hours)</label><input id="bid-periodhours" type="number" min="1" max="744" bind:value={form.periodhours} oninput={() => (dirty = true)} /></div>
             <div class="field"><label for="bid-lowbalance">Low balance below (blocks covered)</label><input id="bid-lowbalance" type="number" min="0" bind:value={form.lowbalanceblocks} oninput={() => (dirty = true)} /></div>
