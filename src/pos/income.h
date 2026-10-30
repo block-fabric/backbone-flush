@@ -5,6 +5,7 @@
 #ifndef BITCOIN_POS_INCOME_H
 #define BITCOIN_POS_INCOME_H
 
+#include <consensus/amount.h>
 #include <script/script.h>
 #include <uint256.h>
 
@@ -55,7 +56,13 @@ std::vector<CScript> ReporterScripts(const CBlock& block, const std::optional<ui
  * exact when the payouts of a block passed the cap of a block and some waited for the next, nor for a
  * refund to the same script in the same block.)
  */
-std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<CScript>& reporters);
+/*
+ * @param pot        if known, what the pots of the blocks of stake this anchor pays came to (their pot outputs): 0 means
+ *                   the anchor pays no pot, and no output is the pot (a deposit to the payee, the only payout to it in a
+ *                   BMM block that pays no pot, was taken for it: Flush mainnet block 1); otherwise the pot is at least it.
+ *                   Deposits and refunds come first in the payouts, so the pot is never one of them if it is paid at all.
+ */
+std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<CScript>& reporters, std::optional<CAmount> pot = std::nullopt);
 
 } // namespace pos
 

@@ -53,7 +53,7 @@ std::vector<CScript> ReporterScripts(const CBlock& block, const std::optional<ui
     return scripts;
 }
 
-std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<CScript>& reporters)
+std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<CScript>& reporters, std::optional<CAmount> pot)
 {
     if (block.vtx.empty()) return {};
     const std::vector<CTxOut>& outs{block.vtx[0]->vout};
@@ -93,8 +93,9 @@ std::vector<CoinbaseRole> CoinbaseRoles(const CBlock& block, const std::vector<C
             break;
         }
     }
-    for (size_t i{end}; payee && i-- > 1;) {
-        if (payout(i) && outs[i].scriptPubKey == *payee) {
+    // (No pot to pay: none of them; a pot: an output of at least it.)
+    for (size_t i{end}; payee && (!pot || *pot > 0) && i-- > 1;) {
+        if (payout(i) && outs[i].scriptPubKey == *payee && (!pot || outs[i].nValue >= *pot)) {
             roles[i] = CoinbaseRole::ANCHOR;
             break;
         }

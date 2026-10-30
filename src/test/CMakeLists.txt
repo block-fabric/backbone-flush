@@ -53,6 +53,7 @@ add_executable(test_bitcoin
   sidechain_hooks_tests.cpp
   fastblocks_tests.cpp
   pos_anchorbid_tests.cpp
+  pos_income_tests.cpp
   layers_tests.cpp
   dex_cl_tests.cpp
   dex_book_tests.cpp

@@ -1141,19 +1141,54 @@ public:
         if (!index || index->nHeight == 0 || !read(*index, block, proposer)) return {};
         // An anchor pays the rewards for the proofs of the blocks since the anchor before it, that one included.
         std::vector<CScript> reporters;
+        // What the pots of the blocks of stake it pays came to: those after the block the anchor before it anchored (some
+        // before that anchor, a ticket anchoring a block below it) up to this one. Not known if the walk stopped short.
+        std::optional<CAmount> pot;
         if (pos::IsAnchorBlock(block)) {
             int distance{0};
-            for (const CBlockIndex* earlier{index->pprev}; earlier && earlier->nHeight > 0 && distance < MAX_ANCHOR_DISTANCE; earlier = earlier->pprev, ++distance) {
+            CAmount pots{0};
+            bool known{false};
+            // (The anchor before it, once found: the walk goes on down to the block it anchored.) Pots of blocks after the
+            // block this one anchors are the next anchor's.
+            const CBlockIndex* own_anchored{WITH_LOCK(::cs_main, return hooks->AnchoredBy(*index))};
+            const int count_from{own_anchored ? own_anchored->nHeight : index->nHeight - 1};
+            int stop_below{-1};
+            for (const CBlockIndex* earlier{index->pprev}; earlier && distance < MAX_ANCHOR_DISTANCE; earlier = earlier->pprev, ++distance) {
+                if (stop_below >= 0 && earlier->nHeight <= stop_below) {
+                    known = true;
+                    break;
+                }
+                if (earlier->nHeight == 0) {
+                    known = true;
+                    break;
+                }
                 CBlock before;
                 std::optional<uint256> before_proposer;
                 if (!read(*earlier, before, before_proposer)) break;
+                if (pos::IsPosHeader(before) && earlier->nHeight <= count_from) {
+                    for (const CTxOut& out : before.vtx[0]->vout) {
+                        if (pos::IsPotScript(out.scriptPubKey)) pots += out.nValue;
+                    }
+                }
+                if (stop_below >= 0) continue;
                 const auto scripts{pos::ReporterScripts(before, before_proposer, chainman().GetConsensus().hashGenesisBlock)};
                 reporters.insert(reporters.end(), scripts.begin(), scripts.end());
-                if (pos::IsAnchorBlock(before)) break;
+                if (pos::IsAnchorBlock(before)) {
+                    // Pots of blocks after the block it anchored are this anchor's: its own included, if one of stake.
+                    const CBlockIndex* anchored{WITH_LOCK(::cs_main, return hooks->AnchoredBy(*earlier))};
+                    if (!anchored) break;
+                    // (Its own pot outputs counted above already belong after its anchored block only if it is one of stake.)
+                    stop_below = anchored->nHeight;
+                    if (earlier->nHeight <= stop_below + 1 && !pos::IsPosHeader(before)) {
+                        known = true;
+                        break;
+                    }
+                }
             }
+            if (known) pot = pots;
         }
         std::vector<CoinbaseRole> roles;
-        for (const pos::CoinbaseRole role : pos::CoinbaseRoles(block, reporters)) {
+        for (const pos::CoinbaseRole role : pos::CoinbaseRoles(block, reporters, pot)) {
             switch (role) {
             case pos::CoinbaseRole::OTHER: roles.push_back(CoinbaseRole::OTHER); break;
             case pos::CoinbaseRole::PRODUCER: roles.push_back(CoinbaseRole::STAKED); break;
