@@ -3,7 +3,7 @@
   // the newest BMM blocks (blocks of stake that record a BMM commitment, and merged mined ones), the tickets this
   // node knows (what BMM bidders ask the mainchain to commit to), commitments the active chain leaves out, the fee
   // pot BMM bidders win, and what this node itself bids (-validatoranchorbid). getanchorinfo, getposinfo, getblock;
-  // the bid from the host (fastblocks.anchoring); the whole policy is under Merged mining (AnchorBidPanel).
+  // the bid from the host (fastblocks.anchoring); the whole policy is under Merged mining (BiddingPanel).
   import Amount from '../../components/Amount.svelte';
   import Icon from '../../components/Icon.svelte';
   import Pager from '../../components/Pager.svelte';

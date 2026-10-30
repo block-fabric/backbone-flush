@@ -1,18 +1,22 @@
-// Merged mining, a validator's anchor bids (chain/fb/AnchorBidPanel.svelte): the policy read with getanchorbidpolicy and
-// getanchorinfo's bid, the presets and the advanced fields, a change through the host's confirmation (setanchorbidpolicy
-// is a confirmed method, never a plain RPC of the page), a node that is not a validator; and what a mainchain commitment
-// of this chain is in the table of its blocks (resolveCommitment: a block, or on FastBlocks an anchor ticket).
+// Merged mining, Bidding (chain/fb/BiddingPanel.svelte): the node's one bid policy, read with getanchorbidpolicy and
+// getanchorinfo's bid; the five strategies and "Prevent stalling", the fields of the strategy chosen, the limits and the
+// day's spending, the triggers; a change through the host's confirmation (setanchorbidpolicy is a confirmed method, never a
+// plain RPC of the page), the strategy always sent with "Prevent stalling"; a node that is not a validator; and what a
+// mainchain commitment of this chain is in the table of its blocks (resolveCommitment: a block, or on FastBlocks an anchor ticket).
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import AnchorBidPanel, { changedFields, curveText, PRESETS, type BidPolicy, type BidPolicyInfo, type BidStatus } from '../chain/fb/AnchorBidPanel.svelte';
+import BiddingPanel, { changedFields, curveText, STRATEGIES, type BidPolicy, type BidPolicyInfo, type BidStatus } from '../chain/fb/BiddingPanel.svelte';
 import { setTransport, type BridgeRequest } from '../lib/bridge';
 import { resolveCommitment, type CommitmentReads } from '../lib/side';
 
+// Louis's app (an 8.3.5 feespreventstall, floor 0) as 8.3.6 reads it: Fees, Prevent stalling on.
 const POLICY: BidPolicy = {
-  strategy: 'feespreventstall',
-  floor: 0.000005,
-  max: 0.001,
-  fixed: 0.000005,
+  strategy: 'fees',
+  preventstall: true,
+  anchor: true,
+  floor: 0,
+  max: 0.0001,
+  fixed: 0,
   feeshare: 99,
   escalationstart: 0.5,
   curve: [
@@ -20,14 +24,16 @@ const POLICY: BidPolicy = {
     { pressure: 0.75, multiplier: 2 },
     { pressure: 0.9, multiplier: 4 },
   ],
+  flatboost: true,
+  boost: 4,
   interpolate: true,
-  usefeeestimate: true,
-  requestvsize: 190,
+  usefeeestimate: false,
+  requestvsize: 189,
   rebidafter: 3,
   rebidstep: 2,
   rebidmax: 8,
   warnmissed: 3,
-  periodcap: 0.01,
+  periodcap: 0.001,
   periodhours: 24,
   lowbalanceblocks: 1008,
 };
@@ -35,11 +41,11 @@ const POLICY: BidPolicy = {
 const BID: BidStatus = {
   validator: true,
   bidding: true,
-  strategy: 'feespreventstall',
-  effective: 0.0000076,
-  normal: 0.000005,
-  kind: 'escalation',
-  reason: 'escalation at p=0.92: x4.00 the fee estimate (1.00 sat/vB for 190 vB)',
+  strategy: 'fees',
+  effective: 0.00001,
+  normal: 0,
+  kind: 'stall',
+  reason: 'preventing a stall at p=0.92: x4.00 the competitive base 0.0000025 (no bid: no fees)',
   pressure: 0.92,
   multiplier: 4,
   escalationstart: 0.5,
@@ -50,13 +56,13 @@ const BID: BidStatus = {
   feesource: 'estimatesmartfee',
   missed: 8,
   balance: 0.5,
-  coverblocks: 65789,
-  spentperiod: 0.0001,
-  periodcap: 0.01,
+  coverblocks: 50000,
+  spentperiod: 0.0003,
+  periodcap: 0.001,
   periodhours: 24,
   history: [
-    { mainheight: 973961, ticket: 'aa'.repeat(32), offer: 0.0000076, kind: 'escalation', reason: 'escalation', pressure: 0.92, status: 'pending', cost: 0, time: 1 },
-    { mainheight: 973960, ticket: 'bb'.repeat(32), offer: 0.000005, kind: 'floor', reason: 'floor', pressure: 0.9, status: 'missed', cost: 0, time: 0 },
+    { mainheight: 973961, ticket: 'aa'.repeat(32), offer: 0.00001, kind: 'stall', reason: 'stall', pressure: 0.92, status: 'pending', cost: 0, time: 1 },
+    { mainheight: 973960, ticket: 'bb'.repeat(32), offer: 0.000005, kind: 'fees', reason: 'fees', pressure: 0.9, status: 'missed', cost: 0, time: 0 },
   ],
   warnings: ['Your bid is too low: 8 mainchain blocks in a row came without this validator’s commitment.'],
 };
@@ -96,88 +102,118 @@ beforeEach(() => {
 
 afterEach(() => setTransport(null));
 
-describe('the anchor bid panel', () => {
-  it('explains the dynamic base and shows a skipped idle bid', async () => {
-    bid = { ...BID, effective: 0, normal: 0, kind: 'idle', reason: 'skipped: nothing to anchor', pressure: 0.1 };
-    render(AnchorBidPanel);
-    await waitFor(() => expect(document.getElementById('anchor-bid-reason')?.textContent).toBe('skipped: nothing to anchor'));
-    expect(PRESETS.find((p) => p.id === 'feespreventstall')?.text).toMatch(/rounded up to whole sat\/vB/);
-  });
+const sentFields = () => (calls.find((c) => c.method === 'rpc.confirmed')!.params as { method: string; params: unknown[] }).params[0];
 
-  it('shows the bid now and why, the run and its pressure, the wallet, the warnings and the last bids', async () => {
-    render(AnchorBidPanel);
-    await waitFor(() => expect(document.getElementById('anchor-bid-reason')?.textContent).toMatch(/escalation at p=0.92/));
-    expect((document.getElementById('anchor-bid-pressure') as HTMLMeterElement).value).toBeCloseTo(0.92);
-    expect(document.getElementById('anchor-bid-status')!.textContent).toMatch(/1\D?766 \/ 1\D?920 slots/);
-    expect(document.getElementById('anchor-bid-status')!.textContent).toMatch(/65\D?789 mainchain blocks at this bid/);
-    expect(document.getElementById('anchor-bid-missed')!.textContent).toBe('8');
+describe('the bidding panel', () => {
+  it('shows the bid now and why, the run and its pressure, the day spent and left, the wallet, the warnings and the last bids', async () => {
+    render(BiddingPanel);
+    await waitFor(() => expect(document.getElementById('bid-reason')?.textContent).toMatch(/preventing a stall at p=0.92/));
+    expect((document.getElementById('bid-pressure') as HTMLMeterElement).value).toBeCloseTo(0.92);
+    expect(document.getElementById('bid-status')!.textContent).toMatch(/1\D?766 \/ 1\D?920 slots/);
+    expect(document.getElementById('bid-status')!.textContent).toMatch(/50\D?000 mainchain blocks at this bid/);
+    expect(document.getElementById('bid-missed')!.textContent).toBe('8');
+    // Spent 0.0003 of a cap of 0.001 today: 0.0007 left.
+    expect(document.getElementById('bid-left')!.textContent).toMatch(/left.*0\.0007.*of.*0\.001/);
+    expect(document.getElementById('bid-wallet')!.textContent).toMatch(/Paid from your mainchain wallet/);
     expect(screen.getByRole('alert').textContent).toMatch(/Your bid is too low/);
-    const table = screen.getByRole('table', { name: 'Last anchor bids' });
+    const table = screen.getByRole('table', { name: 'Last bids' });
     expect(table.textContent).toMatch(/973\D?960/);
     expect(table.textContent).toMatch(/missed/);
     // Every read is a read: no spending call without the host.
     expect(calls.some((c) => c.kind === 'rpc' && c.method === 'setanchorbidpolicy')).toBe(false);
   });
 
-  it('the five presets, the default one said exactly as the user asked', async () => {
-    render(AnchorBidPanel);
+  it('five strategies, Fees the default, and Prevent stalling beside them', async () => {
+    render(BiddingPanel);
     await screen.findByText('Strategy');
-    expect(PRESETS.map((p) => p.id)).toEqual(['fixed', 'minimal', 'fees', 'feespreventstall', 'off']);
+    expect(STRATEGIES.map((p) => p.id)).toEqual(['fees', 'feesminimum', 'minimum', 'fixed', 'off']);
+    expect(STRATEGIES.map((p) => p.label)).toEqual(['Fees', 'Fees + minimum', 'Minimum every block', 'Fixed amount', 'Off']);
     const radios = screen.getAllByRole('radio') as HTMLInputElement[];
     expect(radios).toHaveLength(5);
-    expect(radios.find((r) => r.checked)?.value).toBe('feespreventstall');
-    expect(screen.getByText('Fees + prevent stalling')).toBeTruthy();
-    expect(
-      screen.getByText(
-        PRESETS.find((p) => p.id === 'feespreventstall')!.text,
-      ),
-    ).toBeTruthy();
+    expect(radios.find((r) => r.checked)?.value).toBe('fees');
+    const stall = document.getElementById('bid-preventstall') as HTMLInputElement;
+    expect(stall.checked).toBe(true);
+    expect(stall.disabled).toBe(false);
+    // The triggers: merged mining (the page's controls) and, on a validator, Anchor my validator.
+    expect(document.getElementById('bid-trigger-mine')!.textContent).toMatch(/Mine blocks when fees pay/);
+    expect((document.getElementById('bid-anchor') as HTMLInputElement).checked).toBe(true);
+    // Nothing changed: nothing to apply.
+    expect((document.getElementById('bid-apply') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('a change goes through the host, which asks the desktop; only the fields changed', async () => {
-    render(AnchorBidPanel);
+  it('the amount fields of the strategy chosen, and only those', async () => {
+    render(BiddingPanel);
     await screen.findByText('Strategy');
-    await fireEvent.click(screen.getByRole('radio', { name: /Minimal: keep the chain moving/ }));
-    await fireEvent.click(document.getElementById('anchor-advanced')!);
-    expect(document.getElementById('anchor-advanced-fields')).not.toBeNull();
-    await fireEvent.input(document.getElementById('anchor-curve')!, { target: { value: '0.5:1,0.8:5' } });
+    const shown = () => ['bid-feeshare', 'bid-floor', 'bid-fixed'].filter((id) => document.getElementById(id));
+    expect(shown()).toEqual(['bid-feeshare']);
+    await fireEvent.click(screen.getByRole('radio', { name: /^Fees \+ minimum/ }));
+    expect(shown()).toEqual(['bid-feeshare', 'bid-floor']);
+    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    expect(shown()).toEqual(['bid-floor']);
+    await fireEvent.click(screen.getByRole('radio', { name: /^Fixed amount/ }));
+    expect(shown()).toEqual(['bid-fixed']);
+    await fireEvent.click(screen.getByRole('radio', { name: /^Off/ }));
+    expect(shown()).toEqual([]);
+    // Off means off: Prevent stalling greyed out, its value kept; the warning.
+    expect((document.getElementById('bid-preventstall') as HTMLInputElement).disabled).toBe(true);
+    expect((document.getElementById('bid-preventstall') as HTMLInputElement).checked).toBe(true);
+    expect(document.getElementById('bid-off-warning')!.textContent).toMatch(/leaves its anchors to other bidders/);
+  });
+
+  it('a change goes through the host, which asks the desktop; the strategy always with Prevent stalling', async () => {
+    render(BiddingPanel);
+    await screen.findByText('Strategy');
+    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    await fireEvent.input(document.getElementById('bid-floor')!, { target: { value: '0.00001' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
     const sent = calls.find((c) => c.method === 'rpc.confirmed')!.params as { method: string; params: unknown[] };
     expect(sent.method).toBe('setanchorbidpolicy');
-    expect(sent.params).toEqual([{ strategy: 'minimal', curve: '0.5:1,0.8:5' }]);
-    // The reset is offered once something differs from the options.
-    await waitFor(() => expect((document.getElementById('anchor-reset') as HTMLButtonElement).disabled).toBe(false));
+    expect(sent.params).toEqual([{ strategy: 'minimum', preventstall: true, floor: '0.00001' }]);
+    await waitFor(() => expect((document.getElementById('bid-reset') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('Prevent stalling alone, Anchor my validator alone, the limits', async () => {
+    render(BiddingPanel);
+    await screen.findByText('Strategy');
+    await fireEvent.click(document.getElementById('bid-preventstall')!);
+    await fireEvent.click(document.getElementById('bid-anchor')!);
+    await fireEvent.input(document.getElementById('bid-periodcap')!, { target: { value: '0.002' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ strategy: 'fees', preventstall: false, anchor: false, periodcap: '0.002' });
   });
 
   it('a declined change is no error; a minimum above the maximum is not sent', async () => {
     answer = 'no';
-    render(AnchorBidPanel);
+    render(BiddingPanel);
     await screen.findByText('Strategy');
     await fireEvent.click(screen.getByRole('radio', { name: /^Off/ }));
-    expect(screen.getByText(/leaves its anchors to other bidders/)).toBeTruthy();
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
     expect(document.querySelector('.side-bad[role="alert"]')?.textContent ?? '').not.toMatch(/declined/);
-    const floor = document.getElementById('anchor-floor') as HTMLInputElement;
-    await fireEvent.input(floor, { target: { value: '0.01' } });
-    await waitFor(() => expect(document.getElementById('anchor-problem')?.textContent).toMatch(/above the maximum/));
+    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    await fireEvent.input(document.getElementById('bid-floor')!, { target: { value: '0.01' } });
+    await waitFor(() => expect(document.getElementById('bid-problem')?.textContent).toMatch(/above the maximum/));
     expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('a node that is not a validator: the explanation, no form', async () => {
-    info = { ...info, validator: false, bidding: false, explanation: 'This node is not a validator: only validators bid for BMM commitments to their tickets.' };
-    bid = { ...bid, validator: false, bidding: false };
-    render(AnchorBidPanel);
-    await waitFor(() => expect(document.getElementById('anchor-bid-explanation')?.textContent).toMatch(/not a validator/));
-    expect(screen.queryAllByRole('radio')).toHaveLength(0);
-    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull();
+  it('a node that is not a validator: the same form, no Anchor my validator', async () => {
+    info = { ...info, validator: false, bidding: false, explanation: 'This node is not a validator: it bids only as a merged miner (setbmm), under this policy; merged mining is off.' };
+    bid = { ...bid, validator: false, bidding: false, warnings: [] };
+    render(BiddingPanel);
+    await waitFor(() => expect(document.getElementById('bid-explanation')?.textContent).toMatch(/not a validator/));
+    expect(screen.getAllByRole('radio')).toHaveLength(5);
+    expect(document.getElementById('bid-anchor')).toBeNull();
+    expect(document.getElementById('bid-trigger-mine')).not.toBeNull();
   });
 
-  it('the fields sent: amounts in coins, the curve as text, nothing unchanged', () => {
+  it('the fields sent: amounts in coins, the curve as text, nothing unchanged, the strategy with Prevent stalling', () => {
     expect(curveText(POLICY.curve)).toBe('0.5:1,0.75:2,0.9:4');
     expect(changedFields(POLICY, { ...POLICY })).toEqual({});
-    expect(changedFields(POLICY, { ...POLICY, floor: 0, max: 0.002, rebidafter: 0 })).toEqual({ floor: '0', max: '0.002', rebidafter: 0 });
+    expect(changedFields(POLICY, { ...POLICY, floor: 0.00001, max: 0.002, rebidafter: 0 })).toEqual({ floor: '0.00001', max: '0.002', rebidafter: 0 });
+    expect(changedFields(POLICY, { ...POLICY, strategy: 'feesminimum' })).toEqual({ strategy: 'feesminimum', preventstall: true });
+    expect(changedFields(POLICY, { ...POLICY, preventstall: false })).toEqual({ strategy: 'fees', preventstall: false });
   });
 });
 

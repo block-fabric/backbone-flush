@@ -1,15 +1,16 @@
 <script lang="ts">
   // Blind merged mining of a sidechain (the Mine tab of the template's Qt Mainchain page and its mining bar,
   // redone): the miners of the mainchain mine the blocks of this chain for a fee, which the wallet of the
-  // mainchain node pays. Automatic mining (setbmm: on or off, the address of the fees, "always" and its
-  // offer), one block by hand (requestbmmblock), what happened (the requests and their results, the
-  // candidates kept), the blocks of the mainchain that committed to this chain, and the connection.
+  // mainchain node pays. Bidding (the node's one bid policy, chain/fb/BiddingPanel.svelte), with its trigger
+  // "Mine blocks when fees pay" here (setbmm: on or off, the address of the fees, "always" and its offer), one
+  // block by hand (requestbmmblock), what happened (the requests and their results, the candidates kept), the
+  // blocks of the mainchain that committed to this chain, and the connection.
   import { t } from '../lib/i18n.svelte';
   import { stacked } from '../lib/actions';
   import SafeText from '../components/SafeText.svelte';
   import Amount from '../components/Amount.svelte';
   import AmountInput from '../components/AmountInput.svelte';
-  import AnchorBidPanel from '../chain/fb/AnchorBidPanel.svelte';
+  import BiddingPanel from '../chain/fb/BiddingPanel.svelte';
   import Icon from '../components/Icon.svelte';
   import { CHAIN } from '../chain/config';
   import { errorText, inform } from '../lib/dialogs.svelte';
@@ -188,15 +189,15 @@
 <div class="bmm" class:page={!embedded}>
   {#if !embedded}<header class="page-head"><h1>{t(PAGES.bmm.title)}</h1></header>{/if}
   <p class="side-note">
-    The blocks of this chain are mined by the miners of {mainName}, who commit to them in their own blocks for a fee, which the wallet of the {mainName} node pays (blind merged mining). Automatic mining asks for a block whenever
-    there are transactions whose fees pay for one: it offers the miners of {mainName} 99% of those fees, and you keep the fees, so one hundredth is yours. Without fees it asks for nothing and costs nothing.
+    The blocks of this chain are mined by the miners of {mainName}, who commit to them in their own blocks for a fee, which the wallet of the {mainName} node pays (blind merged mining). What this node offers, and when, is its bid
+    policy, under Bidding: by default the fee share (99% of the fees, you keep the rest), no minimum, and a bid that lands when the chain nears a stall.
   </p>
 
   <section class="side-stats">
     <div class="panel side-stat">
       <span class="muted">Automatic mining</span>
       <strong class="state" class:on={mining}><span class="dot"></span>{mining ? (bmm?.idle ? 'On, waiting for fees' : 'On') : 'Off'}</strong>
-      <span class="faint">{mining ? (bmm?.always ? 'a block with every block of the mainchain' : 'when fees pay for a block') : 'no blocks asked for'}</span>
+      <span class="faint">{mining ? (bmm?.always ? 'a block with every block of the mainchain' : 'as the bid policy says') : 'no blocks asked for'}</span>
     </div>
     <div class="panel side-stat"><span class="muted">Blocks mined</span><strong class="num" id="bmm-blocks">{bmm ? formatCount(bmm.blocks) : '–'}</strong><span class="faint">by this node</span></div>
     <div class="panel side-stat"><span class="muted">Requests</span><strong class="num" id="bmm-requests">{bmm ? formatCount(bmm.requests) : '–'}</strong><span class="faint">{bmm ? `outbid ${formatCount(bmm.outbid)} times` : ''}</span></div>
@@ -205,39 +206,41 @@
 
   {#if bmm?.error}<p class="side-note side-bad" role="alert">Last attempt failed: <SafeText text={bmm.error} /></p>{/if}
 
-  <div class="side-cols">
-    <section class="panel">
-      <div class="panel-head"><h2>Automatic mining</h2><span class="side-link" class:on={mining}><span class="dot"></span>{mining ? 'Mining' : 'Not mining'}</span></div>
-      <form class="panel-body side-form" onsubmit={(e) => { e.preventDefault(); setMining(true); }}>
-        <div class="field">
-          <label for="bmm-address">Pay the fees to</label>
-          <div class="row">
-            <input id="bmm-address" type="text" class="mono grow" spellcheck="false" autocomplete="off" placeholder="An address of this chain; empty for a new one of the wallet" bind:value={address} disabled={mining} />
-          </div>
-        </div>
-        <label class="check">
-          <input id="bmm-always" type="checkbox" bind:checked={always} disabled={mining} />
-          <span>Always: a block with every block of {mainName}, with or without fees</span>
-        </label>
-        {#if always}
-          <AmountInput id="bmm-always-amount" label="Offer for each block" bind:value={alwaysOffer} disabled={mining} />
-          <p class="side-note side-warn">For tests: every block of {mainName} costs the offer, fees or not.</p>
-        {/if}
-        <p class="side-note fb-small" id="bmm-offer-scope">This offer is merged mining's, used only while it is on. A validator's own anchor bids follow its anchor bid policy, below.</p>
+  {#snippet mineTrigger()}
+    <form class="side-form" id="bmm-form" onsubmit={(e) => { e.preventDefault(); setMining(true); }}>
+      <span class="side-link" class:on={mining}><span class="dot"></span>{mining ? (bmm?.idle ? t('On, waiting for a bid') : t('On')) : t('Off')}</span>
+      <div class="field">
+        <label for="bmm-address">Pay the fees to</label>
         <div class="row">
-          <button type="submit" class="btn primary" id="bmm-start" disabled={mining || busy}><Icon name="merged" size={16} /> Start mining</button>
-          <button type="button" class="btn" id="bmm-stop" disabled={!mining || busy} onclick={() => setMining(false)}>Stop mining</button>
+          <input id="bmm-address" type="text" class="mono grow" spellcheck="false" autocomplete="off" placeholder="An address of this chain; empty for a new one of the wallet" bind:value={address} disabled={mining} />
         </div>
-        {#if mining && bmm?.lastoffer !== undefined}
-          <p class="side-note">Last block asked for: <Amount sats={coinsToSats(bmm.lastfees ?? 0)} /> of fees, <Amount sats={coinsToSats(bmm.lastoffer)} /> offered.</p>
-        {/if}
-      </form>
-    </section>
+      </div>
+      <label class="check">
+        <input id="bmm-always" type="checkbox" bind:checked={always} disabled={mining} />
+        <span>For tests: a block with every block of {mainName}, with or without fees, for an offer of its own</span>
+      </label>
+      {#if always}
+        <AmountInput id="bmm-always-amount" label="Offer for each block" bind:value={alwaysOffer} disabled={mining} />
+        <p class="side-note side-warn">For tests: every block of {mainName} costs the offer, fees or not (at most the maximum per bid).</p>
+      {/if}
+      <div class="row">
+        <button type="submit" class="btn primary" id="bmm-start" disabled={mining || busy}><Icon name="merged" size={16} /> Start mining</button>
+        <button type="button" class="btn" id="bmm-stop" disabled={!mining || busy} onclick={() => setMining(false)}>Stop mining</button>
+      </div>
+      {#if mining && bmm?.lastoffer !== undefined}
+        <p class="side-note">Last block asked for: <Amount sats={coinsToSats(bmm.lastfees ?? 0)} /> of fees, <Amount sats={coinsToSats(bmm.lastoffer)} /> offered.</p>
+      {/if}
+    </form>
+  {/snippet}
 
+  <!-- The node's one bid policy, for every node: the strategy, its limits, and both triggers (merged mining's, above). -->
+  <BiddingPanel mining={mineTrigger} />
+
+  <div class="side-cols">
     <section class="panel">
       <div class="panel-head"><h2>One block by hand</h2></div>
       <form class="panel-body side-form" onsubmit={(e) => { e.preventDefault(); mineOnce(); }}>
-        <p class="side-note">A block of this chain, for an offer you choose: how a deposit gets credited, or a withdrawal bundle started, when no transactions pay for a block.</p>
+        <p class="side-note">A block of this chain, for an offer you choose: how a deposit gets credited, or a withdrawal bundle started, when no transactions pay for a block. At most the maximum per bid, and it counts in the cap.</p>
         <AmountInput id="bmm-once-amount" label="Offer to the miners of {mainName}" bind:value={onceOffer} />
         <div class="row"><button type="submit" class="btn" id="bmm-once" disabled={busy}><Icon name="block" size={16} /> Mine one block</button></div>
         {#if lastManual}
@@ -249,9 +252,6 @@
       </form>
     </section>
   </div>
-
-  <!-- A validator's own anchorer, which bids whether merged mining is on or off (its policy, not the offer above). -->
-  <AnchorBidPanel />
 
   <div class="side-cols">
     <section class="panel">
