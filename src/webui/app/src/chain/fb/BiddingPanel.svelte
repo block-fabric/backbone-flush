@@ -132,7 +132,7 @@
   }
 
   /** The recommended plan: Fees, Prevent stalling, and the 8.3.7 defaults (set only where the node has the field). */
-  export const RECOMMENDED = { strategy: 'fees', preventstall: true, batch: 10, heartbeathours: 6, valueatrisk: 1, reservepct: 20, reservetarget: 0.0001, turns: true, turnbackup: 2 } as const;
+  export const RECOMMENDED = { strategy: 'fees', preventstall: true, batch: 10, heartbeathours: 6, valueatrisk: 1, reservepct: 20, reservetarget: 0.01, turns: true, turnbackup: 2 } as const;
   export const NEW_FIELDS = ['batch', 'heartbeathours', 'valueatrisk', 'reservepct', 'reservetarget', 'turns', 'turnbackup'] as const;
 
   /** Whether a policy is the recommended plan as it stands (any field the node does not have is not compared). */
@@ -179,11 +179,6 @@
       if (key in out) out[key] = satsToCoins(coinsToSats(next[key] as number));
     }
     return out;
-  }
-
-  /** The 24 h and 7 d windows of "anchoring", under either spelling. */
-  export function anchoringWindows(a: AnchoringInfo | undefined): { day?: AnchoringWindow; week?: AnchoringWindow } {
-    return { day: a?.day ?? a?.['24h'], week: a?.week ?? a?.['7d'] };
   }
 
   import { coinsToSats, satsToCoins } from '../../lib/units';
@@ -404,12 +399,23 @@
   const inForce = $derived(info?.policy ?? null);
   const anchorerOff = $derived(!!info?.validator && !!inForce && (inForce.strategy === 'off' || !inForce.anchor));
   const a = $derived<AnchoringInfo | undefined>(anchoring ?? bid?.anchoring);
-  const windows = $derived(anchoringWindows(a));
   const feeStrategy = $derived(inForce?.strategy === 'fees' || inForce?.strategy === 'feesminimum');
   /** How long the chain goes without an anchor before blocks of stake halt: hours when the slot is known. */
   const haltAfter = $derived(!bid ? '–' : slotSeconds > 0 ? t('%1 h', String(Math.round((bid.maxunanchoredslots * slotSeconds) / 360) / 10)) : t('%1 slots', formatCount(bid.maxunanchoredslots)));
   const statusWords: Record<BidRecord['status'], string> = { pending: 'pending', landed: 'landed', missed: 'missed', outbid: 'outbid' };
 </script>
+
+{#snippet windowFacts(id: string, label: string, w: AnchoringWindow)}
+  <div {id}>
+    <span>{label}</span>
+    <strong>{#if w.collected !== undefined}<Amount sats={coinsToSats(w.collected)} />{:else}–{/if}</strong>
+    <span class="faint">
+      {#if w.paid !== undefined}{t('collected; paid')} <Amount sats={coinsToSats(w.paid)} />{/if}
+      {#if w.nobmm !== undefined}<span class="bid-nobmm">{t('%1 mainchain blocks without any BMM', formatCount(w.nobmm))}</span>{/if}
+      {#if w.toosoon !== undefined}<span class="bid-toosoon">{t('%1 missed: the block came too soon after the bid', formatCount(w.toosoon))}</span>{/if}
+    </span>
+  </div>
+{/snippet}
 
 <section class="panel" aria-labelledby="bid-title" id="bid-panel">
   <div class="panel-head">
@@ -639,20 +645,8 @@
             <strong id="bid-missed">{formatCount(bid.missed)}</strong>
             <span class="faint">{#if bid.feerate !== undefined}{t('fee estimate %1 sat/vB', bid.feerate.toFixed(2))}{:else}{t('no fee estimate')}{/if}</span>
           </div>
-          {#if windows.day}
-            <div id="bid-day">
-              <span>Anchors (24 h)</span>
-              <strong>{#if windows.day.collected !== undefined}<Amount sats={coinsToSats(windows.day.collected)} />{:else}–{/if}</strong>
-              <span class="faint">{#if windows.day.paid !== undefined}{t('collected; paid')} <Amount sats={coinsToSats(windows.day.paid)} />{/if}</span>
-            </div>
-          {/if}
-          {#if windows.week}
-            <div id="bid-week">
-              <span>Anchors (7 d)</span>
-              <strong>{#if windows.week.collected !== undefined}<Amount sats={coinsToSats(windows.week.collected)} />{:else}–{/if}</strong>
-              <span class="faint">{#if windows.week.paid !== undefined}{t('collected; paid')} <Amount sats={coinsToSats(windows.week.paid)} />{/if}</span>
-            </div>
-          {/if}
+          {#if a?.day}{@render windowFacts('bid-day', t('Anchors (24 h)'), a.day)}{/if}
+          {#if a?.week}{@render windowFacts('bid-week', t('Anchors (7 d)'), a.week)}{/if}
         </div>
         {#each bid.warnings as warning, i (i)}
           <p class="side-note side-bad bid-warning" role="alert"><SafeText text={warning} /></p>

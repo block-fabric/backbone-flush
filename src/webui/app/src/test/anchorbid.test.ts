@@ -40,7 +40,7 @@ const POLICY: BidPolicy = {
 };
 
 // The same on an 8.3.7 node: the fields of demand-driven anchoring, at their defaults.
-const POLICY_837: BidPolicy = { ...POLICY, batch: 10, heartbeathours: 6, valueatrisk: 1, reservepct: 20, reservetarget: 0.0001, turns: true, turnbackup: 2 };
+const POLICY_837: BidPolicy = { ...POLICY, batch: 10, heartbeathours: 6, valueatrisk: 1, reservepct: 20, reservetarget: 0.01, turns: true, turnbackup: 2 };
 
 const BID: BidStatus = {
   validator: true,
@@ -298,15 +298,15 @@ describe('the bidding panel', () => {
 describe('the bidding panel on an 8.3.7 node (demand-driven anchoring)', () => {
   const ANCHORING: AnchoringInfo = {
     reserve: 0.00004,
-    reservetarget: 0.0001,
+    reservetarget: 0.01,
     deficit: 0,
     valueatrisk: 0.3,
     batchneeded: 0.0000378,
     pot: 0.000012,
     nextheartbeat: 0,
     turn: { designated: false, mainheight: 973962 },
-    day: { collected: 0.0002, paid: 0.00015, anchors: { fees: 3, heartbeat: 1 } },
-    '7d': { collected: 0.001, paid: 0.0008 },
+    day: { collected: 0.0002, paid: 0.00015, anchors: { fees: 3, heartbeat: 1 }, nobmm: 4, toosoon: 2 },
+    week: { collected: 0.001, paid: 0.0008 },
   };
   beforeEach(() => {
     info = { ...info, policy: { ...POLICY_837 }, defaults: { ...POLICY_837 } };
@@ -320,13 +320,16 @@ describe('the bidding panel on an 8.3.7 node (demand-driven anchoring)', () => {
     expect(document.getElementById('bid-line-batch')!.textContent).toMatch(/Waiting for fees:.*0\.000012.*of.*0\.0000378.*needed/);
     expect(document.getElementById('bid-line-heartbeat')!.textContent).toMatch(/heartbeat in 4 h 12 m/);
     expect(document.getElementById('bid-line-risk')!.textContent).toMatch(/unanchored value.*0\.3.*\/.*1/);
-    expect(document.getElementById('bid-line-reserve')!.textContent).toMatch(/reserve.*0\.00004.*\/.*0\.0001/);
+    expect(document.getElementById('bid-line-reserve')!.textContent).toMatch(/reserve.*0\.00004.*\/ 0\.010*\b/);
     expect(document.getElementById('bid-line-reserve')!.textContent).not.toMatch(/short/);
     expect(document.getElementById('bid-line-turn')!.textContent).toMatch(/another validator's turn/);
     expect(line).toMatch(/spent today.*0\.0003.*of.*0\.001/);
-    // The windows, under either spelling.
+    // The windows, with the blocks without BMM and the misses too soon when given.
     expect(document.getElementById('bid-day')!.textContent).toMatch(/0\.0002.*paid.*0\.00015/);
     expect(document.getElementById('bid-week')!.textContent).toMatch(/0\.001.*paid.*0\.0008/);
+    expect(document.getElementById('bid-day')!.textContent).toMatch(/4 mainchain blocks without any BMM/);
+    expect(document.getElementById('bid-day')!.textContent).toMatch(/2 missed: the block came too soon after the bid/);
+    expect(document.getElementById('bid-week')!.querySelector('.bid-nobmm, .bid-toosoon')).toBeNull();
     // The card says what the plan does now.
     expect(screen.getByRole('radio', { name: /^Recommended/ }).closest('label')!.textContent).toMatch(/in batches, with a heartbeat/);
   });
@@ -340,7 +343,7 @@ describe('the bidding panel on an 8.3.7 node (demand-driven anchoring)', () => {
   });
 
   it('getanchorinfo\'s bid may carry "anchoring" too', async () => {
-    bid = { ...bid, anchoring: { reserve: 0.00001, reservetarget: 0.0001 } };
+    bid = { ...bid, anchoring: { reserve: 0.00001, reservetarget: 0.01 } };
     render(BiddingPanel);
     await waitFor(() => expect(document.getElementById('bid-line-reserve')?.textContent).toMatch(/reserve.*0\.00001/));
   });
@@ -371,7 +374,7 @@ describe('the bidding panel on an 8.3.7 node (demand-driven anchoring)', () => {
     expect(document.getElementById('bid-adjusted')).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
-    expect(sentFields()).toEqual({ batch: 10, valueatrisk: '1', reservetarget: '0.0001', turns: true });
+    expect(sentFields()).toEqual({ batch: 10, valueatrisk: '1', reservetarget: '0.01', turns: true });
   });
 
   it('choosing Recommended from another plan brings the recommended values with it', async () => {

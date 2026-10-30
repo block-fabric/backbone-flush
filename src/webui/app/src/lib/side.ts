@@ -73,6 +73,10 @@ export interface AnchoringWindow {
   collected?: number;
   paid?: number;
   anchors?: Record<string, number>;
+  /** Mainchain blocks without any BMM commitment. */
+  nobmm?: number;
+  /** Missed bids whose mainchain block came less than ~4 s after the bid. */
+  toosoon?: number;
 }
 
 /** getbmminfo's "anchoring" (8.3.7): the reserve, what a batch needs, the heartbeat, whose turn. Every field optional. */
@@ -85,11 +89,9 @@ export interface AnchoringInfo {
   pot?: number;
   nextheartbeat?: number;
   turn?: { designated: boolean; mainheight?: number };
-  // The spec names "over 24 h and 7 d" without keys: either spelling is read.
+  /** The last 24 h and 7 d. */
   day?: AnchoringWindow;
   week?: AnchoringWindow;
-  '24h'?: AnchoringWindow;
-  '7d'?: AnchoringWindow;
 }
 
 /** getbmminfo: continuous blind merged mining. */
