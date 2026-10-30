@@ -6,7 +6,7 @@
 
 The validators of feature_fastblocks_idle.py, on mock time, with the default policy (no -validatoranchorbidstrategy):
 
-  - a quiet chain (no fees, no peg or staking action waiting): no bid (Fees: no fees, no bid) while the stall
+  - a quiet chain (no fees, no peg work waiting; the staking accounting is no work): no bid (Fees: no fees, no bid) while the stall
     pressure is below its threshold (0.5 of max_unanchored_slots), even across epochs (no anchor an epoch);
   - from the threshold: stall prevention's bid, the boost (4 x the base);
   - once anchored, quiet again: no bid; a deposit on the mainchain: a bid at once (stall prevention: peg work waiting).

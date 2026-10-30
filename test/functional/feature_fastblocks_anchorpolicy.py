@@ -13,10 +13,12 @@ transaction below 50 sat/vB (-blockmintxfee): a congested mempool, whatever the 
   - setanchorbidpolicy: checked (floor above max, an unknown strategy, a share over 100 %, a pressure of 0, a falling
     curve), kept in settings.json over the options, read back after a restart; reset: the options' policy again;
   - the strategy names before 8.3.6 (doc/fastblocks-anchor-bids.md, "The names before 8.3.6") and the new form, by the
-    RPC and from an 8.3.5 settings.json (the app's feespreventstall with floor 0: Fees, Prevent stalling on);
+    RPC and from an 8.3.5 settings.json (the app's feespreventstall with floor 0: Fees, Prevent stalling on; a floor set
+    later, at once and after a restart; a floor without a strategy; 8.3.5's off and fees);
   - congested, Fees + minimum with Prevent stalling: the minimum's bids stay out of the mainchain's blocks (missed, the
     "bid too low" warning, the rebids not enough) while the stall pressure p stays below the threshold (0.5); once p
-    crosses it the escalated bid lands, the run ends, the bid drops back to the minimum, and the chain never halts.
+    crosses it the escalated bid lands, the run ends, the bid drops back to the minimum, and the chain never halts;
+  - the period's spending and the bids made, kept across a restart.
 """
 
 import json
@@ -131,16 +133,19 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
             assert "anchorbidpolicy" not in json.load(f)
 
         self.log.info("The names before 8.3.6, and the new form")
+        # (fees, fixed and off are new names here: they say nothing of Prevent stalling, which only "preventstall": false
+        # turns off; fees from the options' policy is Fees + Prevent stalling.)
         for fields, strategy, stall in (
-            ({"strategy": "fees"}, "fees", False),
+            ({"strategy": "fees"}, "fees", True),
             ({"strategy": "feespreventstall", "floor": 0}, "fees", True),
             ({"strategy": "feespreventstall", "floor": 0.00001}, "feesminimum", True),
             ({"strategy": "minimal"}, "minimum", True),
-            ({"strategy": "fixed"}, "fixed", False),
-            ({"strategy": "off"}, "off", False),
+            ({"strategy": "fixed"}, "fixed", True),
+            ({"strategy": "off"}, "off", True),
             ({"strategy": "fees", "preventstall": True}, "fees", True),
             ({"preventstall": False, "strategy": "minimum"}, "minimum", False),
             ({"strategy": "feesminimum"}, "feesminimum", False),
+            ({"strategy": "fees"}, "fees", False),
         ):
             info = n0.setanchorbidpolicy(fields)
             assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), (strategy, stall))
@@ -162,6 +167,34 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         policy = n0.getanchorbidpolicy()["policy"]
         assert_equal((policy["strategy"], policy["preventstall"], sats(policy["floor"]), policy["usefeeestimate"]), ("fees", True, 0, False))
         assert_equal((sats(policy["max"]), sats(policy["periodcap"]), policy["feeshare"]), (10_000, 100_000, 99))
+        # A floor set later on that old word: Fees + minimum at once (8.3.5's feespreventstall bid at least its floor), and the same after a restart.
+        info = n0.setanchorbidpolicy({"floor": 0.00001})
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), ("feesminimum", True))
+        self.restart_validator(0)
+        policy = n0.getanchorbidpolicy()["policy"]
+        assert_equal((policy["strategy"], policy["preventstall"], sats(policy["floor"])), ("feesminimum", True, 1000))
+        n0.setanchorbidpolicy(reset=True)
+
+        def with_settings(saved):
+            self.stop_node(0)
+            with open(path, encoding="utf8") as f:
+                settings = json.load(f)
+            settings["anchorbidpolicy"] = saved
+            with open(path, "w", encoding="utf8") as f:
+                json.dump(settings, f)
+            self.restart_validator(0)
+            return n0.getanchorbidpolicy()
+
+        # 8.3.5 saved only the fields changed: a floor without a strategy is 8.3.5's default, feespreventstall, with it: Fees + minimum.
+        info = with_settings({"floor": 0.00001, "max": 0.0001})
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"], sats(info["policy"]["floor"])), ("feesminimum", True, 1000))
+        # 8.3.5's off turned its anchorer off alone, the merged miner bidding on: "Anchor my validator" off, the strategy kept.
+        info = with_settings({"strategy": "off"})
+        assert_equal((info["policy"]["strategy"], info["policy"]["anchor"], info["bidding"]), ("feesminimum", False, False))
+        assert_equal(n0.getbmminfo()["bidpolicy"]["strategy"], "feesminimum")
+        # 8.3.5's fees: no stall prevention.
+        info = with_settings({"strategy": "fees", "floor": 0})
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), ("fees", False))
         n0.setanchorbidpolicy(reset=True)
 
         self.log.info("Congested: node 0 the only bidder (the others off), a steep curve from p = 0.5")
@@ -238,6 +271,19 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         landed = [h for h in n0.getanchorinfo(50)["bid"]["history"] if h["status"] == "landed"]
         assert_greater_than(len(landed), 1)
         assert_equal(len({n.getbestblockhash() for n in self.nodes}), 1)
+
+        self.log.info("The period's spending and the bids made are kept across a restart (anchorbids.json)")
+        before = n0.getanchorinfo(50)["bid"]
+        spent = sats(before["spentperiod"])
+        assert_greater_than(spent, 0)
+        assert_equal(spent, sum(sats(h["offer"]) for h in landed))
+        self.restart_validator(0)
+        assert os.path.exists(os.path.join(n0.chain_path, "anchorbids.json"))
+        after = n0.getanchorinfo(50)["bid"]
+        assert_equal(sats(after["spentperiod"]), spent)
+        assert_equal([(h["ticket"], h["offer"]) for h in after["history"] if h["status"] == "landed"], [(h["ticket"], h["offer"]) for h in landed])
+        bmm = n0.getbmminfo()["bidpolicy"]
+        assert_equal(sats(bmm["spentperiod"]), spent)
         self.log.info(f"Missed {missed_before} mainchain blocks at the floor; landed at slot {landed_at}; the halt would have been at {halt_slot}")
 
     def setup_chain_and_validators(self):

@@ -379,6 +379,33 @@ BOOST_FIXTURE_TEST_CASE(pending_peg_actions, BasicTestingSetup)
     BOOST_CHECK(HasPendingAnchorActions(side, record));
 }
 
+// The staking accounting is no peg work: a fee pool waiting (the incident: 0.0001479 ECX, a bid every mainchain block)
+// sets off no bid without fees.
+BOOST_FIXTURE_TEST_CASE(staking_accounting_is_no_peg_work, BasicTestingSetup)
+{
+    sidechain::EmptyStore empty;
+    sidechain::StoreOverlay store{empty};
+    // The validator pool (pos/hooks.cpp's POOL, table 0x5f).
+    const sidechain::Table<uint64_t, int64_t> pool{0x5f};
+    pool.Put(store, 72, 14'790);
+    sidechain::State side{store};
+    BOOST_CHECK_EQUAL(PoolTotal(side.View()), 14'790);
+    sidechain::Mainchain record;
+    sidechain::MainBlock block;
+    block.hash = uint256{1};
+    BOOST_REQUIRE(record.Append(block));
+    BOOST_CHECK(!HasPendingAnchorActions(side, record));
+    // Fees with Prevent stalling, no fees, far from the limit: no bid.
+    BidInputs in{At(0.1)};
+    in.pending_actions = HasPendingAnchorActions(side, record);
+    const BidDecision d{DecideNodeBid(AnchorBidPolicy{}, in, BidTriggers{.anchor = true, .mine = true})};
+    BOOST_CHECK(!d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "idle");
+    // Near the limit, Prevent stalling bids all the same.
+    in.slot = in.first_unanchored_slot + in.max_unanchored_slots * 6 / 10;
+    BOOST_CHECK_EQUAL(DecideNodeBid(AnchorBidPolicy{}, in, BidTriggers{.anchor = true}).kind, "stall");
+}
+
 BOOST_AUTO_TEST_CASE(pressure_and_curve)
 {
     BOOST_CHECK(Close(StallPressure(100, -1, 1920), 0));
@@ -429,12 +456,12 @@ BOOST_AUTO_TEST_CASE(old_names)
         AnchorBidPolicy start;
         start.prevent_stall = before;
         for (const Case& c : std::vector<Case>{
-                 {R"({"strategy":"fees"})", BidStrategy::FEES, false},
                  {R"({"strategy":"feespreventstall"})", BidStrategy::FEES, true},
                  {R"({"strategy":"minimal"})", BidStrategy::MINIMUM, true},
-                 {R"({"strategy":"fixed"})", BidStrategy::FIXED, false},
                  {R"({"strategy":"Fees + prevent stalling"})", BidStrategy::FEES, true},
-                 // The new names say nothing of it: kept.
+                 // The new names say nothing of it: kept (fees and fixed are new names here: "preventstall": false alone turns it off).
+                 {R"({"strategy":"fees"})", BidStrategy::FEES, before},
+                 {R"({"strategy":"fixed"})", BidStrategy::FIXED, before},
                  {R"({"strategy":"minimum"})", BidStrategy::MINIMUM, before},
                  {R"({"strategy":"feesminimum"})", BidStrategy::FEES_MINIMUM, before},
                  {R"({"strategy":"Fees + minimum"})", BidStrategy::FEES_MINIMUM, before},
@@ -459,8 +486,10 @@ BOOST_AUTO_TEST_CASE(old_names)
     BOOST_CHECK(Applied(R"({"floor":0.00001,"strategy":"feespreventstall"})").strategy == BidStrategy::FEES_MINIMUM);
     BOOST_CHECK(Applied(R"({"strategy":"feespreventstall"})", Applied(R"({"floor":0.00001})")).strategy == BidStrategy::FEES_MINIMUM);
     BOOST_CHECK(Applied(R"({"strategy":"feespreventstall","floor":0})").strategy == BidStrategy::FEES);
-    // "fees" is a new name too: Fees, the floor kept but unused.
+    // "fees" is a new name too: Fees, the floor kept but unused; Prevent stalling on (the default) unless said off.
     BOOST_CHECK(Applied(R"({"strategy":"fees","floor":0.00001})").strategy == BidStrategy::FEES);
+    BOOST_CHECK(Applied(R"({"strategy":"fees"})").PreventsStall());
+    BOOST_CHECK(!Applied(R"({"strategy":"fees","preventstall":false})").PreventsStall());
     // Louis's app (8.3.5 settings.json): Fees, Prevent stalling on, no minimum.
     const AnchorBidPolicy ui{Applied(R"({"strategy":"feespreventstall","floor":0,"usefeeestimate":false,"feeshare":99,"max":0.0001,"periodcap":0.001})")};
     BOOST_CHECK(ui.strategy == BidStrategy::FEES);
@@ -479,6 +508,157 @@ BOOST_AUTO_TEST_CASE(old_names)
     BOOST_CHECK(live.strategy == BidStrategy::MINIMUM);
     BOOST_CHECK(live.prevent_stall);
     BOOST_CHECK_EQUAL(DecideBid(live, At(0)).amount, 10'000);
+}
+
+// The words both old and new (fees, fixed, off), by where they are said (doc/fastblocks-anchor-bids.md, "The names before 8.3.6").
+BOOST_AUTO_TEST_CASE(old_and_new_words_by_context)
+{
+    const auto applied{[](const std::string& json, StrategyContext context, AnchorBidPolicy policy = {}) {
+        UniValue fields;
+        BOOST_REQUIRE(fields.read(json));
+        std::string error;
+        BOOST_REQUIRE_MESSAGE(ApplyPolicyFields(policy, fields, error, context), error);
+        BOOST_REQUIRE_EQUAL(CheckPolicy(policy), "");
+        return policy;
+    }};
+    for (const StrategyContext context : {StrategyContext::CURRENT, StrategyContext::OPTIONS}) {
+        // New names: fees and fixed keep Prevent stalling (on by default).
+        BOOST_CHECK(applied(R"({"strategy":"fees"})", context).prevent_stall);
+        BOOST_CHECK(applied(R"({"strategy":"fixed","fixed":0.00001})", context).prevent_stall);
+        BOOST_CHECK(applied(R"({"strategy":"fees","floor":0.00001})", context).strategy == BidStrategy::FEES);
+    }
+    // off: the new Off in setanchorbidpolicy and the app; 8.3.5's off (the anchorer alone) in the options.
+    const AnchorBidPolicy off{applied(R"({"strategy":"off"})", StrategyContext::CURRENT)};
+    BOOST_CHECK(!off.Bids());
+    const AnchorBidPolicy anchor_off{applied(R"({"strategy":"off"})", StrategyContext::OPTIONS, With(BidStrategy::MINIMUM))};
+    BOOST_CHECK(anchor_off.Bids());
+    BOOST_CHECK(anchor_off.strategy == BidStrategy::MINIMUM);
+    BOOST_CHECK(!anchor_off.anchor);
+    BOOST_CHECK(anchor_off.prevent_stall);
+    // With it, the merged miner still bids (as setbmm did in 8.3.5); the anchorer does not (no anchor trigger: FollowerRound).
+    BOOST_CHECK(DecideNodeBid(anchor_off, At(0, std::nullopt, 10'000), BidTriggers{.mine = true}).bid);
+    // 8.3.5's settings: every word as 8.3.5 meant it.
+    const auto legacy{StrategyContext::LEGACY_SETTINGS};
+    AnchorBidPolicy p{applied(R"({"strategy":"fees"})", legacy)};
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(!p.prevent_stall);
+    p = applied(R"({"strategy":"fees","floor":0.00001})", legacy);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM); // 8.3.5's fees bid at least its floor
+    BOOST_CHECK(!p.prevent_stall);
+    p = applied(R"({"strategy":"fixed","fixed":0.00001})", legacy);
+    BOOST_CHECK(p.strategy == BidStrategy::FIXED);
+    BOOST_CHECK(!p.prevent_stall);
+    p = applied(R"({"strategy":"off","floor":0.00001})", legacy);
+    BOOST_CHECK(p.Bids());
+    BOOST_CHECK(!p.anchor);
+    BOOST_CHECK_EQUAL(p.floor, 1000);
+    BOOST_CHECK(applied(R"({"strategy":"off","anchor":true})", legacy).anchor); // (anchor said too: as said)
+    BOOST_CHECK(applied(R"({"strategy":"minimal"})", legacy).strategy == BidStrategy::MINIMUM);
+    // Which settings are 8.3.5's: neither preventstall nor anchor (8.3.6 saves preventstall with every change).
+    UniValue saved;
+    BOOST_REQUIRE(saved.read(R"({"floor":0.00001})"));
+    BOOST_CHECK(IsLegacySettings(saved));
+    BOOST_REQUIRE(saved.read(R"({"floor":0.00001,"preventstall":true})"));
+    BOOST_CHECK(!IsLegacySettings(saved));
+    BOOST_REQUIRE(saved.read(R"({"anchor":false})"));
+    BOOST_CHECK(!IsLegacySettings(saved));
+}
+
+// An 8.3.5 settings.json with a floor and no strategy (8.3.5 saved only the fields changed; its default was
+// feespreventstall): Fees + minimum with a floor above 0; and a floor set later the same at once as after a restart.
+BOOST_AUTO_TEST_CASE(legacy_settings_upgrade)
+{
+    const auto args_of{[](std::vector<const char*> argv, ArgsManager& args) {
+        for (const char* name : {"-validatoranchorbid", "-validatoranchorbidstrategy", "-validatoranchorbidpreventstall", "-validatoranchorbidmode"}) {
+            args.AddArg(name, "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+        }
+        argv.insert(argv.begin(), "x");
+        std::string error;
+        BOOST_REQUIRE(args.ParseParameters(argv.size(), argv.data(), error));
+    }};
+    // As StartServices reads the settings.
+    const auto start{[](const ArgsManager& args, const std::string& json, UniValue& overrides) {
+        const AnchorBidPolicy defaults{AnchorBidPolicyFromArgs(args, ChainType::MAIN)};
+        UniValue saved;
+        BOOST_REQUIRE(saved.read(json));
+        const bool legacy{IsLegacySettings(saved)};
+        const UniValue fields{legacy ? LegacyBidSettings(saved, defaults, args, ChainType::MAIN) : saved};
+        AnchorBidPolicy policy{defaults};
+        std::string error;
+        BOOST_REQUIRE_MESSAGE(ApplyPolicyFields(policy, fields, error, legacy ? StrategyContext::LEGACY_SETTINGS : StrategyContext::CURRENT), error);
+        overrides = legacy ? NormalizedLegacySettings(fields, policy) : saved;
+        return policy;
+    }};
+    // As setanchorbidpolicy changes the policy (without reset): the overrides it saves are the fields, normalized.
+    const auto set{[](AnchorBidPolicy policy, UniValue& overrides, const std::string& json) {
+        UniValue fields;
+        BOOST_REQUIRE(fields.read(json));
+        std::string error;
+        BOOST_REQUIRE(ApplyPolicyFields(policy, fields, error));
+        ReapplySavedStrategy(policy, overrides, fields);
+        const UniValue said{PolicyToUniValue(policy)};
+        UniValue kept{UniValue::VOBJ};
+        for (const std::string& key : overrides.getKeys()) {
+            if (fields.find_value(key).isNull() && key != "preventstall") kept.pushKV(key, overrides.find_value(key));
+        }
+        for (const std::string& key : fields.getKeys()) kept.pushKV(key, said.find_value(key));
+        if (fields.find_value("preventstall").isNull()) kept.pushKV("preventstall", said.find_value("preventstall"));
+        overrides = kept;
+        return policy;
+    }};
+    ArgsManager none;
+    args_of({}, none);
+    UniValue overrides;
+    // The floor alone: Fees + minimum, Prevent stalling on (as 8.3.5 bid at least its floor).
+    AnchorBidPolicy p{start(none, R"({"floor":0.00001})", overrides)};
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(p.prevent_stall);
+    BOOST_CHECK(!IsLegacySettings(overrides));
+    BOOST_CHECK_EQUAL(overrides.find_value("strategy").get_str(), "feespreventstall");
+    // ... read back the same from what 8.3.6 keeps.
+    UniValue again;
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
+    // A floor of 0 in them: Fees.
+    BOOST_CHECK(start(none, R"({"floor":0,"max":0.0001})", overrides).strategy == BidStrategy::FEES);
+    // The options' strategy when they say one: minimal stays Minimum.
+    ArgsManager minimal;
+    args_of({"-validatoranchorbidstrategy=minimal"}, minimal);
+    BOOST_CHECK(start(minimal, R"({"floor":0.00001})", overrides).strategy == BidStrategy::MINIMUM);
+    // -validatoranchorbidmode=fees (8.3.5's fees): at least the floor, no stall prevention.
+    ArgsManager mode;
+    args_of({"-validatoranchorbidmode=fees"}, mode);
+    p = start(mode, R"({"floor":0.00001})", overrides);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(!p.prevent_stall);
+    // 8.3.5's off in its settings: the anchorer off, the merged miner still bidding.
+    p = start(none, R"({"strategy":"off"})", overrides);
+    BOOST_CHECK(p.Bids());
+    BOOST_CHECK(!p.anchor);
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
+
+    // The saved strategy is the old word, floor 0 (the app of 8.3.5): Fees. A floor set later: Fees + minimum at once, and after a restart.
+    p = start(none, R"({"strategy":"feespreventstall","floor":0})", overrides);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    p = set(p, overrides, R"({"floor":0.00001})");
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
+    // And back to 0: Fees, both ways.
+    p = set(p, overrides, R"({"floor":0})");
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
+    // A strategy said in the new words replaces it: no floor makes it anything else then.
+    p = set(p, overrides, R"({"strategy":"fees"})");
+    p = set(p, overrides, R"({"floor":0.00001})");
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
+    // 8.3.5's fees with a floor of 0, then a floor: Fees + minimum, without stall prevention, both ways.
+    p = start(none, R"({"strategy":"fees","floor":0})", overrides);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(!p.prevent_stall);
+    p = set(p, overrides, R"({"floor":0.00001})");
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(!p.prevent_stall);
+    BOOST_CHECK(start(none, overrides.write(), again) == p);
 }
 
 BOOST_AUTO_TEST_CASE(fields_and_checks)
@@ -724,25 +904,32 @@ BOOST_AUTO_TEST_CASE(node_bid_options)
     BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.anchor = true}).amount, 10'000);
     BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.mine = true}).amount, 10'000);
     // The old names, the new names and the checkbox.
+    // fees is the new Fees: Prevent stalling on unless -novalidatoranchorbidpreventstall.
     BOOST_CHECK(from({"-validatoranchorbidstrategy=fees"}).strategy == BidStrategy::FEES);
-    BOOST_CHECK(!from({"-validatoranchorbidstrategy=fees"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=fees"}).prevent_stall);
+    BOOST_CHECK(!from({"-validatoranchorbidstrategy=fees", "-novalidatoranchorbidpreventstall"}).prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbidstrategy=feespreventstall"}).prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbidstrategy=feespreventstall"}).strategy == BidStrategy::FEES);
-    BOOST_CHECK(!from({"-validatoranchorbidstrategy=fixed", "-validatoranchorbid=0.00001"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=fixed", "-validatoranchorbid=0.00001"}).prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbidstrategy=minimum"}).prevent_stall);
     BOOST_CHECK(!from({"-validatoranchorbidstrategy=minimum", "-validatoranchorbidpreventstall=0"}).prevent_stall);
     BOOST_CHECK(!from({"-validatoranchorbidstrategy=minimum", "-novalidatoranchorbidpreventstall"}).prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbidstrategy=fees", "-validatoranchorbidpreventstall"}).prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbidstrategy=feesminimum"}).strategy == BidStrategy::FEES_MINIMUM);
-    BOOST_CHECK(from({"-validatoranchorbidstrategy=off"}).strategy == BidStrategy::OFF);
+    // off in the options is 8.3.5's: the anchorer off alone, the merged miner still bids.
+    p = from({"-validatoranchorbidstrategy=off"});
+    BOOST_CHECK(p.Bids());
+    BOOST_CHECK(!p.anchor);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
     // A floor alone, the old default feespreventstall: at least the floor, Fees + minimum; a floor of 0: Fees.
     p = from({"-validatoranchorbid=0.00001"});
     BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
     BOOST_CHECK(p.prevent_stall);
     BOOST_CHECK(from({"-validatoranchorbid=0"}).strategy == BidStrategy::FEES);
     BOOST_CHECK(from({"-validatoranchorbidmode=standard"}).strategy == BidStrategy::FEES);
+    // 8.3.5's fees mode: the pot whole, at least the floor, no stall prevention.
     p = from({"-validatoranchorbidmode=fees", "-validatoranchorbid=0.00001"});
-    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
     BOOST_CHECK(!p.prevent_stall);
     BOOST_CHECK_EQUAL(p.fee_share_bps, 10000);
     // The anchorer off: "Anchor my validator" off; the merged miner bids all the same.
