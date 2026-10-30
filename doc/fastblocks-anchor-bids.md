@@ -23,7 +23,11 @@ stalling; strategies are not really convenient"):
 
 **The minimum** is the user's floor (`floor`), or the relay minimum of a request if higher: the mainchain's relay
 rate (`getnetworkinfo` `relayfee`, raised by `getmempoolinfo` `mempoolminfee`) times the larger of `requestvsize` and
-250 vB (the largest request a wallet makes), rounded up. 1 sat/vB: 250 sat. A floor of 0 means the relay minimum.
+250 vB (the largest request a wallet makes), rounded up. 1 sat/vB: 250 sat. A floor of 0 means the relay minimum:
+since 8.3.6 an explicit bid of 0 (`-validatoranchorbid=0`, `floor` 0) under Minimum and Fees + minimum is no longer a
+request that pays the mainchain nothing but one of the relay minimum, since a bid below the relay rate never
+propagates on eCash (a cooperating miner, Backbone `-bmmzerofee`, is no reason to bid less). Only `max` below it
+makes a bid smaller.
 
 **☑ Prevent stalling** (`preventstall`, on by default), whatever the strategy but Off:
 

@@ -2,16 +2,22 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""A validator's anchorer bidding 0, and passing the fees into its bid (Fees + minimum at 100 %, a minimum of 0).
+"""A validator's anchorer bidding its minimum, and passing the fees into its bid (Fees + minimum at 100 %, a floor of 0).
 
 The mainchain is a cooperating miner: Backbone with -bmmzerofee (it takes BMM requests that pay no fee), looked
 for in MAINCHAIN_BIN_DIR (a build of the bmm-zero branch); the test is skipped without one. Three genesis
 validators, 15-second slots on mock time, as feature_fastblocks_idle.py:
 
-  - Minimum every block, floor 0, no fees: every request pays the mainchain 0, and anchors land;
-  - Fees + minimum at 100 %, floor 0: a transaction's fees on the sidechain; the requests pay what the pot pays the
-    ticket's payee for the anchor (on this chain, as before), and the pot accrued is the bidder's share of
-    the transaction's fee (BidderShare at the next block's bidderbps): the share passed into the bid, once;
+An explicit floor of 0 under Minimum and Fees + minimum (since 8.3.6) means the relay minimum, not a bid of 0: the
+mainchain's relay rate (relayfee, raised by mempoolminfee) times the larger of the request's vsize and 250 vB, rounded
+up, as a bid below the relay rate never propagates on eCash. The test computes it from the mainchain.
+
+  - Minimum every block, floor 0, no fees: every request pays the mainchain the relay minimum (or 500 sat above a bid
+    of its own that did not land: the stale rule), and anchors land;
+  - Fees + minimum at 100 %, floor 0: a transaction's fees on the sidechain; the request whose anchor pays the pot
+    bids what the pot pays the ticket's payee (on this chain, as before), the others the minimum, and the pot accrued
+    is the bidder's share of the transaction's fee (BidderShare at the next block's bidderbps): the share passed into
+    the bid, once;
   - the same with a cap (-validatoranchorbidmax): the request pays the cap, the payee still the whole pot.
 """
 
@@ -59,6 +65,17 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         assert_equal(len(entries), 1)
         return sats(next(iter(entries.values()))["fees"]["base"])
 
+    def relay_minimum(self, vsize=189):
+        """The relay minimum of a request (pos::MinimumBid with a floor of 0): the mainchain's relay rate (relayfee, raised by
+        mempoolminfee) times the larger of the request's vsize and 250 vB, rounded up."""
+        rate = max(sats(self.main.getnetworkinfo()["relayfee"]), sats(self.main.getmempoolinfo()["mempoolminfee"]))
+        return -(-rate * max(vsize, 250) // 1000)
+
+    def assert_minimum_bids(self, fees, minimum):
+        """Bids of the minimum, or of the minimum raised above a bid of this node that did not land (another validator's
+        commitment got in instead: the stale rule, REPLACEMENT_BUMP 500 sat above it, which other nodes may still hold)."""
+        assert all(f >= minimum and (f - minimum) % 500 == 0 for f in fees), fees
+
     def pot(self):
         info = self.nodes[0].getposinfo()
         return sats(info["pot"]["accrued"]), sats(info["pot"]["paid"]), info["anchors"]
@@ -98,10 +115,15 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         self.main_address = main.getnewaddress()
         self.setup_chain_and_validators()
 
-        self.log.info("Minimum, floor 0, no fees: requests of 0, mined by the cooperating miner; anchors land")
+        self.log.info("Minimum, floor 0, no fees: requests of the relay minimum; anchors land")
         self.next_slot()
+        minimum = self.relay_minimum()
+        assert_greater_than(minimum, 0)
+        assert_equal(sats(n0.getanchorinfo()["bid"]["effective"]), minimum)
         fees, paid = self.window(4)
-        assert_equal((fees, paid), ([0] * 4, 0))
+        self.log.info(f"relay minimum {minimum} sat: bids {fees}, paid {paid}")
+        self.assert_minimum_bids(fees, minimum)
+        assert_equal(paid, 0)
         assert_equal(len({n.getbestblockhash() for n in self.nodes}), 1)
 
         self.log.info("Fees + minimum at 100 %, floor 0: the bidder's share of the fees passed into the bid, once")
@@ -122,8 +144,10 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         assert_equal(accrued - accrued_before, share)
         assert_equal(accrued, out)
         assert_equal(paid, share)
-        # The request whose anchor paid the pot bid it whole; the others nothing (no fees left to pass on).
-        assert_equal(sorted(fees), [0] * (len(fees) - 1) + [share])
+        # The request whose anchor paid the pot bid it whole; the others the minimum (no fees left to pass on).
+        assert_equal(max(fees), share)
+        fees.remove(share)
+        self.assert_minimum_bids(fees, minimum)
 
         self.log.info("Fees + minimum with a cap: the request pays the cap; the payee still the whole pot")
         cap = 7
