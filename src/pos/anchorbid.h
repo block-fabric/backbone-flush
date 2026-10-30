@@ -138,6 +138,29 @@ struct AnchorBidPolicy {
     int stall_reserve_pct{50};
     //! A warning when the bid wallet covers fewer mainchain blocks than this at the current bid (0: none).
     int low_balance_blocks{1008};
+    //! Since 8.3.7, demand-driven anchoring (doc/fastblocks-anchor-bids.md, "When the anchorer bids"):
+    //! Fees bids only once the fee share is `batch` times the landing price (MinimumBid) at least, so that one anchor
+    //! carries the fees of many blocks: the pot keeps growing across the blocks no anchor covers, so waiting loses no
+    //! fees, and a request of ~378 sat on eCash is not paid for every few sat of fees. 0: as before 8.3.7 (a share that
+    //! pays for its own request).
+    double batch{10};
+    //! The heartbeat: after this many hours without an anchor (the age of the unanchored run, in slots), a bid of the
+    //! competitive base whatever the fees, so that a quiet chain is anchored every few hours, not only at the stall
+    //! bid's p = 0.5 (8 h on eCash mainnet). 0: none.
+    double heartbeat_hours{6};
+    //! Value at risk: when the transactions of the blocks of stake no anchor covers move this much at least (the sum of
+    //! their outputs), a bid like work waiting (the competitive base, the work throttle). 0: none.
+    CAmount value_at_risk{COIN};
+    //! The anchor reserve, a ledger of this node funded by its fee bids: while it holds less than reserve_target, a fee
+    //! bid keeps back reserve_pct of the fee share (at most what the reserve lacks), credited when the bid lands; a
+    //! landed bid without fees behind it (the heartbeat, work, value at risk, a stall) is debited from it.
+    int reserve_pct{20};
+    CAmount reserve_target{1'000'000};
+    //! Taking turns: of the active validators, one is designated for each mainchain block (DesignatedBidder) and bids at
+    //! once; the others hold their bid until the need has gone turn_backup mainchain blocks without an anchor. Fees only;
+    //! a stall bid never waits.
+    bool turns{true};
+    int turn_backup{2};
 
     bool Bids() const { return strategy != BidStrategy::OFF; }
     //! A bid for every mainchain block (the minimum strategies and fixed), not only when fees pay.
@@ -189,6 +212,12 @@ struct BidInputs {
     int missed{0};
     //! What landed bids cost in the current period.
     CAmount spent_in_period{0};
+    //! What the transactions of the blocks of stake no anchor covers move: the sum of their outputs (change too).
+    CAmount value_at_risk{0};
+    //! What the node's anchor reserve holds (AnchorBidPolicy::reserve_pct).
+    CAmount reserve{0};
+    //! The length of a slot, for the heartbeat's hours.
+    int64_t slot_seconds{15};
 };
 
 /** A BMM request a mainchain block took: its slot and its feerate (per 1000 vbytes). */
@@ -224,8 +253,10 @@ struct BidDecision {
     CAmount amount{0};
     //! The strategy's bid before stall prevention.
     CAmount normal{0};
-    //! "fees", "minimum", "fixed", "rebid", "pending" (peg work), "stall" (the stall boost), "escalation" (the curve), "max", "periodcap", "replace",
-    //! "always", "idle" (Fees without fees that pay) or "off".
+    //! "fees", "minimum", "fixed", "rebid", "pending" (peg work), "valueatrisk" (the value the unanchored blocks move),
+    //! "heartbeat" (hours without an anchor), "stall" (the stall boost), "escalation" (the curve), "max", "periodcap",
+    //! "replace", "always", "idle" (Fees without fees that pay, or below a batch) or "off"; the node adds "throttled"
+    //! and "turn" (another validator's turn).
     std::string kind;
     //! In words, for the log and the pages.
     std::string reason;
@@ -235,8 +266,22 @@ struct BidDecision {
     std::string trigger;
     //! A stall prevention bid (the stall boost or the curve): it may spend the whole cap, the stall reserve too.
     bool stall{false};
-    //! A bid for work waiting without fees (kind "pending" before the limits): throttled by the node (FollowerRound).
+    //! A bid for work waiting without fees (kind "pending" or "valueatrisk" before the limits): throttled by the node
+    //! (FollowerRound).
     bool work{false};
+    //! A heartbeat bid: never throttled, and, as liveness, it may spend the stall reserve of the cap.
+    bool heartbeat{false};
+    //! What the bid is for, before the limits (max, periodcap, replace) name it: "fees", "minimum", "fixed", "rebid",
+    //! "pending", "valueatrisk", "heartbeat", "stall", "escalation", "always" (or "hand", a bid by hand).
+    std::string basis;
+    //! What a fee bid keeps back of the fee share for the anchor reserve, credited to it when the bid lands.
+    CAmount holdback{0};
+    //! A bid with no fees behind it (work, value at risk, the heartbeat, a stall): debited from the reserve when it lands.
+    bool unfunded{false};
+    //! A bid that takes turns (AnchorBidPolicy::turns: Fees, not a stall bid): a validator not designated holds it.
+    bool turns{false};
+    //! Whether it may spend the stall reserve of the cap (CapLeft's `stall`): a stall bid or a heartbeat.
+    bool SpendsReserve() const { return stall || heartbeat; }
 };
 
 /**
@@ -271,7 +316,7 @@ inline constexpr CAmount MINE_MIN_OFFER{500};
 struct BidTriggers {
     //! "Anchor my validator": a validator's own anchorer (a validator whose policy has `anchor`).
     bool anchor{false};
-    //! "Mine blocks when fees pay": the merged miner (setbmm on), which bids when the fee share pays for a request.
+    //! "Merged-mine as a backup producer": the merged miner (setbmm on), which bids when the fee share pays for a request.
     bool mine{false};
     //! setbmm's "always" (for tests): a bid for every mainchain block, `mine_amount` (at most the policy's max).
     bool mine_always{false};
@@ -286,6 +331,35 @@ struct BidTriggers {
  * larger of requestvsize and 250 vB, rounded up) if higher.
  */
 CAmount MinimumBid(const AnchorBidPolicy& policy, const BidInputs& inputs);
+
+/**
+ * The relay minimum of a request: the relay rate times the larger of requestvsize and 250 vB, rounded up (the
+ * largest request a wallet makes; a request of more inputs than the usual 189 vB was refused under it).
+ */
+CAmount RelayMinimum(const AnchorBidPolicy& policy, const BidInputs& inputs);
+
+/**
+ * The fee share from which Fees bids: `batch` times the landing price (MinimumBid), rounded up, and at least what pays
+ * for a request (MINE_MIN_OFFER, the relay minimum).
+ */
+CAmount BatchNeeded(const AnchorBidPolicy& policy, const BidInputs& inputs);
+
+/** The heartbeat's age of the unanchored run in slots of `slot_seconds` (heartbeat_hours, rounded up); 0: none. */
+int64_t HeartbeatSlots(const AnchorBidPolicy& policy, int64_t slot_seconds);
+
+/** What a fee bid of `share` keeps back for a reserve holding `reserve`: reserve_pct of it, at most what the reserve lacks of its target. */
+CAmount Holdback(const AnchorBidPolicy& policy, CAmount share, CAmount reserve);
+
+/**
+ * The validator designated to bid for mainchain block `main_height` (taking turns): of `validators` sorted by key, the
+ * one at the first 8 bytes of SHA256(seed, main_height), little-endian, mod their number. The same on every node that
+ * knows the set and the seed (the epoch's, else a value of the chain both know). Nothing for an empty set.
+ */
+std::optional<uint256> DesignatedBidder(std::vector<uint256> validators, const uint256& seed, int main_height);
+
+//! A bid that misses this many times the relay minimum or more is not too low: the mainchain's pool may not be
+//! including BMM commitments at all (the enforcer, or the pool's side), and the warning says so.
+inline constexpr int POOL_WARNING_RELAY_MULTIPLE{10};
 
 /**
  * The bid of the node for these inputs and triggers: the policy's (DecideBid), the same for both triggers; setbmm's

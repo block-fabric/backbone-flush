@@ -34,6 +34,8 @@ BidInputs At(double p, std::optional<CAmount> rate = std::nullopt, CAmount pot =
     in.pot = pot;
     // A quiet chain: no peg work waiting (pending_peg_work below).
     in.pending_actions = false;
+    // A full anchor reserve (the default target): fee bids keep nothing back (demand_driven_reserve has an empty one).
+    in.reserve = 1'000'000;
     return in;
 }
 
@@ -42,6 +44,9 @@ AnchorBidPolicy With(BidStrategy strategy, bool prevent_stall = true)
     AnchorBidPolicy policy;
     policy.strategy = strategy;
     policy.prevent_stall = prevent_stall;
+    // (8.3.6's bids: no batches, no anchor reserve; demand_driven below has 8.3.7's.)
+    policy.batch = 0;
+    policy.reserve_pct = 0;
     return policy;
 }
 
@@ -1113,6 +1118,198 @@ BOOST_AUTO_TEST_CASE(node_bid_options)
     BidInputs fees{At(0, std::nullopt, 100'000)};
     BOOST_CHECK_EQUAL(DecideNodeBid(reg, fees, BidTriggers{.mine = true}).amount, sidechain::Follower::Offer(100'000));
     BOOST_CHECK(from({"-validatoranchorbid=0"}, ChainType::REGTEST).anchor);
+}
+
+// Since 8.3.7: demand-driven anchoring (doc/fastblocks-anchor-bids.md, "When the anchorer bids").
+BOOST_AUTO_TEST_CASE(demand_driven_defaults)
+{
+    const AnchorBidPolicy policy;
+    BOOST_CHECK_EQUAL(policy.batch, 10);
+    BOOST_CHECK_EQUAL(policy.heartbeat_hours, 6);
+    BOOST_CHECK_EQUAL(policy.value_at_risk, COIN);
+    BOOST_CHECK_EQUAL(policy.reserve_pct, 20);
+    BOOST_CHECK_EQUAL(policy.reserve_target, 1'000'000);
+    BOOST_CHECK(policy.turns);
+    BOOST_CHECK_EQUAL(policy.turn_backup, 2);
+    const UniValue said{PolicyToUniValue(policy)};
+    for (const char* key : {"batch", "heartbeathours", "valueatrisk", "reservepct", "reservetarget", "turns", "turnbackup"}) {
+        BOOST_CHECK_MESSAGE(!said.find_value(key).isNull(), key);
+        BOOST_CHECK(std::ranges::find(PolicyFieldNames(), key) != PolicyFieldNames().end());
+    }
+    BOOST_CHECK_EQUAL(said.find_value("reservetarget").getValStr(), "0.01000000");
+    // Set and checked as the other fields; an old policy without them reads their defaults.
+    const AnchorBidPolicy set{Applied(R"({"batch":2.5,"heartbeathours":0,"valueatrisk":"0.5","reservepct":30,"reservetarget":0.001,"turns":false,"turnbackup":4})")};
+    BOOST_CHECK_EQUAL(set.batch, 2.5);
+    BOOST_CHECK_EQUAL(set.heartbeat_hours, 0);
+    BOOST_CHECK_EQUAL(set.value_at_risk, COIN / 2);
+    BOOST_CHECK_EQUAL(set.reserve_pct, 30);
+    BOOST_CHECK_EQUAL(set.reserve_target, 100'000);
+    BOOST_CHECK(!set.turns);
+    BOOST_CHECK_EQUAL(set.turn_backup, 4);
+    BOOST_CHECK(Applied(R"({"strategy":"fees","floor":0})") == [] { AnchorBidPolicy p; return p; }());
+    for (const char* bad : {R"({"batch":-1})", R"({"batch":1001})", R"({"heartbeathours":745})", R"({"reservepct":101})", R"({"turns":"maybe"})"}) {
+        UniValue fields;
+        BOOST_REQUIRE(fields.read(bad));
+        AnchorBidPolicy p;
+        std::string error;
+        BOOST_CHECK_MESSAGE(!ApplyPolicyFields(p, fields, error) || !CheckPolicy(p).empty(), bad);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(demand_driven_batches)
+{
+    // Fees bids once the fee share is batch x the landing price (MinimumBid: 250 sat at 1 sat/vB): 2500 sat.
+    AnchorBidPolicy policy{With(BidStrategy::FEES, /*prevent_stall=*/false)};
+    policy.batch = 10;
+    BidInputs in{At(0)};
+    BOOST_CHECK_EQUAL(BatchNeeded(policy, in), 2500);
+    in.pot = 2500; // a share of 2475
+    BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK(!d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "idle");
+    BOOST_CHECK(d.reason.find("waits for a batch") != std::string::npos);
+    in.pot = 2525; // 2500
+    d = DecideBid(policy, in);
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 2500);
+    BOOST_CHECK_EQUAL(d.basis, "fees");
+    // The landing price follows the floor and the relay rate; batch 0 is 8.3.6's rule (the share pays for a request).
+    policy.floor = 1000;
+    BOOST_CHECK_EQUAL(BatchNeeded(policy, in), 10'000);
+    policy.batch = 0;
+    BOOST_CHECK_EQUAL(BatchNeeded(policy, in), MINE_MIN_OFFER);
+    in.pot = 506;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 501);
+    // No fees at all: the words of before.
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0)).reason, "no bid: no fees");
+}
+
+BOOST_AUTO_TEST_CASE(demand_driven_heartbeat)
+{
+    AnchorBidPolicy policy{With(BidStrategy::FEES)};
+    policy.heartbeat_hours = 6;
+    BOOST_CHECK_EQUAL(HeartbeatSlots(policy, 15), 1440);
+    BOOST_CHECK_EQUAL(HeartbeatSlots(policy, 0), 0);
+    BidInputs in{At(0)};
+    in.max_unanchored_slots = 3840;
+    in.slot_seconds = 15;
+    in.slot = in.first_unanchored_slot + 1439;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    in.slot = in.first_unanchored_slot + 1440;
+    BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "heartbeat");
+    BOOST_CHECK(d.heartbeat && d.unfunded && !d.stall && !d.work && d.SpendsReserve());
+    // The competitive base: the least competitive rate of the network, here 2 sat/vB x 189 vB.
+    in.min_rate_per_kvb = 2000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 378);
+    // It may spend the stall reserve of the cap: with all but the reserve spent, it still bids.
+    policy.period_cap = 10'000;
+    policy.stall_reserve_pct = 50;
+    in.spent_in_period = 5000;
+    d = DecideBid(policy, in);
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 378);
+    // No run, no heartbeat; 0: none; nor without Prevent stalling, nor for Minimum or Fixed.
+    in.first_unanchored_slot = -1;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    in.first_unanchored_slot = in.slot - 1500;
+    policy.heartbeat_hours = 0;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    policy.heartbeat_hours = 6;
+    policy.prevent_stall = false;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    policy.prevent_stall = true;
+    in.spent_in_period = 0;
+    policy.strategy = BidStrategy::FIXED;
+    policy.fixed = 300;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "fixed");
+}
+
+BOOST_AUTO_TEST_CASE(demand_driven_value_at_risk)
+{
+    AnchorBidPolicy policy{With(BidStrategy::FEES)};
+    policy.value_at_risk = COIN;
+    BidInputs in{At(0)};
+    in.min_rate_per_kvb = 2000;
+    in.value_at_risk = COIN - 1;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    in.value_at_risk = COIN;
+    const BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "valueatrisk");
+    BOOST_CHECK_EQUAL(d.amount, 378);
+    // Throttled as work is, debited from the reserve when it lands, and taking turns.
+    BOOST_CHECK(d.work && d.unfunded && d.turns && !d.SpendsReserve());
+    policy.value_at_risk = 0;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    // Minimum and Fixed keep their meaning.
+    policy.value_at_risk = COIN;
+    policy.strategy = BidStrategy::MINIMUM;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "minimum");
+}
+
+BOOST_AUTO_TEST_CASE(demand_driven_reserve)
+{
+    AnchorBidPolicy policy{With(BidStrategy::FEES, /*prevent_stall=*/false)};
+    policy.reserve_pct = 20;
+    policy.reserve_target = 1'000'000;
+    // 20 % of the share, at most what the reserve lacks.
+    BOOST_CHECK_EQUAL(Holdback(policy, 10'000, 0), 2000);
+    BOOST_CHECK_EQUAL(Holdback(policy, 10'000, 999'500), 500);
+    BOOST_CHECK_EQUAL(Holdback(policy, 10'000, 1'000'000), 0);
+    BidInputs in{At(0, std::nullopt, 10'101)}; // a share of 10'000 (at 99 %)
+    in.reserve = 0;
+    BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK_EQUAL(d.amount, 8000);
+    BOOST_CHECK_EQUAL(d.holdback, 2000);
+    BOOST_CHECK(!d.unfunded);
+    // Full: the whole share again.
+    in.reserve = 1'000'000;
+    d = DecideBid(policy, in);
+    BOOST_CHECK_EQUAL(d.amount, 10'000);
+    BOOST_CHECK_EQUAL(d.holdback, 0);
+    // Fees + minimum: never below the minimum.
+    policy.strategy = BidStrategy::FEES_MINIMUM;
+    policy.floor = 9000;
+    in.reserve = 0;
+    d = DecideBid(policy, in);
+    BOOST_CHECK_EQUAL(d.amount, 9000);
+    BOOST_CHECK_EQUAL(d.holdback, 1000);
+    // A stale raise is paid out of the holdback first.
+    policy.strategy = BidStrategy::FEES;
+    policy.floor = 0;
+    policy.period_cap = 0;
+    d = DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 8000});
+    BOOST_CHECK_EQUAL(d.amount, 8500);
+    BOOST_CHECK_EQUAL(d.holdback, 1500);
+}
+
+BOOST_AUTO_TEST_CASE(demand_driven_turns)
+{
+    // The same choice whatever the order of the set, one of it, spread over the blocks.
+    const auto filled{[](unsigned char byte) { const std::vector<unsigned char> bytes(32, byte); return uint256{std::span<const unsigned char>{bytes}}; }};
+    std::vector<uint256> keys;
+    for (unsigned char i{1}; i <= 5; ++i) keys.push_back(filled(i));
+    const uint256 seed{filled(0x42)};
+    std::vector<uint256> reversed{keys.rbegin(), keys.rend()};
+    std::set<uint256> chosen;
+    for (int h{100}; h < 200; ++h) {
+        const auto a{DesignatedBidder(keys, seed, h)};
+        BOOST_REQUIRE(a);
+        BOOST_CHECK(*a == *DesignatedBidder(reversed, seed, h));
+        BOOST_CHECK(std::ranges::find(keys, *a) != keys.end());
+        chosen.insert(*a);
+    }
+    BOOST_CHECK_EQUAL(chosen.size(), keys.size());
+    BOOST_CHECK(!DesignatedBidder({}, seed, 1));
+    // Fees bids take turns, a stall bid never; nor the other strategies.
+    AnchorBidPolicy policy{With(BidStrategy::FEES)};
+    BOOST_CHECK(DecideBid(policy, At(0, std::nullopt, 100'000)).turns);
+    BOOST_CHECK(!DecideBid(policy, At(0.6)).turns);
+    policy.turns = false;
+    BOOST_CHECK(!DecideBid(policy, At(0, std::nullopt, 100'000)).turns);
+    BOOST_CHECK(!DecideBid(With(BidStrategy::MINIMUM), At(0)).turns);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

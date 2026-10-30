@@ -8,6 +8,8 @@
 #include <map>
 
 #include <core_io.h>
+#include <crypto/common.h>
+#include <hash.h>
 #include <tinyformat.h>
 #include <univalue.h>
 #include <util/moneystr.h>
@@ -166,7 +168,8 @@ const std::vector<std::string>& PolicyFieldNames()
 {
     static const std::vector<std::string> names{"strategy", "preventstall", "anchor", "floor", "max", "fixed", "feeshare", "escalationstart", "curve", "interpolate",
                                                 "usefeeestimate", "requestvsize", "rebidafter", "rebidstep", "rebidmax", "warnmissed",
-                                                "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost", "stallreserve"};
+                                                "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost", "stallreserve",
+                                                "batch", "heartbeathours", "valueatrisk", "reservepct", "reservetarget", "turns", "turnbackup"};
     return names;
 }
 
@@ -198,6 +201,12 @@ std::string CheckPolicy(const AnchorBidPolicy& policy)
     if (policy.low_balance_blocks < 0 || policy.low_balance_blocks > 1'000'000) return "lowbalanceblocks: from 0 (no warning) to 1000000";
     if (!(policy.boost >= 1) || policy.boost > 1000) return "boost: a multiplier of the floor from 1 to 1000";
     if (policy.stall_reserve_pct < 0 || policy.stall_reserve_pct > 100) return "stallreserve: a percentage of the cap from 0 to 100";
+    if (!(policy.batch >= 0) || policy.batch > 1000) return "batch: a multiple of the landing price from 0 (no batching) to 1000";
+    if (!(policy.heartbeat_hours >= 0) || policy.heartbeat_hours > 24 * 31) return "heartbeathours: from 0 (no heartbeat) to 744 hours";
+    if (!MoneyRange(policy.value_at_risk)) return "valueatrisk: an amount from 0 (none) to all the coins";
+    if (policy.reserve_pct < 0 || policy.reserve_pct > 100) return "reservepct: a percentage of the fee share from 0 to 100";
+    if (!MoneyRange(policy.reserve_target)) return "reservetarget: an amount from 0 to all the coins";
+    if (policy.turn_backup < 0 || policy.turn_backup > 1000) return "turnbackup: from 0 to 1000 mainchain blocks";
     return "";
 }
 
@@ -233,6 +242,13 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy)
     out.pushKV("periodhours", policy.period_hours);
     out.pushKV("stallreserve", policy.stall_reserve_pct);
     out.pushKV("lowbalanceblocks", policy.low_balance_blocks);
+    out.pushKV("batch", policy.batch);
+    out.pushKV("heartbeathours", policy.heartbeat_hours);
+    out.pushKV("valueatrisk", ValueFromAmount(policy.value_at_risk));
+    out.pushKV("reservepct", policy.reserve_pct);
+    out.pushKV("reservetarget", ValueFromAmount(policy.reserve_target));
+    out.pushKV("turns", policy.turns);
+    out.pushKV("turnbackup", policy.turn_backup);
     return out;
 }
 
@@ -336,6 +352,22 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
             const auto percent{Integer(value)};
             if (!percent || *percent < 0 || *percent > 100) return bad("a whole percentage from 0 to 100");
             policy.stall_reserve_pct = static_cast<int>(*percent);
+        } else if (key == "batch") {
+            ok = real(policy.batch);
+        } else if (key == "heartbeathours") {
+            ok = real(policy.heartbeat_hours);
+        } else if (key == "valueatrisk") {
+            ok = money(policy.value_at_risk);
+        } else if (key == "reservepct") {
+            const auto percent{Integer(value)};
+            if (!percent || *percent < 0 || *percent > 100) return bad("a whole percentage from 0 to 100");
+            policy.reserve_pct = static_cast<int>(*percent);
+        } else if (key == "reservetarget") {
+            ok = money(policy.reserve_target);
+        } else if (key == "turns") {
+            ok = boolean(policy.turns);
+        } else if (key == "turnbackup") {
+            ok = integer(policy.turn_backup);
         } else {
             error = strprintf("%s: not a field of the policy (%s)", key, util::Join(PolicyFieldNames(), ", "));
             return false;
@@ -425,18 +457,46 @@ std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amo
     return replacement;
 }
 
-namespace {
-/** The relay floor for the largest request a wallet makes (250 vB: a request of more inputs than the usual 189 vB was
- * refused under it, "min relay fee not met, 19 < 21"). */
-CAmount RelayFloor(const AnchorBidPolicy& policy, const BidInputs& inputs)
+CAmount RelayMinimum(const AnchorBidPolicy& policy, const BidInputs& inputs)
 {
+    // The relay floor for the largest request a wallet makes (250 vB: a request of more inputs than the usual 189 vB was
+    // refused under it, "min relay fee not met, 19 < 21").
     return Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * std::max(policy.request_vsize, 250) / 1000.0));
 }
-} // namespace
 
 CAmount MinimumBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
 {
-    return std::max(policy.floor, RelayFloor(policy, inputs));
+    return std::max(policy.floor, RelayMinimum(policy, inputs));
+}
+
+CAmount BatchNeeded(const AnchorBidPolicy& policy, const BidInputs& inputs)
+{
+    // What pays for a request's own place in a block (as before 8.3.7), and a batch of the landing price above it.
+    const CAmount pays{std::max(MINE_MIN_OFFER, RelayMinimum(policy, inputs))};
+    if (!(policy.batch > 0)) return pays;
+    return std::max(pays, Clamp(std::ceil(policy.batch * static_cast<double>(MinimumBid(policy, inputs)))));
+}
+
+int64_t HeartbeatSlots(const AnchorBidPolicy& policy, int64_t slot_seconds)
+{
+    if (!(policy.heartbeat_hours > 0) || slot_seconds <= 0) return 0;
+    return std::max<int64_t>(1, static_cast<int64_t>(std::ceil(policy.heartbeat_hours * 3600 / static_cast<double>(slot_seconds))));
+}
+
+CAmount Holdback(const AnchorBidPolicy& policy, CAmount share, CAmount reserve)
+{
+    if (share <= 0 || policy.reserve_pct <= 0 || reserve >= policy.reserve_target) return 0;
+    const CAmount part{share / 100 * policy.reserve_pct + share % 100 * policy.reserve_pct / 100};
+    return std::min(part, policy.reserve_target - std::max<CAmount>(reserve, 0));
+}
+
+std::optional<uint256> DesignatedBidder(std::vector<uint256> validators, const uint256& seed, int main_height)
+{
+    if (validators.empty()) return std::nullopt;
+    std::sort(validators.begin(), validators.end());
+    validators.erase(std::unique(validators.begin(), validators.end()), validators.end());
+    const uint256 hash{(HashWriter{} << seed << int32_t{main_height}).GetSHA256()};
+    return validators[ReadLE64(hash.begin()) % validators.size()];
 }
 
 namespace {
@@ -479,19 +539,30 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     // The strategy's own bid; `bids` false: none (Fees without fees that pay for a request).
     bool bids{true};
     switch (policy.strategy) {
-    case BidStrategy::FEES:
-        // No minimum, no floor: the fee share once it pays for a request's own place in a block, else nothing.
-        if (share >= std::max(MINE_MIN_OFFER, RelayFloor(policy, inputs))) {
+    case BidStrategy::FEES: {
+        // No minimum, no floor: the fee share once it pays for a request's own place in a block, else nothing; since
+        // 8.3.7, once it is a batch (batch x the landing price): the pot keeps growing across the blocks no anchor
+        // covers, so the fees of many blocks go in one request rather than a request for every few sat of fees.
+        const CAmount needed{BatchNeeded(policy, inputs)};
+        if (share >= needed) {
             d.normal = share;
             d.kind = "fees";
             d.reason = share_text;
         } else {
             bids = false;
             d.kind = "idle";
-            d.reason = share > 0 ? strprintf("no bid: the %s does not pay for a request", share_text) : "no bid: no fees";
+            if (share <= 0) {
+                d.reason = "no bid: no fees";
+            } else if (share >= std::max(MINE_MIN_OFFER, RelayMinimum(policy, inputs))) {
+                d.reason = strprintf("no bid: the %s waits for a batch of %s (%g x the landing price %s)", share_text, FormatMoney(needed), policy.batch,
+                                     FormatMoney(MinimumBid(policy, inputs)));
+            } else {
+                d.reason = strprintf("no bid: the %s does not pay for a request", share_text);
+            }
             if (policy.PreventsStall()) d.reason += ", nothing waiting to anchor";
         }
         break;
+    }
     case BidStrategy::FEES_MINIMUM:
         if (share > minimum) {
             d.normal = share;
@@ -516,7 +587,27 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     case BidStrategy::OFF:
         break;
     }
+    d.basis = bids ? d.kind : "";
+    // The anchor reserve: while it lacks of its target, a fee bid keeps back reservepct of the share (never below the
+    // minimum of Fees + minimum), credited to the reserve when the bid lands; the reserve pays the bids without fees.
+    const bool fee_strategy{policy.strategy == BidStrategy::FEES || policy.strategy == BidStrategy::FEES_MINIMUM};
+    if (bids && d.kind == "fees") {
+        CAmount holdback{Holdback(policy, share, inputs.reserve)};
+        if (policy.strategy == BidStrategy::FEES_MINIMUM) holdback = std::min(holdback, std::max<CAmount>(share - minimum, 0));
+        if (holdback > 0) {
+            d.holdback = holdback;
+            d.normal = share - holdback;
+            d.reason += strprintf(", %s kept for the anchor reserve (%d %%; it holds %s of %s)", FormatMoney(holdback), policy.reserve_pct, FormatMoney(inputs.reserve),
+                                  FormatMoney(policy.reserve_target));
+        }
+    }
     d.amount = bids ? d.normal : 0;
+    // A bid for a need without fees behind it replaces the strategy's (what the reserve would have kept, too).
+    const auto unfunded{[&](const char* basis) {
+        d.basis = basis;
+        d.holdback = 0;
+        d.unfunded = true;
+    }};
     if (policy.PreventsStall()) {
         // Missed mainchain blocks raise what must land: flat, twice for every two missed, at most the boost; legacy,
         // rebidstep for every rebidafter missed, at most rebidmax. rebidafter 0: no raises after missed blocks, in either
@@ -534,23 +625,50 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
                 d.amount = raised;
                 d.multiplier = factor;
                 d.kind = "rebid";
+                d.basis = "rebid";
+                d.holdback = 0;
                 d.reason = strprintf("rebid after %d missed mainchain blocks: x%.2f the minimum %s", inputs.missed, factor, FormatMoney(minimum));
             }
         }
         // Work waiting for an anchor (a deposit to credit, withdrawals or a bundle; a bond, an unbond or a jail): it
         // would wait without one, so a bid that lands (the competitive base), fees or not, as 8.3.5's
-        // feespreventstall did (with the flat boost: the legacy policy is its curve and rebids alone).
-        if (policy.flat_boost && inputs.pending_actions) {
+        // feespreventstall did (with the flat boost: the legacy policy is its curve and rebids alone). And, for the fee
+        // strategies since 8.3.7, value at risk: the transactions of the blocks no anchor covers move valueatrisk or more
+        // (their outputs summed, change too: an approximation), which an anchor makes final; bid for as work is.
+        const bool at_risk{fee_strategy && policy.value_at_risk > 0 && inputs.value_at_risk >= policy.value_at_risk};
+        if (policy.flat_boost && (inputs.pending_actions || at_risk)) {
             const CAmount base{CompetitiveBase(policy, inputs)};
             const CAmount pending{Clamp(static_cast<double>(base) * factor)};
             if (!bids || pending > d.amount) {
-                d.reason = strprintf("peg work waiting for an anchor: the competitive base %s%s%s", FormatMoney(base),
+                const std::string what{inputs.pending_actions ? std::string{"peg work waiting for an anchor"}
+                                                              : strprintf("value at risk: %s moved in blocks of stake no anchor covers (valueatrisk %s)",
+                                                                          FormatMoney(inputs.value_at_risk), FormatMoney(policy.value_at_risk))};
+                d.reason = strprintf("%s: the competitive base %s%s%s", what, FormatMoney(base),
                                      factor > 1 ? strprintf(" x%.2f after %d missed", factor, inputs.missed) : "",
                                      bids ? strprintf(" (the strategy: %s)", d.reason) : "");
                 d.amount = pending;
                 d.multiplier = factor;
-                d.kind = "pending";
+                d.kind = inputs.pending_actions ? "pending" : "valueatrisk";
+                unfunded(inputs.pending_actions ? "pending" : "valueatrisk");
                 d.work = true;
+                bids = true;
+            }
+        }
+        // The heartbeat (the fee strategies, since 8.3.7): no anchor for heartbeathours (the age of the unanchored run),
+        // a bid of the competitive base whatever the fees, never throttled, which may spend the stall reserve of the cap
+        // (it is liveness). A quiet chain is then anchored every few hours, not only by the stall bid below.
+        if (const int64_t beat{HeartbeatSlots(policy, inputs.slot_seconds)};
+            policy.flat_boost && fee_strategy && beat > 0 && inputs.first_unanchored_slot >= 0 && inputs.slot - inputs.first_unanchored_slot >= beat) {
+            const CAmount base{CompetitiveBase(policy, inputs)};
+            if (!bids || base > d.amount) {
+                d.reason = strprintf("heartbeat: no anchor for %d slots (heartbeathours %g): the competitive base %s%s", inputs.slot - inputs.first_unanchored_slot,
+                                     policy.heartbeat_hours, FormatMoney(base), bids ? strprintf(" (the strategy: %s)", d.reason) : "");
+                d.amount = base;
+                d.multiplier = 1;
+                d.kind = "heartbeat";
+                unfunded("heartbeat");
+                d.heartbeat = true;
+                d.work = false;
                 bids = true;
             }
         }
@@ -579,7 +697,9 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
                 d.amount = stall;
                 d.multiplier = multiplier;
                 d.kind = policy.flat_boost ? "stall" : "escalation";
+                unfunded(policy.flat_boost ? "stall" : "escalation");
                 d.stall = true;
+                d.heartbeat = false;
                 d.work = false;
                 bids = true;
             }
@@ -587,14 +707,17 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     }
     if (!bids) return d;
     d.bid = true;
+    // Taking turns (Fees): the node holds a bid of a validator not designated for the block (FollowerRound); a stall
+    // bid never waits.
+    d.turns = policy.turns && policy.strategy == BidStrategy::FEES && !d.stall;
     if (d.amount > policy.max) {
         d.amount = policy.max;
         d.kind = "max";
         d.reason += strprintf(", capped at max %s", FormatMoney(policy.max));
     }
     if (policy.period_cap > 0) {
-        const CAmount left{CapLeft(policy, inputs.spent_in_period, d.stall)};
-        const std::string of{d.stall || policy.stall_reserve_pct == 0 ? std::string{} : strprintf(" (%d %% kept for stall prevention)", policy.stall_reserve_pct)};
+        const CAmount left{CapLeft(policy, inputs.spent_in_period, d.SpendsReserve())};
+        const std::string of{d.SpendsReserve() || policy.stall_reserve_pct == 0 ? std::string{} : strprintf(" (%d %% kept for stall prevention)", policy.stall_reserve_pct)};
         if (left == 0 && d.amount > 0) {
             d.bid = false;
             d.kind = "periodcap";
@@ -627,7 +750,7 @@ void Limit(const AnchorBidPolicy& policy, CAmount spent, BidDecision& d)
         d.reason += strprintf(", capped at max %s", FormatMoney(policy.max));
     }
     if (policy.period_cap > 0) {
-        const CAmount left{CapLeft(policy, spent, d.stall)};
+        const CAmount left{CapLeft(policy, spent, d.SpendsReserve())};
         if (left == 0 && d.amount > 0) {
             d.kind = "periodcap";
             d.reason = strprintf("no bid: the cap of %s in %d h is spent (less the stall reserve)", FormatMoney(policy.period_cap), policy.period_hours);
@@ -648,8 +771,10 @@ void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, Bid
 {
     if (!d.bid || stale <= 0 || d.amount > stale + REPLACEMENT_BUMP - 1) return;
     const CAmount raised{stale + REPLACEMENT_BUMP};
-    const bool fits{raised <= policy.max && raised <= CapLeft(policy, spent, d.stall)};
+    const bool fits{raised <= policy.max && raised <= CapLeft(policy, spent, d.SpendsReserve())};
     if (fits) {
+        // (What a fee bid kept back for the reserve pays the raise first.)
+        d.holdback = std::max<CAmount>(d.holdback - (raised - d.amount), 0);
         d.amount = raised;
         d.kind = "replace";
         d.reason += strprintf(", raised to %s: above a bid of %s that did not land, which other nodes may still hold on the same coin", FormatMoney(raised), FormatMoney(stale));
@@ -680,6 +805,7 @@ BidDecision DecideNodeBid(const AnchorBidPolicy& policy, const BidInputs& inputs
         always.pressure = StallPressure(inputs.slot, inputs.first_unanchored_slot, inputs.max_unanchored_slots);
         always.normal = always.amount = triggers.mine_amount;
         always.kind = "always";
+        always.basis = "always";
         always.reason = strprintf("merged mining, always: %s for every mainchain block", FormatMoney(triggers.mine_amount));
         always.bid = always.amount > 0;
         if (always.bid) Limit(policy, inputs.spent_in_period, always);
