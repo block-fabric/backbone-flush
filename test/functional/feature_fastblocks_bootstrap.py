@@ -112,9 +112,16 @@ class FastBlocksBootstrapTest(SidechainTest):
         self.bmm_block()
         self.bmm_block()
         assert_equal(n0.getblockcount(), 4)
-        anchor_epoch = n0.getposinfo()["epoch"]
+        # The anchor's epoch as the chain takes it (AnchorSlot): of the later of its time and the median time of the
+        # mainchain block that committed it, which runs ahead of the clock here (more than a hundred mainchain blocks
+        # in a few seconds, each at least a second after the median of the ones before): up to an epoch later.
+        anchor = n0.getblock(n0.getbestblockhash())
+        main_median = main.getblock(main.getbestblockhash())["mediantime"]
+        anchor_epoch = (max(anchor["time"], main_median) - REGTEST_GENESIS_TIME) // EPOCH
         assert_greater_than(B - 4, anchor_epoch)
-        # The set of the epoch after next has them: fixed a set lead of 0 ahead (the long lead: LONG_LEAD epochs).
+        # The set of the epoch after next has them: fixed a set lead of 0 ahead (the long lead: LONG_LEAD epochs); known
+        # once the clock is past its boundary (an anchor of a later epoch than the clock's: a few seconds on).
+        self.wait_until(lambda: n0.getvalidators(anchor_epoch + 2)["known"], timeout=2 * EPOCH + 30)
         assert_equal(self.keys(anchor_epoch + 2), sorted(XONLY[:2]))
         assert n0.getvalidators(anchor_epoch + 2)["active"]
         while n0.getposinfo()["epoch"] < anchor_epoch + 3:

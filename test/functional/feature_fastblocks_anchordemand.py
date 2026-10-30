@@ -278,11 +278,17 @@ class FastBlocksAnchorDemandTest(FastBlocksAnchorPolicyTest):
         n0.setanchorbidpolicy({"heartbeathours": 0, "valueatrisk": 0.5, "turns": True, "turnbackup": 2})
         self.next_slot(settle=1)
         self.mine_block(lead=10, other_bmm=False)
-        txid = n0.sendtoaddress(address=self.nodes[1].getnewaddress(), amount=1, fee_rate=1)
-        for _ in range(10):
-            self.next_slot(settle=1)
-            if n0.gettransaction(txid)["confirmations"] > 0:
-                break
+
+        def at_risk():
+            """A transaction moving more than valueatrisk in a block of stake: work for an anchor."""
+            txid = n0.sendtoaddress(address=self.nodes[1].getnewaddress(), amount=1, fee_rate=1)
+            for _ in range(20):
+                self.next_slot(settle=1)
+                if n0.gettransaction(txid)["confirmations"] > 0:
+                    break
+            self.wait_until(lambda: sats(n0.getbmminfo()["anchoring"]["valueatrisk"]) >= 50_000_000)
+
+        at_risk()
         # (The others' anchorers are off, but they are in the set: two in three blocks are another's turn, which changes
         # with every mainchain block.) Until it bids as the backup: on its own turn it bids at once (pushed out here, in a
         # block without BMM); on another's it holds, and a block found 1 s into the wait does not count, one 10 s into it
@@ -290,6 +296,11 @@ class FastBlocksAnchorDemandTest(FastBlocksAnchorPolicyTest):
         def state():
             self.wait_until(lambda: n0.getbmminfo()["anchoring"]["turn"]["mainheight"] == main.getblockcount() + 1)
             bid = n0.getanchorinfo()["bid"]
+            if bid["kind"] == "idle":
+                # (A request made again as the block was mined, after the test pushed the others out, landed under
+                # load: anchored, nothing at risk. Work again.)
+                at_risk()
+                bid = n0.getanchorinfo()["bid"]
             self.log.debug(f"mainchain block {main.getblockcount() + 1}: {bid['kind']}: {bid['reason']}")
             assert bid["kind"] != "stall", "the stall bid came first"
             return bid, n0.getbmminfo()["anchoring"]["turn"]["designated"]
