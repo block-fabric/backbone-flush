@@ -1140,8 +1140,9 @@ std::optional<Follower::MinedRequest> Follower::Mine(const Mining& mining, uint6
         if (m_mining_settings == settings) m_mining.idle = true;
         return std::nullopt;
     }};
-    // Without transactions there are no fees, and a block without fees is not worth what the mainchain is paid for it.
-    if (!mining.always && (!m_node.mempool || m_node.mempool->size() == 0)) return wait();
+    // Without transactions there are no fees, and a block without fees is not worth what the mainchain is paid for it --
+    // unless the node's policy bids without fees (stall prevention near the unanchored limit, peg work): it says, for 0.
+    if (!mining.always && (!m_node.mempool || m_node.mempool->size() == 0) && (!mining.decide || !mining.decide(0))) return wait();
 
     std::string error;
     const auto candidate{CreateCandidate(mining.coinbase_script, error)};

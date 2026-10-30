@@ -21,6 +21,7 @@
 #include <uint256.h>
 #include <univalue.h>
 #include <util/chaintype.h>
+#include <util/fs.h>
 
 #include <array>
 #include <atomic>
@@ -109,7 +110,11 @@ struct FastState {
 
 /** The FastBlocks part of a chain's state. */
 FastState GetFastState(const sidechain::StoreView& view);
-/** Peg work and staking payouts that need an anchor, independent of fees and stall pressure. */
+/**
+ * Peg work waiting for an anchor, independent of fees and stall pressure: a deposit to credit (in the mainchain record
+ * above the chain's), withdrawals or a bundle. Not the staking accounting (the pot's reserve, the fee pool, rewards owed,
+ * unbonds), which advances only as anchors land.
+ */
 bool HasPendingAnchorActions(const sidechain::State& state, const sidechain::Mainchain& record);
 /** The pot accrued as of the block at `height` on the chain of `view`, at least what was paid. */
 int64_t PotAccruedAt(const sidechain::StoreView& view, int32_t height);
@@ -678,6 +683,12 @@ private:
     mutable uint256 m_bid_polled_for GUARDED_BY(m_anchor_mutex);
     mutable bool m_bid_low_warned GUARDED_BY(m_anchor_mutex){false};
     mutable bool m_bid_off_warned GUARDED_BY(m_anchor_mutex){false};
+    //! Where the bids made and what landed cost are kept across restarts (BID_FILE in the network's data directory; empty: not kept).
+    mutable fs::path m_bid_file GUARDED_BY(m_anchor_mutex);
+    /** Write the bids made, what landed cost (pruned to the longest period) and the run of missed blocks to m_bid_file. */
+    void SaveBidsLocked() const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
+    /** Read them back from `path` (nothing if it is missing or not a file of bids), and keep them there from now on. */
+    void LoadBids(const fs::path& path) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /** Settle the pending bids with the commitments of the mainchain record; what landed costs in the period. */
     void SettleBids(const sidechain::Mainchain& record) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
     CAmount SpentInPeriod(const AnchorBidPolicy& policy, int64_t now) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
@@ -687,6 +698,11 @@ private:
 
 /** The bids an anchorer remembers. */
 inline constexpr size_t BID_HISTORY{50};
+/** The file, in the network's data directory beside settings.json, that keeps the node's bids across restarts: the history
+ * (the stale rule, the pages) and what the landed ones cost (the period's cap, "spent" and "left"). */
+inline constexpr const char* BID_FILE{"anchorbids.json"};
+//! The longest period of the cap (periodhours at most 744): what landed is kept that long.
+inline constexpr int64_t BID_LANDED_SECONDS{int64_t{24 * 31} * 3600};
 /** The node's setting (settings.json) that keeps the fields setanchorbidpolicy changed. */
 inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
 /**
@@ -695,6 +711,14 @@ inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
  * (-validatoranchorbidstrategy, ...). Off on regtest unless one is given. Errors logged, the defaults kept.
  */
 AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain);
+/**
+ * The fields to read of an 8.3.5 settings.json (IsLegacySettings), which saved only the fields changed: without a
+ * strategy, the options' if it depends on the floor (8.3.5's default, feespreventstall, unless the options say another),
+ * so that the floor of the settings makes it Fees + minimum as it did. Read with StrategyContext::LEGACY_SETTINGS.
+ */
+UniValue LegacyBidSettings(const UniValue& saved, const AnchorBidPolicy& defaults, const ArgsManager& args, ChainType chain);
+/** Those fields in the words of 8.3.6, with preventstall (what setanchorbidpolicy saves), for `policy` read from them. */
+UniValue NormalizedLegacySettings(const UniValue& fields, const AnchorBidPolicy& policy);
 /** The policy in a line, for the log. */
 std::string AnchorBidPolicySummary(const AnchorBidPolicy& policy);
 

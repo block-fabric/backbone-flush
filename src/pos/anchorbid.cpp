@@ -118,22 +118,42 @@ std::string StrategyName(BidStrategy strategy)
     return "";
 }
 
-std::optional<StrategyWord> ParseStrategyWord(const std::string& name)
+std::optional<StrategyWord> ParseStrategyWord(const std::string& name, StrategyContext context)
 {
     std::string word{ToLower(util::TrimString(name))};
     std::erase_if(word, [](char c) { return c == ' ' || c == '_' || c == '-'; });
-    // The names before 8.3.6 (doc/fastblocks-anchor-bids.md, "The names before 8.3.6"): each also said whether to prevent stalling.
-    if (word == "fees") return StrategyWord{.strategy = BidStrategy::FEES, .prevent_stall = false};
+    const bool legacy{context == StrategyContext::LEGACY_SETTINGS};
+    // The names before 8.3.6 alone (doc/fastblocks-anchor-bids.md, "The names before 8.3.6"): each also said whether to
+    // prevent stalling, wherever it is said.
     if (word == "feespreventstall" || word == "fees+preventstalling" || word == "fees+preventstall") {
         return StrategyWord{.strategy = BidStrategy::FEES, .prevent_stall = true, .fees_or_floor = true};
     }
     if (word == "minimal" || word == "keepmoving") return StrategyWord{.strategy = BidStrategy::MINIMUM, .prevent_stall = true};
-    if (word == "fixed") return StrategyWord{.strategy = BidStrategy::FIXED, .prevent_stall = false};
-    if (word == "off") return StrategyWord{.strategy = BidStrategy::OFF};
+    // Old and new names: 8.3.5's meaning only in 8.3.5's settings (fees bid at least its floor, fees and fixed without
+    // stall prevention); a new name says nothing of stall prevention ("preventstall": false is what turns it off).
+    if (word == "fees") {
+        if (legacy) return StrategyWord{.strategy = BidStrategy::FEES, .prevent_stall = false, .fees_or_floor = true};
+        return StrategyWord{.strategy = BidStrategy::FEES};
+    }
+    if (word == "fixed") {
+        if (legacy) return StrategyWord{.strategy = BidStrategy::FIXED, .prevent_stall = false};
+        return StrategyWord{.strategy = BidStrategy::FIXED};
+    }
+    // 8.3.5's off turned the anchorer off alone (setbmm still bid): so in its settings and in -validatoranchorbidstrategy,
+    // which it read; the new Off (setanchorbidpolicy, the app) is no bids at all.
+    if (word == "off") {
+        if (context == StrategyContext::CURRENT) return StrategyWord{.strategy = BidStrategy::OFF};
+        return StrategyWord{.anchor_off = true};
+    }
     // The new names, and the words of the pages.
     if (word == "feesminimum" || word == "fees+minimum") return StrategyWord{.strategy = BidStrategy::FEES_MINIMUM};
     if (word == "minimum" || word == "minimumeveryblock") return StrategyWord{.strategy = BidStrategy::MINIMUM};
     return std::nullopt;
+}
+
+bool IsLegacySettings(const UniValue& saved)
+{
+    return saved.isObject() && saved.find_value("preventstall").isNull() && saved.find_value("anchor").isNull();
 }
 
 std::optional<BidStrategy> ParseStrategy(const std::string& name)
@@ -214,7 +234,7 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy)
     return out;
 }
 
-bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::string& error)
+bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::string& error, StrategyContext context)
 {
     if (!fields.isObject()) {
         error = "the policy is an object of fields";
@@ -222,6 +242,7 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
     }
     // A strategy of the old names says whether to prevent stalling, unless "preventstall" is given too (in any order).
     const bool stall_given{!fields.find_value("preventstall").isNull()};
+    const bool anchor_given{!fields.find_value("anchor").isNull()};
     bool fees_or_floor{false};
     for (const std::string& key : fields.getKeys()) {
         const UniValue& value{fields.find_value(key)};
@@ -255,9 +276,14 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
         }};
         bool ok{true};
         if (key == "strategy") {
-            const auto word{value.isStr() ? ParseStrategyWord(value.get_str()) : std::nullopt};
+            const auto word{value.isStr() ? ParseStrategyWord(value.get_str(), context) : std::nullopt};
             if (!word) return bad("fees, feesminimum, minimum, fixed or off (or the older minimal, feespreventstall)");
-            policy.strategy = word->strategy;
+            if (word->anchor_off) {
+                // 8.3.5's off: the anchorer off, the strategy as it was.
+                if (!anchor_given) policy.anchor = false;
+            } else {
+                policy.strategy = word->strategy;
+            }
             if (word->prevent_stall && !stall_given) policy.prevent_stall = *word->prevent_stall;
             fees_or_floor = word->fees_or_floor;
         } else if (key == "preventstall") {
@@ -313,6 +339,17 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
     // The old feespreventstall bid at least its floor: with one, that is Fees + minimum now (with a floor of 0, Fees).
     if (fees_or_floor && policy.floor > 0) policy.strategy = BidStrategy::FEES_MINIMUM;
     return true;
+}
+
+void ReapplySavedStrategy(AnchorBidPolicy& policy, const UniValue& overrides, const UniValue& fields)
+{
+    if (!fields.isObject() || !fields.find_value("strategy").isNull() || !overrides.isObject()) return;
+    const UniValue& saved{overrides.find_value("strategy")};
+    if (!saved.isStr()) return;
+    const auto word{ParseStrategyWord(saved.get_str(), IsLegacySettings(overrides) ? StrategyContext::LEGACY_SETTINGS : StrategyContext::CURRENT)};
+    if (!word || !word->fees_or_floor) return;
+    if (policy.strategy != BidStrategy::FEES && policy.strategy != BidStrategy::FEES_MINIMUM) return;
+    policy.strategy = policy.floor > 0 ? BidStrategy::FEES_MINIMUM : BidStrategy::FEES;
 }
 
 std::optional<uint8_t> BmmRequestSlot(std::span<const unsigned char> script, const uint256& prev)

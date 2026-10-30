@@ -24,6 +24,7 @@
 #include <sidechain/store.h>
 #include <streams.h>
 #include <util/chaintype.h>
+#include <util/fs_helpers.h>
 #include <util/strencodings.h>
 #include <util/moneystr.h>
 #include <util/time.h>
@@ -31,7 +32,9 @@
 
 #include <algorithm>
 #include <array>
+#include <fstream>
 #include <ios>
+#include <sstream>
 #include <tuple>
 
 namespace pos {
@@ -1888,9 +1891,10 @@ std::vector<CTxOut> FastBlocksHooks::MergeMinedOutputs(const sidechain::StoreVie
 
 bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Mainchain& record)
 {
-    const auto& view{side.View()};
-    const StakeState stake{GetStakeState(view)};
-    if (stake.unbonding > 0 || stake.rewards_owed > 0 || stake.pot_reserve > 0 || PoolTotal(view) > 0) return true;
+    // Peg in and peg out alone (the owner's rule, 2026-10-30): a bid without fees is for a deposit waiting to be credited
+    // or withdrawals waiting (a bundle). Not the staking accounting: the pot's reserve, the fee pool (PoolTotal), the
+    // rewards owed and the unbonds advance with the anchors that land (one at least every 8-16 h: stall prevention). A
+    // fee pool of 0.0001479 ECX counted here made a node bid every mainchain block, its daily cap spent in 4 hours.
     bool withdrawals{side.Bundle().has_value()};
     side.ForEachWithdrawal([&](const sidechain::Withdrawal&) { withdrawals = true; return false; });
     if (withdrawals) return true;
@@ -1908,7 +1912,8 @@ bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Main
 bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
 {
     ChainstateManager* chainman{Chainman()};
-    if (!chainman || !chainman->m_mainchain) return false;
+    // (true: nothing for the follower's own merged mining either, which would bid without the node's policy.)
+    if (!chainman || !chainman->m_mainchain) return true;
     // Proofs of leaders that signed twice, found by watching headers; and the tickets of the newest
     // commitments, for a node that does not have them. Blocks of stake whose epoch's seed the record
     // moved are taken back.
@@ -1920,7 +1925,9 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     const int main_height{record.Height()};
     const uint256 main_tip{record.TipHash()};
     const auto main_block{record.GetBlock(main_height)};
-    if (!main_block) return false;
+    // No mainchain block yet: no bid (true: not the follower's merged mining either, which offers its fee share without the
+    // node's policy, past Off, max and the cap).
+    if (!main_block) return true;
 
     FastState fast;
     const CBlockIndex* tip;
@@ -1937,6 +1944,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     // from the same mainchain wallet, one request per mainchain block (doc/fastblocks-anchor-bids.md, "Triggers").
     std::optional<ValidatorBid> validator{ValidatorAnchoring()};
     const AnchorBidPolicy policy{BidPolicy()};
+    const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
     if (validator && (!validator->policy.Bids() || !validator->policy.anchor)) {
         const bool off{!validator->policy.Bids()};
         validator.reset();
@@ -1944,19 +1952,19 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         if (!m_bid_off_warned) {
             m_bid_off_warned = true;
             LogWarning("FastBlocks: this validator's anchorer is off (%s): the chain relies on other bidders for its anchors, and its blocks of stake halt after %d slots without one",
-                       off ? "bid strategy off" : "\"Anchor my validator\" off", m_params.max_unanchored_slots);
+                       off ? "bid strategy off" : "\"Anchor my validator\" off", m_params.MaxUnanchoredSlots(slot));
         }
     }
-    const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
     // These reads precede m_anchor_mutex: never acquire cs_main while holding the anchor lock.
     // A quiet chain needs no anchor of its own (user decision 2026-10-26): leaders and seeds come from the mainchain record
-    // and the newest anchor's set, however old (SetFor), so epochs go on; only what changes the state's set (a bond, an
-    // unbond, a jail: Staking::SetChanged) waits for an anchor, with the peg actions and fees (HasPendingAnchorActions).
+    // and the newest anchor's set, however old (SetFor), so epochs go on. What bids without fees is peg work alone (the
+    // owner's rule, 2026-10-30: HasPendingAnchorActions), and stall prevention near the unanchored limit (the pressure, in
+    // DecideBid); not a stall of blocks of stake by itself, nor the staking accounting or a change of the set (a bond, an
+    // unbond, a jail), which take effect with the anchors that land.
     const bool stalled{Stalled(fast, main_block->time, PosActiveNow())};
     const bool needs_anchor{WITH_LOCK(::cs_main, {
         const sidechain::State side{chainman->ActiveChainstate().SideState()};
-        if (stalled || HasPendingAnchorActions(side, record)) return true;
-        return m_staking.SetChanged(side.View(), EpochOf(slot, m_params));
+        return HasPendingAnchorActions(side, record);
     })};
     // The mainchain's next-block fee estimate and the bid wallet's balance (once per mainchain block), the bids
     // made settled with the record; and the bid of the policy for a pot.
@@ -1982,6 +1990,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
                                                 .kind = decision.kind, .reason = decision.reason, .pressure = decision.pressure,
                                                 .time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), .trigger = decision.trigger});
         while (m_bid_history.size() > BID_HISTORY) m_bid_history.pop_front();
+        SaveBidsLocked();
     }};
     // No PoS blocks for a while (or none at all on this chain, or no active validator set): merged mined
     // blocks, as the template's -- by a validator too, for its bid whatever the fees (a BMM block
@@ -2167,13 +2176,63 @@ std::optional<FastBlocksHooks::ValidatorBid> FastBlocksHooks::ValidatorAnchoring
     return m_validator;
 }
 
+namespace {
+/** Whether the options say anything of the anchor bid (else, on regtest, no anchorer). */
+bool AnchorBidOptionsGiven(const ArgsManager& args)
+{
+    return args.IsArgSet("-validatoranchorbid") || args.IsArgSet("-validatoranchorbidstrategy") || args.IsArgSet("-validatoranchorbidfixed") ||
+           args.IsArgSet("-validatoranchorbidpreventstall");
+}
+} // namespace
+
+UniValue LegacyBidSettings(const UniValue& saved, const AnchorBidPolicy& defaults, const ArgsManager& args, ChainType chain)
+{
+    UniValue fields{saved};
+    if (!fields.find_value("strategy").isNull()) return fields;
+    if (chain == ChainType::REGTEST && !AnchorBidOptionsGiven(args)) return fields;
+    // 8.3.5 saved only the fields changed: without a strategy, the options' (8.3.5's default, feespreventstall, without
+    // one), which bid at least the floor: Fees + minimum with the floor of the settings above 0.
+    std::optional<StrategyWord> word;
+    if (args.IsArgSet("-validatoranchorbidstrategy") && !args.IsArgNegated("-validatoranchorbidstrategy")) {
+        word = ParseStrategyWord(args.GetArg("-validatoranchorbidstrategy", ""), StrategyContext::OPTIONS);
+    } else if (args.GetArg("-validatoranchorbidmode", "") == "fees") {
+        word = ParseStrategyWord("fees", StrategyContext::LEGACY_SETTINGS);
+    } else {
+        word = ParseStrategyWord("feespreventstall");
+    }
+    if (!word || !word->fees_or_floor) return fields;
+    fields.pushKV("strategy", "feespreventstall");
+    // (What the options say of stall prevention: feespreventstall's on, 8.3.5's fees off, or -validatoranchorbidpreventstall.)
+    if (fields.find_value("preventstall").isNull()) fields.pushKV("preventstall", defaults.prevent_stall);
+    return fields;
+}
+
+UniValue NormalizedLegacySettings(const UniValue& fields, const AnchorBidPolicy& policy)
+{
+    const UniValue said{PolicyToUniValue(policy)};
+    UniValue out{UniValue::VOBJ};
+    std::optional<StrategyWord> word;
+    if (const UniValue& strategy{fields.find_value("strategy")}; strategy.isStr()) word = ParseStrategyWord(strategy.get_str(), StrategyContext::LEGACY_SETTINGS);
+    for (const std::string& key : fields.getKeys()) {
+        if (key == "strategy" || key == "preventstall" || key == "anchor") continue;
+        out.pushKV(key, said.find_value(key));
+    }
+    if (word && word->anchor_off) {
+        out.pushKV("anchor", false);
+    } else if (word) {
+        // A strategy that depends on the floor stays the word that says so (feespreventstall, whatever preventstall says).
+        out.pushKV("strategy", word->fees_or_floor ? std::string{"feespreventstall"} : StrategyName(policy.strategy));
+    }
+    out.pushKV("preventstall", policy.prevent_stall);
+    return out;
+}
+
 AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain)
 {
     AnchorBidPolicy policy;
     // On regtest unless given: no anchorer, and no period cap (the merged miner of a regtest node bids under this policy
     // too, for as many blocks as a test mines): its fee share, without stall prevention, as setbmm did before 8.3.5.
-    const bool given{args.IsArgSet("-validatoranchorbid") || args.IsArgSet("-validatoranchorbidstrategy") || args.IsArgSet("-validatoranchorbidfixed") ||
-                     args.IsArgSet("-validatoranchorbidpreventstall")};
+    const bool given{AnchorBidOptionsGiven(args)};
     if (chain == ChainType::REGTEST && !given) {
         policy.anchor = false;
         policy.prevent_stall = false;
@@ -2210,10 +2269,12 @@ AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain
         LogError("FastBlocks: -validatoranchorbidmode is standard or fees, not %s: standard", mode);
     }
     if (!strategy.empty()) {
+        // (The words of the older options, in their meaning: -validatoranchorbidmode=fees is 8.3.5's fees, at least the
+        // floor and no stall prevention.)
         UniValue one{UniValue::VOBJ};
         one.pushKV("strategy", strategy);
         std::string error;
-        ApplyPolicyFields(policy, one, error);
+        ApplyPolicyFields(policy, one, error, StrategyContext::LEGACY_SETTINGS);
     }
     // The other options, as setanchorbidpolicy's fields (preventstall after the strategy, whose old names say it too).
     UniValue fields{UniValue::VOBJ};
@@ -2232,7 +2293,8 @@ AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain
         one.pushKV(field, value);
         std::string error;
         AnchorBidPolicy changed{policy};
-        if (!ApplyPolicyFields(changed, one, error)) {
+        // (-validatoranchorbidstrategy: the new names, but off, 8.3.5's: the anchorer off alone.)
+        if (!ApplyPolicyFields(changed, one, error, StrategyContext::OPTIONS)) {
             LogError("FastBlocks: %s: %s (not used)", option, error);
         } else {
             policy = changed;
@@ -2275,8 +2337,10 @@ std::string AnchorBidPolicySummary(const AnchorBidPolicy& p)
 void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
 {
     const int height{record.Height()};
+    bool settled{false};
     for (AnchorBidRecord& bid : m_bid_history) {
         if (bid.status != AnchorBidRecord::Status::PENDING || bid.main_height >= height) continue;
+        settled = true;
         const auto at{record.HashAt(bid.main_height)};
         const auto bmm{record.BmmAt(bid.main_height + 1)};
         if (!at || *at != bid.main_tip) {
@@ -2295,6 +2359,7 @@ void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
             ++m_bid_missed;
         }
     }
+    if (settled) SaveBidsLocked();
     if (m_bid_missed == 0) m_bid_missed_warned = 0;
     const int warn{m_validator ? m_validator->policy.warn_missed : 0};
     if (warn > 0 && m_bid_missed >= warn && m_bid_missed != m_bid_missed_warned) {
@@ -2304,7 +2369,7 @@ void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
                    "raise the floor or the escalation (setanchorbidpolicy), or the chain halts after %d slots without an anchor",
                    m_bid_missed, FormatMoney(last.offer), static_cast<double>(last.offer) / (m_validator ? m_validator->policy.request_vsize : DEFAULT_ANCHOR_REQUEST_VSIZE),
                    m_bid_inputs.fee_rate_per_kvb ? strprintf(", the mainchain's next-block estimate %.2f sat/vB", *m_bid_inputs.fee_rate_per_kvb / 1000.0) : "",
-                   m_params.max_unanchored_slots);
+                   m_params.MaxUnanchoredSlots(SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)));
     }
 }
 
@@ -2312,7 +2377,7 @@ CAmount FastBlocksHooks::SpentInPeriod(const AnchorBidPolicy& policy, int64_t no
 {
     // Every landed bid of the node, whatever set it off (both triggers, and by hand): one budget. Kept a month at
     // most (the longest period), not only the history's last bids (a day has 144 mainchain blocks or more).
-    while (!m_bid_landed.empty() && m_bid_landed.front().first <= now - int64_t{24 * 31} * 3600) m_bid_landed.pop_front();
+    while (!m_bid_landed.empty() && m_bid_landed.front().first <= now - BID_LANDED_SECONDS) m_bid_landed.pop_front();
     CAmount spent{0};
     for (const auto& [time, offer] : m_bid_landed) {
         if (time > now - int64_t{policy.period_hours} * 3600) spent += offer;
@@ -2342,6 +2407,119 @@ void FastBlocksHooks::NoteBid(int main_height, const uint256& main_tip, const ui
     m_bid_history.push_back(AnchorBidRecord{.main_height = main_height, .main_tip = main_tip, .ticket = commitment, .offer = offer, .kind = trigger,
                                             .reason = "by hand (requestbmmblock)", .time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), .trigger = trigger});
     while (m_bid_history.size() > BID_HISTORY) m_bid_history.pop_front();
+    SaveBidsLocked();
+}
+
+void FastBlocksHooks::SaveBidsLocked() const
+{
+    if (m_bid_file.empty()) return;
+    UniValue landed{UniValue::VARR};
+    const int64_t now{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
+    for (const auto& [time, offer] : m_bid_landed) {
+        if (time <= now - BID_LANDED_SECONDS) continue;
+        UniValue entry{UniValue::VARR};
+        entry.push_back(time);
+        entry.push_back(offer);
+        landed.push_back(std::move(entry));
+    }
+    UniValue history{UniValue::VARR};
+    for (const AnchorBidRecord& bid : m_bid_history) {
+        UniValue entry{UniValue::VOBJ};
+        entry.pushKV("mainheight", bid.main_height);
+        entry.pushKV("maintip", bid.main_tip.GetHex());
+        entry.pushKV("ticket", bid.ticket.GetHex());
+        entry.pushKV("offer", bid.offer);
+        entry.pushKV("kind", bid.kind);
+        entry.pushKV("reason", bid.reason);
+        entry.pushKV("pressure", bid.pressure);
+        entry.pushKV("status", static_cast<int>(bid.status));
+        entry.pushKV("time", bid.time);
+        entry.pushKV("trigger", bid.trigger);
+        history.push_back(std::move(entry));
+    }
+    UniValue out{UniValue::VOBJ};
+    out.pushKV("version", 1);
+    out.pushKV("landed", std::move(landed));
+    out.pushKV("history", std::move(history));
+    out.pushKV("missed", m_bid_missed);
+    // Written whole beside it, then moved over it: a crash leaves the old file or the new one.
+    fs::path temp{m_bid_file};
+    temp += ".new";
+    {
+        std::ofstream file{static_cast<const std::filesystem::path&>(temp), std::ios::out | std::ios::trunc};
+        file << out.write(1) << "\n";
+        if (!file.good()) {
+            LogWarning("FastBlocks: the bids could not be written to %s: the period's spending starts again after a restart", fs::PathToString(temp));
+            return;
+        }
+    }
+    if (!RenameOver(temp, m_bid_file)) LogWarning("FastBlocks: the bids could not be written to %s", fs::PathToString(m_bid_file));
+}
+
+void FastBlocksHooks::LoadBids(const fs::path& path) const
+{
+    UniValue in;
+    {
+        std::ifstream file{static_cast<const std::filesystem::path&>(path)};
+        if (file.is_open()) {
+            std::stringstream text;
+            text << file.rdbuf();
+            if (!in.read(text.str()) || !in.isObject()) {
+                LogWarning("FastBlocks: %s is not a file of bids: not read (written again with the next bid)", fs::PathToString(path));
+                in = UniValue{};
+            }
+        }
+    }
+    const int64_t now{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
+    LOCK(m_anchor_mutex);
+    m_bid_file = path;
+    if (!in.isObject()) return;
+    const auto number{[](const UniValue& v) -> std::optional<int64_t> {
+        if (!v.isNum()) return std::nullopt;
+        try {
+            return v.getInt<int64_t>();
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
+    }};
+    m_bid_landed.clear();
+    if (const UniValue& landed{in.find_value("landed")}; landed.isArray()) {
+        for (const UniValue& entry : landed.getValues()) {
+            if (!entry.isArray() || entry.size() != 2) continue;
+            const auto time{number(entry[0])};
+            const auto offer{number(entry[1])};
+            if (!time || !offer || !MoneyRange(*offer) || *time <= now - BID_LANDED_SECONDS) continue;
+            m_bid_landed.emplace_back(*time, *offer);
+        }
+    }
+    std::sort(m_bid_landed.begin(), m_bid_landed.end());
+    m_bid_history.clear();
+    if (const UniValue& history{in.find_value("history")}; history.isArray()) {
+        for (const UniValue& entry : history.getValues()) {
+            if (!entry.isObject()) continue;
+            const auto height{number(entry.find_value("mainheight"))};
+            const auto offer{number(entry.find_value("offer"))};
+            const auto status{number(entry.find_value("status"))};
+            const auto time{number(entry.find_value("time"))};
+            const UniValue& tip{entry.find_value("maintip")};
+            const UniValue& ticket{entry.find_value("ticket")};
+            if (!height || !offer || !MoneyRange(*offer) || !status || *status < 0 || *status > static_cast<int>(AnchorBidRecord::Status::OUTBID) || !time ||
+                !tip.isStr() || !ticket.isStr()) {
+                continue;
+            }
+            const auto tip_hash{uint256::FromHex(tip.get_str())};
+            const auto ticket_hash{uint256::FromHex(ticket.get_str())};
+            if (!tip_hash || !ticket_hash) continue;
+            const UniValue& pressure{entry.find_value("pressure")};
+            const auto text{[&](const char* key) { const UniValue& v{entry.find_value(key)}; return v.isStr() ? v.get_str() : std::string{}; }};
+            m_bid_history.push_back(AnchorBidRecord{.main_height = static_cast<int>(*height), .main_tip = *tip_hash, .ticket = *ticket_hash, .offer = *offer,
+                                                    .kind = text("kind"), .reason = text("reason"), .pressure = pressure.isNum() ? pressure.get_real() : 0,
+                                                    .status = static_cast<AnchorBidRecord::Status>(*status), .time = *time, .trigger = text("trigger")});
+        }
+    }
+    while (m_bid_history.size() > BID_HISTORY) m_bid_history.pop_front();
+    if (const auto missed{number(in.find_value("missed"))}; missed && *missed >= 0 && *missed < 1'000'000) m_bid_missed = static_cast<int>(*missed);
+    LogInfo("FastBlocks: %d bids read from %s (%d landed in the last %d days)", m_bid_history.size(), fs::PathToString(path), m_bid_landed.size(), BID_LANDED_SECONDS / 86400);
 }
 
 void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const uint256& main_tip, const AnchorBidPolicy& policy) const
@@ -2560,13 +2738,19 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
     UniValue overrides{UniValue::VOBJ};
     if (node.args) {
         if (const common::SettingsValue saved{node.args->GetSetting(ANCHOR_BID_SETTING)}; saved.isObject()) {
+            const bool legacy{IsLegacySettings(saved)};
+            UniValue fields{saved};
+            if (legacy) fields = LegacyBidSettings(saved, defaults, *node.args, m_chain_params.GetChainType());
             std::string error;
             AnchorBidPolicy changed{defaults};
-            if (!ApplyPolicyFields(changed, saved, error) || !(error = CheckPolicy(changed)).empty()) {
+            if (!ApplyPolicyFields(changed, fields, error, legacy ? StrategyContext::LEGACY_SETTINGS : StrategyContext::CURRENT) || !(error = CheckPolicy(changed)).empty()) {
                 LogError("FastBlocks: the anchor bid policy in the settings (%s) is not used: %s", ANCHOR_BID_SETTING, error);
             } else {
                 policy = changed;
-                overrides = saved;
+                // 8.3.5's settings, in the words of 8.3.6 from now on (what setanchorbidpolicy saves next): the same policy
+                // read back after a restart, and a floor set later the same before and after one.
+                overrides = legacy ? NormalizedLegacySettings(fields, changed) : UniValue{saved};
+                if (legacy) LogInfo("FastBlocks: the anchor bid policy in the settings is 8.3.5's (no preventstall): read as 8.3.5 meant it: %s", AnchorBidPolicySummary(changed));
             }
         }
     }
@@ -2576,6 +2760,8 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
         m_bid_overrides = overrides;
         m_node_policy = policy;
     }
+    // The bids made and what landed cost, as before the restart (the period's cap, the stale rule).
+    if (node.args) LoadBids(node.args->GetDataDirNet() / BID_FILE);
     std::string error;
     m_producer = Producer::FromArgs(node, *this, error);
     m_producer_error = error;

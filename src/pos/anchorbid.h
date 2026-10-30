@@ -44,17 +44,35 @@ enum class BidStrategy {
 std::string StrategyName(BidStrategy strategy);
 std::optional<BidStrategy> ParseStrategy(const std::string& name);
 
+/**
+ * Where a strategy word comes from, for the words that are both a name before 8.3.6 and a new name (fees, fixed, off):
+ * doc/fastblocks-anchor-bids.md, "The names before 8.3.6".
+ */
+enum class StrategyContext {
+    //! setanchorbidpolicy, the app, and the settings 8.3.6 writes (always with preventstall): the new names.
+    CURRENT,
+    //! -validatoranchorbidstrategy: the new names, but off, which is 8.3.5's (the anchorer off alone).
+    OPTIONS,
+    //! The settings 8.3.5 wrote (an anchorbidpolicy without preventstall nor anchor): 8.3.5's meaning of every word.
+    LEGACY_SETTINGS,
+};
+
 /** A strategy as it was said: new names, and the names before 8.3.6, which also said whether to prevent stalling. */
 struct StrategyWord {
     BidStrategy strategy{BidStrategy::FEES};
-    //! What the word says of "Prevent stalling", if anything (the old names: fees and fixed no, minimal and
-    //! feespreventstall yes; the new names minimum and feesminimum, and off, say nothing).
+    //! What the word says of "Prevent stalling", if anything (the old names: minimal and feespreventstall yes, and in
+    //! 8.3.5's settings fees and fixed no; the new names, fees and fixed among them, and off say nothing).
     std::optional<bool> prevent_stall;
-    //! The old feespreventstall (or -validatoranchorbidmode=standard): Fees + minimum when the policy has a floor above 0
-    //! (it bid at least the floor), Fees without one.
+    //! The old feespreventstall (or -validatoranchorbidmode=standard), and fees in 8.3.5's settings: Fees + minimum when
+    //! the policy has a floor above 0 (it bid at least the floor), Fees without one.
     bool fees_or_floor{false};
+    //! 8.3.5's off (in its settings, or -validatoranchorbidstrategy=off): the validator's anchorer off ("Anchor my
+    //! validator", anchor false), the strategy as it was; the merged miner (setbmm) still bids, as in 8.3.5.
+    bool anchor_off{false};
 };
-std::optional<StrategyWord> ParseStrategyWord(const std::string& name);
+std::optional<StrategyWord> ParseStrategyWord(const std::string& name, StrategyContext context = StrategyContext::CURRENT);
+/** Whether a saved anchorbidpolicy is one 8.3.5 wrote: neither preventstall nor anchor (8.3.6 always saves preventstall). */
+bool IsLegacySettings(const UniValue& saved);
 
 //! Optional operator floor. Automatic bids also cover the estimated mainchain transaction fee.
 inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{0};
@@ -75,7 +93,7 @@ struct EscalationPoint {
 struct AnchorBidPolicy {
     BidStrategy strategy{BidStrategy::FEES};
     //! "Prevent stalling": as the chain nears the unanchored limit, a bid that lands an anchor whatever the strategy (the stall
-    //! boost or the curve); when peg work waits for an anchor (deposits, withdrawals, set changes), the competitive base;
+    //! boost or the curve); when peg work waits for an anchor (a deposit to credit, withdrawals or a bundle), the competitive base;
     //! after missed blocks, the minimum raised for the strategies that bid every block. Not with OFF.
     bool prevent_stall{true};
     //! "Anchor my validator": a validator's own anchorer bids (the other trigger is the merged miner, setbmm).
@@ -132,7 +150,13 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy);
  * Set the fields given in `fields` (an object: numbers, booleans, or text as in the options) on `policy`.
  * @return false, and why in `error`, if a field is unknown or not a value of its kind (the policy is then not checked).
  */
-bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::string& error);
+bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::string& error, StrategyContext context = StrategyContext::CURRENT);
+/**
+ * setanchorbidpolicy `fields` without a strategy, on a node whose saved fields (`overrides`) keep an old strategy word
+ * that depends on the floor (feespreventstall): that strategy again for the floor now in force, as a restart reads the
+ * settings, so that a floor set later bids the same before and after a restart.
+ */
+void ReapplySavedStrategy(AnchorBidPolicy& policy, const UniValue& overrides, const UniValue& fields);
 /** The names of the fields of a policy. */
 const std::vector<std::string>& PolicyFieldNames();
 
@@ -148,7 +172,8 @@ struct BidInputs {
     std::optional<CAmount> fee_rate_per_kvb;
     //! Mainchain relay minimum in satoshis per 1000 vbytes; conservative fallback when unavailable.
     CAmount relay_rate_per_kvb{1000};
-    //! Peg work or staking/validator-set maintenance needs an anchor (stall prevention bids for it). Unknown: bid.
+    //! Peg work waits for an anchor: a deposit to credit, withdrawals or a bundle (HasPendingAnchorActions; stall prevention
+    //! bids for it). Not the staking accounting (the pot, the fee pool, rewards owed, unbonds) nor set changes. Unknown: bid.
     bool pending_actions{true};
     //! The least feerate of a BMM request recent mainchain blocks took (any slot), per 1000 vbytes, if seen.
     std::optional<CAmount> included_rate_per_kvb;

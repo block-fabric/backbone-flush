@@ -69,9 +69,9 @@ std::vector<RPCResult> PolicyFieldsDoc()
         {RPCResult::Type::BOOL, "interpolate", "Linear between the points of the curve (else steps)"},
         {RPCResult::Type::BOOL, "usefeeestimate", "Stall prevention's base follows the mainchain's next-block fee estimate"},
         {RPCResult::Type::NUM, "requestvsize", "The size of a BMM request, in vbytes"},
-        {RPCResult::Type::NUM, "rebidafter", "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
-        {RPCResult::Type::NUM, "rebidstep", "The multiplier of each such raise"},
-        {RPCResult::Type::NUM, "rebidmax", "The most those raises multiply the bid"},
+        {RPCResult::Type::NUM, "rebidafter", "With flatboost false only: missed mainchain blocks in a row before the bid is raised again (0: never)"},
+        {RPCResult::Type::NUM, "rebidstep", "With flatboost false only: the multiplier of each such raise"},
+        {RPCResult::Type::NUM, "rebidmax", "With flatboost false only: the most those raises multiply the bid"},
         {RPCResult::Type::NUM, "warnmissed", "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
         {RPCResult::Type::STR_AMOUNT, "periodcap", "The most the landed bids cost in periodhours (0: no cap)"},
         {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
@@ -218,7 +218,7 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::STR, "trigger", "What sets off the bid now: anchor, mine, anchor+mine, or empty"},
         {RPCResult::Type::STR_AMOUNT, "effective", "What it bids now for the next mainchain block"},
         {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before stall prevention"},
-        {RPCResult::Type::STR, "kind", "fixed, floor, fees, rebid, escalation, max, periodcap or off"},
+        {RPCResult::Type::STR, "kind", "fees, minimum, fixed, rebid (the minimum raised after missed blocks), pending (peg work waiting: a deposit or withdrawals), stall (the stall boost), escalation (the legacy curve), max, periodcap, replace (above a stale bid), always (setbmm's always), idle (Fees without fees that pay) or off"},
         {RPCResult::Type::STR, "reason", "Why, in words"},
         {RPCResult::Type::NUM, "pressure", "Stall pressure p: unanchoredslots / maxunanchoredslots (the chain halts at 1)"},
         {RPCResult::Type::NUM, "multiplier", "The escalation (or rebid) multiplier applied"},
@@ -227,7 +227,7 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::NUM, "unanchoredslots", "Slots since then"},
         {RPCResult::Type::NUM, "maxunanchoredslots", "The halt: blocks of stake stop after this many slots without an anchor"},
         {RPCResult::Type::STR_AMOUNT, "pot", "The pot of the last anchor bid for"},
-        {RPCResult::Type::BOOL, "pendingactions", "Peg actions or staking maintenance need an anchor"},
+        {RPCResult::Type::BOOL, "pendingactions", "Peg work waits for an anchor: a deposit to credit, withdrawals or a bundle (not the staking accounting)"},
         {RPCResult::Type::NUM, "relayfeerate", "Mainchain relay minimum, in sat/vB"},
         {RPCResult::Type::NUM, "feerate", /*optional=*/true, "The mainchain's next-block fee estimate, in sat/vB"},
         {RPCResult::Type::STR, "feesource", "Where the estimate came from"},
@@ -1081,8 +1081,10 @@ RPCMethod setanchorbidpolicy()
         "of any node (setbmm), whose bids the same mainchain wallet pays. The fields given change; the others stay. "
         "Kept in the node's settings (settings.json), over the options (-validatoranchorbid*), which stay the defaults (reset: back to them). "
         "strategy off stops every bid of the node (both triggers; one by hand still goes); anchor=false stops only the anchorer. "
-        "The strategy names before 8.3.6 still work and say whether to prevent stalling, unless preventstall is given: fees (no), feespreventstall "
-        "(fees, yes; feesminimum with a floor above 0), minimal (minimum, yes), fixed (no).",
+        "The strategy names before 8.3.6 still work and say whether to prevent stalling, unless preventstall is given: feespreventstall "
+        "(fees, yes; feesminimum with a floor above 0), minimal (minimum, yes). fees, fixed and off are new names here: they say nothing of stall "
+        "prevention (preventstall=false is what turns it off; on by default). Prevent stalling bids without fees only near the unanchored limit, "
+        "or when peg work waits for an anchor (a deposit to credit, withdrawals or a bundle).",
         {
             {"policy", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "The fields to change",
             {
@@ -1098,9 +1100,9 @@ RPCMethod setanchorbidpolicy()
                 {"interpolate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Linear between the points of the curve (else steps)"},
                 {"usefeeestimate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Stall prevention's base follows the mainchain's next-block fee estimate"},
                 {"requestvsize", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The size of a BMM request, in vbytes (50-10000)"},
-                {"rebidafter", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
-                {"rebidstep", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The multiplier of each such raise (1-100)"},
-                {"rebidmax", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The most those raises multiply the bid (1-1000)"},
+                {"rebidafter", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "With flatboost false only (the flat boost, the default, raises the minimum x2 for every two missed blocks, at most boost): missed mainchain blocks in a row before the bid is raised again (0: never)"},
+                {"rebidstep", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "With flatboost false only: the multiplier of each such raise (1-100)"},
+                {"rebidmax", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "With flatboost false only: the most those raises multiply the bid (1-1000)"},
                 {"warnmissed", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the \"bid too low\" warning (0: never)"},
                 {"periodcap", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The most the landed bids cost in periodhours (0: no cap)"},
                 {"periodhours", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The period of the cap, in hours (1-744)"},
@@ -1125,13 +1127,18 @@ RPCMethod setanchorbidpolicy()
     pos::AnchorBidPolicy policy{reset ? report.defaults : report.policy};
     std::string error;
     if (!pos::ApplyPolicyFields(policy, fields, error)) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
-    if (error = pos::CheckPolicy(policy); !error.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
     // The fields changed from the options' policy, as they are said (normalized).
     UniValue overrides{reset ? UniValue{UniValue::VOBJ} : report.overrides};
+    // A saved strategy that depends on the floor (8.3.5's feespreventstall): again for the floor now, as after a restart.
+    pos::ReapplySavedStrategy(policy, overrides, fields);
+    if (error = pos::CheckPolicy(policy); !error.empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, error);
     const UniValue said{pos::PolicyToUniValue(policy)};
-    // A strategy is kept with what it says of stall prevention (an old name says it too), so that the settings read back the same.
+    // A strategy is kept with what it says of stall prevention (an old name says it too), so that the settings read back the
+    // same; and preventstall is in every policy saved, which tells it from one 8.3.5 saved (pos::IsLegacySettings).
     std::vector<std::string> keys{fields.getKeys()};
-    if (!fields.find_value("strategy").isNull() && fields.find_value("preventstall").isNull()) keys.emplace_back("preventstall");
+    if (!keys.empty() && fields.find_value("preventstall").isNull() && (!fields.find_value("strategy").isNull() || overrides.find_value("preventstall").isNull())) {
+        keys.emplace_back("preventstall");
+    }
     for (const std::string& key : keys) {
         UniValue kept(UniValue::VOBJ);
         for (const std::string& other : overrides.getKeys()) {

@@ -864,6 +864,8 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
         (fields.isObject() && !pos::ApplyPolicyFields(policy, fields, error)) || !(error = pos::CheckPolicy(policy)).empty()) {
         throw HostError(BRIDGE_INVALID_REQUEST, error.empty() ? std::string{"Not a policy"} : error);
     }
+    // (As the node does: a saved strategy that depends on the floor, again for the floor now.)
+    if (!back) pos::ReapplySavedStrategy(policy, now.find_value("overrides"), fields);
     Window::ConfirmDialog dialog;
     dialog.title = "Change the bid policy";
     dialog.kind = "rpc:setanchorbidpolicy";
