@@ -77,6 +77,13 @@ std::vector<RPCResult> PolicyFieldsDoc()
         {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
         {RPCResult::Type::NUM, "stallreserve", "The percentage of the cap kept for stall prevention's bids (the others spend the cap less it)"},
         {RPCResult::Type::NUM, "lowbalanceblocks", "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
+        {RPCResult::Type::NUM, "batch", "Fees bids once the fee share is this many times the landing price (0: whenever it pays for a request)"},
+        {RPCResult::Type::NUM, "heartbeathours", "Hours without an anchor before a heartbeat bid of the competitive base (0: none)"},
+        {RPCResult::Type::STR_AMOUNT, "valueatrisk", "A bid as for work waiting once the unanchored blocks of stake move this much (0: never)"},
+        {RPCResult::Type::NUM, "reservepct", "The percentage of a fee bid's share kept for the anchor reserve while it is below its target"},
+        {RPCResult::Type::STR_AMOUNT, "reservetarget", "What the anchor reserve fills up to"},
+        {RPCResult::Type::BOOL, "turns", "Fees: the validators take turns (the designated one bids at once)"},
+        {RPCResult::Type::NUM, "turnbackup", "Mainchain blocks without an anchor before a validator not designated bids"},
     };
 }
 
@@ -87,7 +94,7 @@ std::vector<RPCResult> PolicyResultDoc()
         {RPCResult::Type::BOOL, "bidding", "Whether the node bids: its anchorer (a validator with anchor on) or its merged miner (setbmm on), the strategy not off"},
         {RPCResult::Type::STR, "explanation", /*optional=*/true, "Why it does not bid, if it does not"},
         {RPCResult::Type::BOOL, "anchortrigger", "\"Anchor my validator\": a validator with anchor on, the strategy not off"},
-        {RPCResult::Type::BOOL, "minetrigger", "\"Mine blocks when fees pay\": setbmm on"},
+        {RPCResult::Type::BOOL, "minetrigger", "\"Merged-mine as a backup producer\": setbmm on"},
         {RPCResult::Type::OBJ, "policy", "The policy in force", PolicyFieldsDoc()},
         {RPCResult::Type::OBJ, "defaults", "The policy of the options (-validatoranchorbid*), before setanchorbidpolicy", PolicyFieldsDoc()},
         {RPCResult::Type::OBJ, "overrides", "The fields setanchorbidpolicy changed, kept in the node's settings", {}, {.skip_type_check = true}},
@@ -198,6 +205,9 @@ UniValue BidResult(const pos::FastBlocksHooks::AnchorBidReport& report, int coun
         entry.pushKV("trigger", bid.trigger);
         entry.pushKV("cost", ValueFromAmount(bid.status == pos::FastBlocksHooks::AnchorBidRecord::Status::LANDED ? bid.offer : 0));
         entry.pushKV("time", bid.time);
+        entry.pushKV("pot", ValueFromAmount(bid.pot));
+        entry.pushKV("holdback", ValueFromAmount(bid.holdback));
+        entry.pushKV("basis", bid.basis.empty() ? bid.kind : bid.basis);
         history.push_back(std::move(entry));
     }
     out.pushKV("history", std::move(history));
@@ -215,11 +225,11 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::STR, "explanation", /*optional=*/true, "Why it does not bid, if it does not"},
         {RPCResult::Type::STR, "strategy", "The strategy in force"},
         {RPCResult::Type::BOOL, "anchortrigger", "\"Anchor my validator\" on"},
-        {RPCResult::Type::BOOL, "minetrigger", "\"Mine blocks when fees pay\" on (setbmm)"},
+        {RPCResult::Type::BOOL, "minetrigger", "\"Merged-mine as a backup producer\" on (setbmm)"},
         {RPCResult::Type::STR, "trigger", "What sets off the bid now: anchor, mine, anchor+mine, or empty"},
         {RPCResult::Type::STR_AMOUNT, "effective", "What it bids now for the next mainchain block"},
         {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before stall prevention"},
-        {RPCResult::Type::STR, "kind", "fees, minimum, fixed, rebid (the minimum raised after missed blocks), pending (work waiting for an anchor: deposits, withdrawals, and bonds, unbonds and jails), stall (the stall boost), escalation (the legacy curve), max, periodcap, replace (above a stale bid), always (setbmm's always), idle (Fees without fees that pay), throttled (work waiting, but its last bid did not land: one in 3 mainchain blocks) or off"},
+        {RPCResult::Type::STR, "kind", "fees, minimum, fixed, rebid (the minimum raised after missed blocks), pending (work waiting for an anchor: deposits, withdrawals, and bonds, unbonds and jails), valueatrisk (the unanchored blocks move valueatrisk or more), heartbeat (heartbeathours without an anchor), stall (the stall boost), escalation (the legacy curve), max, periodcap, replace (above a stale bid), always (setbmm's always), idle (Fees without fees that pay, or below a batch), throttled (work waiting, but its last bid did not land: one in 3 mainchain blocks), turn (another validator's turn) or off"},
         {RPCResult::Type::STR, "reason", "Why, in words"},
         {RPCResult::Type::NUM, "pressure", "Stall pressure p: unanchoredslots / maxunanchoredslots (the chain halts at 1)"},
         {RPCResult::Type::NUM, "multiplier", "The escalation (or rebid) multiplier applied"},
@@ -255,6 +265,9 @@ std::vector<RPCResult> BidResultDoc()
                 {RPCResult::Type::STR, "status", "pending, landed, missed (the block had no commitment of this chain) or outbid (another commitment of this chain, or the mainchain went another way)"},
                 {RPCResult::Type::STR_AMOUNT, "cost", "What it cost (landed bids only)"},
                 {RPCResult::Type::NUM_TIME, "time", "When it was made"},
+                {RPCResult::Type::STR_AMOUNT, "pot", "The pot behind it: what its anchor pays the payee"},
+                {RPCResult::Type::STR_AMOUNT, "holdback", "What it kept back of the fee share for the anchor reserve"},
+                {RPCResult::Type::STR, "basis", "What it was bid for, before max, the cap or a stale bid named it: fees, minimum, fixed, rebid, pending, valueatrisk, heartbeat, stall, escalation, always or hand"},
             }},
         }},
         {RPCResult::Type::ARR, "warnings", "Warnings: the bid too low, the wallet low, the cap reached, the anchorer off", {{RPCResult::Type::STR, "", "A warning"}}},
@@ -1109,6 +1122,13 @@ RPCMethod setanchorbidpolicy()
                 {"periodhours", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The period of the cap, in hours (1-744)"},
                 {"stallreserve", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The percentage of the cap kept for stall prevention's bids (0-100; 50 by default): every other bid spends at most the cap less it"},
                 {"lowbalanceblocks", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "A warning when the bid wallet covers fewer mainchain blocks (0: never)"},
+                {"batch", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Fees bids once the fee share is this many times the landing price (0-1000; 10 by default; 0: whenever it pays for a request)"},
+                {"heartbeathours", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "With Prevent stalling, hours without an anchor before a bid of the competitive base whatever the fees (0-744; 6 by default; 0: none)"},
+                {"valueatrisk", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "With Prevent stalling, a bid as for work waiting once the unanchored blocks of stake move this much (1 by default; 0: never)"},
+                {"reservepct", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The percentage of a fee bid's share kept for the anchor reserve while it is below its target (0-100; 20 by default)"},
+                {"reservetarget", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "What the anchor reserve fills up to (0.01 by default)"},
+                {"turns", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Fees: the validators take turns, the designated one bidding at once (true by default)"},
+                {"turnbackup", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Mainchain blocks without an anchor before a validator not designated bids (0-1000; 2 by default)"},
             }},
             {"reset", RPCArg::Type::BOOL, RPCArg::Default{false}, "Back to the options' policy first (the settings forgotten)"},
         },

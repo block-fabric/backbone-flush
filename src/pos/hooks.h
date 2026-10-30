@@ -427,6 +427,8 @@ public:
         CScript payee;
         //! The bid policy in force: the options' (-validatoranchorbid*), with what setanchorbidpolicy changed.
         AnchorBidPolicy policy;
+        //! The producer's validator keys: the node takes its turn when any of them is designated (DesignatedBidder).
+        std::vector<uint256> keys;
     };
     /** A validator's own anchorer: none if this node is not a validator (its policy may be off). */
     std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
@@ -447,6 +449,22 @@ public:
         std::string trigger;
         //! A bid for work waiting without fees (BidDecision::work): the throttle counts these.
         bool work{false};
+        //! The pot the anchor pays its payee (the fees behind the bid), and what the bid kept back of the fee share for
+        //! the anchor reserve (BidDecision::holdback), credited when it lands.
+        CAmount pot{0};
+        CAmount holdback{0};
+        //! What it was for before the limits named it (BidDecision::basis; empty in the files of 8.3.6: then `kind`).
+        std::string basis;
+        //! No fees behind it (BidDecision::unfunded): debited from the anchor reserve when it lands.
+        bool unfunded{false};
+    };
+    /** What the landed anchors of a window collected and paid. */
+    struct AnchoringTotals {
+        //! The pots of the landed anchors, and their offers.
+        CAmount collected{0};
+        CAmount paid{0};
+        //! Landed anchors, by what they were bid for (AnchorBidRecord::basis).
+        std::map<std::string, int> anchors;
     };
     /** What the anchorer bids now, and why; what it bid; what its wallet covers. */
     struct AnchorBidReport {
@@ -472,6 +490,18 @@ public:
         std::string balance_error;
         std::string fee_source;
         std::vector<std::string> warnings;
+        //! The anchor reserve (AnchorBidPolicy::reserve_pct), and what landed bids without fees spent past it since it
+        //! was last full.
+        CAmount reserve{0};
+        CAmount deficit{0};
+        //! Taking turns: whether this node is designated for the next mainchain block, `turn_main_height`.
+        bool designated{false};
+        int turn_main_height{0};
+        //! The time from which the heartbeat bids, if it will (an unanchored run, a heartbeat).
+        std::optional<int64_t> next_heartbeat;
+        //! The last 24 hours, and the last 7 days.
+        AnchoringTotals day;
+        AnchoringTotals week;
     };
     /**
      * The report as of `slot`, the run without an anchor starting at `first_unanchored_slot` (-1: none); `mining`, the
@@ -673,6 +703,33 @@ private:
     const AnchorBidPolicy& PolicyLocked() const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex) { return m_validator ? m_validator->policy : m_node_policy; }
     //! What the bids that landed cost, and when they were made (the period's spending; a month at most).
     mutable std::deque<std::pair<int64_t, CAmount>> m_bid_landed GUARDED_BY(m_anchor_mutex);
+    /** A landed bid, for what anchoring collected and paid (the last ANCHORS_LANDED_SECONDS). */
+    struct LandedAnchor {
+        int64_t time{0};
+        CAmount offer{0};
+        CAmount pot{0};
+        std::string basis;
+    };
+    mutable std::deque<LandedAnchor> m_anchors_landed GUARDED_BY(m_anchor_mutex);
+    //! The anchor reserve: what the holdbacks of landed fee bids put in, less the landed bids without fees; and what those
+    //! spent past an empty reserve since it was last at its target (reported, never a reason not to bid).
+    mutable CAmount m_anchor_reserve GUARDED_BY(m_anchor_mutex){0};
+    mutable CAmount m_anchor_deficit GUARDED_BY(m_anchor_mutex){0};
+    //! Taking turns: whether this node was designated for the mainchain block after the tip m_turn_for (the last round),
+    //! for the report; and the mainchain height from which it holds a bid while another validator has the turn (-1: none).
+    mutable bool m_turn_designated GUARDED_BY(m_anchor_mutex){false};
+    mutable int m_turn_main_height GUARDED_BY(m_anchor_mutex){0};
+    mutable int m_turn_held_since GUARDED_BY(m_anchor_mutex){-1};
+    //! What the transactions of each block of stake no anchor covers move (the sum of their outputs), by block: read once
+    //! a block (ValueAtRisk), the blocks of the run only.
+    mutable Mutex m_risk_mutex;
+    mutable std::map<uint256, CAmount> m_risk_moved GUARDED_BY(m_risk_mutex);
+    //! The run's total as of the tip m_risk_for, the last anchored height m_risk_anchored.
+    mutable uint256 m_risk_for GUARDED_BY(m_risk_mutex);
+    mutable int m_risk_anchored GUARDED_BY(m_risk_mutex){-1};
+    mutable CAmount m_risk_value GUARDED_BY(m_risk_mutex){0};
+    /** What the transactions of the active chain's blocks above `anchored_height`, to `tip`, move: their outputs summed. */
+    CAmount ValueAtRisk(const CBlockIndex* tip, int anchored_height) const EXCLUSIVE_LOCKS_REQUIRED(!m_risk_mutex, !::cs_main);
     /** The stale bid a new one must pay more than (pos::StaleOffer over the history), at `now`. */
     CAmount StaleLocked(int64_t now) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
     //! The policy of the options, and the fields the settings changed.
@@ -713,6 +770,8 @@ inline constexpr int WORK_BID_SPACING{3};
 inline constexpr const char* BID_FILE{"anchorbids.json"};
 //! The longest period of the cap (periodhours at most 744): what landed is kept that long.
 inline constexpr int64_t BID_LANDED_SECONDS{int64_t{24 * 31} * 3600};
+//! What anchoring collected and paid is reported for 7 days at most: the landed anchors are kept that long.
+inline constexpr int64_t ANCHORS_LANDED_SECONDS{int64_t{7 * 24} * 3600};
 /** The node's setting (settings.json) that keeps the fields setanchorbidpolicy changed. */
 inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
 /**

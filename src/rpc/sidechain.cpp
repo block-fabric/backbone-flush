@@ -396,6 +396,18 @@ RPCMethod setbmm()
     };
 }
 
+std::vector<RPCResult> AnchoringTotalsDoc()
+{
+    return {
+        {RPCResult::Type::STR_AMOUNT, "collected", "The pots the landed anchors paid"},
+        {RPCResult::Type::STR_AMOUNT, "paid", "What their bids cost (the landed offers)"},
+        {RPCResult::Type::OBJ_DYN, "anchors", "Landed anchors, by what they were bid for (fees, minimum, fixed, rebid, pending, valueatrisk, heartbeat, stall, escalation, always, hand)",
+        {
+            {RPCResult::Type::NUM, "kind", "Their number"},
+        }},
+    };
+}
+
 RPCMethod getbmminfo()
 {
     return RPCMethod{
@@ -430,6 +442,23 @@ RPCMethod getbmminfo()
                 {RPCResult::Type::STR_AMOUNT, "leftordinary", /*optional=*/true, "What is left for the other bids (fees, minimum, fixed, work waiting, always): the cap less the reserve less what was spent"},
                 {RPCResult::Type::STR_AMOUNT, "leftstall", /*optional=*/true, "What is left for a stall prevention bid: the whole cap less what was spent"},
                 {RPCResult::Type::STR_AMOUNT, "stalebid", /*optional=*/true, "A bid that did not land, which other nodes may still hold: the next one is raised above it, within max and the cap"},
+            }},
+            {RPCResult::Type::OBJ, "anchoring", /*optional=*/true, "Demand-driven anchoring (8.3.7): the anchor reserve, what would make a bid, the turn, and what anchoring collected and paid",
+            {
+                {RPCResult::Type::STR_AMOUNT, "reserve", "The anchor reserve: the holdbacks of landed fee bids, less the landed bids without fees"},
+                {RPCResult::Type::STR_AMOUNT, "reservetarget", "What it fills up to (reservetarget)"},
+                {RPCResult::Type::STR_AMOUNT, "deficit", "What landed bids without fees spent past an empty reserve since it was last full"},
+                {RPCResult::Type::STR_AMOUNT, "valueatrisk", "What the transactions of the blocks of stake no anchor covers move (their outputs summed)"},
+                {RPCResult::Type::STR_AMOUNT, "batchneeded", "The fee share from which Fees bids (batch x the landing price)"},
+                {RPCResult::Type::STR_AMOUNT, "pot", "The fee share now (of the pot of the last anchor bid for)"},
+                {RPCResult::Type::NUM_TIME, "nextheartbeat", /*optional=*/true, "When the heartbeat bids, if no anchor lands before (absent without an unanchored run, or without a heartbeat)"},
+                {RPCResult::Type::OBJ, "turn", "Taking turns",
+                {
+                    {RPCResult::Type::BOOL, "designated", "Whether this node is designated for the mainchain block (any of its keys; true when turns do not apply)"},
+                    {RPCResult::Type::NUM, "mainheight", "The mainchain block the turn is for"},
+                }},
+                {RPCResult::Type::OBJ, "day", "The anchors of this node that landed in the last 24 hours", AnchoringTotalsDoc()},
+                {RPCResult::Type::OBJ, "week", "The same in the last 7 days", AnchoringTotalsDoc()},
             }},
         }},
         RPCExamples{HelpExampleCli("getbmminfo", "")},
@@ -478,6 +507,30 @@ RPCMethod getbmminfo()
         }
         if (report.stale > 0) bid.pushKV("stalebid", ValueFromAmount(report.stale));
         result.pushKV("bidpolicy", std::move(bid));
+        UniValue anchoring(UniValue::VOBJ);
+        anchoring.pushKV("reserve", ValueFromAmount(report.reserve));
+        anchoring.pushKV("reservetarget", ValueFromAmount(report.policy.reserve_target));
+        anchoring.pushKV("deficit", ValueFromAmount(report.deficit));
+        anchoring.pushKV("valueatrisk", ValueFromAmount(report.inputs.value_at_risk));
+        anchoring.pushKV("batchneeded", ValueFromAmount(pos::BatchNeeded(report.policy, report.inputs)));
+        anchoring.pushKV("pot", ValueFromAmount(pos::FeeShare(report.inputs.pot, report.policy.fee_share_bps)));
+        if (report.next_heartbeat) anchoring.pushKV("nextheartbeat", *report.next_heartbeat);
+        UniValue turn(UniValue::VOBJ);
+        turn.pushKV("designated", report.designated);
+        turn.pushKV("mainheight", report.turn_main_height);
+        anchoring.pushKV("turn", std::move(turn));
+        const auto totals{[](const pos::FastBlocksHooks::AnchoringTotals& t) {
+            UniValue out(UniValue::VOBJ);
+            out.pushKV("collected", ValueFromAmount(t.collected));
+            out.pushKV("paid", ValueFromAmount(t.paid));
+            UniValue anchors(UniValue::VOBJ);
+            for (const auto& [kind, count] : t.anchors) anchors.pushKV(kind, count);
+            out.pushKV("anchors", std::move(anchors));
+            return out;
+        }};
+        anchoring.pushKV("day", totals(report.day));
+        anchoring.pushKV("week", totals(report.week));
+        result.pushKV("anchoring", std::move(anchoring));
     }
     return result;
 },

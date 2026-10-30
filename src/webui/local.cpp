@@ -873,7 +873,7 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
     dialog.rows = {confirm::Text("Network", Params().GetChainTypeString())};
     if (back) dialog.rows.push_back(confirm::Text("Reset", "back to the options' policy"));
     const UniValue said{pos::PolicyToUniValue(policy)};
-    const std::set<std::string> amounts{"floor", "max", "fixed", "periodcap"};
+    const std::set<std::string> amounts{"floor", "max", "fixed", "periodcap", "valueatrisk", "reservetarget"};
     if (fields.isObject()) {
         for (const std::string& key : fields.getKeys()) {
             const UniValue& value{said.find_value(key)};
