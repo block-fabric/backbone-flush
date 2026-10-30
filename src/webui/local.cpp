@@ -856,7 +856,8 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
     const bool back{reset.isBool() && reset.get_bool()};
     // The policy the call makes, as the node would take it (checked there again).
     const UniValue now{call.Read("getanchorbidpolicy", UniValue{UniValue::VARR}, /*wallet=*/false)};
-    if (!now.find_value("validator").isTrue()) throw HostError(BRIDGE_INVALID_REQUEST, "This node is not a validator: only validators bid for anchors.");
+    // The node's one policy: a validator's anchorer and the merged miner (setbmm) of any node bid under it.
+    const bool validator{now.find_value("validator").isTrue()};
     pos::AnchorBidPolicy policy;
     std::string error;
     if (!pos::ApplyPolicyFields(policy, now.find_value(back ? "defaults" : "policy"), error) ||
@@ -864,7 +865,7 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
         throw HostError(BRIDGE_INVALID_REQUEST, error.empty() ? std::string{"Not a policy"} : error);
     }
     Window::ConfirmDialog dialog;
-    dialog.title = "Change the anchor bid policy";
+    dialog.title = "Change the bid policy";
     dialog.kind = "rpc:setanchorbidpolicy";
     dialog.accept = "Change";
     dialog.rows = {confirm::Text("Network", Params().GetChainTypeString())};
@@ -885,7 +886,11 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
     dialog.rows.push_back(confirm::Text("Strategy", pos::StrategyName(policy.strategy)));
     dialog.rows.push_back(confirm::Amount("Most per mainchain block", policy.max));
     if (policy.period_cap > 0) dialog.rows.push_back(confirm::Amount(strprintf("Most in %d hours", policy.period_hours), policy.period_cap));
-    dialog.message = policy.Bids() ?
+    dialog.message = !validator ?
+        strprintf("This node's merged miner (setbmm), when on, bids from the wallet of the %s node as this policy says (strategy off: the fee share), "
+                  "at most %s a block, from now on and after a restart (kept in the node's settings).\n\nChange it only if you asked for it.",
+                  std::string{chain::MAINCHAIN_NAME}, FormatMoney(policy.max)) :
+        policy.Bids() ?
         strprintf("This node's validator bids from the wallet of the %s node for a BMM commitment to its ticket in every %s block, "
                   "as this policy says, from now on and after a restart (kept in the node's settings): %s.\n\nChange it only if you asked for it.",
                   std::string{chain::MAINCHAIN_NAME}, std::string{chain::MAINCHAIN_NAME}, pos::AnchorBidPolicySummary(policy)) :
