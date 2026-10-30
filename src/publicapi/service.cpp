@@ -289,7 +289,7 @@ double CostOf(const std::string& method_path)
 {
     const std::string method{method_path.substr(method_path.rfind('/') + 1)};
     if (method.starts_with("Quote") || method == "BuildAction" || method == "GetAsset" || method == "ListAssets") return 4;
-    // 8.3.0: a PSBT reads the address's coins (a scan of the UTXO set when the client names none) and their transactions.
+    // 8.3.0: a PSBT looks up the coins the client names (up to MAX_PSBT_COINS, required: no scan of the UTXO set) and their transactions.
     if (method == "BuildPsbt") return 8;
     // 8.3.2: a reservation's depth: lookups in the mempool, the UTXO set and the state.
     if (method == "GetReservation") return 4;
@@ -314,7 +314,7 @@ public:
           m_broadcast_global{options.broadcast_global_per_minute / 60.0, std::max(1.0, options.broadcast_global_per_minute / 6.0), 1},
           m_logo_limits{options.logo_per_minute / 60.0, options.logo_burst},
           m_logo_global{options.logo_global_per_minute / 60.0, std::max(1.0, options.logo_global_per_minute / 6.0), 1},
-          m_logos{options.logo_entries, options.logo_ttl},
+          m_logos{options.logo_entries, options.logo_ttl, std::max<size_t>(1, options.logo_entries / 16)},
           m_wide_limits{options.rate * options.wide_multiplier, options.burst * options.wide_multiplier},
           m_cache{options.cache_entries, options.cache_bytes}, m_gate{options.max_expensive}, m_broadcast_gate{options.max_broadcasts}
     {
@@ -352,26 +352,21 @@ public:
         if (wide) {
             if (const auto wait{m_wide_limits.Take(*wide, cost)}) return wide_refused(*wait);
         }
+        // Broadcasts and uploads of logos: each client's a minute here, an IPv6 client by its wide network (rotating
+        // addresses, or /64s, within it gives no fresh budget); all clients' together only once a request passed the
+        // cheap checks, in the method itself (TakeGlobal): junk refused there takes nothing from the others.
         if (call.path == std::string{"/"} + SERVICE + "/Broadcast") {
             if (!m_options.broadcast) return Status{Code::PERMISSION_DENIED, "this node does not broadcast for others (-publicapibroadcast=0)"};
-            if (const auto wait{m_broadcast_limits.Take(call.client, 1)}) {
+            if (const auto wait{m_broadcast_limits.Take(LimitKey(call.client), 1)}) {
                 const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
                 return Status{Code::RESOURCE_EXHAUSTED, strprintf("broadcast limit: %g a minute (try again in %d s)", m_options.broadcast_per_minute, seconds), {{"retry-after", util::ToString(seconds)}}};
-            }
-            if (const auto wait{m_broadcast_global.Take("*", 1)}) {
-                const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
-                return Status{Code::RESOURCE_EXHAUSTED, "this node broadcasts no more for now: try again shortly", {{"retry-after", util::ToString(seconds)}}};
             }
         }
         // 8.1.0: uploads of logos, as broadcasts: each client's, a minute, and all clients' together.
         if (call.path == std::string{"/"} + SERVICE + "/UploadLogo") {
-            if (const auto wait{m_logo_limits.Take(call.client, 1)}) {
+            if (const auto wait{m_logo_limits.Take(LimitKey(call.client), 1)}) {
                 const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
                 return Status{Code::RESOURCE_EXHAUSTED, strprintf("logo upload limit: %g a minute (try again in %d s)", m_options.logo_per_minute, seconds), {{"retry-after", util::ToString(seconds)}}};
-            }
-            if (const auto wait{m_logo_global.Take("*", 1)}) {
-                const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
-                return Status{Code::RESOURCE_EXHAUSTED, "this node takes no more logos for now: try again shortly", {{"retry-after", util::ToString(seconds)}}};
             }
         }
         return std::nullopt;
@@ -400,6 +395,27 @@ private:
         if (bits <= prefix) return std::nullopt;
         return CSubNet{*network, static_cast<uint8_t>(prefix)}.ToString();
     }
+
+    /** The key of a client's budget of broadcasts and logos: its wide network for an IPv6 client (Options::wide_prefix). */
+    std::string LimitKey(const std::string& client) const
+    {
+        const auto wide{WideClient(client, m_options.wide_prefix)};
+        return wide ? *wide : client;
+    }
+
+    /** One of all clients' budget (broadcasts, logos), for a request that passed the cheap checks; refused if none is left. */
+    static void TakeGlobal(RateLimiter& global, const char* refusal)
+    {
+        if (const auto wait{global.Take("*", 1)}) {
+            const int seconds{std::max(1, static_cast<int>(std::ceil(*wait)))};
+            ApiError error{Code::RESOURCE_EXHAUSTED, refusal};
+            error.status.headers = {{"retry-after", util::ToString(seconds)}};
+            throw error;
+        }
+    }
+
+    //! The client of the call the handler on this thread serves (Serve), for what a method keeps per client.
+    static inline thread_local std::string t_client;
 
     struct Policy {
         //! Replies cached per tip (the same request at the same tip: the same reply).
@@ -476,6 +492,7 @@ private:
                             pass.emplace((policy.broadcast ? m_broadcast_gate : m_gate).Enter());
                             if (!*pass) return w->Finish(Status{Code::RESOURCE_EXHAUSTED, "busy: try again in a moment", {{"retry-after", "1"}}});
                         }
+                        t_client = w->Client();
                         auto made{std::make_shared<const Message>(fn(req, tip))};
                         if (policy.cache) m_cache.Put(key, tip.hash, made, made->Serialize().size());
                         reply = std::move(made);
@@ -3575,8 +3592,13 @@ private:
             }
             const CTransactionRef tx{MakeTransactionRef(std::move(mtx))};
             if (GetVirtualTransactionSize(*tx) > MAX_STANDARD_TX_WEIGHT / WITNESS_SCALE_FACTOR) Fail(Code::FAILED_PRECONDITION, "the transaction is larger than the mempool takes");
+            // Past the cheap checks: one of all clients' broadcasts (not before: junk takes nothing from the others).
+            TakeGlobal(m_broadcast_global, "this node broadcasts no more for now: try again shortly");
             // 8.3.2: never a replacement. A coin a transaction in the mempool spends already is refused here, even at a higher
-            // fee: two builds from the same coins (two clicks, two tabs) keep the first one sent, not the last.
+            // fee: two builds from the same coins (two clicks, two tabs) keep the first one sent, not the last. The check and
+            // the submission under one lock: two such broadcasts at once cannot both pass the check, the second then
+            // replacing the first.
+            LOCK(m_broadcast_mutex);
             {
                 LOCK(m_node.mempool->cs);
                 for (const CTxIn& in : tx->vin) {
@@ -3616,7 +3638,9 @@ private:
             unsigned char hash[CSHA256::OUTPUT_SIZE];
             CSHA256().Write(bytes->data(), bytes->size()).Finalize(hash);
             const std::string hex{HexStr(hash)};
-            m_logos.Put(hex, LogoStore::Logo{std::string(bytes->begin(), bytes->end()), bitassets::LogoMime(*format)});
+            // A logo the rules take: one of all clients' uploads (not before), kept as the client's (its own oldest makes room).
+            TakeGlobal(m_logo_global, "this node takes no more logos for now: try again shortly");
+            m_logos.Put(hex, LogoStore::Logo{std::string(bytes->begin(), bytes->end()), bitassets::LogoMime(*format)}, LogoStore::Clock::now(), LimitKey(t_client));
             Message m{New("UploadLogoReply")};
             m.SetString("sha256", hex);
             m.SetString("url", std::string{REST_PREFIX} + "logos/" + hex);
@@ -3670,6 +3694,8 @@ private:
     RateLimiter m_wide_limits;
     mutable Gate m_gate;
     mutable Gate m_broadcast_gate;
+    //! Held across Broadcast's check for conflicts and its submission (never a replacement).
+    Mutex m_broadcast_mutex;
     /** The last snapshot of the state a call read (TakeTip), kept until the tip moves or the state is flushed. */
     class TipWatch final : public CValidationInterface
     {

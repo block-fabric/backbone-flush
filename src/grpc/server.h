@@ -74,6 +74,8 @@ public:
     virtual void OnClose(std::function<void()> callback) = 0;
     /** A header to send with a successful reply (before the first Write). Names in lower case. */
     virtual void SetHeader(const std::string& name, const std::string& value) {}
+    /** The client's key, as the guard has it (CallInfo::client); empty if not known. */
+    virtual std::string Client() const { return {}; }
 };
 
 /**
@@ -152,6 +154,10 @@ struct Options {
     int max_connections_per_ip{0};
     //! IPv6 clients are counted by this prefix (a client usually has a /64 to rotate addresses in); IPv4 by address.
     int ipv6_prefix{64};
+    //! The connections of an IPv6 network of `wide_prefix` bits (shorter than ipv6_prefix; 0: none), all its clients
+    //! together, at most `max_connections_per_wide` (0: no bound) at once: a /48's many /64s are not as many clients.
+    int wide_prefix{0};
+    int max_connections_per_wide{0};
     //! Close a connection whose replies the peer took no byte of for this long (slow reads: in the socket, the calls or
     //! behind HTTP/2 flow control; a stream whose window stays closed so long is reset); 0: never.
     int write_timeout_seconds{0};
@@ -221,6 +227,8 @@ public:
     /** The key a client is known by, for its connections (Options::max_connections_per_ip) and its calls' limits (CallInfo::client):
      *  an IPv6 address by its prefix (Options::ipv6_prefix), an IPv4 one whole. */
     static std::string AddressKey(const CNetAddr& addr, int ipv6_prefix);
+    /** The IPv6 network a client's connections also count in (Options::wide_prefix): empty for IPv4, or a prefix not shorter than ipv6_prefix. */
+    static std::string WideKey(const CNetAddr& addr, int wide_prefix, int ipv6_prefix);
     void Run(std::function<void()> task);
 
 private:
@@ -243,6 +251,8 @@ private:
     Guard m_guard;
     //! Connections by client address (Options::max_connections_per_ip).
     std::map<std::string, int> m_per_ip GUARDED_BY(m_mutex);
+    //! Connections by IPv6 network (Options::max_connections_per_wide).
+    std::map<std::string, int> m_per_wide GUARDED_BY(m_mutex);
     std::string m_name{"gRPC"};
 };
 

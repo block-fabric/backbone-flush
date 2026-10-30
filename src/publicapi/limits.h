@@ -116,9 +116,14 @@ public:
         std::string bytes;
         std::string content_type;
     };
-    LogoStore(size_t max_entries, Clock::duration ttl) : m_max_entries{max_entries}, m_ttl{ttl} {}
-    /** Keep a logo under `sha256` (hex) from `now`, or keep it longer if it is here. */
-    void Put(const std::string& sha256, Logo logo, Clock::time_point now = Clock::now()) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    /** @param[in] max_per_owner  most logos one uploader keeps at once (0: no bound): a new one past it takes the place of its own oldest */
+    LogoStore(size_t max_entries, Clock::duration ttl, size_t max_per_owner = 0) : m_max_entries{max_entries}, m_ttl{ttl}, m_max_per_owner{max_per_owner} {}
+    /**
+     * Keep a logo under `sha256` (hex) from `now`, or keep it longer if it is here. `owner` is who uploaded it (the
+     * client's network): one owner at its bound replaces its own oldest logo, not the others' (only a full store drops
+     * the oldest of all), so that one client cannot push every other logo out.
+     */
+    void Put(const std::string& sha256, Logo logo, Clock::time_point now = Clock::now(), const std::string& owner = {}) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     /** The logo of `sha256` if it is here and not expired at `now`. */
     std::shared_ptr<const Logo> Get(const std::string& sha256, Clock::time_point now = Clock::now()) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     size_t Entries() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
@@ -128,10 +133,15 @@ private:
         std::string sha256;
         std::shared_ptr<const Logo> logo;
         Clock::time_point at;
+        std::string owner;
     };
     void Expire(Clock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
+    void Drop(std::list<Entry>::iterator it) EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
     const size_t m_max_entries;
     const Clock::duration m_ttl;
+    const size_t m_max_per_owner;
+    //! How many logos each owner has here (none at 0).
+    std::unordered_map<std::string, size_t> m_owned GUARDED_BY(m_mutex);
     mutable Mutex m_mutex;
     //! Oldest upload last.
     std::list<Entry> m_order GUARDED_BY(m_mutex);
