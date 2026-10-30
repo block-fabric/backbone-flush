@@ -181,6 +181,38 @@ eCash block:
   Bonds, unbonds and jails therefore take effect about 49 hours after they are mined [10 h]; during a gap every
   epoch's set is the last anchor's before it.
 
+**eCash mainnet** (user decision 2026-10-30, Flush at block 9, merged mined only, every bidder stopped; from block 10,
+`fork_height`: no block of stake below it, and blocks 0 to 9 depend on none of these values, so they are judged as by
+8.3.4):
+**16 hours** without BMM, `gap_max_unanchored_slots` = 3840. The seed lookahead is derived as above: epochs are led up
+to t0 + lookahead − lag + an epoch, and the limit stops the chain about 16 hours after t0, so the seed comes second
+while the lag is at most lookahead − 15 h. 32 hours gives room for a lag of 17 hours, three times the 5 h 20 min of
+2026-10-24 (the proportion of the 24-hour rule: the lookahead twice the limit). The set lead is as long: bonds,
+unbonds and jails take effect about 33 hours after their anchor (after the bootstrap). `ecashbeta` and `ecashtest`
+keep 24 h and 48 h.
+
+### The bootstrap
+
+On eCash mainnet, until `bootstrap_end_epoch` = 72 (three days after genesis: 2026-11-01 23:17:51 UTC), the set
+lead is 0: the set of an epoch is the newest anchor's before the epoch before it (as on Chains), so a bond counts in
+the epoch after next after the anchor that makes its set, one to two hours, and blocks of stake start two epochs after
+the first anchor with enough stake (every BMM block is an anchor). The sets of the epochs after the fork come from the
+anchors before it as well (blocks 1 to 9: the four bonds of blocks 3 and 4 are in the sets made from block 5 on), so
+blocks of stake can start with block 10 itself, without a new BMM block. Three days leave time for the four nodes to upgrade,
+the first validators to bond and blocks of stake to run before the long lead.
+
+- **The seed** needs no bootstrap value: an epoch's seed is the mainchain block 32 hours before its start, before
+  the slot's activation for about the first 31 epochs (the null mainchain hash), an eCash block from 32 hours before
+  after that: known at once either way. The bootstrap lets an early epoch's seed be known before its set is fixed.
+- **The transition** (`pos::SetBoundary`): from epoch 72 the boundary is the long lead's, but never below the
+  bootstrap's last (epoch 71's, the first slot of epoch 70). So it never goes down (no set already fixed changes, the
+  pruning of the sets holds), and it never jumps (no anchor skipped): epochs 71 to 102 share the set fixed before epoch
+  70, and from 103 the 32-hour lead alone (`fastblocks_tests` `bootstrap_rule`; `feature_fastblocks_bootstrap.py`). A
+  bond anchored from epoch 70 counts from about epoch 103 (2026-11-03 06:17:51 UTC on).
+- **The risk accepted.** The long lead fixes a set before its seed's block can exist, so that no one picks a key or a
+  stake for a known seed. Until epoch 101 a seed can be known before its set is fixed: during the bootstrap every
+  validator is the project's, so no one is there to exploit it.
+
 **The trade-off.** Blocks of stake that no anchor covers rest on stake alone: until an anchor covers them (and 3 anchors
 make them final) the validators could, by a majority of the slots they lead, build another branch of them. The window
 for that grows from 8 to 24 hours, and the leaders of an epoch are known two days ahead instead of nine hours (a longer

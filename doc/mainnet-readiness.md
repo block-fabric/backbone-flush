@@ -20,8 +20,10 @@ A fresh chain with the final rules only: every rule is active from Flush's first
 - The buybacks scanned 64 a block from a cursor, those that cannot buy yet out of the index (upgrade v8): a block's
   work bounded whatever the count of launches.
 - Upgrade v9 (Flush 8.3.2): the DEX rules of that release.
-- Blocks of stake: 24 hours without BMM before they halt (5760 slots of 15 s); seed and set 48 hours ahead; the
-  drivechain undo depth is 12960 blocks; the least prune target is 24000 MiB; the liveness fix is on.
+- Blocks of stake: on `ecash` from block 10 (`fork_height`; none below it), 16 hours without BMM before they halt (3840 slots of 15 s), seed and set 32 hours ahead,
+  and the bootstrap: until epoch 72 (2026-11-01 23:17:51 UTC) the set is fixed an epoch ahead, so bonds count within
+  one to two hours (doc/ecash-sidechains.md, "The bootstrap"); on `ecashbeta` and `ecashtest`, 24 hours (5760 slots),
+  48 hours ahead, no bootstrap. The drivechain undo depth is 12960 blocks; the least prune target is 24000 MiB; the liveness fix is on.
 - Unbonding: a week of anchors (1008; 432 on ecashtest).
 
 ## Defaults (not consensus)
