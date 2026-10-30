@@ -8,6 +8,98 @@ hours halts the chain. The bid policy says what the anchorer offers, and how it
 raises its offer as the chain nears that halt. It is consensus-neutral: what a node
 bids is its own business; the chain only sees which commitment landed.
 
+## Since 8.3.7: when the anchorer bids
+
+Demand-driven anchoring (the owner's decisions, 2026-10-30), node policy only: no consensus change. With Fees (the
+default), and with Fees + minimum where it makes sense, a node bids when something needs an anchor, and otherwise not:
+
+1. **Work waiting** (deposits, withdrawals and bundles, real set changes: below, "Prevent stalling"): the competitive
+   base, the work throttle, as in 8.3.6.
+2. **Value at risk** (`valueatrisk`, 1 coin by default, 0: off): the transactions of the blocks of stake no anchor
+   covers move that much or more, and an anchor makes them final. "Moved" is the sum of the outputs of every transaction
+   but the coinbase in those blocks: an approximation (change outputs count too, so a wallet moving a little out of a
+   large coin counts its whole coin), on the side of bidding. Each block is read once while it is in the unanchored run
+   (3840 blocks at most on eCash mainnet), the total once a tip. Bid for as work waiting is (`kind` `valueatrisk`): the
+   competitive base, throttled as work.
+3. **Fees, in batches** (`batch`, 10 by default): Fees bids only once the fee share is `batch` times the landing price
+   (the minimum, MinimumBid: the floor, or the relay minimum of a request if higher; ~378 sat on eCash), 3780 sat on
+   eCash. The pot keeps growing across the blocks no anchor covers, so waiting loses no fees: one request carries the
+   fees of many blocks, instead of a request for every few sat. Below it, `idle`, "waits for a batch". `batch` 0: 8.3.6's
+   rule (the share once it pays for its own request).
+4. **The heartbeat** (`heartbeathours`, 6 by default, 0: off): no anchor for that long, measured as the age of the
+   unanchored run (`firstunanchoredslot`; 6 h is 1440 slots of 15 s), a bid of the competitive base whatever the fees
+   (`kind` `heartbeat`). Never held by the work throttle; as liveness it may spend the stall reserve of the cap. The stall
+   bid from p = 0.5 (8 h on eCash mainnet) stays as the backup.
+
+Not a trigger: the age of an ordinary transaction (it has no finality target), empty blocks, the fee pool, rewards owed,
+the pot's reserve, the unbond countdown. Value at risk and the heartbeat are bids without fees, so they come with
+"Prevent stalling" (on by default) and the flat policy, as work waiting does; Minimum, Fixed and Off keep their meaning
+(they bid, or not, every block).
+
+### The anchor reserve
+
+A ledger of the node, kept in `anchorbids.json`, funded by its fee bids, which pays for the bids without fees:
+
+- `reservepct` (20 %) and `reservetarget` (0.01 coins). While the reserve holds less than the target, a fee bid (`kind`
+  `fees`) bids the share less a holdback, min(share x reservepct / 100, target - reserve) (never below the minimum
+  with Fees + minimum); when it lands, the reserve gains the holdback. 0.01 coins covers about 4 heartbeats a day at
+  roughly 400 sat for far more than a month (some 600 days) without any activity, or as many fee-less anchors.
+- A bid with no fees behind it (the heartbeat, work, value at risk, a stall bid) that lands is debited its offer, not
+  below 0. An empty reserve never stops such a bid (security first): what it spent past the reserve is the `deficit`,
+  reported, back to 0 once the reserve is full again.
+- Once the reserve is at its target, fee bids bid the whole fee share again. `max` and the period's cap still bound
+  every bid. A stale raise is paid out of the holdback first.
+
+### Taking turns
+
+`turns` (true) and `turnbackup` (2 mainchain blocks), with Fees: of the active validators sorted by key (those the chain
+banned left out), the one designated for mainchain block h is the one at SHA256(the epoch's seed, h) mod their number
+(DesignatedBidder: the first 8 bytes, little-endian; the mainchain tip's hash when the seed is not known), the same on
+every node from chain data. A node with several keys is designated if any of them is. The designated validator bids
+at once; the others hold their bid (`kind` `turn`) until the need has gone `turnbackup` mainchain blocks without an
+anchor landing, from anyone, then bid as the backup; an anchor that lands starts the wait again. Only blocks that gave
+the designated validator a chance count: blocks that carried BMM commitments and came 4 s or more into the wait
+(mainchain blocks come ~17 s apart at the median on eCash, most of them from a pool that does no BMM). A stall bid
+(p >= 0.5) never waits, nor the BMM blocks of a stall of blocks of stake, nor the merged miner of a node that is no
+validator. A set or seed the node does not know: its turn, as before.
+
+### Missed blocks, the pool, and the stale raise
+
+Measured on eCash mainnet (16 h to 2026-10-30): of 339 bids 287 missed; 168 of the misses were blocks of a pool that
+never carries BMM (61 % of blocks), 114 blocks of a committing pool found 3 s or less after the bid (the template
+predated the request; 22 of 22 bids with 4-10 s of lead landed). Each miss made a stale bid, and the next bid 500 sat
+above it (378, 878, 1378 sat ...): the 0.001 cap was spent by 05:13, and the chain went 1,574 slots without an anchor.
+So since 8.3.7, a bid that did not land is settled as:
+
+- `missed`: the mainchain block carried BMM commitments (a request of any slot) and came 4 s or more
+  (MIN_BID_LEAD_SECONDS) after the bid, without this chain's: a miss of ours;
+- `nobmm`: the block carried no BMM commitment at all (its pool does not do BMM): no miss;
+- `toosoon`: the block was found less than 4 s after the bid (by its header's time): no miss.
+
+Only `missed` counts in the run of missed blocks (`missed`, `warnmissed`, the raises after missed blocks) and makes a
+stale bid to raise above; `nobmm` and `toosoon` are counted apart (`getbmminfo`'s `anchoring`). A block the node did not
+see as its tip (two in one round) is a miss, as before. The node reads blocks with the mainchain node's `getblock`; one
+reached through the enforcer's interface alone sees no blocks so, and counts every block without its commitment as a
+miss, as before 8.3.7.
+
+The better fix is in the mainchain wallet: a coin that no unlanded bid spends, so no replacement is needed at all. The
+requests go through `createbmmrequest` (or the enforcer's `CreateBmmCriticalDataTransaction`), which take no coin
+control, so that is the wallet's to do (see "Coins a stale bid tied up").
+
+**The pool warning**: when a bid of 10 times the relay minimum or more misses `warnmissed` blocks in a row, the log and
+`getanchorinfo` say the mainchain pool may not be including BMM commitments (its enforcer, or the pool's side), not
+"your anchor bid is too low".
+
+### Reporting
+
+`getbmminfo`'s `anchoring`: `reserve`, `reservetarget`, `deficit`, `valueatrisk` (what the unanchored blocks move now),
+`batchneeded` (the fee share a batch needs), `pot` (the fee share now), `nextheartbeat` (unix time; absent without an
+unanchored run or a heartbeat), `turn` (`designated`, `mainheight`: the mainchain block it is for), and `day` and
+`week` (the last 24 hours and 7 days): `collected` (the pots of the landed anchors), `paid` (their offers), `anchors`
+(by what they were bid for: `fees`, `minimum`, `fixed`, `rebid`, `pending`, `valueatrisk`, `heartbeat`, `stall`,
+`escalation`, `always`, `hand`), `missed`, `nobmm` and `toosoon`. `getanchorinfo`'s history records gain `pot`,
+`holdback` and `basis`.
+
 ## Since 8.3.6: a strategy, and "Prevent stalling"
 
 The user picks one strategy of five, and a checkbox beside it (Louis: "bid only fees, no minimum, and prevent
@@ -137,7 +229,7 @@ wallet (the enforcer's, or Backbone's). Since 8.3.5 they follow **one bid policy
 `-validatoranchorbid*` options, `anchorbidpolicy` in `settings.json`), on every node, validator or not. What sets a bid
 off:
 
-- **Mine blocks when fees pay** (`setbmm true "address"`, any node): the policy's bid for each mainchain block (with
+- **Merged-mine as a backup producer** (`setbmm true "address"`, any node): the policy's bid for each mainchain block (with
   Fees, only when fees pay); `always` + `amount` (for tests): `amount` for every mainchain block, within max and the cap.
 - **Anchor my validator** (`anchor`, validators, on by default): the validator's own anchorer.
 
@@ -147,13 +239,16 @@ block of stake stall (BMM blocks instead of tickets) is bid for the same way, th
 (an empty mempool too: no fees, but Prevent stalling near the limit, or work waiting for an anchor, still bids). Before the node has a
 mainchain block it bids nothing, merged miner included (no bid without the policy).
 A bid by hand (`requestbmmblock`) may not exceed `max`, and it counts in the day's spending. On regtest without
-anchor options: no anchorer, Fees without stall prevention, and no period cap (`setbmm` as before).
+anchor options: no anchorer, Fees without stall prevention, no period cap, no batches, no anchor reserve and no turns
+(`setbmm` as before).
 
 The daily cap counts every landed bid of the node together (both triggers, and by hand); `getbmminfo`'s `bidpolicy`
 and `getanchorinfo`'s `bid` show it (`spentperiod`, `left`, `trigger`). The bids are kept across restarts in
 `anchorbids.json`, beside `settings.json` in the network's data directory, written at each bid and each settlement:
 the last 50 bids (the history, and the stale rule) and what the landed ones cost over the last 31 days (the longest
-period), so a restart does not start the cap again.
+period), so a restart does not start the cap again; since 8.3.7 also the anchor reserve and its deficit, and the landed
+anchors and the bids that did not land of the last 7 days (the reports), beside what 8.3.6 reads (it loads such a file,
+and a file of 8.3.6 loads with an empty reserve).
 
 ### Coins a stale bid tied up
 
@@ -235,11 +330,16 @@ without a restart, and keeps the fields it changed in the node's settings
 | `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 (no cap on regtest unless an anchor option is given) |
 | `lowbalanceblocks` | `-validatoranchorbidlowbalance` | 1008 |
 | `stallreserve` (% of the cap kept for stall bids) | `-validatoranchorbidstallreserve` | 50 |
+| `batch` (Fees: the multiple of the landing price) | `-validatoranchorbidbatch` | 10 (0 on regtest unless an anchor option is given) |
+| `heartbeathours` | `-validatoranchorbidheartbeathours` | 6 |
+| `valueatrisk` | `-validatoranchorbidvalueatrisk` | 1 |
+| `reservepct`, `reservetarget` | `-validatoranchorbidreservepct`, `-validatoranchorbidreservetarget` | 20 (0 on regtest unless an anchor option is given), 0.01 |
+| `turns`, `turnbackup` | `-validatoranchorbidturns`, `-validatoranchorbidturnbackup` | true (false on regtest unless an anchor option is given), 2 |
 
 Checks: `floor ≤ max`, `fixed ≤ max`, amounts within `MAX_MONEY`, `feeshare`
 0–100, `escalationstart` in (0, 1], the curve 1–8 points with pressures in [0, 1]
 ascending and multipliers 1–1000 not falling, `requestvsize` 50–10000,
-`periodhours` 1–744.
+`periodhours` 1–744, `batch` 0–1000, `heartbeathours` 0–744, `reservepct` 0–100, `turnbackup` 0–1000.
 
 ## RPCs
 
@@ -249,12 +349,14 @@ ascending and multipliers 1–1000 not falling, `requestvsize` 50–10000,
 - `setanchorbidpolicy {fields} (reset)`: the fields given change, the others stay;
   returns as `getanchorbidpolicy`. `flush-cli setanchorbidpolicy '{"strategy":"fees","preventstall":true}'`, `flush-cli -named setanchorbidpolicy floor=0.00001 max=0.0005`.
 - `getanchorinfo`'s `bid`: `effective` (the bid now) and `kind`/`reason` (`fees`,
-  `minimum`, `fixed`, `rebid`, `pending`, `stall`, `escalation`, `max`, `periodcap`, `replace`, `always`, `idle`, `throttled`, `off`), `normal`,
+  `minimum`, `fixed`, `rebid`, `pending`, `valueatrisk`, `heartbeat`, `stall`, `escalation`, `max`, `periodcap`, `replace`, `always`, `idle`, `throttled`, `turn`, `off`), `normal`,
   `pressure`, `multiplier`, `escalationstart`, `firstunanchoredslot`,
   `unanchoredslots`, `maxunanchoredslots`, `pot`, `feerate` (sat/vB) and
   `feesource`, `missed`, `balance` and `coverblocks`, `spentperiod`, `periodcap`,
   `periodhours`, `history` (the last bids: `mainheight`, `ticket`, `offer`, `kind`,
-  `reason`, `pressure`, `status`, `cost`, `time`) and `warnings`.
+  `reason`, `pressure`, `status` (`pending`, `landed`, `missed`, `outbid`, `nobmm`, `toosoon`), `cost`, `time`, `pot`,
+  `holdback`, `basis`) and `warnings`.
+- `getbmminfo`'s `anchoring`: the reserve, the turn and what anchoring collected and paid ("Since 8.3.7").
 - `getanchorticket <hash>`: what a mainchain commitment of this chain is: on
   FastBlocks the mainchain commits to a ticket (h*), and this says the block it
   anchors, its height and whether it is in the active chain.
@@ -269,7 +371,7 @@ of p, the day's spending and what is left of the cap, the bid wallet's balance a
 blocks, the warnings and the last bids. The form: the five strategies (a radio) and "Prevent stalling" (greyed out
 with Off); the amount of the strategy chosen only (the fee share for Fees and Fees + minimum, the minimum for Fees +
 minimum and Minimum, the fixed amount for Fixed); the maximum per bid and the daily cap; "Paid from your mainchain
-wallet"; the two triggers, "Mine blocks when fees pay" (merged mining's address, Start and Stop: `setbmm`) and
+wallet"; the two triggers, "Merged-mine as a backup producer" (merged mining's address, Start and Stop: `setbmm`) and
 "Anchor my validator" (validators); the rest under Advanced. "One block by hand" below it. A change goes through
 `setanchorbidpolicy`, which the desktop confirms (it spends the mainchain wallet), the strategy always sent with
 `preventstall`; `getanchorbidpolicy` is a read of the page.
