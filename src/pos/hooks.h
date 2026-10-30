@@ -116,6 +116,12 @@ FastState GetFastState(const sidechain::StoreView& view);
  * unbonds), which advances only as anchors land.
  */
 bool HasPendingAnchorActions(const sidechain::State& state, const sidechain::Mainchain& record);
+/**
+ * What makes a bid without fees (doc/fastblocks-anchor-bids.md, "Prevent stalling"): peg work (HasPendingAnchorActions),
+ * or a bond, an unbond or a jail no anchor covers yet (Staking::SetChanged for `epoch`: once per change, until an anchor
+ * makes the new set). Not the unbond release countdown, rewards owed, the pot's reserve or the fee pool.
+ */
+bool NeedsAnchor(const sidechain::State& state, const sidechain::Mainchain& record, const Staking& staking, int64_t epoch);
 /** The pot accrued as of the block at `height` on the chain of `view`, at least what was paid. */
 int64_t PotAccruedAt(const sidechain::StoreView& view, int32_t height);
 /**

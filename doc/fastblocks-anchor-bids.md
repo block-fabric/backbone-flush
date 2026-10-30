@@ -35,18 +35,19 @@ makes a bid smaller.
   `p = (slot - firstunanchoredslot) / maxunanchoredslots` of `escalationstart` (0.5), a bid that lands an anchor
   even if the strategy would not bid (Fees without fees): `boost` (4) times the competitive base, or the strategy's
   bid if higher (a large fee share is never multiplied). With `flatboost=false`, the legacy curve instead (below).
-- **Peg work waiting** (peg in and peg out alone: a deposit waiting to be credited, withdrawals or a bundle waiting):
-  the competitive base, fees or not, as 8.3.5's feespreventstall did; otherwise a deposit would wait for fees or for
-  the stall bid, hours on mainnet. (Flat policy only.) Nothing else counts as work (the owner's rule, 2026-10-30): not
-  the staking accounting, the pot's reserve, the fee pool, the rewards owed or the unbonds, nor a change of the
-  validator set or a stall of blocks of stake by itself. A fee pool of 0.0001479 ECX counted as work made a node bid
-  every mainchain block and spend its daily cap in 4 hours. So unbond releases, staking payouts and set changes advance
-  only as anchors land: with fees, or a deposit or a withdrawal, at once; otherwise at the next stall bid, which
+- **Work waiting for an anchor** (deposits, withdrawals, and bonds, unbonds and jails waiting for an anchor: a deposit
+  to credit, withdrawals or a bundle, or a bond, an unbond or a jail in a block no anchor covers yet, until an anchor
+  makes the new validator set): the competitive base, fees or not, as 8.3.5's feespreventstall did; otherwise a
+  deposit would wait for fees or for the stall bid, hours on mainnet. (Flat policy only.) Nothing else counts as work
+  (the owner's rule, 2026-10-30): not the staking accounting, the pot's reserve, the fee pool, the rewards owed or the
+  unbond release countdown, nor a stall of blocks of stake by itself. A fee pool of 0.0001479 ECX counted as work made
+  a node bid every mainchain block and spend its daily cap in 4 hours. So unbond releases and staking payouts advance
+  only as anchors land: with fees, or work waiting, at once; otherwise at the next stall bid, which
   Prevent stalling makes from p = 0.5 of a run without an anchor: about 8 hours into it on eCash mainnet (a limit of
   16 h), so one anchor at least every ~8-16 hours.
 - **Missed blocks**, for the strategies that bid every block (Fees + minimum, Minimum): the minimum raised, x2 for
-  every two mainchain blocks missed in a row, at most `boost` (legacy: the rebid rules below). A fee share or a fixed
-  amount is what it is.
+  every two mainchain blocks missed in a row, at most `boost` (legacy: the rebid rules below); `rebidafter` 0: no such
+  raises. A fee share or a fixed amount is what it is.
 
 **The competitive base** (stall prevention's): the minimum; the next-block estimate (with `usefeeestimate`) rounded up
 to whole sat/vB times `requestvsize` (189 vB), else what recent mainchain blocks took for a BMM request (the robust
@@ -103,14 +104,14 @@ more in four cases, always within `max` and the period's cap:
 
 - the minimum is max(floor, the relay minimum of a request: the relay rate x 250 vB), not the floor alone (the same
   for a floor above 250 sat at 1 sat/vB);
-- when peg work waits (a deposit to credit, withdrawals or a bundle), the competitive base (at least 2 sat/vB x 189 vB
+- when work waits (deposits, withdrawals, and bonds, unbonds and jails), the competitive base (at least 2 sat/vB x 189 vB
   on eCash), if above the minimum;
 - near the unanchored limit, the stall boost is 4 x the competitive base, not 4 x the floor;
 - after missed mainchain blocks, the minimum is raised x2 for every two missed in a row, at most the boost (8.3.5's
   flat policy raised nothing for `minimal`).
 The app of 8.3.5 run as `feespreventstall`, floor 0, `usefeeestimate` false, `feeshare` 99, `max` 0.0001,
 `periodcap` 0.001 is Fees with Prevent stalling on and no minimum: the fee share when there are fees, nothing
-otherwise, and near a stall (or for waiting peg work) the relay minimum's 250 sat x 4 = 1000 sat, within 0.0001 a
+otherwise, and near a stall (or for waiting work) the relay minimum's 250 sat x 4 = 1000 sat, within 0.0001 a
 bid and 0.001 a day. Two things changed for it: a quiet chain with nothing waiting no longer gets a bid of the base
 when the fee share is small but positive (Fees has no minimum: a share below what pays for a request is no bid), and
 the merged miner with strategy Off (set in 8.3.6's app or `setanchorbidpolicy`) no longer bids (Off means off; uncheck
@@ -130,7 +131,7 @@ off:
 Both bid the policy's bid. At most one request per mainchain block: one ticket serves both (its anchor anchors the
 chain and pays its pot to the payee: the `setbmm` address when merged mining is on, else the validator's payout). A
 block of stake stall (BMM blocks instead of tickets) is bid for the same way, the policy deciding from the block's fees
-(an empty mempool too: no fees, but Prevent stalling near the limit, or peg work, still bids). Before the node has a
+(an empty mempool too: no fees, but Prevent stalling near the limit, or work waiting for an anchor, still bids). Before the node has a
 mainchain block it bids nothing, merged miner included (no bid without the policy).
 A bid by hand (`requestbmmblock`) may not exceed `max`, and it counts in the day's spending. On regtest without
 anchor options: no anchorer, Fees without stall prevention, and no period cap (`setbmm` as before).
@@ -173,10 +174,10 @@ A bid is settled when the mainchain block after the one it followed comes: lande
 the mainchain went another way) or missed (no commitment of this chain at all).
 
 - Raises (Prevent stalling, for Fees + minimum and Minimum): with the flat boost (the default), the minimum x2 for
-  every two missed blocks in a row, at most `boost`; `rebidafter`, `rebidstep` and `rebidmax` do not apply (the app
-  shows them only with the flat boost off). With `flatboost=false` (the legacy curve): after `rebidafter` (3) missed
-  blocks in a row the minimum is multiplied by `rebidstep` (2) for each such run, at most `rebidmax` (8) times; 0
-  turns that off.
+  every two missed blocks in a row, at most `boost`. With `flatboost=false` (the legacy curve): after `rebidafter` (3)
+  missed blocks in a row the minimum is multiplied by `rebidstep` (2) for each such run, at most `rebidmax` (8) times.
+  `rebidafter` 0 (`-validatoranchorbidrebid=0`) turns raises after missed blocks off in both; the stall bid as the
+  pressure rises, and the raise above a stale bid on the same coin, stay.
 - Warning: after `warnmissed` (3) missed blocks in a row the log says "your anchor
   bid is too low" (with the bid in sat/vB and the mainchain's estimate) and
   `getanchorinfo` and the app show it. The node sees only its own slot's
@@ -216,7 +217,7 @@ without a restart, and keeps the fields it changed in the node's settings
 | `interpolate` | `-validatoranchorbidinterpolate` | true |
 | `usefeeestimate` | `-validatoranchorbidfeeestimate` | true |
 | `requestvsize` | | 189 |
-| `rebidafter`, `rebidstep`, `rebidmax` (with `flatboost=false` only) | `-validatoranchorbidrebid` (the first) | 3, 2, 8 |
+| `rebidafter` (0: no raises after missed blocks), `rebidstep`, `rebidmax` (the legacy curve) | `-validatoranchorbidrebid` (the first) | 3, 2, 8 |
 | `warnmissed` | | 3 |
 | `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 (no cap on regtest unless an anchor option is given) |
 | `lowbalanceblocks` | `-validatoranchorbidlowbalance` | 1008 |

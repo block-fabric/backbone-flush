@@ -1891,10 +1891,11 @@ std::vector<CTxOut> FastBlocksHooks::MergeMinedOutputs(const sidechain::StoreVie
 
 bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Mainchain& record)
 {
-    // Peg in and peg out alone (the owner's rule, 2026-10-30): a bid without fees is for a deposit waiting to be credited
-    // or withdrawals waiting (a bundle). Not the staking accounting: the pot's reserve, the fee pool (PoolTotal), the
-    // rewards owed and the unbonds advance with the anchors that land (one at least every 8-16 h: stall prevention). A
-    // fee pool of 0.0001479 ECX counted here made a node bid every mainchain block, its daily cap spent in 4 hours.
+    // Peg in and peg out (the owner's rule, 2026-10-30; set changes: NeedsAnchor): a deposit waiting to be credited or
+    // withdrawals waiting (a bundle). Not the staking accounting: the pot's reserve, the fee pool (PoolTotal), the
+    // rewards owed and the unbond release countdown advance with the anchors that land (one at least every 8-16 h:
+    // stall prevention). A fee pool of 0.0001479 ECX counted here made a node bid every mainchain block, its daily cap
+    // spent in 4 hours.
     bool withdrawals{side.Bundle().has_value()};
     side.ForEachWithdrawal([&](const sidechain::Withdrawal&) { withdrawals = true; return false; });
     if (withdrawals) return true;
@@ -1907,6 +1908,13 @@ bool HasPendingAnchorActions(const sidechain::State& side, const sidechain::Main
         if (!block || !block->deposits.empty() || !block->bundles.empty()) return true;
     }
     return false;
+}
+
+bool NeedsAnchor(const sidechain::State& side, const sidechain::Mainchain& record, const Staking& staking, int64_t epoch)
+{
+    // A bond, an unbond or a jail in a block no anchor covers yet: the set the state makes differs from the last anchor's
+    // (Staking::SetChanged), until an anchor's peg step makes it.
+    return HasPendingAnchorActions(side, record) || staking.SetChanged(side.View(), epoch);
 }
 
 bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
@@ -1957,14 +1965,14 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     }
     // These reads precede m_anchor_mutex: never acquire cs_main while holding the anchor lock.
     // A quiet chain needs no anchor of its own (user decision 2026-10-26): leaders and seeds come from the mainchain record
-    // and the newest anchor's set, however old (SetFor), so epochs go on. What bids without fees is peg work alone (the
-    // owner's rule, 2026-10-30: HasPendingAnchorActions), and stall prevention near the unanchored limit (the pressure, in
-    // DecideBid); not a stall of blocks of stake by itself, nor the staking accounting or a change of the set (a bond, an
-    // unbond, a jail), which take effect with the anchors that land.
+    // and the newest anchor's set, however old (SetFor), so epochs go on. What bids without fees is work waiting for an
+    // anchor (the owner's rule, 2026-10-30: deposits, withdrawals, and bonds, unbonds and jails: NeedsAnchor), and stall
+    // prevention near the unanchored limit (the pressure, in DecideBid); not a stall of blocks of stake by itself, nor the
+    // staking accounting (the pot's reserve, the fee pool, rewards owed, the unbond release countdown).
     const bool stalled{Stalled(fast, main_block->time, PosActiveNow())};
     const bool needs_anchor{WITH_LOCK(::cs_main, {
         const sidechain::State side{chainman->ActiveChainstate().SideState()};
-        return HasPendingAnchorActions(side, record);
+        return NeedsAnchor(side, record, m_staking, EpochOf(slot, m_params));
     })};
     // The mainchain's next-block fee estimate and the bid wallet's balance (once per mainchain block), the bids
     // made settled with the record; and the bid of the policy for a pot.

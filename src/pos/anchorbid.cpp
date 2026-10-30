@@ -506,9 +506,10 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     d.amount = bids ? d.normal : 0;
     if (policy.PreventsStall()) {
         // Missed mainchain blocks raise what must land: flat, twice for every two missed, at most the boost; legacy,
-        // rebidstep for every rebidafter missed, at most rebidmax.
+        // rebidstep for every rebidafter missed, at most rebidmax. rebidafter 0: no raises after missed blocks, in either
+        // (the stall bid and the raise above a stale bid are not such raises).
         double factor{1};
-        if (policy.flat_boost && inputs.missed >= 2) {
+        if (policy.flat_boost && policy.rebid_after > 0 && inputs.missed >= 2) {
             factor = std::min(policy.boost, std::pow(2.0, inputs.missed / 2));
         } else if (!policy.flat_boost && policy.rebid_after > 0 && inputs.missed >= policy.rebid_after) {
             factor = std::min(policy.rebid_max, std::pow(policy.rebid_step, inputs.missed / policy.rebid_after));
@@ -523,8 +524,8 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
                 d.reason = strprintf("rebid after %d missed mainchain blocks: x%.2f the minimum %s", inputs.missed, factor, FormatMoney(minimum));
             }
         }
-        // Peg work waiting for an anchor (a deposit to credit, withdrawals, staking payouts, a change of the validator
-        // set): the peg would stall without one, so a bid that lands (the competitive base), fees or not, as 8.3.5's
+        // Work waiting for an anchor (a deposit to credit, withdrawals or a bundle; a bond, an unbond or a jail): it
+        // would wait without one, so a bid that lands (the competitive base), fees or not, as 8.3.5's
         // feespreventstall did (with the flat boost: the legacy policy is its curve and rebids alone).
         if (policy.flat_boost && inputs.pending_actions) {
             const CAmount base{CompetitiveBase(policy, inputs)};

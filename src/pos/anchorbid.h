@@ -93,7 +93,7 @@ struct EscalationPoint {
 struct AnchorBidPolicy {
     BidStrategy strategy{BidStrategy::FEES};
     //! "Prevent stalling": as the chain nears the unanchored limit, a bid that lands an anchor whatever the strategy (the stall
-    //! boost or the curve); when peg work waits for an anchor (a deposit to credit, withdrawals or a bundle), the competitive base;
+    //! boost or the curve); when work waits for an anchor (deposits, withdrawals, and bonds, unbonds and jails), the competitive base;
     //! after missed blocks, the minimum raised for the strategies that bid every block. Not with OFF.
     bool prevent_stall{true};
     //! "Anchor my validator": a validator's own anchorer bids (the other trigger is the merged miner, setbmm).
@@ -122,7 +122,8 @@ struct AnchorBidPolicy {
     bool use_fee_estimate{true};
     int request_vsize{DEFAULT_ANCHOR_REQUEST_VSIZE};
     //! After this many mainchain blocks in a row without its commitment, the bid is multiplied by rebid_step for each
-    //! such run (rebid_step^(missed / rebid_after)), at most rebid_max times. 0: never.
+    //! such run (rebid_step^(missed / rebid_after)), at most rebid_max times (the legacy curve); with the flat boost, x2 for
+    //! every two missed, at most the boost. 0: no raises after missed blocks in either.
     int rebid_after{3};
     double rebid_step{2};
     double rebid_max{8};
@@ -172,8 +173,9 @@ struct BidInputs {
     std::optional<CAmount> fee_rate_per_kvb;
     //! Mainchain relay minimum in satoshis per 1000 vbytes; conservative fallback when unavailable.
     CAmount relay_rate_per_kvb{1000};
-    //! Peg work waits for an anchor: a deposit to credit, withdrawals or a bundle (HasPendingAnchorActions; stall prevention
-    //! bids for it). Not the staking accounting (the pot, the fee pool, rewards owed, unbonds) nor set changes. Unknown: bid.
+    //! Work waits for an anchor: a deposit to credit, withdrawals or a bundle, or a bond, an unbond or a jail (NeedsAnchor;
+    //! stall prevention bids for it). Not the staking accounting (the pot's reserve, the fee pool, rewards owed, the unbond
+    //! release countdown). Unknown: bid.
     bool pending_actions{true};
     //! The least feerate of a BMM request recent mainchain blocks took (any slot), per 1000 vbytes, if seen.
     std::optional<CAmount> included_rate_per_kvb;

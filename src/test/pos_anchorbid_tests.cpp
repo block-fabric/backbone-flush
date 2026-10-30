@@ -13,6 +13,10 @@
 #include <sidechain/follower.h>
 #include <common/args.h>
 #include <univalue.h>
+#include <common/signmessage.h>
+#include <key.h>
+#include <pos/staking.h>
+#include <primitives/transaction.h>
 #include <test/util/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
@@ -404,6 +408,98 @@ BOOST_FIXTURE_TEST_CASE(staking_accounting_is_no_peg_work, BasicTestingSetup)
     // Near the limit, Prevent stalling bids all the same.
     in.slot = in.first_unanchored_slot + in.max_unanchored_slots * 6 / 10;
     BOOST_CHECK_EQUAL(DecideNodeBid(AnchorBidPolicy{}, in, BidTriggers{.anchor = true}).kind, "stall");
+}
+
+// A bond with no fees waits for an anchor: one bid (the strategy's for waiting work: the competitive base, at least the
+// relay minimum), none once an anchor has made the new set. The unbond release countdown is no work.
+BOOST_FIXTURE_TEST_CASE(set_change_needs_an_anchor, BasicTestingSetup)
+{
+    CKey validator, owner;
+    validator.MakeNewKey(/*fCompressed=*/true);
+    owner.MakeNewKey(/*fCompressed=*/true);
+    Consensus::PosParams params;
+    params.min_stake = 100;
+    params.unbonding_anchors = 10;
+    const uint256 genesis{1};
+    const Staking staking{params, genesis};
+    sidechain::EmptyStore empty;
+    sidechain::StoreOverlay store{empty};
+    sidechain::Mainchain record;
+    sidechain::MainBlock block;
+    block.hash = uint256{1};
+    BOOST_REQUIRE(record.Append(block));
+    std::vector<CTxOut> owed;
+    // The first set, made by an anchor: nothing waits.
+    staking.PegStep(store, uint256{5}, 1, 0, 0, 0, owed);
+    const auto needs{[&] { sidechain::State side{store}; return NeedsAnchor(side, record, staking, 0); }};
+    BOOST_CHECK(!needs());
+    const auto bid{[&] {
+        BidInputs in{At(0.1)};
+        in.pending_actions = needs();
+        return DecideNodeBid(AnchorBidPolicy{}, in, BidTriggers{.anchor = true});
+    }};
+    BOOST_CHECK(!bid().bid);
+    // A bond (no fees): one bid, the competitive base (2 sat/vB at least on eCash: here the relay minimum, 250 sat).
+    const uint160 owner_hash{owner.GetPubKey().GetID()};
+    const uint256 pubkey{XOnlyPubKey{validator.GetPubKey()}};
+    std::array<unsigned char, 64> pop;
+    BOOST_REQUIRE(validator.SignSchnorr(BondPopHash(owner_hash, genesis), pop, nullptr, uint256{}));
+    CMutableTransaction bond;
+    bond.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{1}), 0});
+    std::vector<unsigned char> owner_sig;
+    BOOST_REQUIRE(owner.SignCompact(MessageHash(BondMessage(pubkey, 10000, bond.vin[0].prevout, genesis)), owner_sig));
+    bond.vout.emplace_back(10000, BondScript(pubkey, owner_hash, pop, owner_sig));
+    std::string reason;
+    BOOST_REQUIRE_MESSAGE(staking.ApplyTx(store, CTransaction{bond}, 1, 1, reason, uint256{9}), reason);
+    BOOST_CHECK(needs());
+    const BidDecision once{bid()};
+    BOOST_CHECK(once.bid);
+    BOOST_CHECK_EQUAL(once.kind, "pending");
+    BOOST_CHECK_GE(once.amount, 250);
+    // The anchor makes the new set: nothing waits, no bid.
+    staking.PegStep(store, uint256{6}, 2, 0, 0, 0, owed);
+    BOOST_CHECK(!needs());
+    BOOST_CHECK(!bid().bid);
+    // An unbond: a change of the set, one bid; then its release counting down over the anchors (unbonding > 0): none.
+    Unbond u;
+    u.pubkey = pubkey;
+    u.amount = 10000;
+    u.sequence = 0;
+    BOOST_REQUIRE(owner.SignCompact(MessageHash(UnbondMessage(pubkey, 10000, 0, bond.vin[0].prevout, uint256{9}, genesis)), u.signature));
+    CMutableTransaction unbond;
+    unbond.vout.emplace_back(0, UnbondScript(u));
+    BOOST_REQUIRE_MESSAGE(staking.ApplyTx(store, CTransaction{unbond}, 2, 2, reason, uint256{9}), reason);
+    BOOST_CHECK(needs());
+    staking.PegStep(store, uint256{7}, 3, 0, 0, 0, owed);
+    BOOST_CHECK_GT(GetStakeState(store).unbonding, 0);
+    BOOST_CHECK(!needs());
+    // Off still bids nothing.
+    BidInputs in{At(0.1)};
+    in.pending_actions = true;
+    BOOST_CHECK(!DecideNodeBid(With(BidStrategy::OFF), in, BidTriggers{.anchor = true}).bid);
+}
+
+// rebidafter 0: no raises after missed blocks, with the flat boost too; unset (3), the flat raises as before.
+BOOST_AUTO_TEST_CASE(rebid_zero_no_raises)
+{
+    AnchorBidPolicy policy{With(BidStrategy::MINIMUM)};
+    policy.floor = 1000;
+    BidInputs in{At(0.1)};
+    in.missed = 6;
+    const BidDecision raised{DecideBid(policy, in)};
+    BOOST_CHECK_EQUAL(raised.kind, "rebid");
+    BOOST_CHECK_EQUAL(raised.amount, 4000); // x2 per two missed: x8, at most the boost (4)
+    policy.rebid_after = 0;
+    const BidDecision flat{DecideBid(policy, in)};
+    BOOST_CHECK_EQUAL(flat.kind, "minimum");
+    BOOST_CHECK_EQUAL(flat.amount, 1000);
+    policy.flat_boost = false;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    // The stall bid as the pressure rises stays.
+    policy.flat_boost = true;
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.6)).kind, "stall");
+    // And the raise above a stale bid on the same coin.
+    BOOST_CHECK_EQUAL(DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 1000}).kind, "replace");
 }
 
 BOOST_AUTO_TEST_CASE(pressure_and_curve)
