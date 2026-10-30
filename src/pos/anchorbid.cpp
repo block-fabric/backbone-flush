@@ -658,7 +658,7 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         // a bid of the competitive base whatever the fees, never throttled, which may spend the stall reserve of the cap
         // (it is liveness). A quiet chain is then anchored every few hours, not only by the stall bid below.
         if (const int64_t beat{HeartbeatSlots(policy, inputs.slot_seconds)};
-            policy.flat_boost && fee_strategy && beat > 0 && inputs.first_unanchored_slot >= 0 && inputs.slot - inputs.first_unanchored_slot >= beat) {
+            policy.flat_boost && fee_strategy && beat > 0 && !inputs.anchor_waiting && inputs.first_unanchored_slot >= 0 && inputs.slot - inputs.first_unanchored_slot >= beat) {
             const CAmount base{CompetitiveBase(policy, inputs)};
             if (!bids || base > d.amount) {
                 d.reason = strprintf("heartbeat: no anchor for %d slots (heartbeathours %g): the competitive base %s%s", inputs.slot - inputs.first_unanchored_slot,

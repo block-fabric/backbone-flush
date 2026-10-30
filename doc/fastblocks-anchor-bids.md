@@ -28,7 +28,8 @@ default), and with Fees + minimum where it makes sense, a node bids when somethi
    rule (the share once it pays for its own request).
 4. **The heartbeat** (`heartbeathours`, 6 by default, 0: off): no anchor for that long, measured as the age of the
    unanchored run (`firstunanchoredslot`; 6 h is 1440 slots of 15 s), a bid of the competitive base whatever the fees
-   (`kind` `heartbeat`). Never held by the work throttle; as liveness it may spend the stall reserve of the cap. The stall
+   (`kind` `heartbeat`). Never held by the work throttle; as liveness it may spend the stall reserve of the cap. Not while
+   a commitment of this chain in the last mainchain block waits for its acknowledgement (the run ends with it). The stall
    bid from p = 0.5 (8 h on eCash mainnet) stays as the backup.
 
 Not a trigger: the age of an ordinary transaction (it has no finality target), empty blocks, the fee pool, rewards owed,
@@ -58,10 +59,13 @@ banned left out), the one designated for mainchain block h is the one at SHA256(
 every node from chain data. A node with several keys is designated if any of them is. The designated validator bids
 at once; the others hold their bid (`kind` `turn`) until the need has gone `turnbackup` mainchain blocks without an
 anchor landing, from anyone, then bid as the backup; an anchor that lands starts the wait again. Only blocks that gave
-the designated validator a chance count: blocks that carried BMM commitments and came 4 s or more into the wait
-(mainchain blocks come ~17 s apart at the median on eCash, most of them from a pool that does no BMM). A stall bid
+the designated validator a chance count: blocks found 4 s or more into the wait (mainchain blocks come ~17 s apart at
+the median on eCash: one found right after the turn began could not take its bid either). A block without any BMM
+commitment counts all the same: it may be one nobody bid for, the designated validator offline or its anchorer off (no
+node knows another's policy); a backup bid that is not needed costs nothing, only the request that lands pays. A stall bid
 (p >= 0.5) never waits, nor the BMM blocks of a stall of blocks of stake, nor the merged miner of a node that is no
-validator. A set or seed the node does not know: its turn, as before.
+validator. A set or seed the node does not know: its turn, as before. `getanchorinfo`'s `bid` says the turn as the node's
+last round took it (`kind` `turn` while it holds; "this validator's turn" or "the backup" in the reason when it bids).
 
 ### Missed blocks, the pool, and the stale raise
 

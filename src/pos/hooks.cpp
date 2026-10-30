@@ -2021,6 +2021,7 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         m_bid_inputs.value_at_risk = at_risk;
         m_bid_inputs.reserve = m_anchor_reserve;
         m_bid_inputs.slot_seconds = m_params.slot_seconds;
+        m_bid_inputs.anchor_waiting = record.BmmAt(main_height).has_value() && fast.last_main_height < main_height;
         const BidTriggers triggers{.anchor = validator.has_value(), .mine = mining.enabled, .mine_always = mining.enabled && mining.always,
                                    .mine_amount = mining.amount, .stale = StaleLocked(now)};
         BidDecision d{DecideNodeBid(policy, m_bid_inputs, triggers)};
@@ -2045,10 +2046,13 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         // the BMM blocks of a stall of blocks of stake (liveness), nor the merged miner of a node that is no validator.
         m_turn_designated = designated;
         m_turn_main_height = main_height + 1;
+        m_turn_holding.clear();
+        m_turn_said.clear();
         if (d.bid && d.turns && validator && !stalled) {
             if (designated) {
                 m_turn_held_since = -1;
-                d.reason += ", this validator's turn";
+                m_turn_said = ", this validator's turn";
+                d.reason += m_turn_said;
             } else {
                 bool landed{m_turn_held_since < 0 || m_turn_held_since > main_height};
                 for (int at{m_turn_held_since + 1}; !landed && at <= main_height; ++at) landed = record.BmmAt(at).has_value();
@@ -2056,13 +2060,16 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
                     m_turn_held_since = main_height;
                     m_turn_held_time = now;
                 }
-                // The blocks that gave the designated validators a chance: with BMM commitments, and found
-                // MIN_BID_LEAD_SECONDS or more into the wait (mainchain blocks come ~17 s apart at the median, and most
-                // carry no BMM: two of those are no turn missed).
+                // The blocks that gave the designated validators a chance: found MIN_BID_LEAD_SECONDS or more into the
+                // wait (mainchain blocks come ~17 s apart at the median: one found right after the turn began could not
+                // take the designated validator's bid either). A block without any BMM commitment counts all the same:
+                // it may be one nobody bid for, the designated validator being offline or its anchorer off (no node
+                // knows another's policy), and the backup must come then. A backup bid that is not needed costs nothing:
+                // only the request that lands pays.
                 int waited{0};
                 for (int at{m_turn_held_since + 1}; at <= main_height; ++at) {
                     const auto seen{MainSeenLocked(at, record.HashAt(at))};
-                    if (!seen || (seen->bmm && seen->time - m_turn_held_time >= MIN_BID_LEAD_SECONDS)) ++waited;
+                    if (!seen || seen->time - m_turn_held_time >= MIN_BID_LEAD_SECONDS) ++waited;
                 }
                 if (waited < policy.turn_backup) {
                     d.reason = strprintf("no bid: another validator's turn for mainchain block %d; this one bids if no anchor lands in %d mainchain block%s (%s)",
@@ -2070,8 +2077,10 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
                     d.bid = false;
                     d.amount = 0;
                     d.kind = "turn";
+                    m_turn_holding = d.reason;
                 } else {
-                    d.reason += strprintf(", the backup: %d mainchain block%s without an anchor on other validators' turns", waited, waited == 1 ? "" : "s");
+                    m_turn_said = strprintf(", the backup: %d mainchain block%s without an anchor on other validators' turns", waited, waited == 1 ? "" : "s");
+                    d.reason += m_turn_said;
                 }
             }
         } else if (!d.bid && d.kind != "throttled") {
@@ -2999,6 +3008,17 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
     report.decision = DecideNodeBid(policy, report.inputs, BidTriggers{.anchor = report.anchor_trigger, .mine = report.mine_trigger,
                                                                        .mine_always = report.mine_trigger && mining->always,
                                                                        .mine_amount = mining ? mining->amount : 0, .stale = report.stale});
+    // (The turn as the last round took it: held for another validator's, or its own, or the backup; so the report says.)
+    if (report.decision.bid && report.decision.turns && report.anchor_trigger) {
+        if (!m_turn_holding.empty()) {
+            report.decision.bid = false;
+            report.decision.amount = 0;
+            report.decision.kind = "turn";
+            report.decision.reason = m_turn_holding;
+        } else {
+            report.decision.reason += m_turn_said;
+        }
+    }
     if (report.stale > 0 && report.decision.kind != "replace" && report.decision.bid && report.decision.amount < report.stale + REPLACEMENT_BUMP) {
         report.warnings.push_back(strprintf("A bid of %s that did not land may still be held by other nodes: a new bid on the same coin must pay more, and max or the cap keep this one below it.", FormatMoney(report.stale)));
     }

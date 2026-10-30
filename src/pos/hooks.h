@@ -739,6 +739,10 @@ private:
     mutable int m_turn_main_height GUARDED_BY(m_anchor_mutex){0};
     mutable int m_turn_held_since GUARDED_BY(m_anchor_mutex){-1};
     mutable int64_t m_turn_held_time GUARDED_BY(m_anchor_mutex){0};
+    //! Why the last round held its bid for another validator's turn (empty: it did not), for the report.
+    mutable std::string m_turn_holding GUARDED_BY(m_anchor_mutex);
+    //! What the last round added to a bid that took its turn: its own turn, or the backup.
+    mutable std::string m_turn_said GUARDED_BY(m_anchor_mutex);
     //! What the transactions of each block of stake no anchor covers move (the sum of their outputs), by block: read once
     //! a block (ValueAtRisk), the blocks of the run only.
     mutable Mutex m_risk_mutex;

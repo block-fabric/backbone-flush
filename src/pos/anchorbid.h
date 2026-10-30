@@ -218,6 +218,9 @@ struct BidInputs {
     CAmount reserve{0};
     //! The length of a slot, for the heartbeat's hours.
     int64_t slot_seconds{15};
+    //! A commitment of this chain in the last mainchain block waits for its acknowledgement: the unanchored run ends
+    //! with it, so no heartbeat for it (a stall bid still goes).
+    bool anchor_waiting{false};
 };
 
 /** A BMM request a mainchain block took: its slot and its feerate (per 1000 vbytes). */

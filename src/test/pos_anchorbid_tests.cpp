@@ -1200,6 +1200,10 @@ BOOST_AUTO_TEST_CASE(demand_driven_heartbeat)
     BOOST_CHECK(d.bid);
     BOOST_CHECK_EQUAL(d.kind, "heartbeat");
     BOOST_CHECK(d.heartbeat && d.unfunded && !d.stall && !d.work && d.SpendsReserve());
+    // Not while a commitment of this chain waits for its acknowledgement: the run ends with it.
+    in.anchor_waiting = true;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    in.anchor_waiting = false;
     // The competitive base: the least competitive rate of the network, here 2 sat/vB x 189 vB.
     in.min_rate_per_kvb = 2000;
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 378);
