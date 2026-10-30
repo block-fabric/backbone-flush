@@ -2261,11 +2261,14 @@ BOOST_AUTO_TEST_CASE(set_boundary_and_lead)
     for (const ChainType type : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
         const Consensus::PosParams e{CChainParams::Ecash(type)->GetConsensus().pos};
         BOOST_CHECK_EQUAL(e.set_lead_seconds, e.seed_lookahead_seconds);
+        // (eCash mainnet's bootstrap: the set an epoch ahead until epoch 72, then that set until the long lead passes it,
+        // from epoch 103: bootstrap_rule.)
+        const int64_t long_lead_from{type == ChainType::ECASH ? 103 : 0};
         int64_t last{std::numeric_limits<int64_t>::min()};
         for (int64_t epoch{0}; epoch < 400; ++epoch) {
             const int64_t boundary{pos::SetBoundary(epoch, e)};
             BOOST_CHECK_LE(boundary, std::max<int64_t>(0, (epoch - 1) * e.slots_per_epoch));
-            if (boundary > 0) BOOST_CHECK_LE(pos::SlotTime(boundary, e), pos::SeedTime(epoch, e));
+            if (boundary > 0 && epoch >= long_lead_from) BOOST_CHECK_LE(pos::SlotTime(boundary, e), pos::SeedTime(epoch, e));
             BOOST_CHECK_GE(boundary, last);
             last = boundary;
         }
@@ -2276,26 +2279,69 @@ BOOST_AUTO_TEST_CASE(long_gap_rule)
 {
     // The eCash networks: the long-gap rule from their first epoch; at least 24 hours without BMM (user decision,
     // 2026-10-24): 24 hours of unanchored slots, the seed and the set 48 hours ahead, the unbonding and the proofs past
-    // the set lead in anchors (ten-minute anchors).
+    // the set lead in anchors (ten-minute anchors). eCash mainnet (2026-10-30): 16 hours, 32 ahead (after its bootstrap).
     for (const ChainType type : {ChainType::ECASH, ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
         const Consensus::PosParams e{CChainParams::Ecash(type)->GetConsensus().pos};
+        const bool main{type == ChainType::ECASH};
+        const int64_t limit_hours{main ? 16 : 24};
+        const int64_t after{e.bootstrap_end_epoch}; // an epoch past the bootstrap
         BOOST_CHECK_EQUAL(e.gap_epoch, 0);
-        BOOST_CHECK_EQUAL(e.slot_seconds * e.MaxUnanchoredSlots(0), 24 * 3600);
-        BOOST_CHECK_EQUAL(e.SeedLookahead(0), 48 * 3600);
-        BOOST_CHECK_EQUAL(e.SetLead(0), e.SeedLookahead(0));
-        BOOST_CHECK_GT(e.unbonding_anchors * 600, e.SetLead(0) + e.slots_per_epoch * e.slot_seconds);
+        BOOST_CHECK_EQUAL(e.slot_seconds * e.MaxUnanchoredSlots(0), limit_hours * 3600);
+        BOOST_CHECK_EQUAL(e.SeedLookahead(0), (main ? 32 : 48) * 3600);
+        BOOST_CHECK_EQUAL(e.SetLead(after), e.SeedLookahead(after));
+        BOOST_CHECK_GT(e.unbonding_anchors * 600, e.SetLead(after) + e.slots_per_epoch * e.slot_seconds);
         BOOST_CHECK_EQUAL(e.evidence_window_anchors, e.unbonding_anchors - 1);
         BOOST_CHECK_EQUAL(e.MaxUnanchoredSlotsEver(), e.gap_max_unanchored_slots);
         // A reorg of a whole run, twice over, with a margin, can be made (security review 2026-10-24): strictly within the
         // blocks a node can take back, and keeps.
         BOOST_CHECK_GT(int64_t{DRIVECHAIN_UNDO_DEPTH}, 2 * e.MaxUnanchoredSlotsEver() + 1000);
-        BOOST_CHECK_EQUAL(e.gap_max_unanchored_slots, FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS);
+        BOOST_CHECK_LE(e.gap_max_unanchored_slots, FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS);
         BOOST_CHECK_LT(int64_t{DRIVECHAIN_UNDO_DEPTH} * CChainParams::Ecash(type)->GetConsensus().max_block_weight * 115 / 100, static_cast<int64_t>(MinPruneTarget(CChainParams::Ecash(type)->GetConsensus())));
-        // The seed never stops blocks of stake before the unanchored limit through a lag of the median time of up to 24 hours.
-        BOOST_CHECK_GE(e.SeedLookahead(0) + e.slots_per_epoch * e.slot_seconds - 24 * 3600, e.slot_seconds * e.MaxUnanchoredSlots(0));
+        // The seed never stops blocks of stake before the unanchored limit through a lag of the median time of up to 24
+        // hours (eCash mainnet: 17 hours, three times the 5 h 20 min of 2026-10-24).
+        BOOST_CHECK_GE(e.SeedLookahead(0) + e.slots_per_epoch * e.slot_seconds - (main ? 17 : 24) * 3600, e.slot_seconds * e.MaxUnanchoredSlots(0));
     }
     // The Chains networks: never.
     BOOST_CHECK(!CChainParams::Main()->GetConsensus().pos.GapActive(1'000'000));
+}
+
+BOOST_AUTO_TEST_CASE(bootstrap_rule)
+{
+    // eCash mainnet's bootstrap: until epoch 72 the set of an epoch is the newest anchor's before the epoch before it
+    // (bonds count one to two hours after their anchor); from 72 the set fixed before epoch 70 until the 32-hour lead
+    // passes it (epoch 103), then the long lead. The boundary never goes down (no set fixed taken back, the pruning of
+    // the sets), never jumps more than an epoch (no epoch of anchors skipped), and from 102 on is before the seed's time.
+    const Consensus::PosParams e{CChainParams::Ecash(ChainType::ECASH)->GetConsensus().pos};
+    const int64_t n{e.slots_per_epoch};
+    BOOST_REQUIRE_EQUAL(e.bootstrap_end_epoch, 72);
+    // From block 10 (Flush mainnet was at block 9, merged mined only): no block of stake below it.
+    BOOST_CHECK_EQUAL(e.fork_height, 10);
+    BOOST_CHECK_EQUAL(e.SetLead(71), 0);
+    BOOST_CHECK_EQUAL(e.SetLead(72), 32 * 3600);
+    for (int64_t epoch{1}; epoch < 72; ++epoch) BOOST_CHECK_EQUAL(pos::SetBoundary(epoch, e), (epoch - 1) * n);
+    for (int64_t epoch{72}; epoch <= 102; ++epoch) BOOST_CHECK_EQUAL(pos::SetBoundary(epoch, e), 70 * n);
+    for (int64_t epoch{103}; epoch < 400; ++epoch) {
+        BOOST_CHECK_EQUAL(pos::SetBoundary(epoch, e), (epoch - 32) * n);
+        BOOST_CHECK_LE(pos::SlotTime(pos::SetBoundary(epoch, e), e), pos::SeedTime(epoch, e));
+    }
+    BOOST_CHECK_LE(pos::SlotTime(70 * n, e), pos::SeedTime(102, e));
+    BOOST_CHECK_GT(pos::SlotTime(70 * n, e), pos::SeedTime(101, e)); // 101 is the last epoch whose seed may come first
+    for (int64_t epoch{1}; epoch < 400; ++epoch) {
+        const int64_t step{pos::SetBoundary(epoch, e) - pos::SetBoundary(epoch - 1, e)};
+        BOOST_CHECK_GE(step, 0);
+        BOOST_CHECK_LE(step, n);
+    }
+    // The seed of the first 32 epochs is taken before genesis (the null mainchain hash): nothing to wait for.
+    BOOST_CHECK_LE(pos::SeedTime(32, e), e.genesis_time);
+    BOOST_CHECK_GT(pos::SeedTime(33, e), e.genesis_time);
+    // The other eCash networks: none.
+    for (const ChainType type : {ChainType::ECASH_BETANET, ChainType::ECASH_TESTNET}) {
+        const Consensus::PosParams o{CChainParams::Ecash(type)->GetConsensus().pos};
+        BOOST_CHECK_EQUAL(o.bootstrap_end_epoch, 0);
+        BOOST_CHECK_EQUAL(o.fork_height, 0);
+        BOOST_CHECK(!o.Bootstrap(0));
+        BOOST_CHECK_EQUAL(o.SetLead(0), 48 * 3600);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(staking_parameters)

@@ -1229,7 +1229,8 @@ FastBlocksHooks::SlotLeader FastBlocksHooks::LeaderOf(const CBlockIndex& prev, i
         leader.status = LeaderStatus::SET_UNKNOWN;
         return leader;
     }
-    if (!leader.set->Active()) {
+    // Below fork_height no block of stake (eCash mainnet: the blocks of 8.3.4, all merged mined, stay as they were).
+    if (!leader.set->Active() || prev.nHeight + 1 < m_params.fork_height) {
         leader.status = LeaderStatus::INACTIVE;
         return leader;
     }

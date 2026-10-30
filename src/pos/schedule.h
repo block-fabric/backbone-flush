@@ -55,8 +55,9 @@ private:
 int64_t SeedTime(int64_t epoch, const Consensus::PosParams& params);
 /**
  * The slot the anchor that fixes the validator set of `epoch` comes before: the first slot of the epoch before it,
- * or, with set_lead_seconds, the slot of the time that long before the epoch starts, if earlier. Never higher for a
- * later epoch (the sets of the anchors below the boundary of the current epoch are those blocks to come can need).
+ * or, with set_lead_seconds, the slot of the time that long before the epoch starts, if earlier; after a bootstrap
+ * (bootstrap_end_epoch), never below the boundary of its last epoch. Never lower for a later epoch (the sets of the
+ * anchors below the boundary of the current epoch are those blocks to come can need).
  */
 int64_t SetBoundary(int64_t epoch, const Consensus::PosParams& params);
 /**

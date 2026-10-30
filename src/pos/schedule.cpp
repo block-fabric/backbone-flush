@@ -69,8 +69,12 @@ int64_t SetBoundary(int64_t epoch, const Consensus::PosParams& params)
 {
     const int64_t by_epoch{(epoch - 1) * params.slots_per_epoch};
     const int64_t lead{params.SetLead(epoch)};
-    if (lead <= 0) return by_epoch;
-    return std::min(by_epoch, SlotOf(SlotTime(epoch * params.slots_per_epoch, params) - lead, params));
+    const int64_t boundary{lead <= 0 ? by_epoch : std::min(by_epoch, SlotOf(SlotTime(epoch * params.slots_per_epoch, params) - lead, params))};
+    // After the bootstrap, never below its last epoch's boundary (the epoch before bootstrap_end_epoch): the boundary never
+    // goes down from one epoch to the next, so no set fixed is taken back, and the epochs from the end of the bootstrap
+    // share that set until the long lead passes it.
+    if (params.bootstrap_end_epoch > 0 && !params.Bootstrap(epoch)) return std::max(boundary, (params.bootstrap_end_epoch - 2) * params.slots_per_epoch);
+    return boundary;
 }
 
 std::optional<int> SeedHeight(int64_t epoch, const Consensus::PosParams& params, const sidechain::Mainchain& record)

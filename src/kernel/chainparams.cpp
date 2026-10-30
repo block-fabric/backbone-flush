@@ -775,6 +775,10 @@ public:
                     pos.gap_set_lead_seconds = value;
                 } else if (name == "gap_max_unanchored_slots" && value >= 1) {
                     pos.gap_max_unanchored_slots = value;
+                } else if (name == "bootstrap_end_epoch" && value >= 0) {
+                    pos.bootstrap_end_epoch = value;
+                } else if (name == "fork_height" && value >= 0 && value <= std::numeric_limits<int>::max()) {
+                    pos.fork_height = static_cast<int>(value);
                 } else if (name == "unbonding_anchors" && value >= 1) {
                     pos.unbonding_anchors = value;
                 } else if (name == "evidence_window_anchors" && value >= 1) {
@@ -1017,6 +1021,35 @@ public:
         consensus.pos.gap_max_unanchored_slots = FASTBLOCKS_GAP_MAX_UNANCHORED_SLOTS; // 24 hours of 15-second slots
         consensus.pos.gap_seed_lookahead_seconds = 48 * 3600;   // two days
         consensus.pos.gap_set_lead_seconds = 48 * 3600;         // as long
+        if (chain == ChainType::ECASH) {
+            // eCash mainnet (user decision 2026-10-30, Flush at block 9, no block of stake yet; from block 10, fork_height below):
+            // - at least 16 hours without BMM, then the halt: 3840 slots;
+            // - the seed lookahead derived as above: epochs are led up to t0 + lookahead - lag + an epoch, past the
+            //   unanchored limit (16 h from just before t0) while the lag is at most lookahead - 15 h. 32 hours: through a
+            //   lag of up to 17 hours, three times the 5 h 20 min eCash mainnet had on 2026-10-24 (the proportion of the
+            //   24-hour rule: the lookahead twice the limit). The set lead as long: bonds take effect about 33 h after
+            //   their anchor;
+            // - the bootstrap: until epoch 72 (three days after genesis, 2026-11-01 23:17:51 UTC) the set of an epoch is
+            //   the newest anchor's before the epoch before it, so bonds count one to two hours after their anchor and
+            //   blocks of stake start two epochs after the first anchor with four bonds. Epochs 71 to 102 then share the
+            //   set fixed before epoch 70; from 103 the 32-hour lead (pos::SetBoundary). Until epoch 101 the set may be
+            //   fixed after its seed is known, so a new bond (anyone's: the chain is public) could be timed to a known
+            //   seed (leader grinding): accepted for the initial bootstrap (Louis, 2026-10-30), bounded by its end at
+            //   epoch 72 (and the shared set of epochs 71 to 101, fixed before epoch 70).
+            //   The seed needs nothing of its own: an epoch's seed is at its start less 32 hours, before the slot's
+            //   activation for about the first 31 epochs (the null mainchain hash), an eCash block 32 hours before
+            //   after that: known at once either way.
+            consensus.pos.gap_max_unanchored_slots = 16 * 3600 / 15; // 16 hours of 15-second slots
+            consensus.pos.gap_seed_lookahead_seconds = 32 * 3600;    // 32 hours
+            consensus.pos.gap_set_lead_seconds = 32 * 3600;          // as long
+            consensus.pos.bootstrap_end_epoch = 72;                  // three days
+            // At a fork height (user decision 2026-10-30): Flush mainnet was at block 9, merged mined only, with every
+            // bidder of ours stopped until the upgrade. No block of stake below block 10; the blocks 0 to 9 depend on none
+            // of the values above (no block of stake, so no unanchored run; no set pruned before 1007 anchors), and are
+            // judged as by 8.3.4. Blocks of stake from block 10 take the sets the anchors made before it (blocks 1 to 9,
+            // with the four bonds of blocks 3 and 4), with the bootstrap's lead.
+            consensus.pos.fork_height = 10;
+        }
         // Not consensus: an anchor bid of at least 2 sat/vB (miners there took 2-3 sat/vB for BMM requests; 1 waited).
         consensus.pos.min_bid_rate_per_kvb = 2000;
         consensus.pos.final_anchors = 3;                 // half an hour (6 minutes on Chains); not consensus
