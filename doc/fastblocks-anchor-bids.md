@@ -62,7 +62,10 @@ every node from chain data. A node with several keys is designated if any of the
 at once; the others hold their bid (`kind` `turn`) until the need has gone `turnbackup` mainchain blocks without an
 anchor landing, from anyone, then bid as the backup; an anchor that lands starts the wait again. Only blocks that gave
 the designated validator a chance count: blocks found 4 s or more into the wait (mainchain blocks come ~17 s apart at
-the median on eCash: one found right after the turn began could not take its bid either). A block without any BMM
+the median on eCash: one found right after the turn began could not take its bid either), and once twice `turnbackup`
+mainchain blocks have passed every block counts (a header's time is its template's, which may predate the wait however
+late the block is found; bursts of blocks seconds apart come on eCash mainnet too): the backup never waits on block
+spacing alone. A block without any BMM
 commitment counts all the same: it may be one nobody bid for, the designated validator offline or its anchorer off (no
 node knows another's policy); a backup bid that is not needed costs nothing, only the request that lands pays. A stall bid
 (p >= 0.5) never waits, nor the BMM blocks of a stall of blocks of stake, nor the merged miner of a node that is no

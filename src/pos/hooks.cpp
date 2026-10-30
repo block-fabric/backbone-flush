@@ -2094,11 +2094,15 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
                 // it may be one nobody bid for, the designated validator being offline or its anchorer off (no node
                 // knows another's policy), and the backup must come then. A backup bid that is not needed costs nothing:
                 // only the request that lands pays.
+                // Never on block spacing alone, though: a header's time is its template's, which may predate the wait
+                // however late the block is found, and bursts of blocks seconds apart come on eCash mainnet too. Once
+                // twice turnbackup mainchain blocks have passed, every block counts.
                 int waited{0};
                 for (int at{m_turn_held_since + 1}; at <= main_height; ++at) {
                     const auto seen{MainSeenLocked(at, record.HashAt(at))};
                     if (!seen || seen->time - m_turn_held_time >= MIN_BID_LEAD_SECONDS) ++waited;
                 }
+                if (main_height - m_turn_held_since >= 2 * policy.turn_backup) waited = main_height - m_turn_held_since;
                 if (waited < policy.turn_backup) {
                     d.reason = strprintf("no bid: another validator's turn for mainchain block %d; this one bids if no anchor lands in %d mainchain block%s (%s)",
                                          main_height + 1, policy.turn_backup - waited, policy.turn_backup - waited == 1 ? "" : "s", d.reason);
