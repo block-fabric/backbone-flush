@@ -22,10 +22,10 @@ namespace pos {
 
 namespace {
 constexpr std::pair<BidStrategy, const char*> STRATEGIES[]{
-    {BidStrategy::FIXED, "fixed"},
-    {BidStrategy::MINIMAL, "minimal"},
     {BidStrategy::FEES, "fees"},
-    {BidStrategy::FEES_PREVENT_STALL, "feespreventstall"},
+    {BidStrategy::FEES_MINIMUM, "feesminimum"},
+    {BidStrategy::MINIMUM, "minimum"},
+    {BidStrategy::FIXED, "fixed"},
     {BidStrategy::OFF, "off"},
 };
 
@@ -118,21 +118,33 @@ std::string StrategyName(BidStrategy strategy)
     return "";
 }
 
+std::optional<StrategyWord> ParseStrategyWord(const std::string& name)
+{
+    std::string word{ToLower(util::TrimString(name))};
+    std::erase_if(word, [](char c) { return c == ' ' || c == '_' || c == '-'; });
+    // The names before 8.3.6 (doc/fastblocks-anchor-bids.md, "The names before 8.3.6"): each also said whether to prevent stalling.
+    if (word == "fees") return StrategyWord{.strategy = BidStrategy::FEES, .prevent_stall = false};
+    if (word == "feespreventstall" || word == "fees+preventstalling" || word == "fees+preventstall") {
+        return StrategyWord{.strategy = BidStrategy::FEES, .prevent_stall = true, .fees_or_floor = true};
+    }
+    if (word == "minimal" || word == "keepmoving") return StrategyWord{.strategy = BidStrategy::MINIMUM, .prevent_stall = true};
+    if (word == "fixed") return StrategyWord{.strategy = BidStrategy::FIXED, .prevent_stall = false};
+    if (word == "off") return StrategyWord{.strategy = BidStrategy::OFF};
+    // The new names, and the words of the pages.
+    if (word == "feesminimum" || word == "fees+minimum") return StrategyWord{.strategy = BidStrategy::FEES_MINIMUM};
+    if (word == "minimum" || word == "minimumeveryblock") return StrategyWord{.strategy = BidStrategy::MINIMUM};
+    return std::nullopt;
+}
+
 std::optional<BidStrategy> ParseStrategy(const std::string& name)
 {
-    const std::string lower{ToLower(util::TrimString(name))};
-    for (const auto& [s, n] : STRATEGIES) {
-        if (lower == n) return s;
-    }
-    // The words of the pages and of the documentation too.
-    if (lower == "fees+preventstalling" || lower == "fees+prevent stalling" || lower == "fees_prevent_stall") return BidStrategy::FEES_PREVENT_STALL;
-    if (lower == "keepmoving") return BidStrategy::MINIMAL;
-    return std::nullopt;
+    const auto word{ParseStrategyWord(name)};
+    return word ? std::optional{word->strategy} : std::nullopt;
 }
 
 const std::vector<std::string>& PolicyFieldNames()
 {
-    static const std::vector<std::string> names{"strategy", "floor", "max", "fixed", "feeshare", "escalationstart", "curve", "interpolate",
+    static const std::vector<std::string> names{"strategy", "preventstall", "anchor", "floor", "max", "fixed", "feeshare", "escalationstart", "curve", "interpolate",
                                                 "usefeeestimate", "requestvsize", "rebidafter", "rebidstep", "rebidmax", "warnmissed",
                                                 "periodcap", "periodhours", "lowbalanceblocks", "flatboost", "boost"};
     return names;
@@ -172,6 +184,8 @@ UniValue PolicyToUniValue(const AnchorBidPolicy& policy)
 {
     UniValue out(UniValue::VOBJ);
     out.pushKV("strategy", StrategyName(policy.strategy));
+    out.pushKV("preventstall", policy.prevent_stall);
+    out.pushKV("anchor", policy.anchor);
     out.pushKV("floor", ValueFromAmount(policy.floor));
     out.pushKV("max", ValueFromAmount(policy.max));
     out.pushKV("fixed", ValueFromAmount(policy.fixed));
@@ -206,6 +220,9 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
         error = "the policy is an object of fields";
         return false;
     }
+    // A strategy of the old names says whether to prevent stalling, unless "preventstall" is given too (in any order).
+    const bool stall_given{!fields.find_value("preventstall").isNull()};
+    bool fees_or_floor{false};
     for (const std::string& key : fields.getKeys()) {
         const UniValue& value{fields.find_value(key)};
         const auto bad{[&](const std::string& what) {
@@ -238,9 +255,15 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
         }};
         bool ok{true};
         if (key == "strategy") {
-            const auto strategy{value.isStr() ? ParseStrategy(value.get_str()) : std::nullopt};
-            if (!strategy) return bad("fixed, minimal, fees, feespreventstall or off");
-            policy.strategy = *strategy;
+            const auto word{value.isStr() ? ParseStrategyWord(value.get_str()) : std::nullopt};
+            if (!word) return bad("fees, feesminimum, minimum, fixed or off (or the older minimal, feespreventstall)");
+            policy.strategy = word->strategy;
+            if (word->prevent_stall && !stall_given) policy.prevent_stall = *word->prevent_stall;
+            fees_or_floor = word->fees_or_floor;
+        } else if (key == "preventstall") {
+            ok = boolean(policy.prevent_stall);
+        } else if (key == "anchor") {
+            ok = boolean(policy.anchor);
         } else if (key == "floor") {
             ok = money(policy.floor);
         } else if (key == "max") {
@@ -287,6 +310,8 @@ bool ApplyPolicyFields(AnchorBidPolicy& policy, const UniValue& fields, std::str
         }
         if (!ok) return false;
     }
+    // The old feespreventstall bid at least its floor: with one, that is Fees + minimum now (with a floor of 0, Fees).
+    if (fees_or_floor && policy.floor > 0) policy.strategy = BidStrategy::FEES_MINIMUM;
     return true;
 }
 
@@ -350,6 +375,42 @@ std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amo
     return replacement;
 }
 
+namespace {
+/** The relay floor for the largest request a wallet makes (250 vB: a request of more inputs than the usual 189 vB was
+ * refused under it, "min relay fee not met, 19 < 21"). */
+CAmount RelayFloor(const AnchorBidPolicy& policy, const BidInputs& inputs)
+{
+    return Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * std::max(policy.request_vsize, 250) / 1000.0));
+}
+} // namespace
+
+CAmount MinimumBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
+{
+    return std::max(policy.floor, RelayFloor(policy, inputs));
+}
+
+namespace {
+/**
+ * What a bid must be to land when it must (stall prevention's base): the minimum; the next-block estimate (with
+ * use_fee_estimate), else what recent mainchain blocks took for a BMM request, rounded up to whole sat/vB; never below the
+ * network's least competitive rate (min_rate_per_kvb: 2 sat/vB on eCash, where a bid of the relay floor stayed in the
+ * mempool while other slots' requests of 2-3 sat/vB got in, 2026-10-26).
+ */
+CAmount CompetitiveBase(const AnchorBidPolicy& policy, const BidInputs& inputs)
+{
+    CAmount base{MinimumBid(policy, inputs)};
+    std::optional<CAmount> rate;
+    if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) rate = inputs.fee_rate_per_kvb;
+    // What blocks took (RobustIncludedRate), clamped to 10 x the least of the relay floor and the network's rate.
+    if (!rate && inputs.included_rate_per_kvb && *inputs.included_rate_per_kvb > 0) {
+        rate = std::min<CAmount>(*inputs.included_rate_per_kvb, 10 * std::max<CAmount>({inputs.relay_rate_per_kvb, inputs.min_rate_per_kvb, 1000}));
+    }
+    const CAmount per_kvb{std::max(rate.value_or(0), inputs.min_rate_per_kvb)};
+    if (per_kvb > 0) base = std::max(base, Clamp(std::ceil(static_cast<double>(per_kvb) / 1000.0) * policy.request_vsize));
+    return base;
+}
+} // namespace
+
 BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
 {
     BidDecision d;
@@ -360,109 +421,118 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
         d.reason = "off: no bids (the chain relies on other bidders)";
         return d;
     }
-    // Flat policies follow the next-block estimate even before stall pressure builds. Keep the operator's
-    // floor as an optional override; a disabled estimate still respects the mainchain relay minimum.
-    CAmount base{policy.floor};
-    CAmount plain_base{policy.floor};
-    if (policy.flat_boost && policy.strategy == BidStrategy::FEES_PREVENT_STALL) {
-        // The relay floor for the largest request a wallet makes (250 vB: a request of more inputs than the usual 189 vB
-        // was refused under it, "min relay fee not met, 19 < 21").
-        const CAmount relay{Clamp(std::ceil(static_cast<double>(std::max<CAmount>(inputs.relay_rate_per_kvb, 0)) * std::max(policy.request_vsize, 250) / 1000.0))};
-        base = std::max(base, relay);
-        // The next-block estimate, else what recent mainchain blocks took for a BMM request, rounded up to whole
-        // sat/vB, and never below the network's least competitive rate (min_rate_per_kvb: 2 sat/vB on eCash, where a
-        // bid of the relay floor stayed in the mempool while other slots' requests of 2-3 sat/vB got in, 2026-10-26).
-        std::optional<CAmount> rate;
-        if (policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0) rate = inputs.fee_rate_per_kvb;
-        // What blocks took (RobustIncludedRate), clamped to 10 x the least of the relay floor and the network's rate.
-        if (!rate && inputs.included_rate_per_kvb && *inputs.included_rate_per_kvb > 0) {
-            rate = std::min<CAmount>(*inputs.included_rate_per_kvb, 10 * std::max<CAmount>({inputs.relay_rate_per_kvb, inputs.min_rate_per_kvb, 1000}));
-        }
-        const CAmount per_kvb{std::max(rate.value_or(0), inputs.min_rate_per_kvb)};
-        if (per_kvb > 0) base = std::max(base, Clamp(std::ceil(static_cast<double>(per_kvb) / 1000.0) * policy.request_vsize));
-        // Missed mainchain blocks: the base itself goes up, twice for every two missed (at most the boost's factor); the
-        // boost stays boost x the base before it (so never more than boost x the competitive base).
-        plain_base = base;
-        if (inputs.missed >= 2) base = Clamp(static_cast<double>(base) * std::min(policy.boost, std::pow(2.0, inputs.missed / 2)));
-    }
-    if (policy.strategy == BidStrategy::FEES_PREVENT_STALL && policy.flat_boost && inputs.pot <= 0 &&
-        !inputs.pending_actions && d.pressure < policy.escalation_start) {
-        d.kind = "idle";
-        d.reason = "skipped: nothing to anchor";
-        return d;
-    }
-    // The strategy's own bid.
+    const CAmount minimum{MinimumBid(policy, inputs)};
+    const CAmount pot{std::max<CAmount>(inputs.pot, 0)};
+    // All but the operator's margin, as Follower::Offer: pot - pot / 100 at 99 %.
+    const CAmount share{FeeShare(pot, policy.fee_share_bps)};
+    const std::string share_text{strprintf("fee share %s (%.2f %% of %s)", FormatMoney(share), policy.fee_share_bps / 100.0, FormatMoney(pot))};
+    // The strategy's own bid; `bids` false: none (Fees without fees that pay for a request).
+    bool bids{true};
     switch (policy.strategy) {
+    case BidStrategy::FEES:
+        // No minimum, no floor: the fee share once it pays for a request's own place in a block, else nothing.
+        if (share >= std::max(MINE_MIN_OFFER, RelayFloor(policy, inputs))) {
+            d.normal = share;
+            d.kind = "fees";
+            d.reason = share_text;
+        } else {
+            bids = false;
+            d.kind = "idle";
+            d.reason = share > 0 ? strprintf("no bid: the %s does not pay for a request", share_text) : "no bid: no fees";
+            if (policy.PreventsStall()) d.reason += ", nothing waiting to anchor";
+        }
+        break;
+    case BidStrategy::FEES_MINIMUM:
+        if (share > minimum) {
+            d.normal = share;
+            d.kind = "fees";
+            d.reason = share_text;
+        } else {
+            d.normal = minimum;
+            d.kind = "minimum";
+            d.reason = strprintf("minimum %s (%s)", FormatMoney(minimum), share_text);
+        }
+        break;
+    case BidStrategy::MINIMUM:
+        d.normal = minimum;
+        d.kind = "minimum";
+        d.reason = strprintf("minimum %s", FormatMoney(minimum));
+        break;
     case BidStrategy::FIXED:
         d.normal = policy.fixed;
         d.kind = "fixed";
         d.reason = strprintf("fixed %s", FormatMoney(policy.fixed));
         break;
-    case BidStrategy::MINIMAL:
-        d.normal = base;
-        d.kind = base > policy.floor ? "base" : "floor";
-        d.reason = strprintf("base %s", FormatMoney(base));
-        break;
-    case BidStrategy::FEES:
-    case BidStrategy::FEES_PREVENT_STALL: {
-        const CAmount pot{std::max<CAmount>(inputs.pot, 0)};
-        // All but the operator's margin, as Follower::Offer: pot - pot / 100 at 99 %.
-        const CAmount share{FeeShare(pot, policy.fee_share_bps)};
-        if (share > base) {
-            d.normal = share;
-            d.kind = "fees";
-            d.reason = strprintf("fee share %s (%.2f %% of a pot of %s)", FormatMoney(share), policy.fee_share_bps / 100.0, FormatMoney(pot));
-        } else {
-            d.normal = base;
-            d.kind = base > policy.floor ? "base" : "floor";
-            d.reason = strprintf("base %s (fee share %s)", FormatMoney(base), FormatMoney(share));
-        }
-        break;
-    }
     case BidStrategy::OFF:
         break;
     }
-    d.amount = d.normal;
-    if (policy.Escalates() && policy.flat_boost) {
-        // Boost only the base, never a large fee share.
-        if (d.pressure >= policy.escalation_start) {
-            const CAmount boosted{Clamp(static_cast<double>(plain_base) * policy.boost)};
-            if (boosted > d.amount) {
-                d.amount = boosted;
-                d.multiplier = policy.boost;
-                d.kind = "boost";
-                d.reason = strprintf("boost at %s: x%.2f the base %s", p_text, policy.boost, FormatMoney(base));
-            }
+    d.amount = bids ? d.normal : 0;
+    if (policy.PreventsStall()) {
+        // Missed mainchain blocks raise what must land: flat, twice for every two missed, at most the boost; legacy,
+        // rebidstep for every rebidafter missed, at most rebidmax.
+        double factor{1};
+        if (policy.flat_boost && inputs.missed >= 2) {
+            factor = std::min(policy.boost, std::pow(2.0, inputs.missed / 2));
+        } else if (!policy.flat_boost && policy.rebid_after > 0 && inputs.missed >= policy.rebid_after) {
+            factor = std::min(policy.rebid_max, std::pow(policy.rebid_step, inputs.missed / policy.rebid_after));
         }
-    } else if (policy.Escalates()) {
-        // Missed blocks: the bid again, higher, whatever the pressure (capped).
-        if (policy.rebid_after > 0 && inputs.missed >= policy.rebid_after) {
-            const double factor{std::min(policy.rebid_max, std::pow(policy.rebid_step, inputs.missed / policy.rebid_after))};
-            const CAmount raised{Clamp(static_cast<double>(std::max(d.normal, policy.floor)) * factor)};
+        // The strategies that bid every block: their minimum again, higher (a fee share or a fixed amount is what it is).
+        if (factor > 1 && (policy.strategy == BidStrategy::FEES_MINIMUM || policy.strategy == BidStrategy::MINIMUM)) {
+            const CAmount raised{Clamp(static_cast<double>(minimum) * factor)};
             if (raised > d.amount) {
                 d.amount = raised;
                 d.multiplier = factor;
                 d.kind = "rebid";
-                d.reason = strprintf("rebid after %d missed mainchain blocks (x%.2f)", inputs.missed, factor);
+                d.reason = strprintf("rebid after %d missed mainchain blocks: x%.2f the minimum %s", inputs.missed, factor, FormatMoney(minimum));
             }
         }
-        // Stall pressure: toward the mainchain's next-block fee for the request, times the curve. Never below the
-        // threshold, whatever the mempool says.
+        // Peg work waiting for an anchor (a deposit to credit, withdrawals, staking payouts, a change of the validator
+        // set): the peg would stall without one, so a bid that lands (the competitive base), fees or not, as 8.3.5's
+        // feespreventstall did (with the flat boost: the legacy policy is its curve and rebids alone).
+        if (policy.flat_boost && inputs.pending_actions) {
+            const CAmount base{CompetitiveBase(policy, inputs)};
+            const CAmount pending{Clamp(static_cast<double>(base) * factor)};
+            if (!bids || pending > d.amount) {
+                d.reason = strprintf("peg work waiting for an anchor: the competitive base %s%s%s", FormatMoney(base),
+                                     factor > 1 ? strprintf(" x%.2f after %d missed", factor, inputs.missed) : "",
+                                     bids ? strprintf(" (the strategy: %s)", d.reason) : "");
+                d.amount = pending;
+                d.multiplier = factor;
+                d.kind = "pending";
+                bids = true;
+            }
+        }
+        // Near the unanchored limit: a bid that lands, whatever the strategy said (Fees without fees too). Never a
+        // large fee share multiplied: the higher of the two.
         if (d.pressure >= policy.escalation_start) {
-            const double multiplier{EscalationMultiplier(policy, d.pressure)};
-            const bool estimated{policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0};
-            const double base{estimated ? static_cast<double>(*inputs.fee_rate_per_kvb) * policy.request_vsize / 1000.0
-                                        : static_cast<double>(std::max(policy.floor, ESCALATION_FALLBACK_BASE))};
-            const CAmount escalated{Clamp(base * multiplier)};
-            if (escalated > d.amount) {
-                d.amount = escalated;
+            CAmount stall{0};
+            double multiplier{1};
+            std::string why;
+            if (policy.flat_boost) {
+                const CAmount base{CompetitiveBase(policy, inputs)};
+                stall = Clamp(static_cast<double>(base) * policy.boost);
+                multiplier = policy.boost;
+                why = strprintf("preventing a stall at %s: x%.2f the competitive base %s", p_text, policy.boost, FormatMoney(base));
+            } else {
+                multiplier = EscalationMultiplier(policy, d.pressure);
+                const bool estimated{policy.use_fee_estimate && inputs.fee_rate_per_kvb && *inputs.fee_rate_per_kvb > 0};
+                const double base{estimated ? static_cast<double>(*inputs.fee_rate_per_kvb) * policy.request_vsize / 1000.0
+                                            : static_cast<double>(std::max(policy.floor, ESCALATION_FALLBACK_BASE))};
+                stall = Clamp(base * multiplier);
+                why = estimated ? strprintf("escalation at %s: x%.2f the fee estimate (%.2f sat/vB for %d vB)", p_text, multiplier, *inputs.fee_rate_per_kvb / 1000.0, policy.request_vsize)
+                                : strprintf("escalation at %s: x%.2f the floor (no fee estimate)", p_text, multiplier);
+            }
+            if (!bids || stall > d.amount) {
+                d.reason = bids ? strprintf("%s (the strategy: %s)", why, d.reason) : strprintf("%s (%s)", why, d.reason);
+                d.amount = stall;
                 d.multiplier = multiplier;
-                d.kind = "escalation";
-                d.reason = estimated ? strprintf("escalation at %s: x%.2f the fee estimate (%.2f sat/vB for %d vB)", p_text, multiplier, *inputs.fee_rate_per_kvb / 1000.0, policy.request_vsize)
-                                     : strprintf("escalation at %s: x%.2f the floor (no fee estimate)", p_text, multiplier);
+                d.kind = policy.flat_boost ? "stall" : "escalation";
+                bids = true;
             }
         }
     }
+    if (!bids) return d;
+    d.bid = true;
     if (d.amount > policy.max) {
         d.amount = policy.max;
         d.kind = "max";
@@ -471,6 +541,7 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     if (policy.period_cap > 0) {
         const CAmount left{std::max<CAmount>(policy.period_cap - inputs.spent_in_period, 0)};
         if (left == 0 && d.amount > 0) {
+            d.bid = false;
             d.kind = "periodcap";
             d.reason = strprintf("no bid: the cap of %s in %d h is spent", FormatMoney(policy.period_cap), policy.period_hours);
             d.amount = 0;
@@ -482,7 +553,6 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
             d.reason += strprintf(", cut to what is left of the cap of %s in %d h", FormatMoney(policy.period_cap), policy.period_hours);
         }
     }
-    d.bid = true;
     return d;
 }
 
@@ -535,55 +605,38 @@ void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, Bid
 
 BidDecision DecideNodeBid(const AnchorBidPolicy& policy, const BidInputs& inputs, const BidTriggers& triggers)
 {
-    std::optional<BidDecision> anchor;
-    if (triggers.anchor && policy.Bids()) anchor = DecideBid(policy, inputs);
-    std::optional<BidDecision> mine;
-    if (triggers.mine) {
-        BidDecision d;
-        d.pressure = StallPressure(inputs.slot, inputs.first_unanchored_slot, inputs.max_unanchored_slots);
-        if (triggers.mine_always) {
-            d.normal = d.amount = triggers.mine_amount;
-            d.kind = "always";
-            d.reason = strprintf("merged mining, always: %s for every mainchain block", FormatMoney(triggers.mine_amount));
-            d.bid = d.amount > 0;
-            if (d.bid) Limit(policy, inputs.spent_in_period, d);
-        } else {
-            // A strategy off stops the anchorer, not the merged miner: it then bids the fee share.
-            AnchorBidPolicy own{policy};
-            if (!own.Bids()) own.strategy = BidStrategy::FEES;
-            const CAmount share{FeeShare(inputs.pot, own.fee_share_bps)};
-            if (share < MINE_MIN_OFFER) {
-                d.kind = "idle";
-                d.reason = strprintf("merged mining waits for fees that pay for a block (a fee share of %s)", FormatMoney(share));
-            } else {
-                BidInputs in{inputs};
-                // Fees to pass on: never "nothing to anchor".
-                in.pending_actions = true;
-                d = DecideBid(own, in);
-            }
-        }
-        mine = d;
-    }
     BidDecision d;
-    if (anchor && mine) {
-        // One request serves both: the higher bid, or the one that bids.
-        if (anchor->bid && mine->bid) {
-            d = anchor->amount >= mine->amount ? *anchor : *mine;
-        } else {
-            d = anchor->bid ? *anchor : *mine;
-        }
-        d.trigger = "anchor+mine";
-    } else if (anchor) {
-        d = *anchor;
-        d.trigger = "anchor";
-    } else if (mine) {
-        d = *mine;
-        d.trigger = "mine";
-    } else {
+    if (!policy.Bids()) {
+        // Off means off: neither trigger bids, and no stall prevention (a bid by hand still goes).
+        d.pressure = StallPressure(inputs.slot, inputs.first_unanchored_slot, inputs.max_unanchored_slots);
         d.kind = "off";
-        d.reason = triggers.anchor ? "off: no bids (the chain relies on other bidders)" : "no trigger: merged mining is off and this node anchors no validator";
+        d.reason = "off: no bids (the chain relies on other bidders)";
         return d;
     }
+    if (!triggers.anchor && !triggers.mine) {
+        d.kind = "off";
+        d.reason = "no trigger: merged mining is off and this node anchors no validator";
+        return d;
+    }
+    // One policy for both triggers: the same bid; setbmm's "always" (for tests) offers its own amount, the higher one with
+    // the anchorer (one request serves both).
+    if (triggers.mine && triggers.mine_always) {
+        BidDecision always;
+        always.pressure = StallPressure(inputs.slot, inputs.first_unanchored_slot, inputs.max_unanchored_slots);
+        always.normal = always.amount = triggers.mine_amount;
+        always.kind = "always";
+        always.reason = strprintf("merged mining, always: %s for every mainchain block", FormatMoney(triggers.mine_amount));
+        always.bid = always.amount > 0;
+        if (always.bid) Limit(policy, inputs.spent_in_period, always);
+        d = always;
+        if (triggers.anchor) {
+            const BidDecision anchor{DecideBid(policy, inputs)};
+            if (anchor.bid && (!always.bid || anchor.amount > always.amount)) d = anchor;
+        }
+    } else {
+        d = DecideBid(policy, inputs);
+    }
+    d.trigger = triggers.anchor && triggers.mine ? "anchor+mine" : triggers.anchor ? "anchor" : "mine";
     StaleRaise(policy, triggers.stale, inputs.spent_in_period, d);
     return d;
 }

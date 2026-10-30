@@ -1937,12 +1937,14 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
     // from the same mainchain wallet, one request per mainchain block (doc/fastblocks-anchor-bids.md, "Triggers").
     std::optional<ValidatorBid> validator{ValidatorAnchoring()};
     const AnchorBidPolicy policy{BidPolicy()};
-    if (validator && !validator->policy.Bids()) {
+    if (validator && (!validator->policy.Bids() || !validator->policy.anchor)) {
+        const bool off{!validator->policy.Bids()};
         validator.reset();
         LOCK(m_anchor_mutex);
         if (!m_bid_off_warned) {
             m_bid_off_warned = true;
-            LogWarning("FastBlocks: this validator's anchorer is off (bid strategy off): the chain relies on other bidders for its anchors, and its blocks of stake halt after %d slots without one", m_params.max_unanchored_slots);
+            LogWarning("FastBlocks: this validator's anchorer is off (%s): the chain relies on other bidders for its anchors, and its blocks of stake halt after %d slots without one",
+                       off ? "bid strategy off" : "\"Anchor my validator\" off", m_params.max_unanchored_slots);
         }
     }
     const int64_t slot{SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)};
@@ -2168,48 +2170,66 @@ std::optional<FastBlocksHooks::ValidatorBid> FastBlocksHooks::ValidatorAnchoring
 AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain)
 {
     AnchorBidPolicy policy;
-    // Off on regtest unless given.
-    const bool given{args.IsArgSet("-validatoranchorbid") || args.IsArgSet("-validatoranchorbidstrategy") || args.IsArgSet("-validatoranchorbidfixed")};
-    // (And no period cap: the merged miner of a regtest node bids under this policy too, for as many blocks as a test mines.)
+    // On regtest unless given: no anchorer, and no period cap (the merged miner of a regtest node bids under this policy
+    // too, for as many blocks as a test mines): its fee share, without stall prevention, as setbmm did before 8.3.5.
+    const bool given{args.IsArgSet("-validatoranchorbid") || args.IsArgSet("-validatoranchorbidstrategy") || args.IsArgSet("-validatoranchorbidfixed") ||
+                     args.IsArgSet("-validatoranchorbidpreventstall")};
     if (chain == ChainType::REGTEST && !given) {
-        policy.strategy = BidStrategy::OFF;
+        policy.anchor = false;
+        policy.prevent_stall = false;
         policy.period_cap = 0;
     }
+    // The strategy the options say before -validatoranchorbidstrategy (which wins): the old default, feespreventstall,
+    // is Fees + minimum with a floor above 0, else Fees (ApplyPolicyFields); -validatoranchorbidmode=fees, the pot whole.
+    std::string strategy;
     if (args.IsArgNegated("-validatoranchorbid")) {
-        policy.strategy = BidStrategy::OFF;
+        // The anchorer off; the merged miner (setbmm) bids all the same, as before.
+        policy.anchor = false;
     } else if (args.IsArgSet("-validatoranchorbid")) {
         const std::string value{args.GetArg("-validatoranchorbid", "")};
         const auto parsed{ParseMoney(value)};
         if (value == "off") {
-            policy.strategy = BidStrategy::OFF;
+            policy.anchor = false;
         } else if (!parsed || !MoneyRange(*parsed)) {
             LogError("FastBlocks: -validatoranchorbid is not an amount: the validator's anchorer is off");
-            policy.strategy = BidStrategy::OFF;
+            policy.anchor = false;
         } else {
             policy.floor = *parsed;
             policy.fixed = *parsed;
+            if (*parsed > 0) strategy = "feespreventstall";
         }
     }
     const std::string mode{args.GetArg("-validatoranchorbidmode", "")};
     if (mode == "fees") {
-        // The pot whole, passed into the bid; no escalation.
-        if (policy.Bids()) policy.strategy = BidStrategy::FEES;
+        // The pot whole, passed into the bid; no stall prevention.
+        strategy = "fees";
         policy.fee_share_bps = 10000;
-    } else if (!mode.empty() && mode != "standard") {
+    } else if (mode == "standard") {
+        strategy = "feespreventstall";
+    } else if (!mode.empty()) {
         LogError("FastBlocks: -validatoranchorbidmode is standard or fees, not %s: standard", mode);
     }
-    // The other options, as setanchorbidpolicy's fields.
+    if (!strategy.empty()) {
+        UniValue one{UniValue::VOBJ};
+        one.pushKV("strategy", strategy);
+        std::string error;
+        ApplyPolicyFields(policy, one, error);
+    }
+    // The other options, as setanchorbidpolicy's fields (preventstall after the strategy, whose old names say it too).
     UniValue fields{UniValue::VOBJ};
     for (const auto& [option, field] : std::initializer_list<std::pair<const char*, const char*>>{
-             {"-validatoranchorbidstrategy", "strategy"}, {"-validatoranchorbidmax", "max"}, {"-validatoranchorbidfixed", "fixed"},
+             {"-validatoranchorbidstrategy", "strategy"}, {"-validatoranchorbidpreventstall", "preventstall"}, {"-validatoranchorbidmax", "max"}, {"-validatoranchorbidfixed", "fixed"},
              {"-validatoranchorbidshare", "feeshare"}, {"-validatoranchorbidescalation", "escalationstart"}, {"-validatoranchorbidcurve", "curve"},
              {"-validatoranchorbidinterpolate", "interpolate"}, {"-validatoranchorbidfeeestimate", "usefeeestimate"}, {"-validatoranchorbidrebid", "rebidafter"},
              {"-validatoranchorbidperiodcap", "periodcap"}, {"-validatoranchorbidlowbalance", "lowbalanceblocks"}}) {
         if (!args.IsArgSet(option)) continue;
-        // (The strategy off for -novalidatoranchorbid wins.)
-        if (std::string_view{field} == "strategy" && !policy.Bids() && args.IsArgSet("-validatoranchorbid")) continue;
         UniValue one{UniValue::VOBJ};
-        one.pushKV(field, args.GetArg(option, ""));
+        // (-novalidatoranchorbidpreventstall: false.)
+        std::string value{args.IsArgNegated(option) ? std::string{"0"} : args.GetArg(option, "")};
+        // A switch given alone (-validatoranchorbidpreventstall): on.
+        const std::string_view name{field};
+        if (value.empty() && (name == "preventstall" || name == "interpolate" || name == "usefeeestimate")) value = "1";
+        one.pushKV(field, value);
         std::string error;
         AnchorBidPolicy changed{policy};
         if (!ApplyPolicyFields(changed, one, error)) {
@@ -2223,9 +2243,11 @@ AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain
         policy.max = std::max({policy.max, policy.floor, policy.fixed});
         if (const std::string again{CheckPolicy(policy)}; !again.empty()) {
             LogError("FastBlocks: the anchor bid options do not make a policy (%s): the defaults", again);
-            const BidStrategy strategy{policy.strategy};
+            const AnchorBidPolicy chosen{policy};
             policy = AnchorBidPolicy{};
-            policy.strategy = strategy;
+            policy.strategy = chosen.strategy;
+            policy.prevent_stall = chosen.prevent_stall;
+            policy.anchor = chosen.anchor;
         } else {
             LogWarning("FastBlocks: %s: the most the anchorer bids is %s", error, FormatMoney(policy.max));
         }
@@ -2235,14 +2257,19 @@ AnchorBidPolicy AnchorBidPolicyFromArgs(const ArgsManager& args, ChainType chain
 
 std::string AnchorBidPolicySummary(const AnchorBidPolicy& p)
 {
+    std::string what;
     switch (p.strategy) {
     case BidStrategy::OFF: return "no bids (strategy off)";
-    case BidStrategy::FIXED: return strprintf("%s for every mainchain block (fixed), at most %s", FormatMoney(p.fixed), FormatMoney(p.max));
-    case BidStrategy::MINIMAL: return strprintf("%s for every mainchain block (minimal), escalated from stall pressure %.2f, at most %s", FormatMoney(p.floor), p.escalation_start, FormatMoney(p.max));
-    case BidStrategy::FEES: return strprintf("%.2f %% of the fee share its anchor owes, at least %s, at most %s (fees)", p.fee_share_bps / 100.0, FormatMoney(p.floor), FormatMoney(p.max));
-    case BidStrategy::FEES_PREVENT_STALL: return strprintf("%.2f %% of the fee share its anchor owes, at least %s, a stall boost from pressure %.2f, at most %s (fees + prevent stalling)", p.fee_share_bps / 100.0, FormatMoney(p.floor), p.escalation_start, FormatMoney(p.max));
+    case BidStrategy::FEES: what = strprintf("the fee share (%.2f %%) when there are fees, no minimum (fees)", p.fee_share_bps / 100.0); break;
+    case BidStrategy::FEES_MINIMUM: what = strprintf("the fee share (%.2f %%), at least the minimum (the floor %s or the relay minimum), every mainchain block (feesminimum)", p.fee_share_bps / 100.0, FormatMoney(p.floor)); break;
+    case BidStrategy::MINIMUM: what = strprintf("the minimum (the floor %s or the relay minimum) every mainchain block (minimum)", FormatMoney(p.floor)); break;
+    case BidStrategy::FIXED: what = strprintf("%s every mainchain block (fixed)", FormatMoney(p.fixed)); break;
     }
-    return "";
+    what += p.prevent_stall ? strprintf(", preventing stalls from stall pressure %.2f", p.escalation_start) : ", no stall prevention";
+    what += strprintf(", at most %s a bid", FormatMoney(p.max));
+    if (p.period_cap > 0) what += strprintf(" and %s in %d h", FormatMoney(p.period_cap), p.period_hours);
+    if (!p.anchor) what += "; the validator's anchorer off (merged mining alone)";
+    return what;
 }
 
 void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
@@ -2334,7 +2361,7 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     // Core), else estimatefee (Bitcoin ABC); none through the enforcer's interface alone (the floor then).
     std::optional<CAmount> rate;
     std::string source{"none: the floor"};
-    if (policy.use_fee_estimate && policy.strategy != BidStrategy::FIXED) {
+    if (policy.use_fee_estimate && policy.PreventsStall()) {
         try {
             UniValue params{UniValue::VARR};
             params.push_back(1);
@@ -2478,10 +2505,9 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
     report.spent = SpentInPeriod(policy, now);
     report.inputs.spent_in_period = report.spent;
     report.stale = StaleLocked(now);
-    report.anchor_trigger = m_validator && policy.Bids();
-    report.mine_trigger = mining && mining->enabled;
-    // Without the merged miner's settings, as if only the anchorer bid (getanchorinfo's view of old).
-    report.decision = DecideNodeBid(policy, report.inputs, BidTriggers{.anchor = report.anchor_trigger || (!mining && m_validator.has_value()), .mine = report.mine_trigger,
+    report.anchor_trigger = m_validator && policy.Bids() && policy.anchor;
+    report.mine_trigger = mining && mining->enabled && policy.Bids();
+    report.decision = DecideNodeBid(policy, report.inputs, BidTriggers{.anchor = report.anchor_trigger, .mine = report.mine_trigger,
                                                                        .mine_always = report.mine_trigger && mining->always,
                                                                        .mine_amount = mining ? mining->amount : 0, .stale = report.stale});
     if (report.stale > 0 && report.decision.kind != "replace" && report.decision.bid && report.decision.amount < report.stale + REPLACEMENT_BUMP) {
@@ -2491,7 +2517,13 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
         if (report.decision.kind == "periodcap") report.warnings.push_back("The spending cap of the period is reached: the bid is cut.");
         return report;
     }
-    if (!policy.Bids()) report.warnings.push_back("The anchorer is off: this validator bids for no anchors, and the chain relies on other bidders; blocks of stake halt after max_unanchored_slots without one.");
+    if (!policy.Bids()) {
+        report.warnings.push_back("Bidding is off: this node bids for no anchors, and the chain relies on other bidders; blocks of stake halt after max_unanchored_slots without one.");
+    } else if (!policy.anchor && !report.mine_trigger) {
+        report.warnings.push_back("\"Anchor my validator\" is off: this validator bids for no anchors, and the chain relies on other bidders; blocks of stake halt after max_unanchored_slots without one.");
+    } else if (!policy.prevent_stall && !policy.BidsEveryBlock()) {
+        report.warnings.push_back("Stall prevention is off: without fees this node does not bid, and if no one else does, blocks of stake halt after max_unanchored_slots without an anchor.");
+    }
     if (policy.warn_missed > 0 && m_bid_missed >= policy.warn_missed) {
         report.warnings.push_back(strprintf("Your bid is too low: %d mainchain blocks in a row came without this validator's commitment.", m_bid_missed));
     }
@@ -2557,7 +2589,7 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
         // pot to the producer's payout.
         ValidatorBid own{.payee = m_producer->Payout(), .policy = policy};
         LogInfo("FastBlocks: the validator's anchorer: %s%s", AnchorBidPolicySummary(policy), overrides.getKeys().empty() ? "" : " (with the settings of setanchorbidpolicy)");
-        if (!policy.Bids()) LogWarning("FastBlocks: this validator's anchorer bids nothing (strategy off): the chain relies on other bidders for its anchors");
+        if (!policy.Bids() || !policy.anchor) LogWarning("FastBlocks: this validator's anchorer bids nothing (%s): the chain relies on other bidders for its anchors", policy.Bids() ? "\"Anchor my validator\" off" : "strategy off");
         if (policy.Bids() && policy.floor == 0) LogInfo("FastBlocks: a bid of 0 pays the mainchain no fee: only a miner that takes such requests includes it (Backbone -bmmzerofee, or -minrelaytxfee=0)");
         LOCK(m_anchor_mutex);
         m_validator = own;

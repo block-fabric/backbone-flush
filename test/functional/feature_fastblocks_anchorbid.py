@@ -2,17 +2,17 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""A validator's anchorer bidding 0, and passing the fees into its bid (-validatoranchorbidmode=fees).
+"""A validator's anchorer bidding 0, and passing the fees into its bid (Fees + minimum at 100 %, a minimum of 0).
 
 The mainchain is a cooperating miner: Backbone with -bmmzerofee (it takes BMM requests that pay no fee), looked
 for in MAINCHAIN_BIN_DIR (a build of the bmm-zero branch); the test is skipped without one. Three genesis
 validators, 15-second slots on mock time, as feature_fastblocks_idle.py:
 
-  - -validatoranchorbid=0, no fees: every request pays the mainchain 0, and anchors land;
-  - fees mode, floor 0: a transaction's fees on the sidechain; the requests pay what the pot pays the
+  - Minimum every block, floor 0, no fees: every request pays the mainchain 0, and anchors land;
+  - Fees + minimum at 100 %, floor 0: a transaction's fees on the sidechain; the requests pay what the pot pays the
     ticket's payee for the anchor (on this chain, as before), and the pot accrued is the bidder's share of
     the transaction's fee (BidderShare at the next block's bidderbps): the share passed into the bid, once;
-  - fees mode with a cap (-validatoranchorbidmax): the request pays the cap, the payee still the whole pot.
+  - the same with a cap (-validatoranchorbidmax): the request pays the cap, the payee still the whole pot.
 """
 
 from decimal import Decimal
@@ -34,7 +34,7 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
     def set_test_params(self):
         super().set_test_params()
         self.main_extra_args = ["-bmmzerofee"]
-        self.bid_args = ["-validatoranchorbid=0"]
+        self.bid_args = ["-validatoranchorbid=0", "-validatoranchorbidstrategy=minimum"]
 
     def run_test(self):
         try:
@@ -98,14 +98,14 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         self.main_address = main.getnewaddress()
         self.setup_chain_and_validators()
 
-        self.log.info("-validatoranchorbid=0, no fees: requests of 0, mined by the cooperating miner; anchors land")
+        self.log.info("Minimum, floor 0, no fees: requests of 0, mined by the cooperating miner; anchors land")
         self.next_slot()
         fees, paid = self.window(4)
         assert_equal((fees, paid), ([0] * 4, 0))
         assert_equal(len({n.getbestblockhash() for n in self.nodes}), 1)
 
-        self.log.info("Fees mode, floor 0: the bidder's share of the fees passed into the bid, once")
-        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidmode=fees"])
+        self.log.info("Fees + minimum at 100 %, floor 0: the bidder's share of the fees passed into the bid, once")
+        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100"])
         self.next_slot()
         self.window(2)
         accrued_before, paid_before, _ = self.pot()
@@ -125,9 +125,9 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         # The request whose anchor paid the pot bid it whole; the others nothing (no fees left to pass on).
         assert_equal(sorted(fees), [0] * (len(fees) - 1) + [share])
 
-        self.log.info("Fees mode with a cap: the request pays the cap; the payee still the whole pot")
+        self.log.info("Fees + minimum with a cap: the request pays the cap; the payee still the whole pot")
         cap = 7
-        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidmode=fees", f"-validatoranchorbidmax=0.0000000{cap}"])
+        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100", f"-validatoranchorbidmax=0.0000000{cap}"])
         self.next_slot()
         self.window(2)
         txid = n0.sendtoaddress(address=n1.getnewaddress(), amount=1, fee_rate=50)

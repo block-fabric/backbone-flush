@@ -884,18 +884,15 @@ std::optional<Window::ConfirmDialog> AnchorBidPolicyDialog(const confirm::Call& 
     }
     dialog.rows.push_back(confirm::Heading("Limits"));
     dialog.rows.push_back(confirm::Text("Strategy", pos::StrategyName(policy.strategy)));
+    if (policy.Bids()) dialog.rows.push_back(confirm::Text("Prevent stalling", policy.prevent_stall ? "on" : "off"));
     dialog.rows.push_back(confirm::Amount("Most per mainchain block", policy.max));
     if (policy.period_cap > 0) dialog.rows.push_back(confirm::Amount(strprintf("Most in %d hours", policy.period_hours), policy.period_cap));
-    dialog.message = !validator ?
-        strprintf("This node's merged miner (setbmm), when on, bids from the wallet of the %s node as this policy says (strategy off: the fee share), "
-                  "at most %s a block, from now on and after a restart (kept in the node's settings).\n\nChange it only if you asked for it.",
-                  std::string{chain::MAINCHAIN_NAME}, FormatMoney(policy.max)) :
-        policy.Bids() ?
-        strprintf("This node's validator bids from the wallet of the %s node for a BMM commitment to its ticket in every %s block, "
-                  "as this policy says, from now on and after a restart (kept in the node's settings): %s.\n\nChange it only if you asked for it.",
-                  std::string{chain::MAINCHAIN_NAME}, std::string{chain::MAINCHAIN_NAME}, pos::AnchorBidPolicySummary(policy)) :
-        std::string{"This node's validator will bid for no anchors: the chain then relies on other bidders, and its blocks of stake halt "
-                    "after max_unanchored_slots without one.\n\nChange it only if you asked for it."};
+    dialog.message = !policy.Bids() ?
+        std::string{"This node will bid for nothing: neither its validator's anchors nor merged mining. The chain then relies on other bidders, and its blocks of stake halt "
+                    "after max_unanchored_slots without an anchor.\n\nChange it only if you asked for it."} :
+        strprintf("This node bids from the wallet of the %s node (%s, and merged mining when on) as this policy says, from now on and after a restart "
+                  "(kept in the node's settings): %s.\n\nChange it only if you asked for it.",
+                  std::string{chain::MAINCHAIN_NAME}, validator && policy.anchor ? "for its validator's anchors" : "not for its validator's anchors", pos::AnchorBidPolicySummary(policy));
     return dialog;
 }
 
@@ -1065,7 +1062,7 @@ void RegisterHost(Bridge& bridge, NodeFn node, guard::ConfirmFn confirm, confirm
         UniValue out{UniValue::VOBJ};
         const pos::FastBlocksHooks* hooks{pos::InstalledHooks()};
         const auto anchoring{hooks ? hooks->ValidatorAnchoring() : std::nullopt};
-        out.pushKV("on", anchoring.has_value() && anchoring->policy.Bids());
+        out.pushKV("on", anchoring.has_value() && anchoring->policy.Bids() && anchoring->policy.anchor);
         if (anchoring) {
             out.pushKV("bid", FormatMoney(anchoring->policy.floor));
             out.pushKV("strategy", pos::StrategyName(anchoring->policy.strategy));

@@ -28,123 +28,328 @@ BidInputs At(double p, std::optional<CAmount> rate = std::nullopt, CAmount pot =
     in.slot = 5000 + static_cast<int64_t>(p * 1000);
     in.fee_rate_per_kvb = rate;
     in.pot = pot;
+    // A quiet chain: no peg work waiting (pending_peg_work below).
+    in.pending_actions = false;
     return in;
 }
 
-AnchorBidPolicy With(BidStrategy strategy)
+AnchorBidPolicy With(BidStrategy strategy, bool prevent_stall = true)
 {
     AnchorBidPolicy policy;
     policy.strategy = strategy;
-    // The curve's escalation (the tests below it); the default's flat boost is flat_boost's own test.
-    policy.flat_boost = false;
-    policy.request_vsize = 190; // Legacy curve coverage.
-    policy.floor = 500;
-    policy.fixed = 500;
+    policy.prevent_stall = prevent_stall;
     return policy;
 }
 
-/** The policy of before the flat boost (a floor of 500, the curve), which the tests of the curve were written for. */
-AnchorBidPolicy Old() { return With(BidStrategy::FEES_PREVENT_STALL); }
-
 bool Close(double a, double b) { return std::abs(a - b) < 1e-9; }
+
+AnchorBidPolicy Applied(const std::string& json, AnchorBidPolicy policy = {})
+{
+    UniValue fields;
+    BOOST_REQUIRE(fields.read(json));
+    std::string error;
+    BOOST_REQUIRE_MESSAGE(ApplyPolicyFields(policy, fields, error), error);
+    BOOST_REQUIRE_EQUAL(CheckPolicy(policy), "");
+    return policy;
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(pos_anchorbid_tests)
 
 BOOST_AUTO_TEST_CASE(defaults)
 {
+    // A fresh node (8.3.6): Fees, Prevent stalling on, anchoring its validator; max and the cap as 8.3.5.
     const AnchorBidPolicy policy;
-    BOOST_CHECK(policy.strategy == BidStrategy::FEES_PREVENT_STALL);
+    BOOST_CHECK(policy.strategy == BidStrategy::FEES);
+    BOOST_CHECK(policy.prevent_stall);
+    BOOST_CHECK(policy.anchor);
     BOOST_CHECK_EQUAL(policy.floor, 0);
     BOOST_CHECK(policy.flat_boost);
     BOOST_CHECK(Close(policy.boost, 4));
     BOOST_CHECK_EQUAL(policy.max, 100'000);
+    BOOST_CHECK_EQUAL(policy.period_cap, 1'000'000);
     BOOST_CHECK_EQUAL(policy.fee_share_bps, 9900);
     BOOST_CHECK(Close(policy.escalation_start, 0.5));
     BOOST_CHECK_EQUAL(CheckPolicy(policy), "");
-    for (const auto s : {BidStrategy::FIXED, BidStrategy::MINIMAL, BidStrategy::FEES, BidStrategy::FEES_PREVENT_STALL, BidStrategy::OFF}) {
+    for (const auto s : {BidStrategy::FEES, BidStrategy::FEES_MINIMUM, BidStrategy::MINIMUM, BidStrategy::FIXED, BidStrategy::OFF}) {
         BOOST_CHECK(ParseStrategy(StrategyName(s)) == s);
     }
+    BOOST_CHECK_EQUAL(StrategyName(BidStrategy::FEES_MINIMUM), "feesminimum");
     BOOST_CHECK(!ParseStrategy("standard"));
+    const UniValue said{PolicyToUniValue(policy)};
+    BOOST_CHECK_EQUAL(said.find_value("strategy").get_str(), "fees");
+    BOOST_CHECK(said.find_value("preventstall").get_bool());
+    BOOST_CHECK(said.find_value("anchor").get_bool());
 }
 
-BOOST_AUTO_TEST_CASE(flat_boost)
+// Every strategy, with and without stall prevention: no fees and fees, far from a stall and near one. The inputs: eCash's
+// relay minimum (1 sat/vB), an estimate of 1.41 sat/vB, 189 vB; the minimum is the relay floor of 250 vB (250 sat), the
+// competitive base 2 x 189 = 378 sat, the stall bid 4 x 378 = 1512 sat.
+BOOST_AUTO_TEST_CASE(strategy_by_stall)
 {
-    AnchorBidPolicy policy;
+    struct Case {
+        BidStrategy strategy;
+        bool stall;
+        double p;
+        CAmount pot;
+        std::optional<CAmount> amount; // none: no bid
+        std::string kind;
+    };
+    const std::vector<Case> cases{
+        // Fees: the fee share, no minimum; no fees, no bid; near a stall, the stall bid only with Prevent stalling.
+        {BidStrategy::FEES, false, 0, 0, std::nullopt, "idle"},
+        {BidStrategy::FEES, true, 0, 0, std::nullopt, "idle"},
+        {BidStrategy::FEES, false, 0, 100'000, 99'000, "fees"},
+        {BidStrategy::FEES, true, 0, 100'000, 99'000, "fees"},
+        {BidStrategy::FEES, false, 0.6, 0, std::nullopt, "idle"},
+        {BidStrategy::FEES, true, 0.6, 0, 1512, "stall"},
+        {BidStrategy::FEES, true, 0.6, 1000, 1512, "stall"},
+        {BidStrategy::FEES, true, 0.6, 100'000, 99'000, "fees"},
+        // Fees + minimum: max(fee share, minimum), every block.
+        {BidStrategy::FEES_MINIMUM, false, 0, 0, 250, "minimum"},
+        {BidStrategy::FEES_MINIMUM, true, 0, 0, 250, "minimum"},
+        {BidStrategy::FEES_MINIMUM, false, 0, 100'000, 99'000, "fees"},
+        {BidStrategy::FEES_MINIMUM, false, 0.6, 0, 250, "minimum"},
+        {BidStrategy::FEES_MINIMUM, true, 0.6, 0, 1512, "stall"},
+        {BidStrategy::FEES_MINIMUM, true, 0.6, 100'000, 99'000, "fees"},
+        // Minimum every block: the minimum, whatever the fees.
+        {BidStrategy::MINIMUM, false, 0, 0, 250, "minimum"},
+        {BidStrategy::MINIMUM, false, 0, 100'000, 250, "minimum"},
+        {BidStrategy::MINIMUM, true, 0, 100'000, 250, "minimum"},
+        {BidStrategy::MINIMUM, false, 0.6, 0, 250, "minimum"},
+        {BidStrategy::MINIMUM, true, 0.6, 0, 1512, "stall"},
+        // Fixed: the fixed amount (1234), raised near a stall only with Prevent stalling.
+        {BidStrategy::FIXED, false, 0, 0, 1234, "fixed"},
+        {BidStrategy::FIXED, true, 0, 100'000, 1234, "fixed"},
+        {BidStrategy::FIXED, false, 0.95, 0, 1234, "fixed"},
+        {BidStrategy::FIXED, true, 0.95, 0, 1512, "stall"},
+        // Off: nothing, Prevent stalling or not.
+        {BidStrategy::OFF, false, 0, 100'000, std::nullopt, "off"},
+        {BidStrategy::OFF, true, 0, 100'000, std::nullopt, "off"},
+        {BidStrategy::OFF, true, 0.95, 0, std::nullopt, "off"},
+    };
+    for (const Case& c : cases) {
+        AnchorBidPolicy policy{With(c.strategy, c.stall)};
+        policy.fixed = 1234;
+        BidInputs in{At(c.p, 1410, c.pot)};
+        const std::string what{strprintf("%s, stall %d, p %.2f, pot %d", StrategyName(c.strategy), c.stall, c.p, c.pot)};
+        for (const BidDecision& d : {DecideBid(policy, in), DecideNodeBid(policy, in, BidTriggers{.anchor = true}), DecideNodeBid(policy, in, BidTriggers{.mine = true})}) {
+            BOOST_CHECK_MESSAGE(d.bid == c.amount.has_value(), what + ": " + d.reason);
+            if (c.amount) BOOST_CHECK_MESSAGE(d.amount == *c.amount, what + strprintf(": %d, ", d.amount) + d.reason);
+            BOOST_CHECK_MESSAGE(d.kind == c.kind, what + ": " + d.kind);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fees_has_no_minimum)
+{
+    // The user's floor does not count for Fees; a fee share that does not pay for a request is no bid (it is not raised).
+    AnchorBidPolicy policy{With(BidStrategy::FEES, /*prevent_stall=*/false)};
+    policy.floor = 20'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0, std::nullopt, 1000)).amount, 990);
+    BOOST_CHECK(!DecideBid(policy, At(0, std::nullopt, 400)).bid); // 396 < 500
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0, std::nullopt, 400)).kind, "idle");
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0, std::nullopt, 506)).amount, 501);
+    BidInputs high{At(0, std::nullopt, 1000)};
+    high.relay_rate_per_kvb = 5000; // the relay floor of a request: 1250 sat, above the share
+    BOOST_CHECK(!DecideBid(policy, high).bid);
+    // Pending peg work without fees: no bid either (only fees, or the stall bid).
+    BidInputs pending{At(0)};
+    pending.pending_actions = true;
+    BOOST_CHECK(!DecideBid(policy, pending).bid);
+    // 99 %: exactly what Follower::Offer bids; 100 %: the pot whole.
+    for (CAmount pot : {CAmount{506}, CAmount{12'345}, CAmount{99'999}, CAmount{100'000}}) {
+        BOOST_CHECK_EQUAL(DecideBid(policy, At(0, std::nullopt, pot)).amount, sidechain::Follower::Offer(pot));
+    }
     policy.fee_share_bps = 10000;
-    const auto bid{[&](double p, CAmount pot, int missed = 0) {
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0, std::nullopt, 12'345)).amount, 12'345);
+}
+
+BOOST_AUTO_TEST_CASE(the_minimum)
+{
+    // The floor, or the relay minimum of a request (rounded up) if higher; never the fee estimate.
+    AnchorBidPolicy policy{With(BidStrategy::MINIMUM, /*prevent_stall=*/false)};
+    BidInputs in{At(0, 50'000)};
+    BOOST_CHECK_EQUAL(MinimumBid(policy, in), 250);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 250);
+    in.relay_rate_per_kvb = 1001;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 251);
+    policy.request_vsize = 400;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 401);
+    policy.floor = 10'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 10'000);
+    in.relay_rate_per_kvb = 0; // a mainchain that relays for nothing (tests): the floor, 0 too
+    policy.floor = 0;
+    const auto zero{DecideBid(policy, in)};
+    BOOST_CHECK(zero.bid);
+    BOOST_CHECK_EQUAL(zero.amount, 0);
+    // Fees + minimum: the higher of the share and the minimum.
+    AnchorBidPolicy both{With(BidStrategy::FEES_MINIMUM, /*prevent_stall=*/false)};
+    both.floor = 5'000;
+    BOOST_CHECK_EQUAL(DecideBid(both, At(0, std::nullopt, 4'000)).amount, 5'000);
+    BOOST_CHECK_EQUAL(DecideBid(both, At(0, std::nullopt, 6'000)).amount, 5'940);
+    BOOST_CHECK_EQUAL(DecideBid(both, At(0, std::nullopt, 6'000)).kind, "fees");
+}
+
+BOOST_AUTO_TEST_CASE(stall_prevention)
+{
+    AnchorBidPolicy policy; // Fees, Prevent stalling
+    const auto bid{[&](double p, CAmount pot, int missed = 0, CAmount spent = 0) {
         BidInputs in{At(p, 1410, pot)};
         in.missed = missed;
+        in.spent_in_period = spent;
         return DecideBid(policy, in);
     }};
-    // ceil(1.41 sat/vB) x 189 vB = 378 sat. Pending work requires a bid even without fees.
-    BOOST_CHECK_EQUAL(bid(0, 0).amount, 378);
-    BOOST_CHECK_EQUAL(bid(0, 300).amount, 378);
-    BOOST_CHECK_EQUAL(bid(0, 900).amount, 900);
-    BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 1512);
+    // Below escalationstart nothing, from it the stall bid: 4 x the competitive base (ceil(1.41) x 189).
+    BOOST_CHECK(!bid(0.49, 0).bid);
+    BOOST_CHECK_EQUAL(bid(0.5, 0).amount, 1512);
     BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 1512);
-    BOOST_CHECK_EQUAL(bid(0.6, 900).amount, 1512);
-    BOOST_CHECK_EQUAL(bid(0.6, 5000).amount, 5000);
-    BOOST_CHECK_EQUAL(bid(0.6, 5000).kind, "fees");
-    BOOST_CHECK_EQUAL(bid(0.6, 0).kind, "boost");
-    BOOST_CHECK_EQUAL(bid(0.4, 0, 9).amount, 4 * 378); // missed blocks raise the base (x4 at most)
-    BOOST_CHECK_EQUAL(bid(0.6, 0, 9).amount, 1512);  // the boost: 4 x the base before, not more
+    BOOST_CHECK(bid(0.6, 0).reason.find("preventing a stall") != std::string::npos);
+    // The competitive base: never below the network's least rate; without an estimate, what blocks took.
+    BidInputs in{At(0.6)};
+    in.min_rate_per_kvb = 2000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 2 * 189);
+    in.included_rate_per_kvb = 2900;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 3 * 189);
+    in.included_rate_per_kvb = 900'000'000; // clamped to 10 x the network's least
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 20 * 189);
+    policy.use_fee_estimate = false; // the estimate left out: the relay floor and the network's rate
+    BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 4 * 250);
+    policy.use_fee_estimate = true;
+    // Within max and the period's cap (the cap is the user's word: a stall bid does not go past it).
     policy.max = 1000;
     BOOST_CHECK_EQUAL(bid(0.6, 0).amount, 1000);
-    BOOST_CHECK_EQUAL(bid(0, 5000).amount, 1000);
-    policy.max = 100000;
-    policy.floor = 20000;
-    BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 80000);
-    // The policy's fields: flatboost and boost, set and printed.
-    AnchorBidPolicy set;
-    std::string error;
-    UniValue fields(UniValue::VOBJ);
-    fields.pushKV("flatboost", false);
-    fields.pushKV("boost", 3);
-    BOOST_CHECK(ApplyPolicyFields(set, fields, error));
-    BOOST_CHECK(!set.flat_boost);
-    BOOST_CHECK(Close(set.boost, 3));
-    BOOST_CHECK_EQUAL(PolicyToUniValue(set).find_value("boost").get_real(), 3);
+    BOOST_CHECK_EQUAL(bid(0.6, 0).kind, "max");
+    policy.max = 100'000;
+    BOOST_CHECK_EQUAL(bid(0.6, 0, 0, policy.period_cap - 700).amount, 700);
+    BOOST_CHECK_EQUAL(bid(0.6, 0, 0, policy.period_cap - 700).kind, "periodcap");
+    BOOST_CHECK(!bid(0.6, 0, 0, policy.period_cap).bid);
+    // A floor raises the stall bid's base too.
+    policy.floor = 20'000;
+    BOOST_CHECK_EQUAL(bid(0.95, 0).amount, 80'000);
+    // Not with the checkbox off, nor with the strategy off.
+    policy.prevent_stall = false;
+    BOOST_CHECK(!bid(0.95, 0).bid);
+    policy.prevent_stall = true;
+    policy.strategy = BidStrategy::OFF;
+    BOOST_CHECK(!bid(0.95, 0).bid);
+    BOOST_CHECK(!policy.PreventsStall());
 }
 
-BOOST_AUTO_TEST_CASE(idle_and_relay_minimum)
+BOOST_AUTO_TEST_CASE(pending_peg_work)
 {
+    // Peg work waiting for an anchor (a deposit, withdrawals, a set change): with Prevent stalling, a bid that lands, the
+    // competitive base (2 x 189 at 1.41 sat/vB), fees or not; raised after missed blocks; not without the checkbox.
     AnchorBidPolicy policy;
-    BidInputs in{At(0.1, 1410)};
-    in.pending_actions = false;
-    const auto quiet{DecideBid(policy, in)};
-    BOOST_CHECK(!quiet.bid);
-    BOOST_CHECK_EQUAL(quiet.kind, "idle");
-    BOOST_CHECK_EQUAL(quiet.reason, "skipped: nothing to anchor");
-    in.pending_actions = true; // deposits, withdrawals, refunds, staking payouts or epoch maintenance
-    BOOST_CHECK(DecideBid(policy, in).bid);
+    BidInputs in{At(0, 1410)};
+    in.pending_actions = true;
+    BidDecision d{DecideBid(policy, in)};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 378);
+    BOOST_CHECK_EQUAL(d.kind, "pending");
+    in.pot = 300; // a share that does not pay: the base
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 378);
-    in.pending_actions = false;
-    in.pot = 100;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 378);
-    in.pot = 5000;
+    in.pot = 5000; // a share above it: the share
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4950);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "fees");
     in.pot = 0;
-    in.slot = 5500; // threshold: boost even without pending actions
-    BOOST_CHECK(DecideBid(policy, in).bid);
+    in.missed = 3;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 378);
+    in.missed = 9;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 378);
+    in.missed = 0;
+    in.slot += 600; // near a stall: the boost
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1512);
-    in.relay_rate_per_kvb = 5000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 5000); // the relay floor for a request of 250 vB
-    in.fee_rate_per_kvb.reset();
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 5000);
-    in.relay_rate_per_kvb = 1001; // relay amount rounds upward, not to the nearest satoshi
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1004);
-    in.fee_rate_per_kvb = 2000; // exact whole sat/vB is not rounded again
-    in.relay_rate_per_kvb = 1000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1512);
-    policy.use_fee_estimate = false;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
-    policy.strategy = BidStrategy::FIXED;
-    policy.fixed = 123;
-    in.slot = 5100;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 123);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "stall");
+    in.slot -= 600;
+    // A floor raises the base.
+    policy.floor = 10'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 10'000);
+    policy.floor = 0;
+    // Not without Prevent stalling, nor with Off; Minimum bids the base when it is above its minimum.
+    policy.prevent_stall = false;
+    BOOST_CHECK(!DecideBid(policy, in).bid);
+    policy.prevent_stall = true;
     policy.strategy = BidStrategy::OFF;
     BOOST_CHECK(!DecideBid(policy, in).bid);
+    policy.strategy = BidStrategy::MINIMUM;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 378);
+    policy.prevent_stall = false;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 250);
+    // A quiet chain, the default: no bid, and why.
+    policy = AnchorBidPolicy{};
+    in.pending_actions = false;
+    d = DecideBid(policy, in);
+    BOOST_CHECK(!d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "idle");
+    BOOST_CHECK_EQUAL(d.reason, "no bid: no fees, nothing waiting to anchor");
+}
+
+BOOST_AUTO_TEST_CASE(rebids)
+{
+    // With Prevent stalling, missed blocks raise the minimum of the strategies that bid every block: x2 for every two
+    // missed, the boost (4) at most; a fee share or a fixed amount is what it is.
+    AnchorBidPolicy policy{With(BidStrategy::MINIMUM)};
+    policy.floor = 1000;
+    BidInputs in{At(0)};
+    in.missed = 1;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    in.missed = 2;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2000);
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "rebid");
+    in.missed = 9;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4000);
+    policy.strategy = BidStrategy::FEES_MINIMUM;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4000);
+    policy.prevent_stall = false;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    policy.prevent_stall = true;
+    policy.strategy = BidStrategy::FIXED;
+    policy.fixed = 1000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    policy.strategy = BidStrategy::FEES;
+    in.pot = 10'000;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 9'900);
+    // The legacy policy (flatboost off): rebidstep for every rebidafter missed, at most rebidmax.
+    policy = With(BidStrategy::MINIMUM);
+    policy.flat_boost = false;
+    policy.floor = 500;
+    in = At(0);
+    in.missed = 2;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 500);
+    in.missed = 3;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+    in.missed = 6;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2000);
+    in.missed = 300;
+    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4000);
+}
+
+BOOST_AUTO_TEST_CASE(legacy_curve)
+{
+    // flatboost off: the stall bid follows the curve, x the estimate for the request (else the floor, 564 sat at least).
+    AnchorBidPolicy policy{With(BidStrategy::MINIMUM)};
+    policy.flat_boost = false;
+    policy.request_vsize = 190;
+    policy.floor = 500;
+    for (double p : {0.0, 0.2, 0.49}) BOOST_CHECK_EQUAL(DecideBid(policy, At(p, 50'000)).amount, 500);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.5, 50'000)).amount, 9500);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.75, 50'000)).amount, 19'000);
+    const auto high{DecideBid(policy, At(0.9, 50'000))};
+    BOOST_CHECK_EQUAL(high.amount, 38'000);
+    BOOST_CHECK_EQUAL(high.kind, "escalation");
+    BOOST_CHECK(Close(high.multiplier, 4));
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.95, 1'000'000)).amount, policy.max);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92)).amount, 2256);
+    // Fees without fees: the curve's bid all the same; peg work waiting: nothing more (the flat policy's rule).
+    policy.strategy = BidStrategy::FEES;
+    policy.floor = 0;
+    BOOST_CHECK(!DecideBid(policy, At(0.2, 1000)).bid);
+    BidInputs pending{At(0.2, 1000)};
+    pending.pending_actions = true;
+    BOOST_CHECK(!DecideBid(policy, pending).bid);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92, 1000)).amount, 760);
+    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92)).amount, 2256);
 }
 
 BOOST_FIXTURE_TEST_CASE(pending_peg_actions, BasicTestingSetup)
@@ -194,109 +399,6 @@ BOOST_AUTO_TEST_CASE(pressure_and_curve)
     BOOST_CHECK(Close(EscalationMultiplier(policy, 0.95), 4));
 }
 
-BOOST_AUTO_TEST_CASE(fixed_and_off)
-{
-    AnchorBidPolicy policy{With(BidStrategy::FIXED)};
-    policy.fixed = 1234;
-    for (double p : {0.0, 0.6, 0.95}) {
-        const auto d{DecideBid(policy, At(p, 50'000))};
-        BOOST_CHECK(d.bid);
-        BOOST_CHECK_EQUAL(d.amount, 1234);
-        BOOST_CHECK_EQUAL(d.kind, "fixed");
-    }
-    const auto off{DecideBid(With(BidStrategy::OFF), At(0.9, 50'000, 1'000'000))};
-    BOOST_CHECK(!off.bid);
-    BOOST_CHECK_EQUAL(off.kind, "off");
-}
-
-BOOST_AUTO_TEST_CASE(below_the_threshold_the_mempool_does_not_count)
-{
-    // A congested mainchain (50 sat/vB): the floor all the same until p reaches 0.5.
-    const AnchorBidPolicy policy{With(BidStrategy::MINIMAL)};
-    for (double p : {0.0, 0.2, 0.49}) {
-        const auto d{DecideBid(policy, At(p, 50'000))};
-        BOOST_CHECK_EQUAL(d.amount, 500);
-        BOOST_CHECK_EQUAL(d.kind, "floor");
-    }
-    // At 0.5, x1 the estimate for 190 vB: 9500; at 0.75, x2; at 0.9, x4 (19000, 38000).
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.5, 50'000)).amount, 9500);
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.75, 50'000)).amount, 19'000);
-    const auto high{DecideBid(policy, At(0.9, 50'000))};
-    BOOST_CHECK_EQUAL(high.amount, 38'000);
-    BOOST_CHECK_EQUAL(high.kind, "escalation");
-    BOOST_CHECK(Close(high.multiplier, 4));
-    // Never above max.
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.95, 1'000'000)).amount, policy.max);
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.95, 1'000'000)).kind, "max");
-    // An anchor lands: the run is over, the floor again.
-    BidInputs landed{At(0.95, 1'000'000)};
-    landed.first_unanchored_slot = -1;
-    BOOST_CHECK_EQUAL(DecideBid(policy, landed).amount, 500);
-}
-
-BOOST_AUTO_TEST_CASE(the_incident)
-{
-    // eCash at ~1 sat/vB, a run at p = 0.92: the floor (500) is over 190 vB x 1 sat/vB x 4, the bid 760.
-    const AnchorBidPolicy policy{Old()};
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.3, 1000)).amount, 500);
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92, 1000)).amount, 760);
-    // Without an estimate: the floor times the curve.
-    BOOST_CHECK_EQUAL(DecideBid(policy, At(0.92)).amount, 2256);
-    // A floor of 0 escalates from 500 sat.
-    AnchorBidPolicy zero{Old()};
-    zero.floor = 0;
-    const auto quiet{DecideBid(zero, At(0.1))};
-    BOOST_CHECK(quiet.bid);
-    BOOST_CHECK_EQUAL(quiet.amount, 0);
-    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92)).amount, 2256);
-    // Not with the estimate off.
-    zero.use_fee_estimate = false;
-    BOOST_CHECK_EQUAL(DecideBid(zero, At(0.92, 50'000)).amount, 2256);
-}
-
-BOOST_AUTO_TEST_CASE(fee_share)
-{
-    // 99 %: what Follower::Offer bids, the operator's hundredth kept.
-    const AnchorBidPolicy fees{With(BidStrategy::FEES)};
-    for (CAmount pot : {CAmount{0}, CAmount{99}, CAmount{501}, CAmount{12'345}, CAmount{99'999}, CAmount{100'000}}) {
-        const auto d{DecideBid(fees, At(0, std::nullopt, pot))};
-        BOOST_CHECK_EQUAL(d.normal, std::max<CAmount>(sidechain::Follower::Offer(pot), 500));
-    }
-    const auto share{DecideBid(fees, At(0.95, 1'000'000, 50'000))};
-    BOOST_CHECK_EQUAL(share.amount, 49'500);
-    BOOST_CHECK_EQUAL(share.kind, "fees");
-    // Fees alone never escalates; fees + prevent stalling does, only when needed.
-    BOOST_CHECK_EQUAL(DecideBid(fees, At(0.95, 1'000'000)).amount, 500);
-    const AnchorBidPolicy both{Old()};
-    BOOST_CHECK_EQUAL(DecideBid(both, At(0.2, 1'000'000, 50'000)).amount, 49'500);
-    BOOST_CHECK_EQUAL(DecideBid(both, At(0.95, 100'000, 50'000)).amount, 76'000);
-    AnchorBidPolicy whole{fees};
-    whole.fee_share_bps = 10000;
-    BOOST_CHECK_EQUAL(DecideBid(whole, At(0, std::nullopt, 12'345)).amount, 12'345);
-}
-
-BOOST_AUTO_TEST_CASE(rebid_and_caps)
-{
-    const AnchorBidPolicy policy{With(BidStrategy::MINIMAL)};
-    BidInputs in{At(0)};
-    in.missed = 2;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 500);
-    in.missed = 3;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "rebid");
-    in.missed = 6;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2000);
-    in.missed = 300;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4000);
-    // The period's cap: cut to what is left, none once spent.
-    in.missed = 0;
-    in.spent_in_period = policy.period_cap - 200;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 200);
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).kind, "periodcap");
-    in.spent_in_period = policy.period_cap;
-    BOOST_CHECK(!DecideBid(policy, in).bid);
-}
-
 BOOST_AUTO_TEST_CASE(replacement_limits)
 {
     AnchorBidPolicy policy;
@@ -314,28 +416,104 @@ BOOST_AUTO_TEST_CASE(replacement_limits)
     BOOST_CHECK(ReplacementBid(policy, 500, 378, 1000));
 }
 
+// The names before 8.3.6, and the new form: existing configs and settings keep their meaning.
+BOOST_AUTO_TEST_CASE(old_names)
+{
+    struct Case {
+        const char* json;
+        BidStrategy strategy;
+        bool stall;
+    };
+    // From a policy with Prevent stalling on and one with it off: an old name says it, whatever it was.
+    for (const bool before : {true, false}) {
+        AnchorBidPolicy start;
+        start.prevent_stall = before;
+        for (const Case& c : std::vector<Case>{
+                 {R"({"strategy":"fees"})", BidStrategy::FEES, false},
+                 {R"({"strategy":"feespreventstall"})", BidStrategy::FEES, true},
+                 {R"({"strategy":"minimal"})", BidStrategy::MINIMUM, true},
+                 {R"({"strategy":"fixed"})", BidStrategy::FIXED, false},
+                 {R"({"strategy":"Fees + prevent stalling"})", BidStrategy::FEES, true},
+                 // The new names say nothing of it: kept.
+                 {R"({"strategy":"minimum"})", BidStrategy::MINIMUM, before},
+                 {R"({"strategy":"feesminimum"})", BidStrategy::FEES_MINIMUM, before},
+                 {R"({"strategy":"Fees + minimum"})", BidStrategy::FEES_MINIMUM, before},
+                 // The new form, in either order.
+                 {R"({"strategy":"fees","preventstall":true})", BidStrategy::FEES, true},
+                 {R"({"preventstall":true,"strategy":"fees"})", BidStrategy::FEES, true},
+                 {R"({"strategy":"minimal","preventstall":false})", BidStrategy::MINIMUM, false},
+                 {R"({"strategy":"fixed","preventstall":"1"})", BidStrategy::FIXED, true},
+             }) {
+            const AnchorBidPolicy p{Applied(c.json, start)};
+            BOOST_CHECK_MESSAGE(p.strategy == c.strategy, c.json);
+            BOOST_CHECK_MESSAGE(p.prevent_stall == c.stall, c.json);
+        }
+        const AnchorBidPolicy off{Applied(R"({"strategy":"off"})", start)};
+        BOOST_CHECK(off.strategy == BidStrategy::OFF);
+        BOOST_CHECK(!off.Bids());
+        BOOST_CHECK(!off.PreventsStall());
+        BOOST_CHECK_EQUAL(off.prevent_stall, before); // kept, greyed out
+    }
+    // feespreventstall bid at least its floor: with one above 0, Fees + minimum (in the same fields or already set).
+    BOOST_CHECK(Applied(R"({"strategy":"feespreventstall","floor":0.00001})").strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(Applied(R"({"floor":0.00001,"strategy":"feespreventstall"})").strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(Applied(R"({"strategy":"feespreventstall"})", Applied(R"({"floor":0.00001})")).strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(Applied(R"({"strategy":"feespreventstall","floor":0})").strategy == BidStrategy::FEES);
+    // "fees" is a new name too: Fees, the floor kept but unused.
+    BOOST_CHECK(Applied(R"({"strategy":"fees","floor":0.00001})").strategy == BidStrategy::FEES);
+    // Louis's app (8.3.5 settings.json): Fees, Prevent stalling on, no minimum.
+    const AnchorBidPolicy ui{Applied(R"({"strategy":"feespreventstall","floor":0,"usefeeestimate":false,"feeshare":99,"max":0.0001,"periodcap":0.001})")};
+    BOOST_CHECK(ui.strategy == BidStrategy::FEES);
+    BOOST_CHECK(ui.prevent_stall);
+    BOOST_CHECK(ui.anchor);
+    BOOST_CHECK_EQUAL(ui.floor, 0);
+    BOOST_CHECK(!ui.use_fee_estimate);
+    BOOST_CHECK_EQUAL(ui.fee_share_bps, 9900);
+    BOOST_CHECK_EQUAL(ui.max, 10'000);
+    BOOST_CHECK_EQUAL(ui.period_cap, 100'000);
+    BOOST_CHECK(!DecideBid(ui, At(0.1)).bid);                                  // no fees: no bid
+    BOOST_CHECK_EQUAL(DecideBid(ui, At(0.1, std::nullopt, 5'000)).amount, 4'950); // the fee share
+    BOOST_CHECK_EQUAL(DecideBid(ui, At(0.6)).amount, 1'000);                   // near a stall: 4 x the relay floor
+    // The live validators' minimal: Minimum every block, Prevent stalling on.
+    const AnchorBidPolicy live{Applied(R"({"strategy":"minimal","floor":0.0001,"max":0.001})")};
+    BOOST_CHECK(live.strategy == BidStrategy::MINIMUM);
+    BOOST_CHECK(live.prevent_stall);
+    BOOST_CHECK_EQUAL(DecideBid(live, At(0)).amount, 10'000);
+}
+
 BOOST_AUTO_TEST_CASE(fields_and_checks)
 {
     AnchorBidPolicy policy;
     std::string error;
     UniValue conf{UniValue::VOBJ};
-    conf.pushKV("strategy", "minimal");
+    conf.pushKV("strategy", "minimum");
+    conf.pushKV("preventstall", false);
+    conf.pushKV("anchor", "0");
     conf.pushKV("floor", "0.00001");
     conf.pushKV("curve", "0.6:1,0.8:3");
     conf.pushKV("interpolate", "0");
     conf.pushKV("feeshare", "100");
     conf.pushKV("periodcap", "0");
     BOOST_CHECK(ApplyPolicyFields(policy, conf, error));
-    BOOST_CHECK(policy.strategy == BidStrategy::MINIMAL);
+    BOOST_CHECK(policy.strategy == BidStrategy::MINIMUM);
+    BOOST_CHECK(!policy.prevent_stall);
+    BOOST_CHECK(!policy.anchor);
     BOOST_CHECK_EQUAL(policy.floor, 1000);
     BOOST_CHECK(policy.curve == (std::vector<EscalationPoint>{{0.6, 1}, {0.8, 3}}));
     BOOST_CHECK(!policy.interpolate);
     BOOST_CHECK_EQUAL(policy.fee_share_bps, 10000);
     BOOST_CHECK_EQUAL(CheckPolicy(policy), "");
-    // Said and read back: the same policy.
-    AnchorBidPolicy again{With(BidStrategy::OFF)};
-    BOOST_CHECK(ApplyPolicyFields(again, PolicyToUniValue(policy), error));
-    BOOST_CHECK(again == policy);
+    // Said and read back: the same policy, whatever the policy before.
+    for (const bool stall : {true, false}) {
+        AnchorBidPolicy again{With(BidStrategy::OFF, stall)};
+        BOOST_CHECK(ApplyPolicyFields(again, PolicyToUniValue(policy), error));
+        BOOST_CHECK(again == policy);
+    }
+    AnchorBidPolicy fresh;
+    fresh.floor = 5000;
+    AnchorBidPolicy again;
+    BOOST_CHECK(ApplyPolicyFields(again, PolicyToUniValue(fresh), error));
+    BOOST_CHECK(again == fresh);
 
     const auto refused{[](const std::string& json) {
         AnchorBidPolicy p;
@@ -358,41 +536,9 @@ BOOST_AUTO_TEST_CASE(fields_and_checks)
     BOOST_CHECK(refused(R"({"curve":""})"));
     BOOST_CHECK(refused(R"({"feeshare":101})"));
     BOOST_CHECK(refused(R"({"strategy":"standard"})"));
+    BOOST_CHECK(refused(R"({"preventstall":"maybe"})"));
     BOOST_CHECK(refused(R"({"periodhours":0})"));
     BOOST_CHECK(refused(R"({"bid":1})"));
-}
-
-BOOST_AUTO_TEST_CASE(competitive_base)
-{
-    // 2026-10-26: through the enforcer's interface no estimate reached the node and it bid the relay floor (189 sat), which
-    // waited while other slots' requests of 2-3 sat/vB got in. The base: the estimate, else what blocks took for a BMM
-    // request, rounded up, never below the network's least (2 sat/vB on eCash); missed blocks raise the base itself.
-    AnchorBidPolicy policy;
-    BidInputs in{At(0)};
-    in.pending_actions = true;
-    in.min_rate_per_kvb = 2000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
-    in.fee_rate_per_kvb = 1410; // 1.41 sat/vB: rounded up to 2
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
-    in.fee_rate_per_kvb = 2500;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3 * 189);
-    in.fee_rate_per_kvb.reset();
-    in.included_rate_per_kvb = 2900; // what the last block took
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 3 * 189);
-    // Missed: x2 at 2, x4 at 4 and more (the boost's factor at most).
-    in.missed = 2;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 3 * 189);
-    in.missed = 7;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 3 * 189);
-    in.slot = in.first_unanchored_slot + 900; // under pressure: the boost of the base before, the same
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 4 * 3 * 189);
-    in.slot = in.first_unanchored_slot;
-    // Nothing pending, no fees, no pressure: no bid; a fee share or the pressure: a bid.
-    in.missed = 0;
-    in.pending_actions = false;
-    BOOST_CHECK(!DecideBid(policy, in).bid);
-    in.pot = 1000;
-    BOOST_CHECK(DecideBid(policy, in).bid);
 }
 
 BOOST_AUTO_TEST_CASE(included_rate_robust)
@@ -437,67 +583,61 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     std::vector<BmmRequestSeen> stuffed_low{{1, 2000}, {2, 3000}, {3, 2500}};
     for (int k{0}; k < 100; ++k) stuffed_low.push_back({static_cast<uint8_t>(k % 2 ? 4 : 9), 1});
     BOOST_CHECK_EQUAL(*RobustIncludedRate({stuffed_low}, active, uint8_t{7}), 2000);
-    // In the bid, the real bounds: clamped to [the network's least, 10 x it], never above the max.
-    AnchorBidPolicy policy;
-    BidInputs in{At(0)};
-    in.pending_actions = true;
-    in.min_rate_per_kvb = 2000;
-    in.included_rate_per_kvb = 900'000'000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 20 * 189);
-    in.included_rate_per_kvb = 1;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 2 * 189);
-    policy.max = 1000;
-    in.included_rate_per_kvb = 900'000'000;
-    BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
 }
 
-// The node's one bid policy: the merged miner (setbmm) and a validator's anchorer under the same max, period cap
-// and stale rule (doc/fastblocks-anchor-bids.md, "Triggers").
-BOOST_AUTO_TEST_CASE(node_bid_mine_trigger)
+// The node's one bid policy: the merged miner (setbmm) and a validator's anchorer bid the same, under the same max,
+// period cap and stale rule (doc/fastblocks-anchor-bids.md, "One policy, two triggers").
+BOOST_AUTO_TEST_CASE(node_bid_triggers)
 {
-    AnchorBidPolicy policy; // feespreventstall, max 0.001, cap 0.01 a day
+    AnchorBidPolicy policy; // Fees, Prevent stalling, max 0.001, cap 0.01 a day
     BidInputs in{At(0, std::nullopt, 100'000)};
-    in.relay_rate_per_kvb = 1000;
-    // The fee share, 99 % of the fees.
     BidDecision d{DecideNodeBid(policy, in, BidTriggers{.mine = true})};
     BOOST_CHECK(d.bid);
     BOOST_CHECK_EQUAL(d.amount, 99'000);
     BOOST_CHECK_EQUAL(d.trigger, "mine");
-    // At most max per bid: min(99 % of the fees, max).
+    BOOST_CHECK_EQUAL(DecideNodeBid(policy, in, BidTriggers{.anchor = true}).trigger, "anchor");
+    BOOST_CHECK_EQUAL(DecideNodeBid(policy, in, BidTriggers{.anchor = true, .mine = true}).trigger, "anchor+mine");
     in.pot = 10'000'000;
     d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
-    BOOST_CHECK(d.bid);
     BOOST_CHECK_EQUAL(d.amount, policy.max);
     BOOST_CHECK_EQUAL(d.kind, "max");
-    // Fees that do not pay for a request: no bid (mining waits), whatever the strategy.
+    // Fees that do not pay for a request: no bid (mining waits).
     in.pot = 400;
-    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
-    BOOST_CHECK(!d.bid);
-    BOOST_CHECK_EQUAL(d.kind, "idle");
-    // A strategy off stops the anchorer, not setbmm: the fee share (regtest's default, setbmm as before).
-    policy.strategy = BidStrategy::OFF;
-    in.pot = 100'000;
-    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
-    BOOST_CHECK(d.bid);
-    BOOST_CHECK_EQUAL(d.amount, 99'000);
-    // ... and exactly Follower::Offer, as setbmm offered before.
-    BOOST_CHECK_EQUAL(FeeShare(123'457, 9900), sidechain::Follower::Offer(123'457));
-    // A fixed offer when the fees pay for a block.
-    policy.strategy = BidStrategy::FIXED;
-    policy.fixed = 20'000;
-    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
-    BOOST_CHECK_EQUAL(d.amount, 20'000);
-    in.pot = 0;
     BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
-    // setbmm's always (for tests): its amount every block, fees or not, but at most max.
+    BOOST_CHECK_EQUAL(FeeShare(123'457, 9900), sidechain::Follower::Offer(123'457));
+    // Either trigger alone, or both: the policy's bid, for every strategy and stall setting.
+    in.pot = 100'000;
+    for (const BidStrategy strategy : {BidStrategy::FEES, BidStrategy::FEES_MINIMUM, BidStrategy::MINIMUM, BidStrategy::FIXED, BidStrategy::OFF}) {
+        for (const bool stall : {false, true}) {
+            AnchorBidPolicy p{With(strategy, stall)};
+            p.fixed = 10'000;
+            const BidDecision b{DecideBid(p, in)};
+            for (const BidTriggers t : {BidTriggers{.anchor = true}, BidTriggers{.mine = true}, BidTriggers{.anchor = true, .mine = true}}) {
+                const BidDecision a{DecideNodeBid(p, in, t)};
+                BOOST_CHECK_EQUAL(a.bid, b.bid);
+                BOOST_CHECK_EQUAL(a.amount, b.amount);
+            }
+        }
+    }
+    // setbmm's always (for tests): its amount every block, fees or not, at most max; the higher one with the anchorer.
+    in.pot = 0;
     d = DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 10'000});
     BOOST_CHECK(d.bid);
     BOOST_CHECK_EQUAL(d.amount, 10'000);
     BOOST_CHECK_EQUAL(d.kind, "always");
-    d = DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 5'000'000});
-    BOOST_CHECK_EQUAL(d.amount, policy.max);
-    // No trigger: no bid.
+    BOOST_CHECK_EQUAL(DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 5'000'000}).amount, policy.max);
+    AnchorBidPolicy fixed{With(BidStrategy::FIXED)};
+    fixed.fixed = 20'000;
+    BOOST_CHECK_EQUAL(DecideNodeBid(fixed, in, BidTriggers{.anchor = true, .mine = true, .mine_always = true, .mine_amount = 10'000}).amount, 20'000);
+    // No trigger: no bid. Off: no bid for either trigger, nor setbmm's always.
     BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{}).bid);
+    policy.strategy = BidStrategy::OFF;
+    in.pot = 100'000;
+    for (const BidTriggers t : {BidTriggers{.anchor = true}, BidTriggers{.mine = true}, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 1000}}) {
+        d = DecideNodeBid(policy, in, t);
+        BOOST_CHECK(!d.bid);
+        BOOST_CHECK_EQUAL(d.kind, "off");
+    }
 }
 
 BOOST_AUTO_TEST_CASE(node_bid_period_cap)
@@ -506,47 +646,22 @@ BOOST_AUTO_TEST_CASE(node_bid_period_cap)
     policy.max = 50'000;
     policy.period_cap = 120'000;
     BidInputs in{At(0, std::nullopt, 100'000)};
-    // Spent 100'000 of 120'000: cut to what is left.
     in.spent_in_period = 100'000;
     BidDecision d{DecideNodeBid(policy, in, BidTriggers{.mine = true})};
     BOOST_CHECK(d.bid);
     BOOST_CHECK_EQUAL(d.amount, 20'000);
     BOOST_CHECK_EQUAL(d.kind, "periodcap");
-    // Spent: nothing, for either trigger, and for "always" too.
     in.spent_in_period = 120'000;
     BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
     BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.anchor = true}).bid);
     BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 1000}).bid);
-    // A cap of 0: none.
     policy.period_cap = 0;
     BOOST_CHECK(DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
 }
 
-BOOST_AUTO_TEST_CASE(node_bid_both_triggers)
-{
-    AnchorBidPolicy policy{With(BidStrategy::MINIMAL)}; // floor 500
-    policy.max = 100'000;
-    BidInputs in{At(0, std::nullopt, 100'000)};
-    // One request serves both: the higher of the two bids.
-    BidDecision d{DecideNodeBid(policy, in, BidTriggers{.anchor = true, .mine = true})};
-    BOOST_CHECK(d.bid);
-    BOOST_CHECK_EQUAL(d.trigger, "anchor+mine");
-    BOOST_CHECK_EQUAL(d.amount, DecideBid(policy, in).amount);
-    // The anchorer alone is DecideBid, unchanged (existing configs keep their meaning).
-    for (const BidStrategy strategy : {BidStrategy::FIXED, BidStrategy::MINIMAL, BidStrategy::FEES, BidStrategy::FEES_PREVENT_STALL, BidStrategy::OFF}) {
-        AnchorBidPolicy p{policy};
-        p.strategy = strategy;
-        p.fixed = 10'000;
-        const BidDecision a{DecideNodeBid(p, in, BidTriggers{.anchor = true})};
-        const BidDecision b{DecideBid(p, in)};
-        BOOST_CHECK_EQUAL(a.bid, b.bid);
-        BOOST_CHECK_EQUAL(a.amount, b.amount);
-    }
-}
-
 BOOST_AUTO_TEST_CASE(node_bid_stale_rule)
 {
-    AnchorBidPolicy policy{With(BidStrategy::FIXED)};
+    AnchorBidPolicy policy{With(BidStrategy::FIXED, /*prevent_stall=*/false)};
     policy.fixed = 10'000;
     policy.max = 50'000;
     policy.period_cap = 0;
@@ -582,44 +697,69 @@ BOOST_AUTO_TEST_CASE(node_bid_stale_rule)
     BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{}, now), 0);
 }
 
-// The options keep their meaning on the one policy: the validators' minimal/0.0001/0.001, and regtest's defaults.
-BOOST_AUTO_TEST_CASE(node_bid_options_compat)
+// The options: the old names and the new, -validatoranchorbidpreventstall, and regtest's defaults.
+BOOST_AUTO_TEST_CASE(node_bid_options)
 {
-    ArgsManager args;
-    args.AddArg("-validatoranchorbid", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    args.AddArg("-validatoranchorbidstrategy", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    args.AddArg("-validatoranchorbidmax", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    args.AddArg("-validatoranchorbidperiodcap", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    {
-        const char* argv[]{"x", "-validatoranchorbidstrategy=minimal", "-validatoranchorbid=0.0001", "-validatoranchorbidmax=0.001"};
+    const auto from{[](std::vector<const char*> argv, ChainType chain = ChainType::MAIN) {
+        ArgsManager args;
+        for (const char* name : {"-validatoranchorbid", "-validatoranchorbidstrategy", "-validatoranchorbidpreventstall", "-validatoranchorbidmode", "-validatoranchorbidmax",
+                                 "-validatoranchorbidfixed", "-validatoranchorbidperiodcap", "-validatoranchorbidshare"}) {
+            args.AddArg(name, "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+        }
+        argv.insert(argv.begin(), "x");
         std::string error;
-        BOOST_REQUIRE(args.ParseParameters(4, argv, error));
-        const AnchorBidPolicy p{AnchorBidPolicyFromArgs(args, ChainType::MAIN)};
-        BOOST_CHECK(p.strategy == BidStrategy::MINIMAL);
-        BOOST_CHECK_EQUAL(p.floor, 10'000);
-        BOOST_CHECK_EQUAL(p.max, 100'000);
-        BOOST_CHECK_EQUAL(p.period_cap, DEFAULT_ANCHOR_BID_PERIOD_CAP);
-        // The anchorer bids as before; the merged miner of the same node under the same floor and max.
-        BidInputs in{At(0, std::nullopt, 10'000'000)};
-        BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.anchor = true}).amount, DecideBid(p, in).amount);
-        BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.mine = true}).amount, 10'000);
+        BOOST_REQUIRE(args.ParseParameters(argv.size(), argv.data(), error));
+        return AnchorBidPolicyFromArgs(args, chain);
+    }};
+    // A fresh node: Fees, Prevent stalling, the 8.3.5 limits.
+    AnchorBidPolicy p{from({})};
+    BOOST_CHECK(p == AnchorBidPolicy{});
+    // The live validators: minimal, a floor, a max.
+    p = from({"-validatoranchorbidstrategy=minimal", "-validatoranchorbid=0.0001", "-validatoranchorbidmax=0.001"});
+    BOOST_CHECK(p.strategy == BidStrategy::MINIMUM);
+    BOOST_CHECK(p.prevent_stall);
+    BOOST_CHECK_EQUAL(p.floor, 10'000);
+    BOOST_CHECK_EQUAL(p.max, 100'000);
+    BidInputs in{At(0, std::nullopt, 10'000'000)};
+    BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.anchor = true}).amount, 10'000);
+    BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.mine = true}).amount, 10'000);
+    // The old names, the new names and the checkbox.
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=fees"}).strategy == BidStrategy::FEES);
+    BOOST_CHECK(!from({"-validatoranchorbidstrategy=fees"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=feespreventstall"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=feespreventstall"}).strategy == BidStrategy::FEES);
+    BOOST_CHECK(!from({"-validatoranchorbidstrategy=fixed", "-validatoranchorbid=0.00001"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=minimum"}).prevent_stall);
+    BOOST_CHECK(!from({"-validatoranchorbidstrategy=minimum", "-validatoranchorbidpreventstall=0"}).prevent_stall);
+    BOOST_CHECK(!from({"-validatoranchorbidstrategy=minimum", "-novalidatoranchorbidpreventstall"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=fees", "-validatoranchorbidpreventstall"}).prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=feesminimum"}).strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(from({"-validatoranchorbidstrategy=off"}).strategy == BidStrategy::OFF);
+    // A floor alone, the old default feespreventstall: at least the floor, Fees + minimum; a floor of 0: Fees.
+    p = from({"-validatoranchorbid=0.00001"});
+    BOOST_CHECK(p.strategy == BidStrategy::FEES_MINIMUM);
+    BOOST_CHECK(p.prevent_stall);
+    BOOST_CHECK(from({"-validatoranchorbid=0"}).strategy == BidStrategy::FEES);
+    BOOST_CHECK(from({"-validatoranchorbidmode=standard"}).strategy == BidStrategy::FEES);
+    p = from({"-validatoranchorbidmode=fees", "-validatoranchorbid=0.00001"});
+    BOOST_CHECK(p.strategy == BidStrategy::FEES);
+    BOOST_CHECK(!p.prevent_stall);
+    BOOST_CHECK_EQUAL(p.fee_share_bps, 10000);
+    // The anchorer off: "Anchor my validator" off; the merged miner bids all the same.
+    for (const char* off : {"-novalidatoranchorbid", "-validatoranchorbid=off"}) {
+        p = from({off});
+        BOOST_CHECK(!p.anchor);
+        BOOST_CHECK(p.Bids());
     }
-    {
-        const char* argv[]{"x"};
-        std::string error;
-        BOOST_REQUIRE(args.ParseParameters(1, argv, error));
-        // Mainnet: the defaults cap the merged miner too.
-        const AnchorBidPolicy main{AnchorBidPolicyFromArgs(args, ChainType::MAIN)};
-        BOOST_CHECK_EQUAL(main.max, DEFAULT_ANCHOR_BID_MAX);
-        BOOST_CHECK_EQUAL(main.period_cap, DEFAULT_ANCHOR_BID_PERIOD_CAP);
-        // Regtest: the anchorer off, no period cap (setbmm in tests as before).
-        const AnchorBidPolicy reg{AnchorBidPolicyFromArgs(args, ChainType::REGTEST)};
-        BOOST_CHECK(reg.strategy == BidStrategy::OFF);
-        BOOST_CHECK_EQUAL(reg.period_cap, 0);
-        BidInputs in{At(0, std::nullopt, 100'000)};
-        BOOST_CHECK_EQUAL(DecideNodeBid(reg, in, BidTriggers{.mine = true}).amount, sidechain::Follower::Offer(100'000));
-        BOOST_CHECK(!DecideNodeBid(reg, in, BidTriggers{.anchor = true}).bid);
-    }
+    // Regtest without options: no anchorer, no stall prevention, no cap; setbmm bids the fee share as before.
+    const AnchorBidPolicy reg{from({}, ChainType::REGTEST)};
+    BOOST_CHECK(reg.strategy == BidStrategy::FEES);
+    BOOST_CHECK(!reg.anchor);
+    BOOST_CHECK(!reg.prevent_stall);
+    BOOST_CHECK_EQUAL(reg.period_cap, 0);
+    BidInputs fees{At(0, std::nullopt, 100'000)};
+    BOOST_CHECK_EQUAL(DecideNodeBid(reg, fees, BidTriggers{.mine = true}).amount, sidechain::Follower::Offer(100'000));
+    BOOST_CHECK(from({"-validatoranchorbid=0"}, ChainType::REGTEST).anchor);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

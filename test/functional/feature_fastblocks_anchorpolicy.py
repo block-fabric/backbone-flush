@@ -12,9 +12,11 @@ transaction below 50 sat/vB (-blockmintxfee): a congested mempool, whatever the 
     miner's, setbmm), which getbmminfo shows with the day's spending;
   - setanchorbidpolicy: checked (floor above max, an unknown strategy, a share over 100 %, a pressure of 0, a falling
     curve), kept in settings.json over the options, read back after a restart; reset: the options' policy again;
-  - congested: the floor bids stay out of the mainchain's blocks (missed, the "bid too low" warning, the rebids not
-    enough) while the stall pressure p stays below the threshold (0.5); once p crosses it the escalated bid lands,
-    the run ends, the bid drops back to the floor, and the chain never halts.
+  - the strategy names before 8.3.6 (doc/fastblocks-anchor-bids.md, "The names before 8.3.6") and the new form, by the
+    RPC and from an 8.3.5 settings.json (the app's feespreventstall with floor 0: Fees, Prevent stalling on);
+  - congested, Fees + minimum with Prevent stalling: the minimum's bids stay out of the mainchain's blocks (missed, the
+    "bid too low" warning, the rebids not enough) while the stall pressure p stays below the threshold (0.5); once p
+    crosses it the escalated bid lands, the run ends, the bid drops back to the minimum, and the chain never halts.
 """
 
 import json
@@ -77,10 +79,11 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
 
         self.setup_chain_and_validators()
 
-        self.log.info("The options' policy: fees + prevent stalling, the floor given")
+        self.log.info("The options' policy: a floor alone (the old default, feespreventstall, with a floor): Fees + minimum, Prevent stalling")
         info = n0.getanchorbidpolicy()
         assert_equal((info["validator"], info["bidding"]), (True, True))
-        assert_equal(info["policy"]["strategy"], "feespreventstall")
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"], info["policy"]["anchor"]), ("feesminimum", True, True))
+        assert_equal(info["strategies"], ["fees", "feesminimum", "minimum", "fixed", "off"])
         assert_equal(sats(info["policy"]["floor"]), 500)
         assert_equal(sats(info["policy"]["max"]), 100_000)
         assert_equal(info["policy"]["escalationstart"], 0.5)
@@ -91,6 +94,7 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         for fields, message in (
             ({"floor": 0.01}, "floor (0.01) above max"),
             ({"strategy": "always"}, "strategy"),
+            ({"preventstall": "maybe"}, "preventstall"),
             ({"feeshare": 150}, "feeshare"),
             ({"escalationstart": 0}, "escalationstart"),
             ({"curve": "0.8:2,0.6:3"}, "ascending"),
@@ -101,37 +105,74 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         assert_equal(n0.getanchorbidpolicy()["overrides"], {})
 
         self.log.info("Set, kept in settings.json, read back after a restart; reset")
+        # (An old name, minimal: Minimum every block, Prevent stalling on, kept in the new words with what it said of it.)
         info = n0.setanchorbidpolicy({"max": 0.002, "curve": "0.5:1,0.75:3", "strategy": "minimal"})
-        assert_equal(info["policy"]["strategy"], "minimal")
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), ("minimum", True))
         assert_equal(info["policy"]["curve"], [{"pressure": 0.5, "multiplier": 1}, {"pressure": 0.75, "multiplier": 3}])
-        assert_equal(sorted(info["overrides"]), ["curve", "max", "strategy"])
-        assert_equal(info["defaults"]["strategy"], "feespreventstall")
-        n0.setanchorbidpolicy(policy={"periodcap": 0})
+        assert_equal(sorted(info["overrides"]), ["curve", "max", "preventstall", "strategy"])
+        assert_equal(info["defaults"]["strategy"], "feesminimum")
+        n0.setanchorbidpolicy(policy={"periodcap": 0, "preventstall": False})
         with open(os.path.join(n0.chain_path, "settings.json"), encoding="utf8") as f:
             saved = json.load(f)["anchorbidpolicy"]
-        assert_equal(sorted(saved), ["curve", "max", "periodcap", "strategy"])
+        assert_equal(sorted(saved), ["curve", "max", "periodcap", "preventstall", "strategy"])
+        assert_equal((saved["strategy"], saved["preventstall"]), ("minimum", False))
         self.restart_validator(0)
         info = n0.getanchorbidpolicy()
-        assert_equal(info["policy"]["strategy"], "minimal")
+        assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), ("minimum", False))
         assert_equal(sats(info["policy"]["max"]), 200_000)
         assert_equal(sats(info["policy"]["periodcap"]), 0)
         assert_equal(len(info["policy"]["curve"]), 2)
-        assert_equal(sorted(info["overrides"]), ["curve", "max", "periodcap", "strategy"])
+        assert_equal(sorted(info["overrides"]), ["curve", "max", "periodcap", "preventstall", "strategy"])
+        assert_equal(n0.getbmminfo()["bidpolicy"]["preventstall"], False)
         info = n0.setanchorbidpolicy(reset=True)
         assert_equal(info["overrides"], {})
         assert_equal(info["policy"], info["defaults"])
         with open(os.path.join(n0.chain_path, "settings.json"), encoding="utf8") as f:
             assert "anchorbidpolicy" not in json.load(f)
 
+        self.log.info("The names before 8.3.6, and the new form")
+        for fields, strategy, stall in (
+            ({"strategy": "fees"}, "fees", False),
+            ({"strategy": "feespreventstall", "floor": 0}, "fees", True),
+            ({"strategy": "feespreventstall", "floor": 0.00001}, "feesminimum", True),
+            ({"strategy": "minimal"}, "minimum", True),
+            ({"strategy": "fixed"}, "fixed", False),
+            ({"strategy": "off"}, "off", False),
+            ({"strategy": "fees", "preventstall": True}, "fees", True),
+            ({"preventstall": False, "strategy": "minimum"}, "minimum", False),
+            ({"strategy": "feesminimum"}, "feesminimum", False),
+        ):
+            info = n0.setanchorbidpolicy(fields)
+            assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), (strategy, stall))
+            # Read back the same from the settings (the strategy kept with what it said of stall prevention).
+            assert_equal(info["overrides"]["preventstall"], stall)
+        info = n0.setanchorbidpolicy({"strategy": "off"})
+        assert_equal(info["bidding"], False)
+        assert "bids for nothing" in info["explanation"]
+        n0.setanchorbidpolicy(reset=True)
+        # An 8.3.5 settings.json (the app's feespreventstall, floor 0, no fee estimate): Fees, Prevent stalling on, no minimum.
+        self.stop_node(0)
+        path = os.path.join(n0.chain_path, "settings.json")
+        with open(path, encoding="utf8") as f:
+            settings = json.load(f)
+        settings["anchorbidpolicy"] = {"strategy": "feespreventstall", "floor": 0, "usefeeestimate": False, "feeshare": 99, "max": 0.0001, "periodcap": 0.001}
+        with open(path, "w", encoding="utf8") as f:
+            json.dump(settings, f)
+        self.restart_validator(0)
+        policy = n0.getanchorbidpolicy()["policy"]
+        assert_equal((policy["strategy"], policy["preventstall"], sats(policy["floor"]), policy["usefeeestimate"]), ("fees", True, 0, False))
+        assert_equal((sats(policy["max"]), sats(policy["periodcap"]), policy["feeshare"]), (10_000, 100_000, 99))
+        n0.setanchorbidpolicy(reset=True)
+
         self.log.info("Congested: node 0 the only bidder (the others off), a steep curve from p = 0.5")
-        n0.setanchorbidpolicy({"strategy": "feespreventstall", "curve": "0.5:1,0.6:40", "warnmissed": 2, "flatboost": False})
+        n0.setanchorbidpolicy({"strategy": "feesminimum", "preventstall": True, "curve": "0.5:1,0.6:40", "warnmissed": 2, "flatboost": False})
         for n in self.nodes[1:]:
             info = n.setanchorbidpolicy({"strategy": "off"})
             assert_equal(info["bidding"], False)
             assert "relies on other bidders" in info["explanation"]
             assert any("off" in w for w in n.getanchorinfo()["bid"]["warnings"])
         bid = n0.getanchorinfo()["bid"]
-        assert_equal((bid["validator"], bid["bidding"], bid["strategy"]), (True, True, "feespreventstall"))
+        assert_equal((bid["validator"], bid["bidding"], bid["strategy"]), (True, True, "feesminimum"))
 
         landed_at = None
         missed_before = 0
@@ -174,14 +215,14 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         assert_greater_than(missed_before, 1)
         assert warned, "no \"bid too low\" warning"
 
-        self.log.info("The run is over: the floor again; the chain went on past where it would have halted")
+        self.log.info("The run is over: the minimum again; the chain went on past where it would have halted")
         for _ in range(4):
             self.next_slot()
         bid = n0.getanchorinfo()["bid"]
         # (Still congested: the floor misses again, and the rebids raise it, x2 after 3 missed, up to x8: no escalation.)
         assert bid["pressure"] < 0.5
         # (Or 500 sat above the last bid that missed since, which other nodes may still hold on the same coin: replace.)
-        assert bid["kind"] in ("floor", "rebid", "replace"), bid["kind"]
+        assert bid["kind"] in ("minimum", "rebid", "replace"), bid["kind"]
         if bid["kind"] != "replace":
             assert sats(bid["effective"]) <= 500 * 8
         else:

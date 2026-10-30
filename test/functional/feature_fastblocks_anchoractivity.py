@@ -29,14 +29,15 @@ class FastBlocksAnchorActivityTest(FastBlocksAnchorPolicyTest):
             self.next_slot(settle=1)
         self.mine()
         self.next_slot(settle=1)
-        n0.setanchorbidpolicy({"strategy": "feespreventstall", "floor": 0.0001,
+        # Fees with Prevent stalling (the floor raises only stall prevention's base: Fees has no minimum).
+        n0.setanchorbidpolicy({"strategy": "fees", "preventstall": True, "floor": 0.0001,
                                "flatboost": True, "periodcap": 0})
         self.mine_main()
         self.next_slot(settle=1)
         self.wait_until(lambda: n0.getanchorinfo()["bid"]["kind"] == "idle")
         idle = n0.getanchorinfo()["bid"]
         assert_equal(idle["pendingactions"], False)
-        assert_equal(idle["reason"], "skipped: nothing to anchor")
+        assert_equal(idle["reason"], "no bid: no fees, nothing waiting to anchor")
         assert_equal(sats(idle["effective"]), 0)
         assert_equal(main.getrawmempool(), [])
 
@@ -55,7 +56,7 @@ class FastBlocksAnchorActivityTest(FastBlocksAnchorPolicyTest):
         self.wait_until(lambda: n0.getanchorinfo()["bid"]["kind"] == "idle")
         while n0.getanchorinfo()["bid"]["pressure"] < 0.5:
             self.next_slot()
-        self.wait_until(lambda: n0.getanchorinfo()["bid"]["kind"] == "boost")
+        self.wait_until(lambda: n0.getanchorinfo()["bid"]["kind"] == "stall")
         boost = n0.getanchorinfo()["bid"]
         assert_equal(boost["pendingactions"], False)
         assert_equal(sats(boost["effective"]), 40000)

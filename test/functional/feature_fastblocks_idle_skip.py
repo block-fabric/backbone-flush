@@ -2,14 +2,14 @@
 # Copyright (c) 2026 The Chains developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""FastBlocks' anchorers bid only when needed ("Fees + prevent stalling", the default: skip_idle).
+"""FastBlocks' anchorers bid only when needed (the default: Fees, Prevent stalling on).
 
 The validators of feature_fastblocks_idle.py, on mock time, with the default policy (no -validatoranchorbidstrategy):
 
-  - a quiet chain (no fees, no peg or staking action waiting): no bid ("skipped: nothing to anchor") while the stall
+  - a quiet chain (no fees, no peg or staking action waiting): no bid (Fees: no fees, no bid) while the stall
     pressure is below its threshold (0.5 of max_unanchored_slots), even across epochs (no anchor an epoch);
-  - from the threshold: a bid, the boost (4 x the base);
-  - once anchored, quiet again: no bid; a deposit on the mainchain: a bid at once.
+  - from the threshold: stall prevention's bid, the boost (4 x the base);
+  - once anchored, quiet again: no bid; a deposit on the mainchain: a bid at once (stall prevention: peg work waiting).
 """
 
 from feature_fastblocks_anchorpolicy import FastBlocksAnchorPolicyTest
@@ -31,7 +31,7 @@ class FastBlocksIdleSkipTest(FastBlocksAnchorPolicyTest):
         super().run_test()
 
     def validator_args(self, i):
-        # The default policy (fees + prevent stalling, skip_idle); the others' anchorers off, node 0 alone bids.
+        # The default policy (Fees, Prevent stalling); the others' anchorers off ("Anchor my validator"), node 0 alone bids.
         return self.side_args + [f"-validatorkeyfile={self.key_files[i]}"] + (["-validatoranchorbid=0"] if i == 0 else ["-novalidatoranchorbid"])
 
     def run_sidechain_test(self):
@@ -65,7 +65,7 @@ class FastBlocksIdleSkipTest(FastBlocksAnchorPolicyTest):
         self.log.info(f"{quiet} quiet mainchain blocks without a bid; from p = 0.5 the boost")
         assert self.bid_waiting(60), "no bid past the threshold"
         bid = n0.getanchorinfo()["bid"]
-        assert_equal(bid["kind"], "boost")
+        assert_equal(bid["kind"], "stall")
         self.set_time(self.now + 1)
         self.mine_main()
         # Anchored: quiet again.

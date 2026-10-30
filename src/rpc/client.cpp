@@ -232,6 +232,8 @@ static const CRPCConvertParam vRPCConvertParams[] =
     { "getanchorinfo", 0, "count" },
     { "setanchorbidpolicy", 0, "policy" },
     { "setanchorbidpolicy", 1, "reset" },
+    { "setanchorbidpolicy", 0, "preventstall" },
+    { "setanchorbidpolicy", 0, "anchor" },
     { "setanchorbidpolicy", 0, "floor" },
     { "setanchorbidpolicy", 0, "max" },
     { "setanchorbidpolicy", 0, "fixed" },

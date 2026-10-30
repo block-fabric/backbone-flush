@@ -343,7 +343,7 @@ RPCMethod setbmm()
         "mainchain 99% of those fees to commit to it. The fees go to the address; the hundredth that is left is what the\n"
         "operator of this node earns. A block without fees is not asked for: see requestbmmblock to mine one by hand.\n"
         "What it offers follows the node's one bid policy (setanchorbidpolicy, shared with a validator's anchorer): its\n"
-        "strategy (the fee share by default; off stops only the anchorer), at most max per bid, within the period's cap\n"
+        "strategy (the fee share by default, no minimum; off: no bids at all), stall prevention, at most max per bid, within the period's cap\n"
         "(periodcap in periodhours, every landed bid of the node counted). getbmminfo shows the policy and the spending.",
         {
             {"mine", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Whether to mine"},
@@ -418,7 +418,8 @@ RPCMethod getbmminfo()
             {RPCResult::Type::NUM, "candidates", "Number of blocks built and kept until the mainchain commits to them or moves on"},
             {RPCResult::Type::OBJ, "bidpolicy", /*optional=*/true, "The node's one bid policy (setanchorbidpolicy), which these bids follow, and what they cost",
             {
-                {RPCResult::Type::STR, "strategy", "The strategy (off: only the anchorer stops; the merged miner bids the fee share)"},
+                {RPCResult::Type::STR, "strategy", "The strategy: fees, feesminimum, minimum, fixed or off (no bids at all)"},
+                {RPCResult::Type::BOOL, "preventstall", "Whether stall prevention is on"},
                 {RPCResult::Type::NUM, "feeshare", "The percentage of the fees offered"},
                 {RPCResult::Type::STR_AMOUNT, "max", "The most any one bid is"},
                 {RPCResult::Type::STR_AMOUNT, "periodcap", "The most the landed bids of the node cost in periodhours (0: no cap)"},
@@ -460,6 +461,7 @@ RPCMethod getbmminfo()
         const auto report{hooks->GetAnchorBidReport(pos::SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), hooks->Params()), first, &mining)};
         UniValue bid(UniValue::VOBJ);
         bid.pushKV("strategy", pos::StrategyName(report.policy.strategy));
+        bid.pushKV("preventstall", report.policy.prevent_stall);
         bid.pushKV("feeshare", report.policy.fee_share_bps / 100.0);
         bid.pushKV("max", ValueFromAmount(report.policy.max));
         bid.pushKV("periodcap", ValueFromAmount(report.policy.period_cap));

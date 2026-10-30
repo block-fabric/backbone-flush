@@ -24,22 +24,37 @@ class UniValue;
 
 namespace pos {
 
-/** How the anchorer bids. */
+/**
+ * What the node bids (since 8.3.6: one choice of five, and "Prevent stalling" beside it, AnchorBidPolicy::prevent_stall).
+ * See doc/fastblocks-anchor-bids.md, "Strategies".
+ */
 enum class BidStrategy {
+    //! The fee share of what the anchor (or the BMM block) pays out, no minimum: no fees, no bid. The default.
+    FEES,
+    //! The fee share, at least the minimum (the floor, or the relay minimum of a request if higher): every mainchain block.
+    FEES_MINIMUM,
+    //! The minimum for every mainchain block.
+    MINIMUM,
     //! `fixed` for every mainchain block.
     FIXED,
-    //! The floor, raised as the chain nears a halt (stall pressure) and after missed blocks: keep the chain moving.
-    MINIMAL,
-    //! The fee share the anchor owes (the pot, less the operator's margin), at least the floor; no escalation.
-    FEES,
-    //! FEES, and a stall boost only when needed (stall pressure, missed blocks). The default.
-    FEES_PREVENT_STALL,
-    //! No bids: the chain relies on other bidders.
+    //! No bids at all (neither trigger; one by hand still goes).
     OFF,
 };
 
 std::string StrategyName(BidStrategy strategy);
 std::optional<BidStrategy> ParseStrategy(const std::string& name);
+
+/** A strategy as it was said: new names, and the names before 8.3.6, which also said whether to prevent stalling. */
+struct StrategyWord {
+    BidStrategy strategy{BidStrategy::FEES};
+    //! What the word says of "Prevent stalling", if anything (the old names: fees and fixed no, minimal and
+    //! feespreventstall yes; the new names minimum and feesminimum, and off, say nothing).
+    std::optional<bool> prevent_stall;
+    //! The old feespreventstall (or -validatoranchorbidmode=standard): Fees + minimum when the policy has a floor above 0
+    //! (it bid at least the floor), Fees without one.
+    bool fees_or_floor{false};
+};
+std::optional<StrategyWord> ParseStrategyWord(const std::string& name);
 
 //! Optional operator floor. Automatic bids also cover the estimated mainchain transaction fee.
 inline constexpr CAmount DEFAULT_VALIDATOR_ANCHOR_BID{0};
@@ -58,8 +73,14 @@ struct EscalationPoint {
 };
 
 struct AnchorBidPolicy {
-    BidStrategy strategy{BidStrategy::FEES_PREVENT_STALL};
-    //! Operator floor; the automatic strategy additionally covers the relay minimum and estimate.
+    BidStrategy strategy{BidStrategy::FEES};
+    //! "Prevent stalling": as the chain nears the unanchored limit, a bid that lands an anchor whatever the strategy (the stall
+    //! boost or the curve); when peg work waits for an anchor (deposits, withdrawals, set changes), the competitive base;
+    //! after missed blocks, the minimum raised for the strategies that bid every block. Not with OFF.
+    bool prevent_stall{true};
+    //! "Anchor my validator": a validator's own anchorer bids (the other trigger is the merged miner, setbmm).
+    bool anchor{true};
+    //! The user's floor: the minimum is this, or the relay minimum of a request if higher (MinimumBid).
     CAmount floor{DEFAULT_VALIDATOR_ANCHOR_BID};
     //! The most it bids, always.
     CAmount max{DEFAULT_ANCHOR_BID_MAX};
@@ -73,14 +94,13 @@ struct AnchorBidPolicy {
     std::vector<EscalationPoint> curve{{0.5, 1}, {0.75, 2}, {0.9, 4}};
     //! Between the points of the curve: interpolated linearly (true) or in steps (false).
     bool interpolate{true};
-    /** Flat boost: max(fee share, boost x the estimated base), only under stall pressure.
-     * With use_fee_estimate, the base covers the relay minimum and the next-block estimate rounded up to
-     * whole sat/vB, as well as the operator floor. Idle default-strategy bids are skipped below the threshold.
-     * Off: the legacy curve and rebid strategy.
+    /** Stall prevention's bid: the flat boost, max(the strategy's bid, boost x the competitive base) from escalation_start
+     * (the base: the minimum, the network's least competitive rate and, with use_fee_estimate, the next-block estimate
+     * rounded up to whole sat/vB, else what recent blocks took). Off: the curve of the legacy policy, and its rebids.
      */
     bool flat_boost{true};
     double boost{4};
-    //! Use the next-block fee estimate for automatic bids (or under pressure with the legacy curve).
+    //! Use the next-block fee estimate for stall prevention's base.
     bool use_fee_estimate{true};
     int request_vsize{DEFAULT_ANCHOR_REQUEST_VSIZE};
     //! After this many mainchain blocks in a row without its commitment, the bid is multiplied by rebid_step for each
@@ -96,9 +116,11 @@ struct AnchorBidPolicy {
     //! A warning when the bid wallet covers fewer mainchain blocks than this at the current bid (0: none).
     int low_balance_blocks{1008};
 
-    bool PassesFees() const { return strategy == BidStrategy::FEES || strategy == BidStrategy::FEES_PREVENT_STALL; }
-    bool Escalates() const { return strategy == BidStrategy::MINIMAL || strategy == BidStrategy::FEES_PREVENT_STALL; }
     bool Bids() const { return strategy != BidStrategy::OFF; }
+    //! A bid for every mainchain block (the minimum strategies and fixed), not only when fees pay.
+    bool BidsEveryBlock() const { return strategy == BidStrategy::FEES_MINIMUM || strategy == BidStrategy::MINIMUM || strategy == BidStrategy::FIXED; }
+    //! Stall prevention in force (OFF means off: the checkbox is kept, greyed out).
+    bool PreventsStall() const { return Bids() && prevent_stall; }
     bool operator==(const AnchorBidPolicy&) const = default;
 };
 
@@ -126,7 +148,7 @@ struct BidInputs {
     std::optional<CAmount> fee_rate_per_kvb;
     //! Mainchain relay minimum in satoshis per 1000 vbytes; conservative fallback when unavailable.
     CAmount relay_rate_per_kvb{1000};
-    //! Peg work or staking/validator-set maintenance needs an anchor. Unknown means bid conservatively.
+    //! Peg work or staking/validator-set maintenance needs an anchor (stall prevention bids for it). Unknown: bid.
     bool pending_actions{true};
     //! The least feerate of a BMM request recent mainchain blocks took (any slot), per 1000 vbytes, if seen.
     std::optional<CAmount> included_rate_per_kvb;
@@ -169,9 +191,10 @@ struct BidDecision {
     //! Whether to bid at all (no: off, or the period's cap spent).
     bool bid{false};
     CAmount amount{0};
-    //! The strategy's bid before escalation.
+    //! The strategy's bid before stall prevention.
     CAmount normal{0};
-    //! "fixed", "floor", "fees", "rebid", "escalation", "max", "periodcap", "base", "idle", "boost" or "off".
+    //! "fees", "minimum", "fixed", "rebid", "pending" (peg work), "stall" (the stall boost), "escalation" (the curve), "max", "periodcap", "replace",
+    //! "always", "idle" (Fees without fees that pay) or "off".
     std::string kind;
     //! In words, for the log and the pages.
     std::string reason;
@@ -196,8 +219,8 @@ CAmount FeeShare(CAmount pot, int fee_share_bps);
 //! What a bid has to pay above another one that spends the same coin, for nodes to take it as a replacement:
 //! the relay fee of the largest request a wallet makes (250 vB at 1 sat/vB) with a margin (as ReplacementBid).
 inline constexpr CAmount REPLACEMENT_BUMP{500};
-//! The least the merged miner bids from fees: below it, a request does not pay for its own place in a mainchain
-//! block (sidechain::Follower::MIN_OFFER).
+//! The least fee share the Fees strategy bids (either trigger): below it, a request does not pay for its own place in a
+//! mainchain block (sidechain::Follower::MIN_OFFER). It skips a bid, it never raises one: Fees has no minimum.
 inline constexpr CAmount MINE_MIN_OFFER{500};
 
 /**
@@ -205,7 +228,7 @@ inline constexpr CAmount MINE_MIN_OFFER{500};
  * from the same mainchain wallet under the same policy; only what sets them off differs.
  */
 struct BidTriggers {
-    //! "Anchor my validator": a validator's own anchorer (a validator whose strategy is not off).
+    //! "Anchor my validator": a validator's own anchorer (a validator whose policy has `anchor`).
     bool anchor{false};
     //! "Mine blocks when fees pay": the merged miner (setbmm on), which bids when the fee share pays for a request.
     bool mine{false};
@@ -218,10 +241,15 @@ struct BidTriggers {
 };
 
 /**
- * The bid of the node for these inputs and triggers: the anchorer's as DecideBid; the merged miner's as DecideBid
- * too (a strategy off is the fee share for it: off stops the anchorer, not setbmm), but only once the fee share
- * pays for a request (MINE_MIN_OFFER), or setbmm's fixed offer with "always". With both, the higher one (one
- * request serves both). Then above a stale bid (StaleRaise), and always within max and the period's cap.
+ * The minimum of the minimum strategies: the user's floor, or the relay minimum of a request (the relay rate times the
+ * larger of requestvsize and 250 vB, rounded up) if higher.
+ */
+CAmount MinimumBid(const AnchorBidPolicy& policy, const BidInputs& inputs);
+
+/**
+ * The bid of the node for these inputs and triggers: the policy's (DecideBid), the same for both triggers; setbmm's
+ * fixed offer with "always" (the higher of the two with the anchorer). Nothing with the strategy off, nor without a
+ * trigger. Then above a stale bid (StaleRaise), and always within max and the period's cap.
  */
 BidDecision DecideNodeBid(const AnchorBidPolicy& policy, const BidInputs& inputs, const BidTriggers& triggers);
 

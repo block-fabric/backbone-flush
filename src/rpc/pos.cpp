@@ -55,17 +55,19 @@ int64_t NowSlot(const Consensus::PosParams& params)
 std::vector<RPCResult> PolicyFieldsDoc()
 {
     return {
-        {RPCResult::Type::STR, "strategy", "fixed, minimal, fees, feespreventstall (fees + prevent stalling) or off"},
-        {RPCResult::Type::STR_AMOUNT, "floor", "The least it bids, in coins of the mainchain"},
+        {RPCResult::Type::STR, "strategy", "fees (the fee share, no minimum), feesminimum (the fee share, at least the minimum), minimum (every mainchain block), fixed or off (no bids at all)"},
+        {RPCResult::Type::BOOL, "preventstall", "Prevent stalling: near the unanchored limit, a bid that lands an anchor whatever the strategy (not with off)"},
+        {RPCResult::Type::BOOL, "anchor", "Anchor my validator: a validator's own anchorer bids (the other trigger is setbmm)"},
+        {RPCResult::Type::STR_AMOUNT, "floor", "The user's minimum, in coins of the mainchain (the minimum is this, or the relay minimum of a request if higher)"},
         {RPCResult::Type::STR_AMOUNT, "max", "The most it bids, always"},
         {RPCResult::Type::STR_AMOUNT, "fixed", "The bid of the fixed strategy"},
         {RPCResult::Type::NUM, "feeshare", "The percentage of the pot the fee strategies bid"},
-        {RPCResult::Type::NUM, "escalationstart", "The stall pressure from which minimal and feespreventstall raise the bid"},
+        {RPCResult::Type::NUM, "escalationstart", "The stall pressure from which stall prevention bids"},
         {RPCResult::Type::BOOL, "flatboost", "Use the flat boost instead of the legacy curve and rebids"},
         {RPCResult::Type::NUM, "boost", "Flat boost multiplier of the base"},
         {RPCResult::Type::ARR, "curve", "The escalation curve", {{RPCResult::Type::OBJ, "", "", {{RPCResult::Type::NUM, "pressure", "Stall pressure"}, {RPCResult::Type::NUM, "multiplier", "Multiplier of the base (fee estimate x requestvsize, else the floor)"}}}}},
         {RPCResult::Type::BOOL, "interpolate", "Linear between the points of the curve (else steps)"},
-        {RPCResult::Type::BOOL, "usefeeestimate", "Escalate from the mainchain's next-block fee estimate"},
+        {RPCResult::Type::BOOL, "usefeeestimate", "Stall prevention's base follows the mainchain's next-block fee estimate"},
         {RPCResult::Type::NUM, "requestvsize", "The size of a BMM request, in vbytes"},
         {RPCResult::Type::NUM, "rebidafter", "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
         {RPCResult::Type::NUM, "rebidstep", "The multiplier of each such raise"},
@@ -81,9 +83,9 @@ std::vector<RPCResult> PolicyResultDoc()
 {
     return {
         {RPCResult::Type::BOOL, "validator", "Whether this node is a validator (only validators bid)"},
-        {RPCResult::Type::BOOL, "bidding", "Whether the node bids: its anchorer (a validator whose strategy is not off) or its merged miner (setbmm on)"},
+        {RPCResult::Type::BOOL, "bidding", "Whether the node bids: its anchorer (a validator with anchor on) or its merged miner (setbmm on), the strategy not off"},
         {RPCResult::Type::STR, "explanation", /*optional=*/true, "Why it does not bid, if it does not"},
-        {RPCResult::Type::BOOL, "anchortrigger", "\"Anchor my validator\": a validator whose strategy is not off"},
+        {RPCResult::Type::BOOL, "anchortrigger", "\"Anchor my validator\": a validator with anchor on, the strategy not off"},
         {RPCResult::Type::BOOL, "minetrigger", "\"Mine blocks when fees pay\": setbmm on"},
         {RPCResult::Type::OBJ, "policy", "The policy in force", PolicyFieldsDoc()},
         {RPCResult::Type::OBJ, "defaults", "The policy of the options (-validatoranchorbid*), before setanchorbidpolicy", PolicyFieldsDoc()},
@@ -94,8 +96,9 @@ std::vector<RPCResult> PolicyResultDoc()
 
 std::string NotBiddingExplanation(const pos::FastBlocksHooks::AnchorBidReport& report)
 {
-    if (!report.validator) return report.mine_trigger ? "" : "This node is not a validator: it bids only as a merged miner (setbmm), under this policy; merged mining is off.";
-    if (!report.policy.Bids() && !report.mine_trigger) return "The strategy is off: this validator bids for no anchors, and the chain relies on other bidders; blocks of stake halt after maxunanchoredslots without an anchor.";
+    if (!report.validator) return report.mine_trigger ? "" : report.policy.Bids() ? "This node is not a validator: it bids only as a merged miner (setbmm), under this policy; merged mining is off." : "The strategy is off: this node bids for nothing.";
+    if (!report.policy.Bids()) return "The strategy is off: this node bids for nothing, and the chain relies on other bidders; blocks of stake halt after maxunanchoredslots without an anchor.";
+    if (!report.anchor_trigger && !report.mine_trigger) return "\"Anchor my validator\" is off and merged mining is off: this validator bids for no anchors, and the chain relies on other bidders.";
     return "";
 }
 
@@ -111,7 +114,7 @@ UniValue PolicyResult(const pos::FastBlocksHooks::AnchorBidReport& report)
     out.pushKV("defaults", pos::PolicyToUniValue(report.defaults));
     out.pushKV("overrides", report.overrides);
     UniValue strategies(UniValue::VARR);
-    for (const char* name : {"fixed", "minimal", "fees", "feespreventstall", "off"}) strategies.push_back(name);
+    for (const char* name : {"fees", "feesminimum", "minimum", "fixed", "off"}) strategies.push_back(name);
     out.pushKV("strategies", std::move(strategies));
     return out;
 }
@@ -214,7 +217,7 @@ std::vector<RPCResult> BidResultDoc()
         {RPCResult::Type::BOOL, "minetrigger", "\"Mine blocks when fees pay\" on (setbmm)"},
         {RPCResult::Type::STR, "trigger", "What sets off the bid now: anchor, mine, anchor+mine, or empty"},
         {RPCResult::Type::STR_AMOUNT, "effective", "What it bids now for the next mainchain block"},
-        {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before escalation"},
+        {RPCResult::Type::STR_AMOUNT, "normal", "The strategy's bid before stall prevention"},
         {RPCResult::Type::STR, "kind", "fixed, floor, fees, rebid, escalation, max, periodcap or off"},
         {RPCResult::Type::STR, "reason", "Why, in words"},
         {RPCResult::Type::NUM, "pressure", "Stall pressure p: unanchoredslots / maxunanchoredslots (the chain halts at 1)"},
@@ -1077,19 +1080,23 @@ RPCMethod setanchorbidpolicy()
         "Changes the node's bid policy, at once and without a restart: the one policy of both triggers, a validator's anchorer and the merged miner "
         "of any node (setbmm), whose bids the same mainchain wallet pays. The fields given change; the others stay. "
         "Kept in the node's settings (settings.json), over the options (-validatoranchorbid*), which stay the defaults (reset: back to them). "
-        "strategy off stops the anchorer; the merged miner then bids the fee share.",
+        "strategy off stops every bid of the node (both triggers; one by hand still goes); anchor=false stops only the anchorer. "
+        "The strategy names before 8.3.6 still work and say whether to prevent stalling, unless preventstall is given: fees (no), feespreventstall "
+        "(fees, yes; feesminimum with a floor above 0), minimal (minimum, yes), fixed (no).",
         {
             {"policy", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "The fields to change",
             {
-                {"strategy", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "fixed, minimal, fees, feespreventstall (fees + prevent stalling) or off"},
-                {"floor", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The least it bids (0 allowed)"},
+                {"strategy", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "fees, feesminimum, minimum, fixed or off (or the older minimal, feespreventstall)"},
+                {"preventstall", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Prevent stalling: near the unanchored limit, bid enough to land an anchor whatever the strategy"},
+                {"anchor", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Anchor my validator: a validator's own anchorer bids"},
+                {"floor", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The user's minimum, for feesminimum and minimum (0 allowed: the relay minimum)"},
                 {"max", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The most it bids, always (at least floor and fixed)"},
                 {"fixed", RPCArg::Type::AMOUNT, RPCArg::Optional::OMITTED, "The bid of the fixed strategy"},
                 {"feeshare", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The percentage of the pot the fee strategies bid (0-100)"},
                 {"escalationstart", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The stall pressure from which the bid escalates (above 0, at most 1)"},
                 {"curve", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The escalation curve, \"p:x,...\" (or an array of {pressure, multiplier}); pressures ascending, multipliers 1-1000 not falling"},
                 {"interpolate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Linear between the points of the curve (else steps)"},
-                {"usefeeestimate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Escalate from the mainchain's next-block fee estimate"},
+                {"usefeeestimate", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Stall prevention's base follows the mainchain's next-block fee estimate"},
                 {"requestvsize", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The size of a BMM request, in vbytes (50-10000)"},
                 {"rebidafter", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Missed mainchain blocks in a row before the bid is raised again (0: never)"},
                 {"rebidstep", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "The multiplier of each such raise (1-100)"},
@@ -1102,7 +1109,7 @@ RPCMethod setanchorbidpolicy()
             {"reset", RPCArg::Type::BOOL, RPCArg::Default{false}, "Back to the options' policy first (the settings forgotten)"},
         },
         RPCResult{RPCResult::Type::OBJ, "", "The policy, as getanchorbidpolicy", PolicyResultDoc()},
-        RPCExamples{HelpExampleCli("setanchorbidpolicy", "'{\"strategy\":\"feespreventstall\",\"floor\":0.000005}'") +
+        RPCExamples{HelpExampleCli("setanchorbidpolicy", "'{\"strategy\":\"fees\",\"preventstall\":true}'") +
                     HelpExampleCli("-named setanchorbidpolicy", "floor=0.00001 max=0.0005") +
                     HelpExampleCli("-named setanchorbidpolicy", "reset=true") +
                     HelpExampleRpc("setanchorbidpolicy", "{\"curve\":\"0.5:1,0.75:3,0.9:6\"}")},
@@ -1122,7 +1129,10 @@ RPCMethod setanchorbidpolicy()
     // The fields changed from the options' policy, as they are said (normalized).
     UniValue overrides{reset ? UniValue{UniValue::VOBJ} : report.overrides};
     const UniValue said{pos::PolicyToUniValue(policy)};
-    for (const std::string& key : fields.getKeys()) {
+    // A strategy is kept with what it says of stall prevention (an old name says it too), so that the settings read back the same.
+    std::vector<std::string> keys{fields.getKeys()};
+    if (!fields.find_value("strategy").isNull() && fields.find_value("preventstall").isNull()) keys.emplace_back("preventstall");
+    for (const std::string& key : keys) {
         UniValue kept(UniValue::VOBJ);
         for (const std::string& other : overrides.getKeys()) {
             if (other != key) kept.pushKV(other, overrides.find_value(other));
