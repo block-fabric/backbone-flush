@@ -31,8 +31,9 @@ class FastBlocksIdleSkipTest(FastBlocksAnchorPolicyTest):
         super().run_test()
 
     def validator_args(self, i):
-        # The default policy (Fees, Prevent stalling); the others' anchorers off ("Anchor my validator"), node 0 alone bids.
-        return self.side_args + [f"-validatorkeyfile={self.key_files[i]}"] + (["-validatoranchorbid=0"] if i == 0 else ["-novalidatoranchorbid"])
+        # The default policy (Fees, Prevent stalling); the others' anchorers off ("Anchor my validator"), node 0 alone bids,
+        # so not taking turns (with them, the turn of a validator whose anchorer is off waits turnbackup mainchain blocks).
+        return self.side_args + [f"-validatorkeyfile={self.key_files[i]}"] + (["-validatoranchorbid=0", "-novalidatoranchorbidturns"] if i == 0 else ["-novalidatoranchorbid"])
 
     def run_sidechain_test(self):
         main = self.main

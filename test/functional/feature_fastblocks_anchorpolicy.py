@@ -29,6 +29,9 @@ from test_framework.util import assert_equal, assert_greater_than, assert_raises
 
 MAX_UNANCHORED = 60
 COIN = 100_000_000
+#: A second sidechain, active beside this one, whose BMM requests the test makes: a mainchain block with BMM but without
+#: this chain's commitment is a miss of ours (one without any BMM commitment is not, since 8.3.7).
+OTHER_SLOT = 6
 
 
 def sats(value):
@@ -58,6 +61,14 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
             if other != i:
                 self.connect_nodes(i, other)
         self.set_time(self.now)
+
+    def mine_with_other_bmm(self, bid_timeout=120):
+        """As mine(), the block carrying the other sidechain's BMM request too (0.001: above the miners' least rate)."""
+        committed = self.bid_waiting(bid_timeout)
+        self.main.createbmmrequest(OTHER_SLOT, os.urandom(32).hex(), 0.001)
+        self.set_time(self.now + 1)
+        self.mine_main()
+        return committed
 
     def run_sidechain_test(self):
         main = self.main
@@ -167,6 +178,9 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         policy = n0.getanchorbidpolicy()["policy"]
         assert_equal((policy["strategy"], policy["preventstall"], sats(policy["floor"]), policy["usefeeestimate"]), ("fees", True, 0, False))
         assert_equal((sats(policy["max"]), sats(policy["periodcap"]), policy["feeshare"]), (10_000, 100_000, 99))
+        # (8.3.7's fields, which 8.3.5 and 8.3.6 never saved: their defaults.)
+        assert_equal((policy["batch"], policy["heartbeathours"], sats(policy["valueatrisk"]), policy["reservepct"], sats(policy["reservetarget"]),
+                      policy["turns"], policy["turnbackup"]), (10, 6, 100_000_000, 20, 1_000_000, True, 2))
         # A floor set later on that old word: Fees + minimum at once (8.3.5's feespreventstall bid at least its floor), and the same after a restart.
         info = n0.setanchorbidpolicy({"floor": 0.00001})
         assert_equal((info["policy"]["strategy"], info["policy"]["preventstall"]), ("feesminimum", True))
@@ -198,7 +212,10 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         n0.setanchorbidpolicy(reset=True)
 
         self.log.info("Congested: node 0 the only bidder (the others off), a steep curve from p = 0.5")
-        n0.setanchorbidpolicy({"strategy": "feesminimum", "preventstall": True, "curve": "0.5:1,0.6:40", "warnmissed": 2, "flatboost": False})
+        # (No fee estimate: the floor is the curve's base, as before the other sidechain's requests, which pay 0.001 in
+        # the blocks below, made the mainchain's estimatesmartfee say 0.1 sat/vB, under what its miners take.)
+        n0.setanchorbidpolicy({"strategy": "feesminimum", "preventstall": True, "curve": "0.5:1,0.6:40", "warnmissed": 2, "flatboost": False,
+                               "usefeeestimate": False})
         for n in self.nodes[1:]:
             info = n.setanchorbidpolicy({"strategy": "off"})
             assert_equal(info["bidding"], False)
@@ -221,10 +238,11 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
                 continue
             bid = n0.getanchorinfo(20)["bid"]
             p = bid["pressure"]
-            committed = self.mine()
+            committed = self.mine_with_other_bmm()
             self.log.debug(f"slot {slot}: p {p:.2f}, bid {bid['effective']} ({bid['kind']}), committed {committed}")
             info = n0.getanchorinfo(50)["bid"]
-            if any("too low" in w for w in info["warnings"]):
+            # (Or, once the bid is 10 x the relay minimum or more, the pool's side named instead, since 8.3.7.)
+            if any("too low" in w or "may not be including BMM" in w for w in info["warnings"]):
                 warned = True
             statuses = [h["status"] for h in info["history"]]
             if landed_at is None and "landed" in statuses:
@@ -267,7 +285,7 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         while slot <= halt_slot + MAX_UNANCHORED:
             slot, k = self.next_slot(), k + 1
             if k % 3 == 0:
-                self.mine()
+                self.mine_with_other_bmm()
         landed = [h for h in n0.getanchorinfo(50)["bid"]["history"] if h["status"] == "landed"]
         assert_greater_than(len(landed), 1)
         assert_equal(len({n.getbestblockhash() for n in self.nodes}), 1)
@@ -295,6 +313,7 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         n0 = self.nodes[0]
         self.mine_main(110)
         main.createsidechainproposal(SLOT, "FastBlocks", "Blocks of stake between merged mined blocks", "11" * 32, "22" * 20)
+        main.createsidechainproposal(OTHER_SLOT, "Other", "Another sidechain, for BMM without this chain's", "33" * 32, "44" * 20)
         self.mine_main(ACTIVATION_PERIOD + 1)
         main.createsidechaindeposit(SLOT, n0.getdepositaddress()["depositaddress"], 50)
         self.mine_main()

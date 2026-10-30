@@ -30,8 +30,10 @@ class FastBlocksAnchorActivityTest(FastBlocksAnchorPolicyTest):
         self.mine()
         self.next_slot(settle=1)
         # Fees with Prevent stalling (the floor raises only stall prevention's base: Fees has no minimum).
+        # (Node 0 alone bids: no turns, which the others' would hold for turnbackup mainchain blocks; feature_fastblocks_anchordemand.py
+        # has them.)
         n0.setanchorbidpolicy({"strategy": "fees", "preventstall": True, "floor": 0.0001,
-                               "flatboost": True, "periodcap": 0})
+                               "flatboost": True, "periodcap": 0, "turns": False})
         self.mine_main()
         self.next_slot(settle=1)
         self.wait_until(lambda: n0.getanchorinfo()["bid"]["kind"] == "idle")

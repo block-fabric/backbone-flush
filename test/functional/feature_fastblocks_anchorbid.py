@@ -127,7 +127,8 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
         assert_equal(len({n.getbestblockhash() for n in self.nodes}), 1)
 
         self.log.info("Fees + minimum at 100 %, floor 0: the bidder's share of the fees passed into the bid, once")
-        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100"])
+        # (No anchor reserve: since 8.3.7 a fee bid keeps back reservepct of the share while the reserve is below its target.)
+        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100", "-validatoranchorbidreservepct=0"])
         self.next_slot()
         self.window(2)
         accrued_before, paid_before, _ = self.pot()
@@ -151,7 +152,7 @@ class FastBlocksAnchorBidTest(FastBlocksIdleTest):
 
         self.log.info("Fees + minimum with a cap: the request pays the cap; the payee still the whole pot")
         cap = 7
-        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100", f"-validatoranchorbidmax=0.0000000{cap}"])
+        self.restart_validators(["-validatoranchorbid=0", "-validatoranchorbidstrategy=feesminimum", "-validatoranchorbidshare=100", "-validatoranchorbidreservepct=0", f"-validatoranchorbidmax=0.0000000{cap}"])
         self.next_slot()
         self.window(2)
         txid = n0.sendtoaddress(address=n1.getnewaddress(), amount=1, fee_rate=50)
