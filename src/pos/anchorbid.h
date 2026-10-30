@@ -377,16 +377,25 @@ void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, Bid
 
 /** A bid of this node, as far as the stale rule needs it. */
 struct PastBid {
-    enum class Status { PENDING, LANDED, MISSED, OUTBID };
+    //! As FastBlocksHooks::AnchorBidRecord::Status: MISSED, a mainchain block that carried BMM commitments (of any
+    //! sidechain) and came MIN_BID_LEAD_SECONDS or more after the bid, without this chain's; NO_BMM, a block that carried
+    //! none at all (a pool that does not do BMM: no miss of ours); TOO_SOON, a block found less than MIN_BID_LEAD_SECONDS
+    //! after the bid (its template predates the request).
+    enum class Status { PENDING, LANDED, MISSED, OUTBID, NO_BMM, TOO_SOON };
     Status status{Status::PENDING};
     CAmount offer{0};
     int64_t time{0};
 };
 //! How long other nodes keep a bid that cannot be mined in their mempools at most (the default -mempoolexpiry).
 inline constexpr int64_t STALE_BID_SECONDS{336 * 3600};
+//! A mainchain block found less than this after a bid could not have taken it: its template predates the request (on
+//! eCash mainnet, 2026-10-30: 22 of 22 bids with 4-10 s of lead landed; 114 misses came 3 s or less after the bid).
+inline constexpr int64_t MIN_BID_LEAD_SECONDS{4};
 /**
  * The stale bid a new one must pay more than: the highest offer of the bids, oldest first, that did not land
- * (missed, or outbid) after the last one that did, and younger than STALE_BID_SECONDS at `now`; 0 if none.
+ * (missed, or outbid) after the last one that did, and younger than STALE_BID_SECONDS at `now`; 0 if none. Not the
+ * bids that could not have landed (NO_BMM, TOO_SOON): raised above each of them, a bid that could not land compounded
+ * into the next one (378, 878, 1378 sat ... on eCash mainnet, 2026-10-30, the day's cap spent by 05:13).
  */
 CAmount StaleOffer(std::span<const PastBid> bids, int64_t now);
 

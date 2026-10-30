@@ -405,6 +405,9 @@ std::vector<RPCResult> AnchoringTotalsDoc()
         {
             {RPCResult::Type::NUM, "kind", "Their number"},
         }},
+        {RPCResult::Type::NUM, "missed", "Bids missed: the mainchain block carried BMM commitments and came 4 s or more after the bid, without this chain's"},
+        {RPCResult::Type::NUM, "nobmm", "Bids for mainchain blocks that carried no BMM commitment of any sidechain (a pool that does not do BMM): no miss"},
+        {RPCResult::Type::NUM, "toosoon", "Bids for mainchain blocks found less than 4 s after them (the template predates the request): no miss"},
     };
 }
 
@@ -457,7 +460,7 @@ RPCMethod getbmminfo()
                     {RPCResult::Type::BOOL, "designated", "Whether this node is designated for the mainchain block (any of its keys; true when turns do not apply)"},
                     {RPCResult::Type::NUM, "mainheight", "The mainchain block the turn is for"},
                 }},
-                {RPCResult::Type::OBJ, "day", "The anchors of this node that landed in the last 24 hours", AnchoringTotalsDoc()},
+                {RPCResult::Type::OBJ, "day", "The anchors of this node that landed, and its bids that did not, in the last 24 hours", AnchoringTotalsDoc()},
                 {RPCResult::Type::OBJ, "week", "The same in the last 7 days", AnchoringTotalsDoc()},
             }},
         }},
@@ -526,6 +529,9 @@ RPCMethod getbmminfo()
             UniValue anchors(UniValue::VOBJ);
             for (const auto& [kind, count] : t.anchors) anchors.pushKV(kind, count);
             out.pushKV("anchors", std::move(anchors));
+            out.pushKV("missed", t.missed);
+            out.pushKV("nobmm", t.no_bmm);
+            out.pushKV("toosoon", t.too_soon);
             return out;
         }};
         anchoring.pushKV("day", totals(report.day));

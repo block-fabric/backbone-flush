@@ -1312,4 +1312,14 @@ BOOST_AUTO_TEST_CASE(demand_driven_turns)
     BOOST_CHECK(!DecideBid(With(BidStrategy::MINIMUM), At(0)).turns);
 }
 
+BOOST_AUTO_TEST_CASE(stale_rule_bids_that_could_not_land)
+{
+    // A bid for a block without any BMM commitment, or one found too soon after it, could not have landed: nothing to
+    // raise above (raised above each, a bid compounded: 378, 878, 1378 sat ... on eCash mainnet).
+    const int64_t now{1'000'000'000};
+    using S = PastBid::Status;
+    BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{{S::NO_BMM, 378, now - 30}, {S::TOO_SOON, 878, now - 20}}, now), 0);
+    BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{{S::MISSED, 378, now - 30}, {S::NO_BMM, 878, now - 20}}, now), 378);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

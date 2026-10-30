@@ -2052,8 +2052,18 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
             } else {
                 bool landed{m_turn_held_since < 0 || m_turn_held_since > main_height};
                 for (int at{m_turn_held_since + 1}; !landed && at <= main_height; ++at) landed = record.BmmAt(at).has_value();
-                if (landed) m_turn_held_since = main_height;
-                const int waited{main_height - m_turn_held_since};
+                if (landed) {
+                    m_turn_held_since = main_height;
+                    m_turn_held_time = now;
+                }
+                // The blocks that gave the designated validators a chance: with BMM commitments, and found
+                // MIN_BID_LEAD_SECONDS or more into the wait (mainchain blocks come ~17 s apart at the median, and most
+                // carry no BMM: two of those are no turn missed).
+                int waited{0};
+                for (int at{m_turn_held_since + 1}; at <= main_height; ++at) {
+                    const auto seen{MainSeenLocked(at, record.HashAt(at))};
+                    if (!seen || (seen->bmm && seen->time - m_turn_held_time >= MIN_BID_LEAD_SECONDS)) ++waited;
+                }
                 if (waited < policy.turn_backup) {
                     d.reason = strprintf("no bid: another validator's turn for mainchain block %d; this one bids if no anchor lands in %d mainchain block%s (%s)",
                                          main_height + 1, policy.turn_backup - waited, policy.turn_backup - waited == 1 ? "" : "s", d.reason);
@@ -2518,8 +2528,21 @@ void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
             bid.status = AnchorBidRecord::Status::OUTBID;
             m_bid_missed = 0;
         } else {
-            bid.status = AnchorBidRecord::Status::MISSED;
-            ++m_bid_missed;
+            // A miss of ours only if the block could have taken the bid: it carried BMM commitments (of any sidechain;
+            // 168 of 287 misses on eCash mainnet, 2026-10-30, were blocks of a pool that never does BMM) and came
+            // MIN_BID_LEAD_SECONDS or more after the bid (114 were found 3 s or less after it). The others neither
+            // count in the run of missed blocks (the warnings, the raises) nor make a stale bid to raise above.
+            // (A block this node did not see as the tip, two in one round say: a miss, as before 8.3.7.)
+            const auto seen{MainSeenLocked(bid.main_height + 1, record.HashAt(bid.main_height + 1))};
+            if (seen && !seen->bmm) {
+                bid.status = AnchorBidRecord::Status::NO_BMM;
+            } else if (seen && seen->time - bid.time < MIN_BID_LEAD_SECONDS) {
+                bid.status = AnchorBidRecord::Status::TOO_SOON;
+            } else {
+                bid.status = AnchorBidRecord::Status::MISSED;
+                ++m_bid_missed;
+            }
+            m_bids_unlanded.emplace_back(bid.time, bid.status);
         }
     }
     if (settled) SaveBidsLocked();
@@ -2544,6 +2567,13 @@ void FastBlocksHooks::SettleBids(const sidechain::Mainchain& record) const
                    m_bid_inputs.fee_rate_per_kvb ? strprintf(", the mainchain's next-block estimate %.2f sat/vB", *m_bid_inputs.fee_rate_per_kvb / 1000.0) : "",
                    m_params.MaxUnanchoredSlots(SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), m_params)));
     }
+}
+
+std::optional<FastBlocksHooks::MainSeen> FastBlocksHooks::MainSeenLocked(int height, const std::optional<uint256>& hash) const
+{
+    const auto it{m_main_seen.find(height)};
+    if (it == m_main_seen.end() || !hash || it->second.hash != *hash) return std::nullopt;
+    return it->second;
 }
 
 CAmount FastBlocksHooks::SpentInPeriod(const AnchorBidPolicy& policy, int64_t now) const
@@ -2633,6 +2663,15 @@ void FastBlocksHooks::SaveBidsLocked() const
     out.pushKV("history", std::move(history));
     out.pushKV("missed", m_bid_missed);
     out.pushKV("anchors", std::move(anchors));
+    UniValue unlanded{UniValue::VARR};
+    for (const auto& [time, status] : m_bids_unlanded) {
+        if (time <= now - ANCHORS_LANDED_SECONDS) continue;
+        UniValue entry{UniValue::VARR};
+        entry.push_back(time);
+        entry.push_back(static_cast<int>(status));
+        unlanded.push_back(std::move(entry));
+    }
+    out.pushKV("unlanded", std::move(unlanded));
     out.pushKV("reserve", m_anchor_reserve);
     out.pushKV("deficit", m_anchor_deficit);
     // Written whole beside it, then moved over it: a crash leaves the old file or the new one.
@@ -2696,7 +2735,7 @@ void FastBlocksHooks::LoadBids(const fs::path& path) const
             const auto time{number(entry.find_value("time"))};
             const UniValue& tip{entry.find_value("maintip")};
             const UniValue& ticket{entry.find_value("ticket")};
-            if (!height || !offer || !MoneyRange(*offer) || !status || *status < 0 || *status > static_cast<int>(AnchorBidRecord::Status::OUTBID) || !time ||
+            if (!height || !offer || !MoneyRange(*offer) || !status || *status < 0 || *status > static_cast<int>(AnchorBidRecord::Status::TOO_SOON) || !time ||
                 !tip.isStr() || !ticket.isStr()) {
                 continue;
             }
@@ -2728,6 +2767,21 @@ void FastBlocksHooks::LoadBids(const fs::path& path) const
         }
     }
     std::sort(m_anchors_landed.begin(), m_anchors_landed.end(), [](const LandedAnchor& a, const LandedAnchor& b) { return a.time < b.time; });
+    m_bids_unlanded.clear();
+    if (const UniValue& unlanded{in.find_value("unlanded")}; unlanded.isArray()) {
+        for (const UniValue& entry : unlanded.getValues()) {
+            if (!entry.isArray() || entry.size() != 2) continue;
+            const auto time{number(entry[0])};
+            const auto status{number(entry[1])};
+            if (!time || !status || *time <= now - ANCHORS_LANDED_SECONDS) continue;
+            if (*status != static_cast<int>(AnchorBidRecord::Status::MISSED) && *status != static_cast<int>(AnchorBidRecord::Status::NO_BMM) &&
+                *status != static_cast<int>(AnchorBidRecord::Status::TOO_SOON)) {
+                continue;
+            }
+            m_bids_unlanded.emplace_back(*time, static_cast<AnchorBidRecord::Status>(*status));
+        }
+    }
+    std::sort(m_bids_unlanded.begin(), m_bids_unlanded.end());
     if (const auto reserve{number(in.find_value("reserve"))}; reserve && MoneyRange(*reserve)) m_anchor_reserve = *reserve;
     if (const auto deficit{number(in.find_value("deficit"))}; deficit && MoneyRange(*deficit)) m_anchor_deficit = *deficit;
     LogInfo("FastBlocks: %d bids read from %s (%d landed in the last %d days; the anchor reserve %s)", m_bid_history.size(), fs::PathToString(path), m_bid_landed.size(),
@@ -2812,6 +2866,9 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     // What the last mainchain block took for well-formed BMM requests (any slot), for a node whose mainchain node
     // answers getblock (not through the enforcer's interface alone): kept for the last 12 blocks (RobustIncludedRate).
     std::optional<std::vector<BmmRequestSeen>> seen;
+    std::optional<MainSeen> main_seen;
+    int main_seen_height{-1};
+    bool carried{false};
     try {
         UniValue args{UniValue::VARR};
         args.push_back(main_tip.GetHex());
@@ -2829,10 +2886,21 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
                     const UniValue& spk{vouts[j].find_value("scriptPubKey").find_value("hex")};
                     if (spk.isStr()) slot = BmmRequestSlot(ParseHex(spk.get_str()), *prev);
                 }
+                if (slot) carried = true;
                 const auto fee{amount(tx.find_value("fee"))};
                 const UniValue& vsize{tx.find_value("vsize").isNum() ? tx.find_value("vsize") : tx.find_value("size")};
                 if (!slot || !fee || !vsize.isNum() || vsize.getInt<int64_t>() <= 0) continue;
                 seen->push_back({*slot, *fee * 1000 / vsize.getInt<int64_t>()});
+            }
+            // Whether the block carried any BMM commitment (a request of any slot: one is valid only with the
+            // coinbase's commitment), for SettleBids: a block of a pool that never does BMM is no miss of ours. Its
+            // time, as its header says (the template's: a block found right after a bid was made from one before it).
+            const UniValue& height{block.find_value("height")};
+            const UniValue& time{block.find_value("time")};
+            if (height.isNum()) {
+                main_seen_height = height.getInt<int>();
+                main_seen = MainSeen{.hash = main_tip, .bmm = carried,
+                                     .time = time.isNum() ? time.getInt<int64_t>() : TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
             }
         }
     } catch (const std::exception&) {
@@ -2850,6 +2918,10 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     } catch (const UniValue&) {
     }
     LOCK(m_anchor_mutex);
+    if (main_seen) {
+        m_main_seen[main_seen_height] = *main_seen;
+        while (m_main_seen.size() > MAIN_SEEN) m_main_seen.erase(m_main_seen.begin());
+    }
     m_bid_inputs.fee_rate_per_kvb = rate;
     if (seen) {
         m_bid_seen.push_back(std::move(*seen));
@@ -2912,6 +2984,14 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
             totals->collected += anchor.pot;
             totals->paid += anchor.offer;
             ++totals->anchors[anchor.basis];
+        }
+    }
+    while (!m_bids_unlanded.empty() && m_bids_unlanded.front().first <= now - ANCHORS_LANDED_SECONDS) m_bids_unlanded.pop_front();
+    for (const auto& [time, status] : m_bids_unlanded) {
+        for (AnchoringTotals* totals : {&report.week, &report.day}) {
+            if (totals == &report.day && time <= now - 24 * 3600) continue;
+            using enum AnchorBidRecord::Status;
+            ++(status == NO_BMM ? totals->no_bmm : status == TOO_SOON ? totals->too_soon : totals->missed);
         }
     }
     report.anchor_trigger = m_validator && policy.Bids() && policy.anchor;

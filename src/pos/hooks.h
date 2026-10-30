@@ -434,7 +434,9 @@ public:
     std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /** A bid of the anchorer, and what became of it. */
     struct AnchorBidRecord {
-        enum class Status { PENDING, LANDED, MISSED, OUTBID };
+        //! (As PastBid::Status: NO_BMM, the block carried no BMM commitment of any sidechain; TOO_SOON, it was found less
+        //! than MIN_BID_LEAD_SECONDS after the bid. Neither is a miss of ours.)
+        enum class Status { PENDING, LANDED, MISSED, OUTBID, NO_BMM, TOO_SOON };
         //! The mainchain tip the request followed: it is for the block after it.
         int main_height{0};
         uint256 main_tip;
@@ -465,6 +467,10 @@ public:
         CAmount paid{0};
         //! Landed anchors, by what they were bid for (AnchorBidRecord::basis).
         std::map<std::string, int> anchors;
+        //! Bids that did not land: real misses, blocks without any BMM commitment, blocks found too soon after the bid.
+        int missed{0};
+        int no_bmm{0};
+        int too_soon{0};
     };
     /** What the anchorer bids now, and why; what it bid; what its wallet covers. */
     struct AnchorBidReport {
@@ -711,6 +717,18 @@ private:
         std::string basis;
     };
     mutable std::deque<LandedAnchor> m_anchors_landed GUARDED_BY(m_anchor_mutex);
+    //! The bids settled MISSED, NO_BMM or TOO_SOON, and when they were made (the last ANCHORS_LANDED_SECONDS).
+    mutable std::deque<std::pair<int64_t, AnchorBidRecord::Status>> m_bids_unlanded GUARDED_BY(m_anchor_mutex);
+    /** A mainchain block as PollBidSignals saw it: whether it carried any BMM commitment, and its time. */
+    struct MainSeen {
+        uint256 hash;
+        bool bmm{true};
+        int64_t time{0};
+    };
+    //! By height, the last MAIN_SEEN blocks (one a mainchain tip polled; a block that was never the tip is not known).
+    mutable std::map<int, MainSeen> m_main_seen GUARDED_BY(m_anchor_mutex);
+    /** What PollBidSignals saw of the mainchain block at `height` with `hash`, if it saw it. */
+    std::optional<MainSeen> MainSeenLocked(int height, const std::optional<uint256>& hash) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
     //! The anchor reserve: what the holdbacks of landed fee bids put in, less the landed bids without fees; and what those
     //! spent past an empty reserve since it was last at its target (reported, never a reason not to bid).
     mutable CAmount m_anchor_reserve GUARDED_BY(m_anchor_mutex){0};
@@ -720,6 +738,7 @@ private:
     mutable bool m_turn_designated GUARDED_BY(m_anchor_mutex){false};
     mutable int m_turn_main_height GUARDED_BY(m_anchor_mutex){0};
     mutable int m_turn_held_since GUARDED_BY(m_anchor_mutex){-1};
+    mutable int64_t m_turn_held_time GUARDED_BY(m_anchor_mutex){0};
     //! What the transactions of each block of stake no anchor covers move (the sum of their outputs), by block: read once
     //! a block (ValueAtRisk), the blocks of the run only.
     mutable Mutex m_risk_mutex;
@@ -772,6 +791,8 @@ inline constexpr const char* BID_FILE{"anchorbids.json"};
 inline constexpr int64_t BID_LANDED_SECONDS{int64_t{24 * 31} * 3600};
 //! What anchoring collected and paid is reported for 7 days at most: the landed anchors are kept that long.
 inline constexpr int64_t ANCHORS_LANDED_SECONDS{int64_t{7 * 24} * 3600};
+//! The mainchain blocks PollBidSignals remembers (whether they carried BMM, their time).
+inline constexpr size_t MAIN_SEEN{200};
 /** The node's setting (settings.json) that keeps the fields setanchorbidpolicy changed. */
 inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
 /**

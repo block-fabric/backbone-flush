@@ -148,6 +148,8 @@ const char* BidStatusName(pos::FastBlocksHooks::AnchorBidRecord::Status status)
     case LANDED: return "landed";
     case MISSED: return "missed";
     case OUTBID: return "outbid";
+    case NO_BMM: return "nobmm";
+    case TOO_SOON: return "toosoon";
     }
     return "";
 }
@@ -262,7 +264,7 @@ std::vector<RPCResult> BidResultDoc()
                 {RPCResult::Type::STR, "reason", "Why"},
                 {RPCResult::Type::NUM, "pressure", "The stall pressure then"},
                 {RPCResult::Type::STR, "trigger", "anchor, mine, anchor+mine or hand"},
-                {RPCResult::Type::STR, "status", "pending, landed, missed (the block had no commitment of this chain) or outbid (another commitment of this chain, or the mainchain went another way)"},
+                {RPCResult::Type::STR, "status", "pending, landed, missed (the block carried BMM commitments, came 4 s or more after the bid, and had none of this chain), outbid (another commitment of this chain, or the mainchain went another way), nobmm (the block carried no BMM commitment of any sidechain: its pool does not do BMM; no miss) or toosoon (the block was found less than 4 s after the bid: its template predates the request; no miss)"},
                 {RPCResult::Type::STR_AMOUNT, "cost", "What it cost (landed bids only)"},
                 {RPCResult::Type::NUM_TIME, "time", "When it was made"},
                 {RPCResult::Type::STR_AMOUNT, "pot", "The pot behind it: what its anchor pays the payee"},

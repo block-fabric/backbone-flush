@@ -829,6 +829,7 @@ CAmount StaleOffer(std::span<const PastBid> bids, int64_t now)
         if (bid.status == PastBid::Status::LANDED) {
             stale = 0;
         } else if ((bid.status == PastBid::Status::MISSED || bid.status == PastBid::Status::OUTBID) && bid.time > now - STALE_BID_SECONDS) {
+            // (NO_BMM and TOO_SOON: bids that could not have landed, never raised above.)
             stale = std::max(stale, bid.offer);
         }
     }
