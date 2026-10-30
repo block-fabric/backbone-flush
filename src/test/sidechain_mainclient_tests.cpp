@@ -234,9 +234,12 @@ BOOST_AUTO_TEST_CASE(ecash_networks)
             // The long-gap rule (from every network's first epoch): 24 hours without BMM, the seed and the set 48 hours
             // ahead; a whole run of it still within the blocks a reorg can take back.
             BOOST_CHECK_EQUAL(consensus.pos.gap_epoch, 0);
-            BOOST_CHECK_EQUAL(consensus.pos.gap_max_unanchored_slots * consensus.pos.slot_seconds, 24 * 3600);
+            // (eCash mainnet: 16 hours, 32 ahead, and a bootstrap of three days.)
+            const bool main{type == ChainType::ECASH};
+            BOOST_CHECK_EQUAL(consensus.pos.gap_max_unanchored_slots * consensus.pos.slot_seconds, (main ? 16 : 24) * 3600);
             BOOST_CHECK_LE(consensus.pos.gap_max_unanchored_slots, DRIVECHAIN_UNDO_DEPTH);
-            BOOST_CHECK_EQUAL(consensus.pos.gap_seed_lookahead_seconds, 48 * 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.gap_seed_lookahead_seconds, (main ? 32 : 48) * 3600);
+            BOOST_CHECK_EQUAL(consensus.pos.bootstrap_end_epoch, main ? 72 : 0);
             BOOST_CHECK_EQUAL(consensus.pos.gap_set_lead_seconds, consensus.pos.gap_seed_lookahead_seconds);
             BOOST_CHECK_GT(consensus.pos.evidence_window_anchors * 600, consensus.pos.gap_set_lead_seconds + 2 * consensus.pos.slots_per_epoch * consensus.pos.slot_seconds);
             BOOST_CHECK_EQUAL(consensus.pos.final_anchors, 3);
