@@ -219,7 +219,8 @@ struct BidInputs {
     //! The length of a slot, for the heartbeat's hours.
     int64_t slot_seconds{15};
     //! A commitment of this chain in the last mainchain block waits for its acknowledgement: the unanchored run ends
-    //! with it, so no heartbeat for it (a stall bid still goes).
+    //! with it, so no heartbeat for it (a stall bid still goes). The node says so only of a ticket it knows, anchoring a
+    //! block of its active chain, and for a few mainchain blocks of a run at most (FollowerRound).
     bool anchor_waiting{false};
 };
 

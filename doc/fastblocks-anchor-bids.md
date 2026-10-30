@@ -29,7 +29,9 @@ default), and with Fees + minimum where it makes sense, a node bids when somethi
 4. **The heartbeat** (`heartbeathours`, 6 by default, 0: off): no anchor for that long, measured as the age of the
    unanchored run (`firstunanchoredslot`; 6 h is 1440 slots of 15 s), a bid of the competitive base whatever the fees
    (`kind` `heartbeat`). Never held by the work throttle; as liveness it may spend the stall reserve of the cap. Not while
-   a commitment of this chain in the last mainchain block waits for its acknowledgement (the run ends with it). The stall
+   a commitment of this chain in the last mainchain block waits for its acknowledgement (the run ends with it): only a
+   commitment of a ticket the node knows, anchoring a block of its active chain (an unknown or bogus one, which anyone
+   could land cheaply every block, holds nothing back), and for 3 mainchain blocks of a run at most. The stall
    bid from p = 0.5 (8 h on eCash mainnet) stays as the backup.
 
 Not a trigger: the age of an ordinary transaction (it has no finality target), empty blocks, the fee pool, rewards owed,

@@ -743,6 +743,11 @@ private:
     mutable std::string m_turn_holding GUARDED_BY(m_anchor_mutex);
     //! What the last round added to a bid that took its turn: its own turn, or the backup.
     mutable std::string m_turn_said GUARDED_BY(m_anchor_mutex);
+    //! The mainchain blocks of the unanchored run m_wait_run (its first slot) whose commitment held the heartbeat back
+    //! (BidInputs::anchor_waiting), the last of them m_wait_tip.
+    mutable int64_t m_wait_run GUARDED_BY(m_anchor_mutex){-1};
+    mutable int m_wait_blocks GUARDED_BY(m_anchor_mutex){0};
+    mutable uint256 m_wait_tip GUARDED_BY(m_anchor_mutex);
     //! What the transactions of each block of stake no anchor covers move (the sum of their outputs), by block: read once
     //! a block (ValueAtRisk), the blocks of the run only.
     mutable Mutex m_risk_mutex;
@@ -797,6 +802,9 @@ inline constexpr int64_t BID_LANDED_SECONDS{int64_t{24 * 31} * 3600};
 inline constexpr int64_t ANCHORS_LANDED_SECONDS{int64_t{7 * 24} * 3600};
 //! The mainchain blocks PollBidSignals remembers (whether they carried BMM, their time).
 inline constexpr size_t MAIN_SEEN{200};
+//! At most this many mainchain blocks of one unanchored run with a commitment waiting for its acknowledgement hold the
+//! heartbeat back: a commitment that is never acknowledged does not stop it for longer.
+inline constexpr int MAX_ANCHOR_WAIT_BLOCKS{3};
 /** The node's setting (settings.json) that keeps the fields setanchorbidpolicy changed. */
 inline constexpr const char* ANCHOR_BID_SETTING{"anchorbidpolicy"};
 /**

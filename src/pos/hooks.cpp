@@ -2004,6 +2004,19 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
             designated = std::find(validator->keys.begin(), validator->keys.end(), *chosen) != validator->keys.end();
         }
     }
+    // A commitment of this chain in the last mainchain block that waits for its acknowledgement holds the heartbeat back
+    // (the run ends with it), but only one this node can see acknowledged: a ticket it knows, anchoring a block of its
+    // active chain. A commitment of an unknown or bogus ticket is not waiting: anyone landing a cheap one every block
+    // would otherwise keep the liveness bids from going out. (A real ticket not relayed here yet: a redundant bid, which
+    // costs nothing unless it lands.)
+    bool anchor_waiting{false};
+    if (const auto waiting{record.BmmAt(main_height)}; waiting && fast.last_main_height < main_height) {
+        if (const auto ticket{GetTicket(*waiting)}) {
+            LOCK(::cs_main);
+            const CBlockIndex* anchored{chainman->m_blockman.LookupBlockIndex(ticket->anchored)};
+            anchor_waiting = anchored && chainman->ActiveChain().Contains(*anchored);
+        }
+    }
     // The mainchain's next-block fee estimate and the bid wallet's balance (once per mainchain block), the bids
     // made settled with the record; and the bid of the policy for a pot.
     if (validator || mining.enabled) PollBidSignals(follower, main_tip, policy);
@@ -2021,7 +2034,22 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
         m_bid_inputs.value_at_risk = at_risk;
         m_bid_inputs.reserve = m_anchor_reserve;
         m_bid_inputs.slot_seconds = m_params.slot_seconds;
-        m_bid_inputs.anchor_waiting = record.BmmAt(main_height).has_value() && fast.last_main_height < main_height;
+        // (Bounded: within one unanchored run, at most MAX_ANCHOR_WAIT_BLOCKS mainchain blocks with such a commitment hold the
+        // heartbeat back, whatever their tickets; past them it bids all the same.)
+        bool waiting{anchor_waiting};
+        if (waiting) {
+            if (m_wait_run != fast.first_unanchored_slot) {
+                m_wait_run = fast.first_unanchored_slot;
+                m_wait_blocks = 0;
+                m_wait_tip.SetNull();
+            }
+            if (m_wait_tip != main_tip) {
+                m_wait_tip = main_tip;
+                ++m_wait_blocks;
+            }
+            waiting = m_wait_blocks <= MAX_ANCHOR_WAIT_BLOCKS;
+        }
+        m_bid_inputs.anchor_waiting = waiting;
         const BidTriggers triggers{.anchor = validator.has_value(), .mine = mining.enabled, .mine_always = mining.enabled && mining.always,
                                    .mine_amount = mining.amount, .stale = StaleLocked(now)};
         BidDecision d{DecideNodeBid(policy, m_bid_inputs, triggers)};
