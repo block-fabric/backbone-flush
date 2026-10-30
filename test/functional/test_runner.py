@@ -176,6 +176,7 @@ BASE_SCRIPTS = [
     'feature_fastblocks_stall.py',
     'feature_fastblocks_signature.py',
     'feature_fastblocks_staking.py',
+    'feature_fastblocks_bootstrap.py',
     'feature_fastblocks_slashing.py',
     'feature_fastblocks_p2p.py',
     'feature_fastblocks_fork.py',
