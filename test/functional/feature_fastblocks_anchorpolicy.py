@@ -8,7 +8,8 @@ Three genesis validators with 15-second slots on mock time, as feature_fastblock
 an anchor before blocks of stake halt (-testposparam=max_unanchored_slots@60), and a mainchain whose miners take no
 transaction below 50 sat/vB (-blockmintxfee): a congested mempool, whatever the floor (500 sat, ~2.6 sat/vB).
 
-  - not a validator: getanchorbidpolicy explains, setanchorbidpolicy refuses;
+  - not a validator: getanchorbidpolicy explains; setanchorbidpolicy sets the node's one policy all the same (its merged
+    miner's, setbmm), which getbmminfo shows with the day's spending;
   - setanchorbidpolicy: checked (floor above max, an unknown strategy, a share over 100 %, a pressure of 0, a falling
     curve), kept in settings.json over the options, read back after a restart; reset: the options' policy again;
   - congested: the floor bids stay out of the mainchain's blocks (missed, the "bid too low" warning, the rebids not
@@ -59,12 +60,19 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         n0 = self.nodes[0]
         self.main_address = main.getnewaddress()
 
-        self.log.info("Not a validator: an explanation, and no policy to set")
+        self.log.info("Not a validator: an explanation; the one policy is its merged miner's")
         info = n0.getanchorbidpolicy()
         assert_equal(info["validator"], False)
         assert_equal(info["bidding"], False)
         assert "not a validator" in info["explanation"]
-        assert_raises_rpc_error(-1, "not a validator", n0.setanchorbidpolicy, {"floor": 0.00001})
+        assert_equal((info["anchortrigger"], info["minetrigger"]), (False, False))
+        info = n0.setanchorbidpolicy({"max": 0.0002, "periodcap": 0.003})
+        assert_equal(sats(info["policy"]["max"]), 20_000)
+        bmm = n0.getbmminfo()["bidpolicy"]
+        assert_equal((sats(bmm["max"]), sats(bmm["periodcap"]), sats(bmm["spentperiod"]), sats(bmm["left"])), (20_000, 300_000, 0, 300_000))
+        # A bid by hand is at most max.
+        assert_raises_rpc_error(-8, "above the most a bid", n0.requestbmmblock, n0.getnewaddress(), 0.0003)
+        n0.setanchorbidpolicy({}, True)
         assert_equal(n0.getanchorinfo()["bid"]["validator"], False)
 
         self.setup_chain_and_validators()
@@ -172,8 +180,12 @@ class FastBlocksAnchorPolicyTest(FastBlocksIdleTest):
         bid = n0.getanchorinfo()["bid"]
         # (Still congested: the floor misses again, and the rebids raise it, x2 after 3 missed, up to x8: no escalation.)
         assert bid["pressure"] < 0.5
-        assert bid["kind"] in ("floor", "rebid"), bid["kind"]
-        assert sats(bid["effective"]) <= 500 * 8
+        # (Or 500 sat above the last bid that missed since, which other nodes may still hold on the same coin: replace.)
+        assert bid["kind"] in ("floor", "rebid", "replace"), bid["kind"]
+        if bid["kind"] != "replace":
+            assert sats(bid["effective"]) <= 500 * 8
+        else:
+            assert_equal(sats(bid["effective"]), sats(bid["stalebid"]) + 500)
         assert_greater_than(landed_offer, sats(bid["effective"]))
         # Past where the first run would have halted, the mempool still congested: the next run escalates and lands
         # again. (next_slot waits for every node's block of the slot: blocks of stake did not halt.)
