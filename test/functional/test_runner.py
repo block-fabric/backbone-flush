@@ -187,6 +187,7 @@ BASE_SCRIPTS = [
     'feature_fastblocks_anchorpolicy.py',
     'feature_fastblocks_anchoractivity.py',
     'feature_fastblocks_anchordemand.py',
+    'feature_fastblocks_anchorgrpc.py',
     'feature_fastblocks_restart.py',
     'feature_fastblocks_unchecked.py',
     'feature_fastblocks_window.py',
