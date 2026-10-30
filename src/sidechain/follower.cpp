@@ -35,6 +35,9 @@
 
 namespace sidechain {
 
+/** Mainchain blocks (an hour on eCash) after which an enforcer that has not proposed this chain's bundle is handed it again (SendBundle). */
+static constexpr int BUNDLE_REHAND_BLOCKS{6};
+
 namespace {
 // The bip300301_enforcer's interface (MainClient::CallEnforcer), in the proto3 JSON mapping: a wrapper is its
 // value, a ConsensusHex/ReverseHex {"hex": ...}; a hash as ConsensusHex is its bytes in order (the reverse of
@@ -924,7 +927,19 @@ void Follower::SendBundle()
         return;
     }
     if (!tx) return;
-    if (WITH_LOCK(m_mutex, return m_bundle_sent != hash)) {
+    // An enforcer may lose a bundle it was handed (a restart, a new data directory) and never say so: handed again
+    // every BUNDLE_REHAND_BLOCKS mainchain blocks while the record has no proposal of it since its commitment (the
+    // enforcer proposes it in the first block it mines; one it holds already is no harm). Not only once per run of
+    // this node, which keeps what it handed in memory alone.
+    const auto rehand{[&] {
+        if (!m_client.HasEnforcer() || committed_at < 0) return false;
+        const Mainchain& record{*Assert(chainman.m_mainchain)};
+        const int at{record.Height()};
+        if (WITH_LOCK(m_mutex, return m_bundle_sent != hash || at - m_bundle_sent_height < BUNDLE_REHAND_BLOCKS)) return false;
+        return !record.ProposedSince(hash, committed_at, at);
+    }};
+    if (WITH_LOCK(m_mutex, return m_bundle_sent != hash) || rehand()) {
+        const int sent_height{Assert(chainman.m_mainchain)->Height()};
         // The mainchain node proposes the bundle in the blocks it mines; others learn its hash from those.
         // That it refuses the bundle is no reason to stop following the mainchain: it is logged, and tried
         // again with the next block.
@@ -949,11 +964,15 @@ void Follower::SendBundle()
                 LOCK(m_mutex);
                 m_bundle_refused = hash;
             }
+            // (A bundle handed before and refused again is tried again BUNDLE_REHAND_BLOCKS later, not every block.)
+            LOCK(m_mutex);
+            if (m_bundle_sent == hash) m_bundle_sent_height = sent_height;
             return;
         }
         LogInfo("Gave the mainchain node the withdrawal bundle %s", hash.ToString());
         LOCK(m_mutex);
         m_bundle_sent = hash;
+        m_bundle_sent_height = sent_height;
     }
     vouch(hash);
     // Once the bundle has the work score, the mainchain node broadcasts the

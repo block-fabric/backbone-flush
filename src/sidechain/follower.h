@@ -282,6 +282,8 @@ private:
     uint256 m_mining_requested_for GUARDED_BY(m_mutex);
     //! The bundle the mainchain node was last given; null once this chain has none, or the record closed it.
     uint256 m_bundle_sent GUARDED_BY(m_mutex);
+    //! The height of the record when the enforcer was last handed m_bundle_sent (SendBundle hands it again if not proposed since).
+    int m_bundle_sent_height GUARDED_BY(m_mutex){-1};
     //! What the mainchain node was last told this chain vouches for: a bundle, or none (null); not told yet if empty.
     std::optional<uint256> m_vouched GUARDED_BY(m_mutex);
     //! The word the mainchain node last refused, since it last took one, so that it is said once.
