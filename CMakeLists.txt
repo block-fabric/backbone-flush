@@ -33,7 +33,7 @@ set(CLIENT_NAME "Flush")
 # The product's own version (its releases): what the node says it is, on the network (the P2P subversion
 # "/Flush:5.1.0/"), in -version, getnetworkinfo and the app's About, and in the release packages' names.
 # CLIENT_VERSION (Bitcoin Core's, below) stays what the wallets, settings and protocol versions count.
-set(PRODUCT_VERSION "8.3.6")
+set(PRODUCT_VERSION "8.3.7")
 set(CLIENT_BIN_NAME "flush")
 set(CLIENT_VERSION_MAJOR 32)
 set(CLIENT_VERSION_MINOR 0)
