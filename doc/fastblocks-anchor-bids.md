@@ -8,10 +8,57 @@ hours halts the chain. The bid policy says what the anchorer offers, and how it
 raises its offer as the chain nears that halt. It is consensus-neutral: what a node
 bids is its own business; the chain only sees which commitment landed.
 
-Only validators bid (a node with `-validatorkeyfile`); on any other node the RPCs
-and the app say so. A node's merged miner (`setbmm`), when on, bids instead, with
-its own offer: the "Offer for each block" of Merged mining's Automatic mining is
-`setbmm`'s, not the anchorer's.
+## One policy, two triggers (8.3.5)
+
+A validator's anchor bids and the merged miner's bids are the same thing: BMM
+requests paid from the same mainchain wallet (the enforcer's, or Backbone's). Since
+8.3.5 they follow **one bid policy** (this one: `setanchorbidpolicy`, the
+`-validatoranchorbid*` options, `anchorbidpolicy` in `settings.json`), on every
+node, validator or not. Only what sets a bid off differs:
+
+- **Mine blocks when fees pay** (`setbmm true "address"`, any node): a bid once the
+  fee share of what the next anchor (or BMM block) pays covers a request (500 sat);
+  `always` + `amount` (for tests): `amount` for every mainchain block.
+- **Anchor my validator** (validators, strategy not `off`): as before.
+
+At most one request per mainchain block: one ticket serves both (its anchor anchors
+the chain and pays its pot to the payee: the `setbmm` address when merged mining is
+on, else the validator's payout). With both on, the bid is the higher of the two.
+A block of stake stall (BMM blocks instead of tickets) is bid for the same way, the
+policy deciding from the block's fees.
+
+What changes for `setbmm`: its offer is now within the policy. By default
+(`feespreventstall`, `max` 0.001, `periodcap` 0.01 a day) the merged miner offers
+max(base, 99 % of the fees), **at most 0.001 coins a block and 0.01 coins of landed
+bids a day**; it no longer bids "whatever the fees are". Strategy `off` stops only
+the anchorer: the merged miner then bids the fee share (99 %), as `setbmm` did.
+`fixed` offers `fixed` whenever the fees pay for a request. `always`'s amount is
+capped by `max` too. A bid by hand (`requestbmmblock`) may not exceed `max`, and it
+counts in the day's spending. On regtest without anchor options, as before: the
+anchorer off, and no period cap.
+
+The daily cap counts every landed bid of the node together (both triggers, and by
+hand), since the node started; `getbmminfo`'s `bidpolicy` and `getanchorinfo`'s
+`bid` show it (`spentperiod`, `left`, `trigger`).
+
+### Coins a stale bid tied up
+
+A bid that did not land (missed, or outbid) cannot be mined any more, and Backbone
+drops it from its own mempool and its wallet abandons it, freeing its coin. Other
+nodes may keep it until their mempool expiry (two weeks by default): a new request
+spending the same coin is then a replacement there, refused unless it pays more
+than the old one plus the incremental relay fee. Seen on mainnet: Backbone's wallet
+reused the abandoned coin at the same fee.
+
+- Flush (8.3.5): the next bid is at least the highest stale bid (not landed since
+  the last that did, within two weeks) plus 500 sat (`kind` `replace`), but never
+  above `max` nor the cap's rest; when it cannot be, the bid goes as it is, and the
+  reason (and a warning) says that nodes holding the stale bid refuse it if the
+  wallet spends the same coin (a refused bid costs nothing). `stalebid` in the RPCs.
+- Backbone (not done here): the real fix is in its wallet's coin selection for BMM
+  requests, which Flush cannot choose: prefer coins no abandoned stale request spent,
+  and spend such a coin only above that request's fee plus the incremental relay
+  fee. Then Flush's raise is rarely needed.
 
 ## Strategies
 

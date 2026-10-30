@@ -177,6 +177,8 @@ struct BidDecision {
     std::string reason;
     double pressure{0};
     double multiplier{1};
+    //! What set it off (DecideNodeBid): "anchor", "mine", or "anchor+mine" (one request serves both); "hand" for one by hand.
+    std::string trigger;
 };
 
 /** Replacement requests need a higher offer; refuse one that would exceed the configured limits. */
@@ -184,6 +186,66 @@ std::optional<CAmount> ReplacementBid(const AnchorBidPolicy& policy, CAmount amo
 
 /** The bid of `policy` for these inputs. */
 BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs);
+
+/**
+ * The share of `pot` a fee strategy bids: all but the operator's margin (pot - pot / 100 at 99 %, as
+ * sidechain::Follower::Offer).
+ */
+CAmount FeeShare(CAmount pot, int fee_share_bps);
+
+//! What a bid has to pay above another one that spends the same coin, for nodes to take it as a replacement:
+//! the relay fee of the largest request a wallet makes (250 vB at 1 sat/vB) with a margin (as ReplacementBid).
+inline constexpr CAmount REPLACEMENT_BUMP{500};
+//! The least the merged miner bids from fees: below it, a request does not pay for its own place in a mainchain
+//! block (sidechain::Follower::MIN_OFFER).
+inline constexpr CAmount MINE_MIN_OFFER{500};
+
+/**
+ * What makes this node bid for the next mainchain block (doc/fastblocks-anchor-bids.md, "Triggers"). Both pay
+ * from the same mainchain wallet under the same policy; only what sets them off differs.
+ */
+struct BidTriggers {
+    //! "Anchor my validator": a validator's own anchorer (a validator whose strategy is not off).
+    bool anchor{false};
+    //! "Mine blocks when fees pay": the merged miner (setbmm on), which bids when the fee share pays for a request.
+    bool mine{false};
+    //! setbmm's "always" (for tests): a bid for every mainchain block, `mine_amount` (at most the policy's max).
+    bool mine_always{false};
+    CAmount mine_amount{0};
+    //! The most a bid of this node that did not land offered, since one last landed: other nodes may still hold
+    //! it in their mempools, and a new bid spending the same coin must pay more to replace it (0: none).
+    CAmount stale{0};
+};
+
+/**
+ * The bid of the node for these inputs and triggers: the anchorer's as DecideBid; the merged miner's as DecideBid
+ * too (a strategy off is the fee share for it: off stops the anchorer, not setbmm), but only once the fee share
+ * pays for a request (MINE_MIN_OFFER), or setbmm's fixed offer with "always". With both, the higher one (one
+ * request serves both). Then above a stale bid (StaleRaise), and always within max and the period's cap.
+ */
+BidDecision DecideNodeBid(const AnchorBidPolicy& policy, const BidInputs& inputs, const BidTriggers& triggers);
+
+/**
+ * A bid made more than `stale` (a bid of this node that did not land, which other nodes may still hold), by
+ * REPLACEMENT_BUMP, if that stays within max and what is left of the period's cap; else the bid as it is (if the
+ * wallet spends the same coin, nodes holding the stale bid refuse it, which costs nothing; reason says so).
+ */
+void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, BidDecision& decision);
+
+/** A bid of this node, as far as the stale rule needs it. */
+struct PastBid {
+    enum class Status { PENDING, LANDED, MISSED, OUTBID };
+    Status status{Status::PENDING};
+    CAmount offer{0};
+    int64_t time{0};
+};
+//! How long other nodes keep a bid that cannot be mined in their mempools at most (the default -mempoolexpiry).
+inline constexpr int64_t STALE_BID_SECONDS{336 * 3600};
+/**
+ * The stale bid a new one must pay more than: the highest offer of the bids, oldest first, that did not land
+ * (missed, or outbid) after the last one that did, and younger than STALE_BID_SECONDS at `now`; 0 if none.
+ */
+CAmount StaleOffer(std::span<const PastBid> bids, int64_t now);
 
 } // namespace pos
 

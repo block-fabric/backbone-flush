@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -148,6 +149,9 @@ public:
         //! share and the pot) whole, `amount` at least and `max_amount` at most (a validator's anchorer in fees mode).
         bool pass_fees{false};
         std::optional<CAmount> max_amount;
+        //! If set, what to offer for a block with these fees, in place of the above (nothing: no request, mining
+        //! waits): a sidechain's bid policy (FastBlocks: the node's one policy, pos/anchorbid.h). For MineWith.
+        std::function<std::optional<CAmount>(CAmount fees)> decide;
         //! Whether mining is on but waits, because a block would not have the fees to pay for itself.
         bool idle{false};
         //! The fees of the block last asked for, and what was offered for it.
@@ -183,7 +187,16 @@ public:
      * Merged mine one round with these settings in place of those of SetMining (a sidechain's own
      * bidder: FastBlocks validators merge mine when blocks of stake stall, whatever setbmm says).
      */
-    void MineWith(const Mining& mining) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex, !m_sync_mutex, !m_act_mutex);
+    /** A commitment merged mining asked for: of the block built on `main_prev_hash`, for `offer`. */
+    struct MinedRequest {
+        uint256 commitment;
+        uint256 main_prev_hash;
+        int main_prev_height{0};
+        CAmount offer{0};
+        CAmount fees{0};
+    };
+    /** @return the request made, if one was */
+    std::optional<MinedRequest> MineWith(const Mining& mining) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex, !m_sync_mutex, !m_act_mutex);
 
     const MainClient& Client() const { return m_client; }
 
@@ -217,7 +230,7 @@ private:
     /** Do what the changes of the record call for. */
     void Act() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     void Mine() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex, !m_sync_mutex, !m_act_mutex);
-    void Mine(const Mining& mining, uint64_t settings) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex, !m_sync_mutex, !m_act_mutex);
+    std::optional<MinedRequest> Mine(const Mining& mining, uint64_t settings) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex, !m_sync_mutex, !m_act_mutex);
     void SendBundle() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     /** Whether this node is still catching up with its chain: in initial block download, or behind the commitments on record. */
     bool CatchingUp() const;

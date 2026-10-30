@@ -11,6 +11,9 @@
 #include <key_io.h>
 #include <node/context.h>
 #include <rpc/pos.h>
+#include <pos/header.h>
+#include <util/moneystr.h>
+#include <pos/hooks.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -304,6 +307,12 @@ RPCMethod requestbmmblock()
     if (!IsValidDestination(destination)) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address");
     const CAmount amount{AmountFromValue(request.params[1])};
     if (amount <= 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "The amount must be positive");
+    // A bid by hand too is at most the node's max per bid (setanchorbidpolicy max), and counts in the period's spending.
+    const pos::FastBlocksHooks* hooks{pos::InstalledHooks()};
+    if (hooks) {
+        const CAmount max{hooks->BidPolicy().max};
+        if (amount > max) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("The amount is above the most a bid of this node is (%s; setanchorbidpolicy max)", FormatMoney(max)));
+    }
     std::string error;
     const auto candidate{follower.CreateCandidate(GetScriptForDestination(destination), error)};
     if (!candidate) throw JSONRPCError(RPC_MISC_ERROR, error);
@@ -312,6 +321,7 @@ RPCMethod requestbmmblock()
         follower.DropCandidate(candidate->block->GetHash());
         throw JSONRPCError(RPC_MISC_ERROR, error);
     }
+    if (hooks) hooks->NoteBid(candidate->main_prev_height, candidate->main_prev_hash, candidate->block->GetHash(), amount, "hand");
     UniValue result(UniValue::VOBJ);
     result.pushKV("hash", candidate->block->GetHash().GetHex());
     result.pushKV("mainchainheight", candidate->main_prev_height);
@@ -331,7 +341,10 @@ RPCMethod setbmm()
         "Turn continuous blind merged mining on or off. When it is on, this node builds a block of this chain whenever\n"
         "there are transactions whose fees pay for one, and has the wallet of the mainchain node offer the miners of the\n"
         "mainchain 99% of those fees to commit to it. The fees go to the address; the hundredth that is left is what the\n"
-        "operator of this node earns. A block without fees is not asked for: see requestbmmblock to mine one by hand.",
+        "operator of this node earns. A block without fees is not asked for: see requestbmmblock to mine one by hand.\n"
+        "What it offers follows the node's one bid policy (setanchorbidpolicy, shared with a validator's anchorer): its\n"
+        "strategy (the fee share by default; off stops only the anchorer), at most max per bid, within the period's cap\n"
+        "(periodcap in periodhours, every landed bid of the node counted). getbmminfo shows the policy and the spending.",
         {
             {"mine", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Whether to mine"},
             {"address", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "The address that receives the transaction fees of the blocks. Required to turn mining on."},
@@ -403,6 +416,17 @@ RPCMethod getbmminfo()
             {RPCResult::Type::NUM, "outbid", "Number of mainchain blocks for which another node bid more, for another block of this chain"},
             {RPCResult::Type::STR, "error", /*optional=*/true, "Why the last attempt to mine failed"},
             {RPCResult::Type::NUM, "candidates", "Number of blocks built and kept until the mainchain commits to them or moves on"},
+            {RPCResult::Type::OBJ, "bidpolicy", /*optional=*/true, "The node's one bid policy (setanchorbidpolicy), which these bids follow, and what they cost",
+            {
+                {RPCResult::Type::STR, "strategy", "The strategy (off: only the anchorer stops; the merged miner bids the fee share)"},
+                {RPCResult::Type::NUM, "feeshare", "The percentage of the fees offered"},
+                {RPCResult::Type::STR_AMOUNT, "max", "The most any one bid is"},
+                {RPCResult::Type::STR_AMOUNT, "periodcap", "The most the landed bids of the node cost in periodhours (0: no cap)"},
+                {RPCResult::Type::NUM, "periodhours", "The period of the cap, in hours"},
+                {RPCResult::Type::STR_AMOUNT, "spentperiod", "What the landed bids of the node (both triggers, and by hand) cost in the period"},
+                {RPCResult::Type::STR_AMOUNT, "left", /*optional=*/true, "What is left of the cap (absent without a cap)"},
+                {RPCResult::Type::STR_AMOUNT, "stalebid", /*optional=*/true, "A bid that did not land, which other nodes may still hold: the next one is raised above it, within max and the cap"},
+            }},
         }},
         RPCExamples{HelpExampleCli("getbmminfo", "")},
         [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
@@ -427,6 +451,24 @@ RPCMethod getbmminfo()
     result.pushKV("outbid", mining.outbid);
     if (!mining.error.empty()) result.pushKV("error", mining.error);
     result.pushKV("candidates", uint64_t{mining.candidates});
+    if (const pos::FastBlocksHooks* hooks{pos::InstalledHooks()}) {
+        int64_t first{-1};
+        {
+            LOCK(::cs_main);
+            first = pos::GetFastState(EnsureChainman(node).ActiveChainstate().SideState().View()).first_unanchored_slot;
+        }
+        const auto report{hooks->GetAnchorBidReport(pos::SlotOf(TicksSinceEpoch<std::chrono::seconds>(NodeClock::now()), hooks->Params()), first, &mining)};
+        UniValue bid(UniValue::VOBJ);
+        bid.pushKV("strategy", pos::StrategyName(report.policy.strategy));
+        bid.pushKV("feeshare", report.policy.fee_share_bps / 100.0);
+        bid.pushKV("max", ValueFromAmount(report.policy.max));
+        bid.pushKV("periodcap", ValueFromAmount(report.policy.period_cap));
+        bid.pushKV("periodhours", report.policy.period_hours);
+        bid.pushKV("spentperiod", ValueFromAmount(report.spent));
+        if (report.policy.period_cap > 0) bid.pushKV("left", ValueFromAmount(std::max<CAmount>(report.policy.period_cap - report.spent, 0)));
+        if (report.stale > 0) bid.pushKV("stalebid", ValueFromAmount(report.stale));
+        result.pushKV("bidpolicy", std::move(bid));
+    }
     return result;
 },
     };

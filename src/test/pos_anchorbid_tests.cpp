@@ -11,6 +11,7 @@
 #include <consensus/params.h>
 
 #include <sidechain/follower.h>
+#include <common/args.h>
 #include <univalue.h>
 #include <test/util/setup_common.h>
 
@@ -448,6 +449,177 @@ BOOST_AUTO_TEST_CASE(included_rate_robust)
     policy.max = 1000;
     in.included_rate_per_kvb = 900'000'000;
     BOOST_CHECK_EQUAL(DecideBid(policy, in).amount, 1000);
+}
+
+// The node's one bid policy: the merged miner (setbmm) and a validator's anchorer under the same max, period cap
+// and stale rule (doc/fastblocks-anchor-bids.md, "Triggers").
+BOOST_AUTO_TEST_CASE(node_bid_mine_trigger)
+{
+    AnchorBidPolicy policy; // feespreventstall, max 0.001, cap 0.01 a day
+    BidInputs in{At(0, std::nullopt, 100'000)};
+    in.relay_rate_per_kvb = 1000;
+    // The fee share, 99 % of the fees.
+    BidDecision d{DecideNodeBid(policy, in, BidTriggers{.mine = true})};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 99'000);
+    BOOST_CHECK_EQUAL(d.trigger, "mine");
+    // At most max per bid: min(99 % of the fees, max).
+    in.pot = 10'000'000;
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, policy.max);
+    BOOST_CHECK_EQUAL(d.kind, "max");
+    // Fees that do not pay for a request: no bid (mining waits), whatever the strategy.
+    in.pot = 400;
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
+    BOOST_CHECK(!d.bid);
+    BOOST_CHECK_EQUAL(d.kind, "idle");
+    // A strategy off stops the anchorer, not setbmm: the fee share (regtest's default, setbmm as before).
+    policy.strategy = BidStrategy::OFF;
+    in.pot = 100'000;
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 99'000);
+    // ... and exactly Follower::Offer, as setbmm offered before.
+    BOOST_CHECK_EQUAL(FeeShare(123'457, 9900), sidechain::Follower::Offer(123'457));
+    // A fixed offer when the fees pay for a block.
+    policy.strategy = BidStrategy::FIXED;
+    policy.fixed = 20'000;
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true});
+    BOOST_CHECK_EQUAL(d.amount, 20'000);
+    in.pot = 0;
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
+    // setbmm's always (for tests): its amount every block, fees or not, but at most max.
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 10'000});
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 10'000);
+    BOOST_CHECK_EQUAL(d.kind, "always");
+    d = DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 5'000'000});
+    BOOST_CHECK_EQUAL(d.amount, policy.max);
+    // No trigger: no bid.
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{}).bid);
+}
+
+BOOST_AUTO_TEST_CASE(node_bid_period_cap)
+{
+    AnchorBidPolicy policy;
+    policy.max = 50'000;
+    policy.period_cap = 120'000;
+    BidInputs in{At(0, std::nullopt, 100'000)};
+    // Spent 100'000 of 120'000: cut to what is left.
+    in.spent_in_period = 100'000;
+    BidDecision d{DecideNodeBid(policy, in, BidTriggers{.mine = true})};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 20'000);
+    BOOST_CHECK_EQUAL(d.kind, "periodcap");
+    // Spent: nothing, for either trigger, and for "always" too.
+    in.spent_in_period = 120'000;
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.anchor = true}).bid);
+    BOOST_CHECK(!DecideNodeBid(policy, in, BidTriggers{.mine = true, .mine_always = true, .mine_amount = 1000}).bid);
+    // A cap of 0: none.
+    policy.period_cap = 0;
+    BOOST_CHECK(DecideNodeBid(policy, in, BidTriggers{.mine = true}).bid);
+}
+
+BOOST_AUTO_TEST_CASE(node_bid_both_triggers)
+{
+    AnchorBidPolicy policy{With(BidStrategy::MINIMAL)}; // floor 500
+    policy.max = 100'000;
+    BidInputs in{At(0, std::nullopt, 100'000)};
+    // One request serves both: the higher of the two bids.
+    BidDecision d{DecideNodeBid(policy, in, BidTriggers{.anchor = true, .mine = true})};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.trigger, "anchor+mine");
+    BOOST_CHECK_EQUAL(d.amount, DecideBid(policy, in).amount);
+    // The anchorer alone is DecideBid, unchanged (existing configs keep their meaning).
+    for (const BidStrategy strategy : {BidStrategy::FIXED, BidStrategy::MINIMAL, BidStrategy::FEES, BidStrategy::FEES_PREVENT_STALL, BidStrategy::OFF}) {
+        AnchorBidPolicy p{policy};
+        p.strategy = strategy;
+        p.fixed = 10'000;
+        const BidDecision a{DecideNodeBid(p, in, BidTriggers{.anchor = true})};
+        const BidDecision b{DecideBid(p, in)};
+        BOOST_CHECK_EQUAL(a.bid, b.bid);
+        BOOST_CHECK_EQUAL(a.amount, b.amount);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(node_bid_stale_rule)
+{
+    AnchorBidPolicy policy{With(BidStrategy::FIXED)};
+    policy.fixed = 10'000;
+    policy.max = 50'000;
+    policy.period_cap = 0;
+    BidInputs in{At(0)};
+    // A bid of 10'000 did not land, and may still be held: the next one, on the same coin, must pay more.
+    BidDecision d{DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 10'000})};
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 10'000 + REPLACEMENT_BUMP);
+    BOOST_CHECK_EQUAL(d.kind, "replace");
+    // A bid above it already: unchanged.
+    d = DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 2000});
+    BOOST_CHECK_EQUAL(d.amount, 10'000);
+    // Never above max: the bid as it is, with the reason why.
+    d = DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 49'800});
+    BOOST_CHECK(d.bid);
+    BOOST_CHECK_EQUAL(d.amount, 10'000);
+    BOOST_CHECK(d.reason.find("did not land") != std::string::npos);
+    // Nor above the cap's rest.
+    policy.period_cap = 100'000;
+    in.spent_in_period = 89'800;
+    d = DecideNodeBid(policy, in, BidTriggers{.anchor = true, .stale = 10'000});
+    BOOST_CHECK_EQUAL(d.amount, 10'000);
+
+    // The stale bid: the highest that did not land since one last did, younger than the mempool expiry.
+    const int64_t now{1'000'000'000};
+    using S = PastBid::Status;
+    std::vector<PastBid> bids{{S::MISSED, 7000, now - 100}, {S::LANDED, 9000, now - 90}, {S::MISSED, 3000, now - 80}, {S::OUTBID, 4000, now - 70}, {S::PENDING, 99'000, now - 1}};
+    BOOST_CHECK_EQUAL(StaleOffer(bids, now), 4000);
+    bids.push_back({S::LANDED, 1000, now});
+    BOOST_CHECK_EQUAL(StaleOffer(bids, now), 0);
+    // Expired: no longer held anywhere.
+    BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{{S::MISSED, 7000, now - STALE_BID_SECONDS - 1}}, now), 0);
+    BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{}, now), 0);
+}
+
+// The options keep their meaning on the one policy: the validators' minimal/0.0001/0.001, and regtest's defaults.
+BOOST_AUTO_TEST_CASE(node_bid_options_compat)
+{
+    ArgsManager args;
+    args.AddArg("-validatoranchorbid", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    args.AddArg("-validatoranchorbidstrategy", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    args.AddArg("-validatoranchorbidmax", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    args.AddArg("-validatoranchorbidperiodcap", "", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    {
+        const char* argv[]{"x", "-validatoranchorbidstrategy=minimal", "-validatoranchorbid=0.0001", "-validatoranchorbidmax=0.001"};
+        std::string error;
+        BOOST_REQUIRE(args.ParseParameters(4, argv, error));
+        const AnchorBidPolicy p{AnchorBidPolicyFromArgs(args, ChainType::MAIN)};
+        BOOST_CHECK(p.strategy == BidStrategy::MINIMAL);
+        BOOST_CHECK_EQUAL(p.floor, 10'000);
+        BOOST_CHECK_EQUAL(p.max, 100'000);
+        BOOST_CHECK_EQUAL(p.period_cap, DEFAULT_ANCHOR_BID_PERIOD_CAP);
+        // The anchorer bids as before; the merged miner of the same node under the same floor and max.
+        BidInputs in{At(0, std::nullopt, 10'000'000)};
+        BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.anchor = true}).amount, DecideBid(p, in).amount);
+        BOOST_CHECK_EQUAL(DecideNodeBid(p, in, BidTriggers{.mine = true}).amount, 10'000);
+    }
+    {
+        const char* argv[]{"x"};
+        std::string error;
+        BOOST_REQUIRE(args.ParseParameters(1, argv, error));
+        // Mainnet: the defaults cap the merged miner too.
+        const AnchorBidPolicy main{AnchorBidPolicyFromArgs(args, ChainType::MAIN)};
+        BOOST_CHECK_EQUAL(main.max, DEFAULT_ANCHOR_BID_MAX);
+        BOOST_CHECK_EQUAL(main.period_cap, DEFAULT_ANCHOR_BID_PERIOD_CAP);
+        // Regtest: the anchorer off, no period cap (setbmm in tests as before).
+        const AnchorBidPolicy reg{AnchorBidPolicyFromArgs(args, ChainType::REGTEST)};
+        BOOST_CHECK(reg.strategy == BidStrategy::OFF);
+        BOOST_CHECK_EQUAL(reg.period_cap, 0);
+        BidInputs in{At(0, std::nullopt, 100'000)};
+        BOOST_CHECK_EQUAL(DecideNodeBid(reg, in, BidTriggers{.mine = true}).amount, sidechain::Follower::Offer(100'000));
+        BOOST_CHECK(!DecideNodeBid(reg, in, BidTriggers{.anchor = true}).bid);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

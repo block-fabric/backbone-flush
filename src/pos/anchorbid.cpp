@@ -407,7 +407,7 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     case BidStrategy::FEES_PREVENT_STALL: {
         const CAmount pot{std::max<CAmount>(inputs.pot, 0)};
         // All but the operator's margin, as Follower::Offer: pot - pot / 100 at 99 %.
-        const CAmount share{pot - (pot / 10000) * (10000 - policy.fee_share_bps) - (pot % 10000) * (10000 - policy.fee_share_bps) / 10000};
+        const CAmount share{FeeShare(pot, policy.fee_share_bps)};
         if (share > base) {
             d.normal = share;
             d.kind = "fees";
@@ -484,6 +484,121 @@ BidDecision DecideBid(const AnchorBidPolicy& policy, const BidInputs& inputs)
     }
     d.bid = true;
     return d;
+}
+
+CAmount FeeShare(CAmount pot, int fee_share_bps)
+{
+    pot = std::max<CAmount>(pot, 0);
+    return pot - (pot / 10000) * (10000 - fee_share_bps) - (pot % 10000) * (10000 - fee_share_bps) / 10000;
+}
+
+namespace {
+/** max, then the period's cap, on a decision that bids (as the end of DecideBid). */
+void Limit(const AnchorBidPolicy& policy, CAmount spent, BidDecision& d)
+{
+    if (d.amount > policy.max) {
+        d.amount = policy.max;
+        d.kind = "max";
+        d.reason += strprintf(", capped at max %s", FormatMoney(policy.max));
+    }
+    if (policy.period_cap > 0) {
+        const CAmount left{std::max<CAmount>(policy.period_cap - spent, 0)};
+        if (left == 0 && d.amount > 0) {
+            d.kind = "periodcap";
+            d.reason = strprintf("no bid: the cap of %s in %d h is spent", FormatMoney(policy.period_cap), policy.period_hours);
+            d.amount = 0;
+            d.bid = false;
+            return;
+        }
+        if (d.amount > left) {
+            d.amount = left;
+            d.kind = "periodcap";
+            d.reason += strprintf(", cut to what is left of the cap of %s in %d h", FormatMoney(policy.period_cap), policy.period_hours);
+        }
+    }
+}
+} // namespace
+
+void StaleRaise(const AnchorBidPolicy& policy, CAmount stale, CAmount spent, BidDecision& d)
+{
+    if (!d.bid || stale <= 0 || d.amount > stale + REPLACEMENT_BUMP - 1) return;
+    const CAmount raised{stale + REPLACEMENT_BUMP};
+    const bool fits{raised <= policy.max && (policy.period_cap == 0 || raised <= policy.period_cap - spent)};
+    if (fits) {
+        d.amount = raised;
+        d.kind = "replace";
+        d.reason += strprintf(", raised to %s: above a bid of %s that did not land, which other nodes may still hold on the same coin", FormatMoney(raised), FormatMoney(stale));
+    } else {
+        d.reason += strprintf(" (not above a bid of %s that did not land: within max and the cap it cannot be, so nodes that still hold that bid refuse this one if it spends the same coin)", FormatMoney(stale));
+    }
+}
+
+BidDecision DecideNodeBid(const AnchorBidPolicy& policy, const BidInputs& inputs, const BidTriggers& triggers)
+{
+    std::optional<BidDecision> anchor;
+    if (triggers.anchor && policy.Bids()) anchor = DecideBid(policy, inputs);
+    std::optional<BidDecision> mine;
+    if (triggers.mine) {
+        BidDecision d;
+        d.pressure = StallPressure(inputs.slot, inputs.first_unanchored_slot, inputs.max_unanchored_slots);
+        if (triggers.mine_always) {
+            d.normal = d.amount = triggers.mine_amount;
+            d.kind = "always";
+            d.reason = strprintf("merged mining, always: %s for every mainchain block", FormatMoney(triggers.mine_amount));
+            d.bid = d.amount > 0;
+            if (d.bid) Limit(policy, inputs.spent_in_period, d);
+        } else {
+            // A strategy off stops the anchorer, not the merged miner: it then bids the fee share.
+            AnchorBidPolicy own{policy};
+            if (!own.Bids()) own.strategy = BidStrategy::FEES;
+            const CAmount share{FeeShare(inputs.pot, own.fee_share_bps)};
+            if (share < MINE_MIN_OFFER) {
+                d.kind = "idle";
+                d.reason = strprintf("merged mining waits for fees that pay for a block (a fee share of %s)", FormatMoney(share));
+            } else {
+                BidInputs in{inputs};
+                // Fees to pass on: never "nothing to anchor".
+                in.pending_actions = true;
+                d = DecideBid(own, in);
+            }
+        }
+        mine = d;
+    }
+    BidDecision d;
+    if (anchor && mine) {
+        // One request serves both: the higher bid, or the one that bids.
+        if (anchor->bid && mine->bid) {
+            d = anchor->amount >= mine->amount ? *anchor : *mine;
+        } else {
+            d = anchor->bid ? *anchor : *mine;
+        }
+        d.trigger = "anchor+mine";
+    } else if (anchor) {
+        d = *anchor;
+        d.trigger = "anchor";
+    } else if (mine) {
+        d = *mine;
+        d.trigger = "mine";
+    } else {
+        d.kind = "off";
+        d.reason = triggers.anchor ? "off: no bids (the chain relies on other bidders)" : "no trigger: merged mining is off and this node anchors no validator";
+        return d;
+    }
+    StaleRaise(policy, triggers.stale, inputs.spent_in_period, d);
+    return d;
+}
+
+CAmount StaleOffer(std::span<const PastBid> bids, int64_t now)
+{
+    CAmount stale{0};
+    for (const PastBid& bid : bids) {
+        if (bid.status == PastBid::Status::LANDED) {
+            stale = 0;
+        } else if ((bid.status == PastBid::Status::MISSED || bid.status == PastBid::Status::OUTBID) && bid.time > now - STALE_BID_SECONDS) {
+            stale = std::max(stale, bid.offer);
+        }
+    }
+    return stale;
 }
 
 } // namespace pos

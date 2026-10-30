@@ -1121,23 +1121,24 @@ void Follower::Mine()
     Mine(mining, settings);
 }
 
-void Follower::MineWith(const Mining& mining)
+std::optional<Follower::MinedRequest> Follower::MineWith(const Mining& mining)
 {
-    Mine(mining, WITH_LOCK(m_mutex, return m_mining_settings));
+    return Mine(mining, WITH_LOCK(m_mutex, return m_mining_settings));
 }
 
-void Follower::Mine(const Mining& mining, uint64_t settings)
+std::optional<Follower::MinedRequest> Follower::Mine(const Mining& mining, uint64_t settings)
 {
     {
         LOCK(m_mutex);
-        if (!mining.enabled) return;
+        if (!mining.enabled) return std::nullopt;
         // One request per mainchain block.
-        if (m_mining_requested_for == m_node.chainman->m_mainchain->TipHash() && !m_mining_requested_for.IsNull()) return;
+        if (m_mining_requested_for == m_node.chainman->m_mainchain->TipHash() && !m_mining_requested_for.IsNull()) return std::nullopt;
     }
     // Mining may be set otherwise while this runs; what was decided for the old settings then says nothing.
-    const auto wait{[this, settings] {
+    const auto wait{[this, settings]() -> std::optional<MinedRequest> {
         LOCK(m_mutex);
         if (m_mining_settings == settings) m_mining.idle = true;
+        return std::nullopt;
     }};
     // Without transactions there are no fees, and a block without fees is not worth what the mainchain is paid for it.
     if (!mining.always && (!m_node.mempool || m_node.mempool->size() == 0)) return wait();
@@ -1149,10 +1150,17 @@ void Follower::Mine(const Mining& mining, uint64_t settings)
     if (candidate) {
         // The first output of the coinbase is the fees of the block; the others pay deposits and the like.
         fees = candidate->block->vtx[0]->vout[0].nValue;
-        if (mining.always && mining.pass_fees) {
+        if (mining.decide) {
+            const auto decided{mining.decide(fees)};
+            if (!decided) {
+                DropCandidate(candidate->block->GetHash());
+                return wait();
+            }
+            offer = *decided;
+        } else if (mining.always && mining.pass_fees) {
             offer = std::max(mining.amount, mining.max_amount ? std::min(fees, *mining.max_amount) : fees);
         }
-        if (!mining.always) {
+        if (!mining.always && !mining.decide) {
             offer = Offer(fees);
             if (offer < MIN_OFFER) {
                 DropCandidate(candidate->block->GetHash());
@@ -1166,23 +1174,25 @@ void Follower::Mine(const Mining& mining, uint64_t settings)
         // Nothing more is asked for until the next mainchain block.
         DropCandidate(candidate->block->GetHash());
         LOCK(m_mutex);
-        if (m_mining_settings != settings) return;
+        if (m_mining_settings != settings) return std::nullopt;
         ++m_mining.outbid;
         m_mining_requested_for = candidate->main_prev_hash;
         m_mining.error.clear();
         LogDebug(BCLog::NET, "Merged mining: %s\n", error);
-        return;
+        return std::nullopt;
     }
     if (candidate && request) {
+        const MinedRequest made{.commitment = candidate->block->GetHash(), .main_prev_hash = candidate->main_prev_hash,
+                                .main_prev_height = candidate->main_prev_height, .offer = offer, .fees = fees};
         LOCK(m_mutex);
         ++m_mining.requests;
-        if (m_mining_settings != settings) return;
+        if (m_mining_settings != settings) return made;
         m_mining_requested_for = candidate->main_prev_hash;
         m_mining.idle = false;
         m_mining.last_fees = fees;
         m_mining.last_offer = offer;
         m_mining.error.clear();
-        return;
+        return made;
     }
     LOCK(m_mutex);
     if (m_mining.error != error) LogWarning("Merged mining: %s", error);
@@ -1195,6 +1205,7 @@ void Follower::Mine(const Mining& mining, uint64_t settings)
         if (m_unrequested && *m_unrequested != hash) m_candidates.erase(*m_unrequested);
         m_unrequested = hash;
     }
+    return std::nullopt;
 }
 
 void Follower::Run()

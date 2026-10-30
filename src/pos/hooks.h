@@ -12,6 +12,7 @@
 #include <pos/header.h>
 #include <pos/schedule.h>
 #include <pos/staking.h>
+#include <sidechain/follower.h>
 #include <sidechain/hooks.h>
 #include <consensus/amount.h>
 #include <kernel/cs_main.h>
@@ -431,11 +432,20 @@ public:
         double pressure{0};
         Status status{Status::PENDING};
         int64_t time{0};
+        //! What set it off: "anchor" (the validator's anchorer), "mine" (setbmm), "anchor+mine", or "hand" (requestbmmblock).
+        std::string trigger;
     };
     /** What the anchorer bids now, and why; what it bid; what its wallet covers. */
     struct AnchorBidReport {
         bool validator{false};
         std::optional<ValidatorBid> bidder;
+        //! The node's bid policy in force, for both triggers (the validator's, or the merged miner's of any node).
+        AnchorBidPolicy policy;
+        //! The triggers on (the merged miner's as the caller says it, `mining`).
+        bool anchor_trigger{false};
+        bool mine_trigger{false};
+        //! The stale bid a new one must pay more than (pos::StaleOffer), 0 if none.
+        CAmount stale{0};
         //! The policy of the options alone, and the fields setanchorbidpolicy changed (the node's settings).
         AnchorBidPolicy defaults;
         UniValue overrides{UniValue::VOBJ};
@@ -450,8 +460,18 @@ public:
         std::string fee_source;
         std::vector<std::string> warnings;
     };
-    /** The report as of `slot`, the run without an anchor starting at `first_unanchored_slot` (-1: none). */
-    AnchorBidReport GetAnchorBidReport(int64_t slot, int64_t first_unanchored_slot) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /**
+     * The report as of `slot`, the run without an anchor starting at `first_unanchored_slot` (-1: none); `mining`, the
+     * merged miner's settings (setbmm), if the caller knows them: its trigger, in the decision shown.
+     */
+    AnchorBidReport GetAnchorBidReport(int64_t slot, int64_t first_unanchored_slot, const sidechain::Follower::Mining* mining = nullptr) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /** The node's bid policy in force (both triggers, and the most a bid by hand may offer). */
+    AnchorBidPolicy BidPolicy() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /**
+     * Note a bid this node made otherwise (requestbmmblock, by hand), for the mainchain block after `main_tip` at
+     * `main_height`, to `commitment`: settled and counted in the period's spending as the others.
+     */
+    void NoteBid(int main_height, const uint256& main_tip, const uint256& commitment, CAmount offer, const std::string& trigger) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /** Put `policy` in force (checked first: CheckPolicy), `overrides` being the fields set on the options' policy. */
     bool SetAnchorBidPolicy(const AnchorBidPolicy& policy, const UniValue& overrides, std::string& error) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /**
@@ -635,6 +655,13 @@ private:
     mutable Bid m_bid GUARDED_BY(m_anchor_mutex);
     //! A validator's own anchorer, if this node is a validator.
     mutable std::optional<ValidatorBid> m_validator GUARDED_BY(m_anchor_mutex);
+    //! The bid policy of a node that is no validator (its merged miner's); a validator's is m_validator's.
+    mutable AnchorBidPolicy m_node_policy GUARDED_BY(m_anchor_mutex);
+    const AnchorBidPolicy& PolicyLocked() const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex) { return m_validator ? m_validator->policy : m_node_policy; }
+    //! What the bids that landed cost, and when they were made (the period's spending; a month at most).
+    mutable std::deque<std::pair<int64_t, CAmount>> m_bid_landed GUARDED_BY(m_anchor_mutex);
+    /** The stale bid a new one must pay more than (pos::StaleOffer over the history), at `now`. */
+    CAmount StaleLocked(int64_t now) const EXCLUSIVE_LOCKS_REQUIRED(m_anchor_mutex);
     //! The policy of the options, and the fields the settings changed.
     mutable AnchorBidPolicy m_bid_defaults GUARDED_BY(m_anchor_mutex);
     mutable UniValue m_bid_overrides GUARDED_BY(m_anchor_mutex){UniValue::VOBJ};
