@@ -181,8 +181,8 @@ RPCMethod refundwithdrawal()
 {
     return RPCMethod{
         "refundwithdrawal",
-        "Take back a withdrawal that this wallet made, as long as it is not in a withdrawal bundle. The block that\n"
-        "includes the request pays the coins, the fee for the mainchain included, to the refund address of the withdrawal." +
+        "Take back a withdrawal that this wallet made, as long as it is not in a withdrawal bundle. The first anchored block\n"
+        "after the request (a block that takes the peg actions) pays the coins, the fee for the mainchain included, to the refund address of the withdrawal." +
         HELP_REQUIRING_PASSPHRASE,
         {
             {"txid", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The id of the transaction that made the withdrawal"},
@@ -304,7 +304,7 @@ RPCMethod createbond()
     return RPCMethod{
         "createbond",
         "Bond coins of this wallet to a validator key of FastBlocks: the coins leave the wallet into the chain's state, and the key\n"
-        "takes part in the validator sets made at the anchors after (from the epoch after next; on the eCash networks, whose sets are fixed set_lead_seconds before their epoch, about ten hours later) while its bond is at least the\n"
+        "takes part in the validator sets made at the anchors after (from the epoch after next; on eCash mainnet, whose sets are fixed set_lead_seconds before their epoch, about 33 hours later, or an hour or two during the bootstrap to epoch 72) while its bond is at least the\n"
         "minimum stake. The wallet owns the bond: it alone can unbond it (createunbond), and is paid what it unbonds. The validator\n"
         "key signs the bond (a proof of possession): by the node's block producer if it holds the key, or given as pop." +
         HELP_REQUIRING_PASSPHRASE,
@@ -380,7 +380,7 @@ RPCMethod createbond()
         if (!signed_pop) {
             const std::string address{EncodeDestination(WitnessV0KeyHash{owner})};
             throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("This node does not hold the validator key: run signbondpop %s %s on its node, then createbond %s %s <pop> %s (with %s as owner)",
-                                                                HexStr(pubkey), address, HexStr(pubkey), FormatMoney(amount), address, address));
+                                                                address, HexStr(pubkey), HexStr(pubkey), FormatMoney(amount), address, address));
         }
         pop = *signed_pop;
     }
@@ -408,8 +408,8 @@ RPCMethod createunbond()
     return RPCMethod{
         "createunbond",
         "Unbond coins this wallet bonded to a validator key of FastBlocks: they leave the validator's stake at once (its weight in the\n"
-        "sets made from then on), and are paid to the bond's owner, in a coinbase, some anchors later (about two days on the main\n"
-        "network): until then a proof that the validator signed two blocks for a slot can still take a share of them. What is left\n"
+        "sets made from then on), and are paid to the bond's owner, in a coinbase, 1008 anchors later (about a week at an anchor\n"
+        "every ten minutes): until then a proof that the validator signed two blocks for a slot can still take a share of them. What is left\n"
         "bonded must be nothing or at least the minimum stake." +
         HELP_REQUIRING_PASSPHRASE,
         {
