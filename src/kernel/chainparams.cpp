@@ -1032,8 +1032,10 @@ public:
             // - the bootstrap: until epoch 72 (three days after genesis, 2026-11-01 23:17:51 UTC) the set of an epoch is
             //   the newest anchor's before the epoch before it, so bonds count one to two hours after their anchor and
             //   blocks of stake start two epochs after the first anchor with four bonds. Epochs 71 to 102 then share the
-            //   set fixed before epoch 70; from 103 the 32-hour lead (pos::SetBoundary). Until 101, a seed may be known
-            //   before its epoch's set is fixed (a bond could be picked for a seed): accepted, every validator is ours.
+            //   set fixed before epoch 70; from 103 the 32-hour lead (pos::SetBoundary). Until epoch 101 the set may be
+            //   fixed after its seed is known, so a new bond (anyone's: the chain is public) could be timed to a known
+            //   seed (leader grinding): accepted for the initial bootstrap (Louis, 2026-10-30), bounded by its end at
+            //   epoch 72 (and the shared set of epochs 71 to 101, fixed before epoch 70).
             //   The seed needs nothing of its own: an epoch's seed is at its start less 32 hours, before the slot's
             //   activation for about the first 31 epochs (the null mainchain hash), an eCash block 32 hours before
             //   after that: known at once either way.

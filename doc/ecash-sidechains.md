@@ -210,8 +210,11 @@ the first validators to bond and blocks of stake to run before the long lead.
   70, and from 103 the 32-hour lead alone (`fastblocks_tests` `bootstrap_rule`; `feature_fastblocks_bootstrap.py`). A
   bond anchored from epoch 70 counts from about epoch 103 (2026-11-03 06:17:51 UTC on).
 - **The risk accepted.** The long lead fixes a set before its seed's block can exist, so that no one picks a key or a
-  stake for a known seed. Until epoch 101 a seed can be known before its set is fixed: during the bootstrap every
-  validator is the project's, so no one is there to exploit it.
+  stake for a known seed. During the bootstrap (and for the epochs to 101 that share its last set) the set may be fixed
+  after its seed is known, so a new bond, anyone's (the chain is public, bonds are not restricted), could be timed to a
+  known seed (leader grinding). Accepted for the initial bootstrap (Louis, 2026-10-30), bounded by its end at epoch 72:
+  bonds anchored from epoch 70 on count only under the long lead, and from epoch 102 every set is fixed before its seed
+  (`fastblocks_tests` `bootstrap_rule` checks it for every epoch from there).
 
 **The trade-off.** Blocks of stake that no anchor covers rest on stake alone: until an anchor covers them (and 3 anchors
 make them final) the validators could, by a majority of the slots they lead, build another branch of them. The window
