@@ -149,9 +149,23 @@ struct PosParams {
     int64_t gap_seed_lookahead_seconds{0};
     int64_t gap_set_lead_seconds{0};
     int64_t gap_max_unanchored_slots{0};
+    /**
+     * The bootstrap (doc/ecash-sidechains.md, "The bootstrap"): before epoch bootstrap_end_epoch the validator set of an
+     * epoch is the newest anchor's before the epoch before it (set lead 0, as on the Chains networks), so that bonds count
+     * within one to two hours of their anchor; from it on the set lead is SetLead's, and no lower than the bootstrap's last
+     * (pos::SetBoundary: the epochs from bootstrap_end_epoch - 1 share one set until the long lead passes it). 0: none.
+     */
+    int64_t bootstrap_end_epoch{0};
+    /**
+     * Blocks of stake from this height only (FastBlocksHooks::LeaderOf: none below it). eCash mainnet: 10, the first
+     * block of Flush 8.3.5's rules (the 16-hour limit, the 32-hour lead and the bootstrap); the blocks below it, all
+     * merged mined, are judged as by 8.3.4 (no rule they depend on changed). 0: from the first block.
+     */
+    int fork_height{0};
     bool GapActive(int64_t epoch) const { return epoch >= gap_epoch; }
+    bool Bootstrap(int64_t epoch) const { return epoch < bootstrap_end_epoch; }
     int64_t SeedLookahead(int64_t epoch) const { return GapActive(epoch) ? gap_seed_lookahead_seconds : seed_lookahead_seconds; }
-    int64_t SetLead(int64_t epoch) const { return GapActive(epoch) ? gap_set_lead_seconds : set_lead_seconds; }
+    int64_t SetLead(int64_t epoch) const { return Bootstrap(epoch) ? 0 : GapActive(epoch) ? gap_set_lead_seconds : set_lead_seconds; }
     /** The unanchored limit for a block of stake at `slot`. */
     int64_t MaxUnanchoredSlots(int64_t slot) const { return slots_per_epoch > 0 && GapActive(slot / slots_per_epoch) ? gap_max_unanchored_slots : max_unanchored_slots; }
     /** The largest unanchored limit of any slot: what walks of the block index that bound a run of blocks of stake allow for. */
