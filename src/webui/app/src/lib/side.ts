@@ -68,6 +68,32 @@ export interface SideBundle {
   lastfailureheight?: number;
 }
 
+/** What the anchors of a window (24 h, 7 d) collected and paid (8.3.7). */
+export interface AnchoringWindow {
+  collected?: number;
+  paid?: number;
+  anchors?: Record<string, number>;
+  /** Mainchain blocks without any BMM commitment. */
+  nobmm?: number;
+  /** Missed bids whose mainchain block came less than ~4 s after the bid. */
+  toosoon?: number;
+}
+
+/** getbmminfo's "anchoring" (8.3.7): the reserve, what a batch needs, the heartbeat, whose turn. Every field optional. */
+export interface AnchoringInfo {
+  reserve?: number;
+  reservetarget?: number;
+  deficit?: number;
+  valueatrisk?: number;
+  batchneeded?: number;
+  pot?: number;
+  nextheartbeat?: number;
+  turn?: { designated: boolean; mainheight?: number };
+  /** The last 24 h and 7 d. */
+  day?: AnchoringWindow;
+  week?: AnchoringWindow;
+}
+
 /** getbmminfo: continuous blind merged mining. */
 export interface BmmInfo {
   mining: boolean;
@@ -82,6 +108,8 @@ export interface BmmInfo {
   outbid: number;
   error?: string;
   candidates: number;
+  /** 8.3.7: the anchorer's reserve, batch, heartbeat and turn (chain/fb/BiddingPanel.svelte's AnchoringInfo). */
+  anchoring?: AnchoringInfo;
 }
 
 /** requestbmmblock: one block asked for by hand. */

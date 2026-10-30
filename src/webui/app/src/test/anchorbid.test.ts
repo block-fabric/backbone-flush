@@ -1,11 +1,12 @@
 // Merged mining, Bidding (chain/fb/BiddingPanel.svelte): the node's one bid policy, read with getanchorbidpolicy and
-// getanchorinfo's bid; the five strategies and "Prevent stalling", the fields of the strategy chosen, the limits and the
-// day's spending, the triggers; a change through the host's confirmation (setanchorbidpolicy is a confirmed method, never a
+// getanchorinfo's bid (and from 8.3.7 getbmminfo's "anchoring"); the four plans and "Prevent stalling", the amount of the
+// plan chosen, every other number under Advanced, the status line, the two switches (Anchor my validator at once, merged
+// mining as a backup producer); the 8.3.7 fields shown only when the node has them; a change through the host's confirmation (setanchorbidpolicy is a confirmed method, never a
 // plain RPC of the page), the strategy always sent with "Prevent stalling"; a node that is not a validator; and what a
 // mainchain commitment of this chain is in the table of its blocks (resolveCommitment: a block, or on FastBlocks an anchor ticket).
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import BiddingPanel, { changedFields, curveText, STRATEGIES, type BidPolicy, type BidPolicyInfo, type BidStatus } from '../chain/fb/BiddingPanel.svelte';
+import BiddingPanel, { changedFields, curveText, isRecommended, planOf, PLANS, recommended, type AnchoringInfo, type BidPolicy, type BidPolicyInfo, type BidStatus } from '../chain/fb/BiddingPanel.svelte';
 import { setTransport, type BridgeRequest } from '../lib/bridge';
 import { resolveCommitment, type CommitmentReads } from '../lib/side';
 
@@ -37,6 +38,9 @@ const POLICY: BidPolicy = {
   periodhours: 24,
   lowbalanceblocks: 1008,
 };
+
+// The same on an 8.3.7 node: the fields of demand-driven anchoring, at their defaults.
+const POLICY_837: BidPolicy = { ...POLICY, batch: 10, heartbeathours: 6, valueatrisk: 1, reservepct: 20, reservetarget: 0.01, turns: true, turnbackup: 2 };
 
 const BID: BidStatus = {
   validator: true,
@@ -114,56 +118,74 @@ describe('the bidding panel', () => {
     expect(document.getElementById('bid-missed')!.textContent).toBe('8');
     // Spent 0.0003 of a cap of 0.001 today: 0.0007 left.
     expect(document.getElementById('bid-left')!.textContent).toMatch(/left.*0\.0007.*of.*0\.001/);
-    expect(document.getElementById('bid-wallet')!.textContent).toMatch(/Paid from your mainchain wallet/);
     expect(screen.getByRole('alert').textContent).toMatch(/Your bid is too low/);
     const table = screen.getByRole('table', { name: 'Last bids' });
     expect(table.textContent).toMatch(/973\D?960/);
     expect(table.textContent).toMatch(/missed/);
+    // The limits, under Advanced, say who pays.
+    await fireEvent.click(document.getElementById('bid-advanced')!);
+    expect(document.getElementById('bid-wallet')!.textContent).toMatch(/Paid from your mainchain wallet/);
     // Every read is a read: no spending call without the host.
     expect(calls.some((c) => c.kind === 'rpc' && c.method === 'setanchorbidpolicy')).toBe(false);
   });
 
-  it('five strategies, Fees the default, and Prevent stalling beside them', async () => {
+  it('four plain plans, Recommended the default, Prevent stalling under them, and two separate switches', async () => {
     render(BiddingPanel);
-    await screen.findByText('Strategy');
-    expect(STRATEGIES.map((p) => p.id)).toEqual(['fees', 'feesminimum', 'minimum', 'fixed', 'off']);
-    expect(STRATEGIES.map((p) => p.label)).toEqual(['Fees', 'Fees + minimum', 'Minimum every block', 'Fixed amount', 'Off']);
+    await screen.findByText('How to pay for anchors');
+    expect(PLANS.map((p) => p.id)).toEqual(['recommended', 'minimum', 'fixed', 'off']);
+    expect(PLANS.map((p) => p.label)).toEqual(['Recommended: pay from the fees', 'Anchor every block (minimum)', 'Fixed amount', 'Off']);
     const radios = screen.getAllByRole('radio') as HTMLInputElement[];
-    expect(radios).toHaveLength(5);
-    expect(radios.find((r) => r.checked)?.value).toBe('fees');
+    expect(radios).toHaveLength(4);
+    expect(radios.find((r) => r.checked)?.value).toBe('recommended');
+    // An 8.3.6 node: no batches, heartbeat or reserve in the words of the card.
+    expect(screen.getByRole('radio', { name: /^Recommended/ }).closest('label')!.textContent).toMatch(/no fees, no bid/);
     const stall = document.getElementById('bid-preventstall') as HTMLInputElement;
     expect(stall.checked).toBe(true);
-    expect(stall.disabled).toBe(false);
-    // The triggers: merged mining (the page's controls) and, on a validator, Anchor my validator.
-    expect(document.getElementById('bid-trigger-mine')!.textContent).toMatch(/Mine blocks when fees pay/);
+    // The switches: Anchor my validator (a validator) and merged mining as a backup producer, each explained.
+    expect(document.getElementById('bid-trigger-anchor')!.textContent).toMatch(/keeps the chain alive/);
+    expect(document.getElementById('bid-trigger-mine')!.textContent).toMatch(/Merged-mine as a backup producer/);
+    expect(document.getElementById('bid-trigger-mine')!.textContent).toMatch(/only if blocks of stake stop/);
     expect((document.getElementById('bid-anchor') as HTMLInputElement).checked).toBe(true);
+    // Every number is under Advanced, collapsed.
+    expect(document.getElementById('bid-advanced-fields')).toBeNull();
+    expect(document.getElementById('bid-max')).toBeNull();
+    // An 8.3.6 node says no more than it knows: the bid now and the day's spending.
+    expect(document.getElementById('bid-line')!.textContent).toMatch(/Bid now/);
+    expect(document.getElementById('bid-line')!.textContent).toMatch(/spent today.*0\.0003.*of.*0\.001/);
+    expect(document.getElementById('bid-line-heartbeat')).toBeNull();
     // Nothing changed: nothing to apply.
     expect((document.getElementById('bid-apply') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('the amount fields of the strategy chosen, and only those', async () => {
+  it('the amount of the plan chosen beside it, every other number under Advanced', async () => {
     render(BiddingPanel);
-    await screen.findByText('Strategy');
-    const shown = () => ['bid-feeshare', 'bid-floor', 'bid-fixed'].filter((id) => document.getElementById(id));
-    expect(shown()).toEqual(['bid-feeshare']);
-    await fireEvent.click(screen.getByRole('radio', { name: /^Fees \+ minimum/ }));
-    expect(shown()).toEqual(['bid-feeshare', 'bid-floor']);
-    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    await screen.findByText('How to pay for anchors');
+    const shown = () => ['bid-floor', 'bid-fixed'].filter((id) => document.getElementById(id));
+    expect(shown()).toEqual([]);
+    await fireEvent.click(screen.getByRole('radio', { name: /^Anchor every block/ }));
     expect(shown()).toEqual(['bid-floor']);
     await fireEvent.click(screen.getByRole('radio', { name: /^Fixed amount/ }));
     expect(shown()).toEqual(['bid-fixed']);
+    await fireEvent.click(document.getElementById('bid-advanced')!);
+    // Fixed shown beside the card: under Advanced, the floor alone.
+    expect(document.getElementById('bid-fixed-advanced')).toBeNull();
+    expect(document.getElementById('bid-floor-advanced')).not.toBeNull();
+    for (const id of ['bid-max', 'bid-periodcap', 'bid-stallreserve', 'bid-feeshare', 'bid-rebid', 'bid-curve']) expect(document.getElementById(id), id).not.toBeNull();
+    // Not on the recommended plan: no Fees + minimum.
+    expect((document.getElementById('bid-feesminimum') as HTMLInputElement).disabled).toBe(true);
+    // The 8.3.7 fields of an 8.3.6 node: not there.
+    for (const id of ['bid-batch', 'bid-heartbeat', 'bid-valueatrisk', 'bid-reservepct', 'bid-reservetarget', 'bid-turns', 'bid-turnbackup']) expect(document.getElementById(id), id).toBeNull();
     await fireEvent.click(screen.getByRole('radio', { name: /^Off/ }));
     expect(shown()).toEqual([]);
-    // Off means off: Prevent stalling greyed out, its value kept; the warning.
-    expect((document.getElementById('bid-preventstall') as HTMLInputElement).disabled).toBe(true);
-    expect((document.getElementById('bid-preventstall') as HTMLInputElement).checked).toBe(true);
+    // Off means off: no Prevent stalling (its value kept), the warning.
+    expect(document.getElementById('bid-preventstall')).toBeNull();
     expect(document.getElementById('bid-off-warning')!.textContent).toMatch(/leaves its anchors to other bidders/);
   });
 
   it('a change goes through the host, which asks the desktop; the strategy always with Prevent stalling', async () => {
     render(BiddingPanel);
-    await screen.findByText('Strategy');
-    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    await screen.findByText('How to pay for anchors');
+    await fireEvent.click(screen.getByRole('radio', { name: /^Anchor every block/ }));
     await fireEvent.input(document.getElementById('bid-floor')!, { target: { value: '0.00001' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
@@ -173,39 +195,79 @@ describe('the bidding panel', () => {
     await waitFor(() => expect((document.getElementById('bid-reset') as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it('Prevent stalling alone, Anchor my validator alone, the limits', async () => {
+  it('Prevent stalling and the limits with Apply; Anchor my validator at once, alone', async () => {
     render(BiddingPanel);
-    await screen.findByText('Strategy');
+    await screen.findByText('How to pay for anchors');
     await fireEvent.click(document.getElementById('bid-preventstall')!);
-    await fireEvent.click(document.getElementById('bid-anchor')!);
+    await fireEvent.click(document.getElementById('bid-advanced')!);
     await fireEvent.input(document.getElementById('bid-periodcap')!, { target: { value: '0.002' } });
+    // The switch sends itself, without the edits of the form, which stay.
+    await fireEvent.click(document.getElementById('bid-anchor')!);
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ anchor: false });
+    await waitFor(() => expect(document.getElementById('bid-anchorer-off')?.textContent).toMatch(/relies on other bidders/));
+    expect((document.getElementById('bid-anchor') as HTMLInputElement).checked).toBe(false);
+    expect((document.getElementById('bid-preventstall') as HTMLInputElement).checked).toBe(false);
+    calls.length = 0;
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
-    expect(sentFields()).toEqual({ strategy: 'fees', preventstall: false, anchor: false, periodcap: '0.002' });
+    expect(sentFields()).toEqual({ strategy: 'fees', preventstall: false, periodcap: '0.002' });
+  });
+
+  it('a declined switch stays as it was', async () => {
+    answer = 'no';
+    render(BiddingPanel);
+    await screen.findByText('How to pay for anchors');
+    const box = document.getElementById('bid-anchor') as HTMLInputElement;
+    await fireEvent.click(box);
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    await waitFor(() => expect(box.checked).toBe(true));
+    expect(document.getElementById('bid-anchorer-off')).toBeNull();
+  });
+
+  it('Fees + minimum: the recommended plan with a minimum on every block, under Advanced', async () => {
+    render(BiddingPanel);
+    await screen.findByText('How to pay for anchors');
+    await fireEvent.click(document.getElementById('bid-advanced')!);
+    await fireEvent.click(document.getElementById('bid-feesminimum')!);
+    expect(document.getElementById('bid-with-minimum')).not.toBeNull();
+    expect(document.getElementById('bid-floor')).not.toBeNull();
+    expect((screen.getByRole('radio', { name: /^Recommended/ }) as HTMLInputElement).checked).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ strategy: 'feesminimum', preventstall: true });
   });
 
   it('a declined change is no error; a minimum above the maximum is not sent', async () => {
     answer = 'no';
     render(BiddingPanel);
-    await screen.findByText('Strategy');
+    await screen.findByText('How to pay for anchors');
     await fireEvent.click(screen.getByRole('radio', { name: /^Off/ }));
     await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
     expect(document.querySelector('.side-bad[role="alert"]')?.textContent ?? '').not.toMatch(/declined/);
-    await fireEvent.click(screen.getByRole('radio', { name: /^Minimum every block/ }));
+    await fireEvent.click(screen.getByRole('radio', { name: /^Anchor every block/ }));
     await fireEvent.input(document.getElementById('bid-floor')!, { target: { value: '0.01' } });
     await waitFor(() => expect(document.getElementById('bid-problem')?.textContent).toMatch(/above the maximum/));
     expect((screen.getByRole('button', { name: 'Apply' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('a node that is not a validator: the same form, no Anchor my validator', async () => {
+  it('a node that is not a validator: the same plans, no Anchor my validator, no warning', async () => {
     info = { ...info, validator: false, bidding: false, explanation: 'This node is not a validator: it bids only as a merged miner (setbmm), under this policy; merged mining is off.' };
     bid = { ...bid, validator: false, bidding: false, warnings: [] };
     render(BiddingPanel);
     await waitFor(() => expect(document.getElementById('bid-explanation')?.textContent).toMatch(/not a validator/));
-    expect(screen.getAllByRole('radio')).toHaveLength(5);
+    expect(screen.getAllByRole('radio')).toHaveLength(4);
     expect(document.getElementById('bid-anchor')).toBeNull();
     expect(document.getElementById('bid-trigger-mine')).not.toBeNull();
+    expect(document.getElementById('bid-anchorer-off')).toBeNull();
+  });
+
+  it('a validator whose bidding is off: the warning that the chain relies on other bidders', async () => {
+    info = { ...info, policy: { ...info.policy, strategy: 'off' } };
+    render(BiddingPanel);
+    await waitFor(() => expect(document.getElementById('bid-anchorer-off')?.textContent).toMatch(/Bidding is off.*relies on other bidders/));
+    expect((document.getElementById('bid-anchor') as HTMLInputElement).disabled).toBe(true);
   });
 
   it('the fields sent: amounts in coins, the curve as text, nothing unchanged, the strategy with Prevent stalling', () => {
@@ -214,6 +276,117 @@ describe('the bidding panel', () => {
     expect(changedFields(POLICY, { ...POLICY, floor: 0.00001, max: 0.002, rebidafter: 0 })).toEqual({ floor: '0.00001', max: '0.002', rebidafter: 0 });
     expect(changedFields(POLICY, { ...POLICY, strategy: 'feesminimum' })).toEqual({ strategy: 'feesminimum', preventstall: true });
     expect(changedFields(POLICY, { ...POLICY, preventstall: false })).toEqual({ strategy: 'fees', preventstall: false });
+    // 8.3.7: its amounts in coins too; a field the node does not have is never sent.
+    expect(changedFields(POLICY_837, { ...POLICY_837, valueatrisk: 2, reservetarget: 0.0002, batch: 20, turns: false })).toEqual({ valueatrisk: '2', reservetarget: '0.0002', batch: 20, turns: false });
+    expect(changedFields(POLICY, { ...POLICY, batch: undefined })).toEqual({});
+  });
+
+  it('the plans of a strategy, and what Recommended is', () => {
+    expect(planOf('fees')).toBe('recommended');
+    expect(planOf('feesminimum')).toBe('recommended');
+    expect(planOf('minimum')).toBe('minimum');
+    expect(isRecommended(POLICY)).toBe(true);
+    expect(isRecommended(POLICY_837)).toBe(true);
+    expect(isRecommended({ ...POLICY_837, batch: 5 })).toBe(false);
+    expect(isRecommended({ ...POLICY, preventstall: false })).toBe(false);
+    // Only the fields the node has.
+    expect(recommended({ ...POLICY, strategy: 'fixed', preventstall: false })).toEqual(POLICY);
+    expect(recommended({ ...POLICY_837, strategy: 'minimum', batch: 3, turns: false })).toEqual(POLICY_837);
+  });
+});
+
+describe('the bidding panel on an 8.3.7 node (demand-driven anchoring)', () => {
+  const ANCHORING: AnchoringInfo = {
+    reserve: 0.00004,
+    reservetarget: 0.01,
+    deficit: 0,
+    valueatrisk: 0.3,
+    batchneeded: 0.0000378,
+    pot: 0.000012,
+    nextheartbeat: 0,
+    turn: { designated: false, mainheight: 973962 },
+    day: { collected: 0.0002, paid: 0.00015, anchors: { fees: 3, heartbeat: 1 }, nobmm: 4, toosoon: 2 },
+    week: { collected: 0.001, paid: 0.0008 },
+  };
+  beforeEach(() => {
+    info = { ...info, policy: { ...POLICY_837 }, defaults: { ...POLICY_837 } };
+    ANCHORING.nextheartbeat = Math.floor(Date.now() / 1000) + 4 * 3600 + 12 * 60 + 30;
+  });
+
+  it('the status line: waiting for fees, the heartbeat, the value at risk, the reserve, the turn, the day spent', async () => {
+    render(BiddingPanel, { anchoring: ANCHORING });
+    await waitFor(() => expect(document.getElementById('bid-line')).not.toBeNull());
+    const line = document.getElementById('bid-line')!.textContent!;
+    expect(document.getElementById('bid-line-batch')!.textContent).toMatch(/Waiting for fees:.*0\.000012.*of.*0\.0000378.*needed/);
+    expect(document.getElementById('bid-line-heartbeat')!.textContent).toMatch(/heartbeat in 4 h 12 m/);
+    expect(document.getElementById('bid-line-risk')!.textContent).toMatch(/unanchored value.*0\.3.*\/.*1/);
+    expect(document.getElementById('bid-line-reserve')!.textContent).toMatch(/reserve.*0\.00004.*\/ 0\.010*\b/);
+    expect(document.getElementById('bid-line-reserve')!.textContent).not.toMatch(/short/);
+    expect(document.getElementById('bid-line-turn')!.textContent).toMatch(/another validator's turn/);
+    expect(line).toMatch(/spent today.*0\.0003.*of.*0\.001/);
+    // The windows, with the blocks without BMM and the misses too soon when given.
+    expect(document.getElementById('bid-day')!.textContent).toMatch(/0\.0002.*paid.*0\.00015/);
+    expect(document.getElementById('bid-week')!.textContent).toMatch(/0\.001.*paid.*0\.0008/);
+    expect(document.getElementById('bid-day')!.textContent).toMatch(/4 mainchain blocks without any BMM/);
+    expect(document.getElementById('bid-day')!.textContent).toMatch(/2 missed: the block came too soon after the bid/);
+    expect(document.getElementById('bid-week')!.querySelector('.bid-nobmm, .bid-toosoon')).toBeNull();
+    // The card says what the plan does now.
+    expect(screen.getByRole('radio', { name: /^Recommended/ }).closest('label')!.textContent).toMatch(/in batches, with a heartbeat/);
+  });
+
+  it('a full batch, a reserve short, a heartbeat due, my turn', async () => {
+    render(BiddingPanel, { anchoring: { ...ANCHORING, pot: 0.00005, deficit: 0.00002, nextheartbeat: 1, turn: { designated: true } } });
+    await waitFor(() => expect(document.getElementById('bid-line-batch')?.textContent).toMatch(/Fees ready for an anchor/));
+    expect(document.getElementById('bid-line-heartbeat')!.textContent).toMatch(/heartbeat due/);
+    expect(document.getElementById('bid-line-reserve')!.textContent).toMatch(/short by.*0\.00002/);
+    expect(document.getElementById('bid-line-turn')!.textContent).toMatch(/your turn to bid/);
+  });
+
+  it('getanchorinfo\'s bid may carry "anchoring" too', async () => {
+    bid = { ...bid, anchoring: { reserve: 0.00001, reservetarget: 0.01 } };
+    render(BiddingPanel);
+    await waitFor(() => expect(document.getElementById('bid-line-reserve')?.textContent).toMatch(/reserve.*0\.00001/));
+  });
+
+  it('the new fields under Advanced, sent as the node takes them; back to the recommended values', async () => {
+    render(BiddingPanel, { anchoring: ANCHORING });
+    await screen.findByText('How to pay for anchors');
+    await fireEvent.click(document.getElementById('bid-advanced')!);
+    expect((document.getElementById('bid-batch') as HTMLInputElement).value).toBe('10');
+    expect((document.getElementById('bid-heartbeat') as HTMLInputElement).value).toBe('6');
+    expect((document.getElementById('bid-reservepct') as HTMLInputElement).value).toBe('20');
+    expect((document.getElementById('bid-turns') as HTMLInputElement).checked).toBe(true);
+    expect((document.getElementById('bid-turnbackup') as HTMLInputElement).value).toBe('2');
+    expect(document.getElementById('bid-adjusted')).toBeNull();
+    await fireEvent.input(document.getElementById('bid-batch')!, { target: { value: '20' } });
+    await fireEvent.input(document.getElementById('bid-valueatrisk')!, { target: { value: '2.5' } });
+    await fireEvent.input(document.getElementById('bid-reservetarget')!, { target: { value: '0.0002' } });
+    await fireEvent.click(document.getElementById('bid-turns')!);
+    expect((document.getElementById('bid-turnbackup') as HTMLInputElement).disabled).toBe(true);
+    // Off the recommended values: the card says so, and offers them back.
+    await waitFor(() => expect(document.getElementById('bid-adjusted')).not.toBeNull());
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ batch: 20, valueatrisk: '2.5', reservetarget: '0.0002', turns: false });
+    await waitFor(() => expect(document.getElementById('bid-adjusted')).not.toBeNull());
+    calls.length = 0;
+    await fireEvent.click(screen.getByRole('button', { name: 'Use the recommended values' }));
+    expect(document.getElementById('bid-adjusted')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ batch: 10, valueatrisk: '1', reservetarget: '0.01', turns: true });
+  });
+
+  it('choosing Recommended from another plan brings the recommended values with it', async () => {
+    info = { ...info, policy: { ...POLICY_837, strategy: 'minimum', preventstall: false, heartbeathours: 0 } };
+    render(BiddingPanel, { anchoring: ANCHORING });
+    await screen.findByText('How to pay for anchors');
+    // A heartbeat of 0 is off: none in the line.
+    expect(document.getElementById('bid-line-heartbeat')).toBeNull();
+    await fireEvent.click(screen.getByRole('radio', { name: /^Recommended/ }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'rpc.confirmed')).toBe(true));
+    expect(sentFields()).toEqual({ strategy: 'fees', preventstall: true, heartbeathours: 6 });
   });
 });
 

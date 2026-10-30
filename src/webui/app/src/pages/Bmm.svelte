@@ -1,8 +1,8 @@
 <script lang="ts">
   // Blind merged mining of a sidechain (the Mine tab of the template's Qt Mainchain page and its mining bar,
   // redone): the miners of the mainchain mine the blocks of this chain for a fee, which the wallet of the
-  // mainchain node pays. Bidding (the node's one bid policy, chain/fb/BiddingPanel.svelte), with its trigger
-  // "Mine blocks when fees pay" here (setbmm: on or off, the address of the fees, "always" and its offer), one
+  // mainchain node pays. Bidding (the node's one bid policy, chain/fb/BiddingPanel.svelte), with its switch
+  // "Merged-mine as a backup producer" here (setbmm: on or off, the address of the fees, "always" and its offer), one
   // block by hand (requestbmmblock), what happened (the requests and their results, the candidates kept), the
   // blocks of the mainchain that committed to this chain, and the connection.
   import { t } from '../lib/i18n.svelte';
@@ -190,12 +190,12 @@
   {#if !embedded}<header class="page-head"><h1>{t(PAGES.bmm.title)}</h1></header>{/if}
   <p class="side-note">
     The blocks of this chain are mined by the miners of {mainName}, who commit to them in their own blocks for a fee, which the wallet of the {mainName} node pays (blind merged mining). What this node offers, and when, is its bid
-    policy, under Bidding: by default the fee share (99% of the fees, you keep the rest), no minimum, and a bid that lands when the chain nears a stall.
+    policy, under Bidding. A validator anchors its blocks of stake there; merged mining of its own blocks is a backup, which carries transactions only once blocks of stake have stopped.
   </p>
 
   <section class="side-stats">
     <div class="panel side-stat">
-      <span class="muted">Automatic mining</span>
+      <span class="muted">Backup merged mining</span>
       <strong class="state" class:on={mining}><span class="dot"></span>{mining ? (bmm?.idle ? 'On, waiting for fees' : 'On') : 'Off'}</strong>
       <span class="faint">{mining ? (bmm?.always ? 'a block with every block of the mainchain' : 'as the bid policy says') : 'no blocks asked for'}</span>
     </div>
@@ -233,8 +233,8 @@
     </form>
   {/snippet}
 
-  <!-- The node's one bid policy, for every node: the strategy, its limits, and both triggers (merged mining's, above). -->
-  <BiddingPanel mining={mineTrigger} />
+  <!-- The node's one bid policy, for every node: the plan, both switches (merged mining's, above), and its limits. -->
+  <BiddingPanel mining={mineTrigger} anchoring={bmm?.anchoring} />
 
   <div class="side-cols">
     <section class="panel">
