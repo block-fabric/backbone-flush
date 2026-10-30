@@ -103,6 +103,21 @@ public:
     UniValue PegInfo(uint32_t slot) const;
     bool HasEnforcer() const { return m_options.enforcer_port != 0; }
     bool EnforcerOnly() const { return m_options.enforcer_only; }
+
+    /** A mainchain block as the enforcer's interface tells it: its height and header time, and whether it carried BMM. */
+    struct EnforcerBmm {
+        int height{0};
+        int64_t time{0};
+        //! A BMM commitment (M7) of any active slot in it.
+        bool bmm{false};
+    };
+    /**
+     * Of the mainchain block `hash`, through the enforcer's interface: GetSidechains for the active slots (about 3 on
+     * eCash mainnet), then GetBlockInfo of the block for each until one has a bmm_commitment (the slot's M7, from the
+     * BMM index); its header (height, timestamp) from those replies, or GetBlockHeaderInfo without an active slot.
+     * @throws MainClientError, std::runtime_error (a block the interface does not know or has not connected)
+     */
+    EnforcerBmm EnforcerBlockBmm(const uint256& hash) const;
     //! host:port of the mainchain node as this node reaches it: the enforcer's interface if enforcer_only, else JSON-RPC.
     std::string Address() const;
 

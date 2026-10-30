@@ -2943,6 +2943,20 @@ void FastBlocksHooks::PollBidSignals(const sidechain::Follower& follower, const 
     } catch (const std::exception&) {
     } catch (const UniValue&) {
     }
+    // A node that reaches the mainchain through the enforcer's interface alone (-mainchaingrpc: every mainnet validator,
+    // through Backbone's interface or the pool's enforcer) has no getblock: the same from GetSidechains and GetBlockInfo
+    // of each active slot (a BMM commitment in the block, its header time). Once a mainchain tip, as getblock.
+    if (!main_seen && client.HasEnforcer()) {
+        try {
+            const sidechain::MainClient::EnforcerBmm block{client.EnforcerBlockBmm(main_tip)};
+            main_seen_height = block.height;
+            main_seen = MainSeen{.hash = main_tip, .bmm = block.bmm, .time = block.time > 0 ? block.time : TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
+        } catch (const std::exception& e) {
+            LogDebug(BCLog::NET, "FastBlocks: what the mainchain block %s carried is not known (the enforcer's interface: %s): a block without this chain's commitment is a miss\n",
+                     main_tip.GetHex(), e.what());
+        } catch (const UniValue&) {
+        }
+    }
     // The sidechains active on the mainchain (their slots alone count).
     std::set<uint8_t> active;
     try {

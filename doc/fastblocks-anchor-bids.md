@@ -84,9 +84,13 @@ So since 8.3.7, a bid that did not land is settled as:
 
 Only `missed` counts in the run of missed blocks (`missed`, `warnmissed`, the raises after missed blocks) and makes a
 stale bid to raise above; `nobmm` and `toosoon` are counted apart (`getbmminfo`'s `anchoring`). A block the node did not
-see as its tip (two in one round) is a miss, as before. The node reads blocks with the mainchain node's `getblock`; one
-reached through the enforcer's interface alone sees no blocks so, and counts every block without its commitment as a
-miss, as before 8.3.7.
+see as its tip (two in one round) is a miss, as before. The node reads each new mainchain tip with the mainchain node's
+`getblock` (a BMM request of any slot in it, its header time); a node that reaches the mainchain through the enforcer's
+interface alone (`-mainchaingrpc`: every mainnet validator, through Backbone's interface or the pool's enforcer) asks
+`GetSidechains`, then `GetBlockInfo` of the block for each active slot (about 3 on mainnet) until one has a
+`bmm_commitment`, the header's `timestamp` with it (`GetBlockHeaderInfo` without an active slot). If neither answers,
+a block without this chain's commitment is a miss, as before 8.3.7; without a header time, the time the node saw the
+block.
 
 The better fix is in the mainchain wallet: a coin that no unlanded bid spends, so no replacement is needed at all. The
 requests go through `createbmmrequest` (or the enforcer's `CreateBmmCriticalDataTransaction`), which take no coin

@@ -669,6 +669,41 @@ UniValue MainClient::EnforcerEvents(uint32_t slot, int first, int count) const
     return result;
 }
 
+MainClient::EnforcerBmm MainClient::EnforcerBlockBmm(const uint256& hash) const
+{
+    EnforcerBmm out;
+    const auto header{[&](const UniValue& info) {
+        if (!info.isObject() || ReverseHash(HexField(info, "blockHash", "block_hash"), "block hash") != hash) {
+            throw std::runtime_error(strprintf("the enforcer's interface did not give the mainchain block %s", hash.GetHex()));
+        }
+        out.height = static_cast<int>(UIntField(info, "height", "height"));
+        out.time = static_cast<int64_t>(UIntField(info, "timestamp", "timestamp"));
+    }};
+    const UniValue reply{CallEnforcer(VALIDATOR + "GetSidechains", UniValue{UniValue::VOBJ})};
+    const UniValue& sidechains{Field(reply, "sidechains", "sidechains")};
+    bool known{false};
+    for (const UniValue& sidechain : sidechains.isArray() ? sidechains.getValues() : std::vector<UniValue>{}) {
+        const uint64_t slot{UIntField(sidechain, "sidechainNumber", "sidechain_number")};
+        const UniValue info{CallEnforcer(VALIDATOR + "GetBlockInfo", Request({{"blockHash", HexValue(hash.GetHex())}, {"sidechainId", slot}, {"maxAncestors", 0}}))};
+        const UniValue& infos{Field(info, "infos", "infos")};
+        // (None: a block the enforcer has not connected.)
+        if (!infos.isArray() || infos.empty()) throw std::runtime_error(strprintf("the enforcer's interface has no info of the mainchain block %s yet", hash.GetHex()));
+        header(Field(infos[0], "headerInfo", "header_info"));
+        known = true;
+        if (HexField(Field(infos[0], "blockInfo", "block_info"), "bmmCommitment", "bmm_commitment")) {
+            out.bmm = true;
+            break;
+        }
+    }
+    if (!known) {
+        const UniValue info{CallEnforcer(VALIDATOR + "GetBlockHeaderInfo", Request({{"blockHash", HexValue(hash.GetHex())}, {"maxAncestors", 0}}))};
+        const UniValue& infos{Field(info, "headerInfos", "header_infos")};
+        if (!infos.isArray() || infos.empty()) throw std::runtime_error(strprintf("the enforcer's interface does not know the mainchain block %s", hash.GetHex()));
+        header(infos[0]);
+    }
+    return out;
+}
+
 UniValue MainClient::CallAsEnforcer(const std::string& method, const UniValue& params) const
 {
     const auto param{[&](size_t i) -> const UniValue& { return params.isArray() && i < params.size() ? params[i] : NullUniValue; }};
