@@ -4530,6 +4530,15 @@ BOOST_FIXTURE_TEST_CASE(protection_next_to_the_key_file, FastBlocksSetup)
     }
     args.ForceSetArg("-validatorkeyfile", fs::PathToString(key_file));
     std::string error;
+#ifndef WIN32
+    // A key file other users can read: refused, with the fix in the error; readable by its owner only, taken.
+    fs::permissions(key_file, fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read | fs::perms::others_read, fs::perm_options::replace);
+    BOOST_CHECK(!pos::Producer::FromArgs(m_node, Hooks(), error));
+    BOOST_CHECK_MESSAGE(error.find("chmod 600") != std::string::npos, error);
+    BOOST_CHECK(!fs::exists(dir / "validator.key.protection"));
+    error.clear();
+#endif
+    fs::permissions(key_file, fs::perms::owner_read | fs::perms::owner_write, fs::perm_options::replace);
     {
         const auto made{pos::Producer::FromArgs(m_node, Hooks(), error)};
         BOOST_REQUIRE_MESSAGE(made, error);

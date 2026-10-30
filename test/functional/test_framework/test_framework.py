@@ -136,6 +136,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         """Main function. This should not be overridden by the subclass test scripts."""
 
         assert hasattr(self, "num_nodes"), "Test must set self.num_nodes in set_test_params()"
+        # Files the test writes are its user's alone (a validator key file must be: -validatorkeyfile, chmod 600).
+        os.umask(0o077)
 
         try:
             self.setup()
