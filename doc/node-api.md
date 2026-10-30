@@ -208,8 +208,8 @@ wallet. The first sentence of each method's help, with `{...}` for a JSON object
 | `createbmmblock "address"` | node | Build the next block of this chain and keep it. |
 | `getanchorinfo ( count )` | node | Returns FastBlocks' anchors: the newest ones on the active chain, the blocks they make anchored and final, the fee pot, and the tickets this node knows. |
 | `getanchorticket "hash"` | node | Returns what a mainchain BMM commitment of this chain is: on FastBlocks a commitment is to an anchor ticket (h*), not to a block, so the block it anchors is found here. |
-| `getanchorbidpolicy` | node | Returns the bid policy of this validator's anchorer: how it bids for a BMM commitment to its ticket in every mainchain block (see doc/fastblocks-anchor-bids.md). |
-| `setanchorbidpolicy ( {...} reset )` | node | Changes the bid policy of this validator's anchorer, at once and without a restart. |
+| `getanchorbidpolicy` | node | Returns the node's bid policy (both triggers: a validator's anchorer and the merged miner): its strategy (fees, feesminimum, minimum, fixed, off), preventstall, its limits (see doc/fastblocks-anchor-bids.md). |
+| `setanchorbidpolicy ( {...} reset )` | node | Changes the node's bid policy, at once and without a restart (old strategy names accepted). |
 
 ### Staking and validators
 

@@ -1253,12 +1253,14 @@ whole UTXO set and the mainchain's escrow changes.)
   staking page ("Fees paid to") show where it goes.
 - The anchorer: with `setbmm`, the node's merged miner; else, on a validator (a
   node with `-validatorkeyfile`), its own anchorer, on by default
-  (its bid policy, [fastblocks-anchor-bids.md](fastblocks-anchor-bids.md): by
-  default the fee share it owes, at least `-validatoranchorbid=<amount>`, in coins
-  of the mainchain, 0.000005 by default, 500 satoshis, with a stall boost as the
-  chain nears its halt; `getanchorbidpolicy`, `setanchorbidpolicy` without a
-  restart; `off` or `-novalidatoranchorbid` turns it off; off on regtest unless
-  given; 0 is a bid of 0, see "Bids of 0 and fees passed into the bid" below), which pays the pot it wins to the producer's payout
+  (its bid policy, [fastblocks-anchor-bids.md](fastblocks-anchor-bids.md): since
+  8.3.6 a strategy, by default Fees (the fee share it owes, no minimum), and
+  "Prevent stalling" (a bid that lands as the chain nears its halt, or when peg
+  work waits); Fees + minimum, Minimum every block and Fixed bid every mainchain
+  block, at least the minimum `-validatoranchorbid=<amount>` (or the relay
+  minimum); `getanchorbidpolicy`, `setanchorbidpolicy` without a restart;
+  `-novalidatoranchorbid` turns the anchorer off ("Anchor my validator"); off on
+  regtest unless given; 0 is a bid of 0, see "Bids of 0 and fees passed into the bid" below), which pays the pot it wins to the producer's payout
   (`-validatorpayout`). It comes from the options, so a restart keeps it, with no
   `setbmm` to call again. While PoS blocks come, it makes a ticket for every
   mainchain block, as soon as it sees the block, and bids for its commitment
@@ -1280,7 +1282,7 @@ whole UTXO set and the mainchain's escrow changes.)
   blocks, it merged mines BMM blocks as the template does; a validator's own
   anchorer too, for its bid whatever the fees (a BMM block starts blocks of
   stake again).
-- Bids of 0 and fees passed into the bid (`-validatoranchorbidmode=fees`). The bid
+- Bids of 0 and fees passed into the bid (strategy `feesminimum` or `fees` at `-validatoranchorbidshare=100`). The bid
   is the fee of the mainchain's BMM request (M8): BIP301, the enforcer and
   Backbone's consensus set no minimum, and the enforcer's templates take
   requests by fee rate down to 0 (the highest of a slot wins). What stops a
@@ -1410,8 +1412,8 @@ after every step:
 | `feature_fastblocks_p2p.py` | Peers of the test framework that misbehave: forged signatures sent first to a node catching up, then the honest nodes (it reaches their tip; the honest blocks are not fetched again and again meanwhile); 5000 unsigned siblings of its newest header, and a message padded with more (the peer's budget taken, no more); about 70 unsigned acknowledging headers from deep in the chain, on a validator that knows the sets (`bad-pos-sig`) and on one restarted whose state pruned them (`bad-pos-fork-too-deep`: no new tip, no reorg); 5000 siblings of a deep block; tickets 8 a peer per mainchain block; `fbgettickets` of 17 entries (misbehaving); one proof sent 200 times (kept once, the peer kept) |
 | `feature_fastblocks_fork.py` | A fork whose overtaking block a node has the header of with a forged signature, and cannot check before it connects the fork: it syncs, the leader's signature replacing the forged one |
 | `feature_fastblocks_idle.py` | Validators only, no fees, no `setbmm`, 15-second slots (the networks') on mock time: an hour and more of blocks of stake and anchors; mainchain blocks in pairs, a commitment in at least 90 % of them, each acknowledged; staking off everywhere, the validators merge mine; restarted, they bid again |
-| `feature_fastblocks_anchorbid.py` | Against Backbone with `-bmmzerofee` (MAINCHAIN_BIN_DIR, a build of its bmm-zero branch; skipped without): `-validatoranchorbid=0` anchors with requests of 0; fees mode, the requests bid the bidder's share of a transaction's fee (BidderShare), once, and the anchor pays it to the payee; with `-validatoranchorbidmax` the request pays the cap and the payee the whole pot |
-| `feature_fastblocks_anchorpolicy.py` | The anchor bid policy: `getanchorbidpolicy` and `setanchorbidpolicy` (checks, kept in `settings.json`, read back after a restart, reset); a mainchain whose miners take nothing below 50 sat/vB: the floor and its rebids missed (the "too low" warning) until the stall pressure crosses 0.5, then the escalated bid lands and the chain goes on past where it would have halted. |
+| `feature_fastblocks_anchorbid.py` | Against Backbone with `-bmmzerofee` (MAINCHAIN_BIN_DIR, a build of its bmm-zero branch; skipped without): Minimum with a floor of 0 anchors with requests of 0; Fees + minimum at 100 %, the requests bid the bidder's share of a transaction's fee (BidderShare), once, and the anchor pays it to the payee; with `-validatoranchorbidmax` the request pays the cap and the payee the whole pot |
+| `feature_fastblocks_anchorpolicy.py` | The anchor bid policy: `getanchorbidpolicy` and `setanchorbidpolicy` (checks, kept in `settings.json`, read back after a restart, reset; the names before 8.3.6 and the new form; an 8.3.5 `settings.json`); a mainchain whose miners take nothing below 50 sat/vB: the floor and its rebids missed (the "too low" warning) until the stall pressure crosses 0.5, then the escalated bid lands and the chain goes on past where it would have halted. |
 | `feature_fastblocks_restart.py` | A validator restarted refuses a BMM block 30 minutes ahead as the others do; every validator restarted while a committed ticket waits asks for it and acknowledges it; a validator whose data directory is wiped does not sign a slot it signed again; one killed between signing and relaying (`-posfaultaftersign`) does not sign that slot again |
 | `feature_fastblocks_soak.py` (extended) | 15-second slots (`-posslotseconds=15`, the networks'), `--duration` minutes of rounds: restarts and kills, partitions, mainchain reorgs, bonds, unbonds, payments, withdrawals; after each, one tip, `pegbalance`, no node down, few failed slots |
 | `feature_fastblocks_slashing.py` | Bonded validators; a leader signs twice; the proof in a block: 10 % gone, banned, the rest unbonded; the banned validator leads no more from the next block; a proof of another of its offences takes nothing; a leader that carries the proof against itself gets no reward; a BMM block carries a proof (all validators stopped), its payee rewarded; the reward paid at the next peg step to the block that carried it; a forged proof refused; the offender out of the sets |

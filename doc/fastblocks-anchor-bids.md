@@ -1,45 +1,107 @@
 # FastBlocks: the anchor bid policy
 
-A validator's own anchorer bids, from the mainchain wallet, for a BMM commitment to
-its ticket when fees, peg work, maintenance or stall pressure call for one (see "The anchorer" in [fastblocks.md](fastblocks.md)).
+A node bids, from the mainchain wallet, for BMM commitments: a validator's own anchorer for its tickets, and
+the merged miner (`setbmm`) of any node (see "The anchorer" in [fastblocks.md](fastblocks.md)).
 Blocks of stake halt after the configured unanchored limit (24 hours on upgraded
 slot 99, formerly 8 hours) without an anchor, so a bid that miners leave out for
 hours halts the chain. The bid policy says what the anchorer offers, and how it
 raises its offer as the chain nears that halt. It is consensus-neutral: what a node
 bids is its own business; the chain only sees which commitment landed.
 
-## One policy, two triggers (8.3.5)
+## Since 8.3.6: a strategy, and "Prevent stalling"
 
-A validator's anchor bids and the merged miner's bids are the same thing: BMM
-requests paid from the same mainchain wallet (the enforcer's, or Backbone's). Since
-8.3.5 they follow **one bid policy** (this one: `setanchorbidpolicy`, the
-`-validatoranchorbid*` options, `anchorbidpolicy` in `settings.json`), on every
-node, validator or not. Only what sets a bid off differs:
+The user picks one strategy of five, and a checkbox beside it (Louis: "bid only fees, no minimum, and prevent
+stalling; strategies are not really convenient"):
 
-- **Mine blocks when fees pay** (`setbmm true "address"`, any node): a bid once the
-  fee share of what the next anchor (or BMM block) pays covers a request (500 sat);
-  `always` + `amount` (for tests): `amount` for every mainchain block.
-- **Anchor my validator** (validators, strategy not `off`): as before.
+| Strategy (`strategy`) | What it bids |
+|---|---|
+| **Fees** (`fees`, the default) | The fee share (`feeshare` %, 99 by default: the operator keeps 1 %) of what the anchor, or the BMM block, pays out. No minimum, no floor: no fees, no bid. A share too small to pay for its own request (below 500 sat, or the relay minimum of a request) is no bid either: it is never raised to a minimum. |
+| **Fees + minimum** (`feesminimum`) | The fee share, or the minimum when the share is below it: max(fee share, minimum), on every mainchain block. |
+| **Minimum every block** (`minimum`) | The minimum on every mainchain block, whatever the fees. |
+| **Fixed amount** (`fixed`) | `fixed` on every mainchain block. |
+| **Off** (`off`) | No bids at all, from either trigger (one by hand still goes). The chain relies on other bidders, and halts without them. |
 
-At most one request per mainchain block: one ticket serves both (its anchor anchors
-the chain and pays its pot to the payee: the `setbmm` address when merged mining is
-on, else the validator's payout). With both on, the bid is the higher of the two.
-A block of stake stall (BMM blocks instead of tickets) is bid for the same way, the
-policy deciding from the block's fees.
+**The minimum** is the user's floor (`floor`), or the relay minimum of a request if higher: the mainchain's relay
+rate (`getnetworkinfo` `relayfee`, raised by `getmempoolinfo` `mempoolminfee`) times the larger of `requestvsize` and
+250 vB (the largest request a wallet makes), rounded up. 1 sat/vB: 250 sat. A floor of 0 means the relay minimum.
 
-What changes for `setbmm`: its offer is now within the policy. By default
-(`feespreventstall`, `max` 0.001, `periodcap` 0.01 a day) the merged miner offers
-max(base, 99 % of the fees), **at most 0.001 coins a block and 0.01 coins of landed
-bids a day**; it no longer bids "whatever the fees are". Strategy `off` stops only
-the anchorer: the merged miner then bids the fee share (99 %), as `setbmm` did.
-`fixed` offers `fixed` whenever the fees pay for a request. `always`'s amount is
-capped by `max` too. A bid by hand (`requestbmmblock`) may not exceed `max`, and it
-counts in the day's spending. On regtest without anchor options, as before: the
-anchorer off, and no period cap.
+**☑ Prevent stalling** (`preventstall`, on by default), whatever the strategy but Off:
 
-The daily cap counts every landed bid of the node together (both triggers, and by
-hand), since the node started; `getbmminfo`'s `bidpolicy` and `getanchorinfo`'s
-`bid` show it (`spentperiod`, `left`, `trigger`).
+- **Near the unanchored limit** (16 h on eCash mainnet): from stall pressure
+  `p = (slot - firstunanchoredslot) / maxunanchoredslots` of `escalationstart` (0.5), a bid that lands an anchor
+  even if the strategy would not bid (Fees without fees): `boost` (4) times the competitive base, or the strategy's
+  bid if higher (a large fee share is never multiplied). With `flatboost=false`, the legacy curve instead (below).
+- **Peg work waiting** (a deposit to credit, withdrawals or a bundle, staking payouts, a change of the validator set):
+  the competitive base, fees or not, as 8.3.5's feespreventstall did; otherwise a deposit would wait for fees or for
+  the stall bid, hours on mainnet. (Flat policy only.)
+- **Missed blocks**, for the strategies that bid every block (Fees + minimum, Minimum): the minimum raised, x2 for
+  every two mainchain blocks missed in a row, at most `boost` (legacy: the rebid rules below). A fee share or a fixed
+  amount is what it is.
+
+**The competitive base** (stall prevention's): the minimum; the next-block estimate (with `usefeeestimate`) rounded up
+to whole sat/vB times `requestvsize` (189 vB), else what recent mainchain blocks took for a BMM request (the robust
+median of the other active slots, clamped to 10 x the network's least rate); never below the network's least
+competitive rate (`min_bid_rate_per_kvb`, 2 sat/vB on eCash). The estimate comes each mainchain block from
+`estimatesmartfee 1`, then `estimatefee`. For example 1.41 sat/vB: 2 x 189 = 378 sat, the stall bid 1512 sat.
+
+**Off means off**: no stall prevention either. The checkbox keeps its value and is greyed out in the app; choosing a
+strategy again brings it back. A node that wants bids only for its validator's stalls has Fees with Prevent stalling.
+
+**Within the limits, always**: every bid, the stall bid too, is at most `max` and within what is left of the period's
+cap. The cap is the user's word on what the wallet spends; a stall bid past it would make it a soft limit. And past it
+little is at stake: only landed bids count, and one landed stall bid ends the unanchored run (the pressure drops to
+0), so a cap that cannot cover one stall bid is a cap set too low, which the app warns of (`periodcap`) rather than
+override. (8.3.5 was the same.)
+
+### The names before 8.3.6
+
+The old strategy names keep their meaning, in `setanchorbidpolicy`, `-validatoranchorbidstrategy` and the node's
+settings (`settings.json`, written by 8.3.5): each also says whether to prevent stalling, unless `preventstall` is
+given too (in any order).
+
+| Old name | Now |
+|---|---|
+| `fees` | Fees, Prevent stalling off |
+| `feespreventstall` (8.3.5's default) | Fees, Prevent stalling on; **Fees + minimum** if the policy has a floor above 0 (it bid at least its floor) |
+| `minimal` | Minimum every block, Prevent stalling on |
+| `fixed` | Fixed amount, Prevent stalling off |
+| `off` | Off |
+| `-validatoranchorbidmode=standard` | as `feespreventstall` |
+| `-validatoranchorbidmode=fees` | Fees at 100 %, Prevent stalling off |
+| `-validatoranchorbid=<amount>` alone (no strategy) | the old default with that floor: Fees + minimum above 0, else Fees; Prevent stalling on |
+| `-novalidatoranchorbid`, `-validatoranchorbid=off` | "Anchor my validator" off (`anchor` false): the merged miner still bids, as before |
+
+`fees` is a new name too: with a floor, it is Fees all the same (the floor kept, unused). The new names `feesminimum`
+and `minimum` say nothing of stall prevention: it stays as it was. `setanchorbidpolicy` keeps a strategy in the
+settings in the new words with `preventstall`, so the settings read back the same; the app always sends both.
+
+So the live validators (`minimal`) bid as before: their floor every mainchain block, with the stall boost and rebids.
+The app of 8.3.5 run as `feespreventstall`, floor 0, `usefeeestimate` false, `feeshare` 99, `max` 0.0001,
+`periodcap` 0.001 is Fees with Prevent stalling on and no minimum: the fee share when there are fees, nothing
+otherwise, and near a stall (or for waiting peg work) the relay minimum's 250 sat x 4 = 1000 sat, within 0.0001 a
+bid and 0.001 a day. Two things changed for it: a quiet chain with nothing waiting no longer gets a bid of the base
+when the fee share is small but positive (Fees has no minimum: a share below what pays for a request is no bid), and
+the merged miner with strategy Off no longer bids (Off means off; uncheck "Anchor my validator" instead).
+
+## One policy, two triggers
+
+A validator's anchor bids and the merged miner's bids are the same thing: BMM requests paid from the same mainchain
+wallet (the enforcer's, or Backbone's). Since 8.3.5 they follow **one bid policy** (`setanchorbidpolicy`, the
+`-validatoranchorbid*` options, `anchorbidpolicy` in `settings.json`), on every node, validator or not. What sets a bid
+off:
+
+- **Mine blocks when fees pay** (`setbmm true "address"`, any node): the policy's bid for each mainchain block (with
+  Fees, only when fees pay); `always` + `amount` (for tests): `amount` for every mainchain block, within max and the cap.
+- **Anchor my validator** (`anchor`, validators, on by default): the validator's own anchorer.
+
+Both bid the policy's bid. At most one request per mainchain block: one ticket serves both (its anchor anchors the
+chain and pays its pot to the payee: the `setbmm` address when merged mining is on, else the validator's payout). A
+block of stake stall (BMM blocks instead of tickets) is bid for the same way, the policy deciding from the block's fees.
+A bid by hand (`requestbmmblock`) may not exceed `max`, and it counts in the day's spending. On regtest without
+anchor options: no anchorer, Fees without stall prevention, and no period cap (`setbmm` as before).
+
+The daily cap counts every landed bid of the node together (both triggers, and by hand), since the node started;
+`getbmminfo`'s `bidpolicy` and `getanchorinfo`'s `bid` show it (`spentperiod`, `left`, `trigger`).
 
 ### Coins a stale bid tied up
 
@@ -60,54 +122,11 @@ reused the abandoned coin at the same fee.
   and spend such a coin only above that request's fee plus the incremental relay
   fee. Then Flush's raise is rarely needed.
 
-## Strategies
+## The legacy curve
 
-| Strategy (`strategy`) | What it bids |
-|---|---|
-| Fixed (`fixed`) | `fixed` for every mainchain block, whatever the fees or the pressure. |
-| Minimal: keep the chain moving (`minimal`) | `floor`; the stall boost and the rebids below. |
-| Fees (`fees`) | The fee share the anchor owes (`feeshare` % of the pot it will pay, 99 % by default: the operator keeps 1 %), at least `floor`. No boost. `-validatoranchorbidmode=fees` is this at 100 %. |
-| Fees + prevent stalling (`feespreventstall`, the default) | The higher of the estimated base and fee share, a 4x base boost near a stall, and no bid when there is nothing to anchor. `-validatoranchorbidmode=standard` is this. |
-| Off (`off`) | Nothing: the chain relies on other bidders, and halts without them. Logged as a warning, shown in the app. |
-
-Whatever the strategy, the bid is at most `max`, and within the period's cap.
-
-## Automatic base and stall boost
-
-For `feespreventstall` with `flatboost` (the default), the base is the largest of:
-
-- the operator's `floor` (default 0);
-- the mainchain relay minimum times `requestvsize`, rounded up to a satoshi;
-- the next-block fee estimate rounded up to whole sat/vB, times `requestvsize` (default 189 vB).
-
-The estimate is refreshed each mainchain block using `estimatesmartfee 1`, then
-`estimatefee`, then `getmempoolinfo.mempoolminfee`. If the backend exposes none,
-the relay minimum is used; if it cannot expose that either, 1 sat/vB is assumed.
-`usefeeestimate=false` disables the estimate, retaining the relay minimum and floor.
-For example, 1.41 sat/vB becomes 2 x 189 = 378 sat. The size is configurable:
-188 vB would give 376 sat. It is a size allowance, not a measurement of the signed request.
-
-The normal bid is `max(base, fee share)`: fees count toward the base, with the
-validator covering the difference. At stall pressure
-`p = (slot - firstunanchoredslot) / maxunanchoredslots` of `escalationstart` (0.5),
-the bid becomes `max(boost x base, fee share)`; `boost` defaults to 4. Large fee
-shares are never multiplied. `max` and the spending cap still apply.
-
-The default strategy skips a bid with reason **"skipped: nothing to anchor"** when
-there is no fee pot, no pending peg/staking work and pressure is below the threshold.
-Pending work includes uncredited mainchain deposits, withdrawals/bundles, staking
-payouts, and validator-set refresh once per epoch. A long record catch-up is handled
-conservatively by bidding. An idle decision is checked again within the same mainchain
-block: new work or stall pressure can start a bid without waiting for another block.
-Fixed bidding remains available for operators who want a request every block.
-
-With `flatboost=false`, the legacy floor/curve/rebid policy remains available.
-Its escalation base uses the unrounded estimate times the size, or the floor
-(at least 564 sat) without an estimate. The curve defaults to `0.5:1,0.75:2,0.9:4`.
-
-The bid is made again for the same mainchain block whenever the policy bids a tenth
-more than the request in the mempool (and 500 sat more): mainchain blocks may be
-hours apart, and p rises in between. The new request replaces the old one.
+With `flatboost=false`, stall prevention follows the curve instead of the flat boost: from `escalationstart`, the
+next-block estimate times `requestvsize` (else the floor, 564 sat at least) times the curve's multiplier
+(`0.5:1,0.75:2,0.9:4` by default, interpolated); and the rebids below for the strategies that bid every block.
 
 ## Missed blocks
 
@@ -144,19 +163,22 @@ without a restart, and keeps the fields it changed in the node's settings
 
 | Field | Option | Default |
 |---|---|---|
-| `strategy` | `-validatoranchorbidstrategy` (or the older `-validatoranchorbidmode`) | `feespreventstall`; off on regtest unless an anchor option is given; `-novalidatoranchorbid` / `-validatoranchorbid=off`: `off` |
-| `floor` | `-validatoranchorbid` | 0 (the relay/estimated base still applies) |
+| `strategy` | `-validatoranchorbidstrategy` (old and new names; or the older `-validatoranchorbidmode`) | `fees` |
+| `preventstall` | `-validatoranchorbidpreventstall` | on (off on regtest unless an anchor option is given) |
+| `anchor` | `-novalidatoranchorbid` / `-validatoranchorbid=off` turn it off | on (off on regtest unless an anchor option is given) |
+| `floor` | `-validatoranchorbid` | 0 (the relay minimum) |
 | `max` | `-validatoranchorbidmax` | 0.001 (raised to the floor or the fixed bid if below them) |
 | `fixed` | `-validatoranchorbidfixed` | the floor |
 | `feeshare` | `-validatoranchorbidshare` | 99 |
 | `escalationstart` | `-validatoranchorbidescalation` | 0.5 |
+| `flatboost`, `boost` | | true, 4 |
 | `curve` | `-validatoranchorbidcurve` | `0.5:1,0.75:2,0.9:4` |
 | `interpolate` | `-validatoranchorbidinterpolate` | true |
 | `usefeeestimate` | `-validatoranchorbidfeeestimate` | true |
 | `requestvsize` | | 189 |
 | `rebidafter`, `rebidstep`, `rebidmax` | `-validatoranchorbidrebid` (the first) | 3, 2, 8 |
 | `warnmissed` | | 3 |
-| `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 |
+| `periodcap`, `periodhours` | `-validatoranchorbidperiodcap` (the first) | 0.01, 24 (no cap on regtest unless an anchor option is given) |
 | `lowbalanceblocks` | `-validatoranchorbidlowbalance` | 1008 |
 
 Checks: `floor ≤ max`, `fixed ≤ max`, amounts within `MAX_MONEY`, `feeshare`
@@ -170,9 +192,9 @@ ascending and multipliers 1–1000 not falling, `requestvsize` 50–10000,
   `policy` (in force), `defaults` (the options'), `overrides` (the fields set),
   `strategies`.
 - `setanchorbidpolicy {fields} (reset)`: the fields given change, the others stay;
-  returns as `getanchorbidpolicy`. `flush-cli -named setanchorbidpolicy floor=0.00001 max=0.0005`.
-- `getanchorinfo`'s `bid`: `effective` (the bid now) and `kind`/`reason` (`fixed`,
-  `floor`, `fees`, `rebid`, `escalation`, `max`, `periodcap`, `off`), `normal`,
+  returns as `getanchorbidpolicy`. `flush-cli setanchorbidpolicy '{"strategy":"fees","preventstall":true}'`, `flush-cli -named setanchorbidpolicy floor=0.00001 max=0.0005`.
+- `getanchorinfo`'s `bid`: `effective` (the bid now) and `kind`/`reason` (`fees`,
+  `minimum`, `fixed`, `rebid`, `pending`, `stall`, `escalation`, `max`, `periodcap`, `replace`, `always`, `idle`, `off`), `normal`,
   `pressure`, `multiplier`, `escalationstart`, `firstunanchoredslot`,
   `unanchoredslots`, `maxunanchoredslots`, `pot`, `feerate` (sat/vB) and
   `feesource`, `missed`, `balance` and `coverblocks`, `spentperiod`, `periodcap`,
@@ -182,28 +204,29 @@ ascending and multipliers 1–1000 not falling, `requestvsize` 50–10000,
   FastBlocks the mainchain commits to a ticket (h*), and this says the block it
   anchors, its height and whether it is in the active chain.
 
-Every bid is logged with its reason: `FastBlocks: anchor bid 0.0002 for mainchain
-block 146 (stall pressure 0.60): escalation at p=0.60: x40.00 the floor (no fee
-estimate)`.
+Every bid is logged with its reason: `FastBlocks: anchor bid 0.00001512 for mainchain
+block 146 (anchor, stall pressure 0.60): preventing a stall at p=0.60: x4.00 the competitive base 0.00000378 (no bid: no fees)`.
 
 ## The app
 
-Drivechains → Merged mining, "Anchor bids of this validator": the bid now and its
-reason, the unanchored run with a gauge of p, the bid wallet's balance and the
-blocks it covers, the spending of the period, the missed blocks, the warnings and
-the last bids; a picker of the five strategies and an Advanced view with every
-field. A change goes through `setanchorbidpolicy`, which the desktop confirms (it
-spends the mainchain wallet); `getanchorbidpolicy` is a read of the page. A node
-that is not a validator sees why it does not bid.
+Drivechains → Merged mining, **Bidding**, for every node: the bid now and its reason, the unanchored run with a gauge
+of p, the day's spending and what is left of the cap, the bid wallet's balance and the blocks it covers, the missed
+blocks, the warnings and the last bids. The form: the five strategies (a radio) and "Prevent stalling" (greyed out
+with Off); the amount of the strategy chosen only (the fee share for Fees and Fees + minimum, the minimum for Fees +
+minimum and Minimum, the fixed amount for Fixed); the maximum per bid and the daily cap; "Paid from your mainchain
+wallet"; the two triggers, "Mine blocks when fees pay" (merged mining's address, Start and Stop: `setbmm`) and
+"Anchor my validator" (validators); the rest under Advanced. "One block by hand" below it. A change goes through
+`setanchorbidpolicy`, which the desktop confirms (it spends the mainchain wallet), the strategy always sent with
+`preventstall`; `getanchorbidpolicy` is a read of the page.
 
 ## The incident this answers
 
 eCash's mempool congested (median 0.136 sat/vB, ~1 sat/vB estimated, blocks 1.5–4.5
 hours apart): a bid of 25 sat (~0.13 sat/vB) missed 8 mainchain blocks and the chain
-halted at the unanchored limit. With the defaults, the floor is 500 sat
-(~2.6 sat/vB), the rebids double it after 3 missed blocks, and from p = 0.5 the bid
-follows the mainchain's estimate (×2 at 0.75, ×4 at 0.9), within 0.001 coins.
+halted at the unanchored limit. With Prevent stalling, from p = 0.5 a bid
+of 4 x the competitive base (never below 2 sat/vB on eCash) lands whatever the strategy, within 0.001 coins.
 
-`feature_fastblocks_anchorpolicy.py` tests it: a mainchain whose miners take nothing
-below 50 sat/vB, the floor and its rebids left out until p crosses 0.5, then the
-escalated bid lands and the chain goes on past where it would have halted.
+`feature_fastblocks_anchorpolicy.py` tests it (Fees + minimum, the legacy curve): a mainchain whose miners take
+nothing below 50 sat/vB, the minimum and its rebids left out until p crosses 0.5, then the escalated bid lands and
+the chain goes on past where it would have halted. It also tests the old names, the new form, and an 8.3.5
+`settings.json` read by 8.3.6.
