@@ -150,6 +150,12 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     const int64_t ipv6_prefix{args.GetIntArg("-publicapiipv6prefix", 64)};
     if (ipv6_prefix < 16 || ipv6_prefix > 128) return InitError(Untranslated("-publicapiipv6prefix: a prefix length from 16 to 128"));
     options.ipv6_prefix = static_cast<int>(ipv6_prefix);
+    // An IPv6 network of -publicapiwideprefix bits holds four clients' connections at most (64 of the 256), whatever
+    // its /64s: one site with a /48 cannot take every connection with 16 a /64.
+    const int64_t wide_prefix{args.GetIntArg("-publicapiwideprefix", 48)};
+    if (wide_prefix != 0 && (wide_prefix < 16 || wide_prefix > 128)) return InitError(Untranslated("-publicapiwideprefix: 0, or a prefix length from 16 to 128"));
+    options.wide_prefix = static_cast<int>(wide_prefix);
+    options.max_connections_per_wide = 4 * options.max_connections_per_ip;
     // Slow reads (also behind HTTP/2 flow control), Rapid Reset and MadeYouReset, requests per connection.
     options.write_timeout_seconds = 30;
     // A slow reader: at least 4 KiB a second taken of its waiting replies (or all of them) over each 30 s; what a
@@ -187,8 +193,6 @@ bool StartPublicApi(node::NodeContext& node, const ArgsManager& args)
     service_options.burst = number("-publicapiburst", 40);
     if (service_options.rate <= 0 || service_options.burst <= 0) return InitError(Untranslated("-publicapirate and -publicapiburst: numbers above 0"));
     service_options.broadcast = args.GetBoolArg("-publicapibroadcast", true);
-    const int64_t wide_prefix{args.GetIntArg("-publicapiwideprefix", 48)};
-    if (wide_prefix != 0 && (wide_prefix < 16 || wide_prefix > 128)) return InitError(Untranslated("-publicapiwideprefix: 0, or a prefix length from 16 to 128"));
     service_options.wide_prefix = static_cast<int>(wide_prefix);
     service_options.wide_multiplier = number("-publicapiwidemultiplier", 64);
     if (service_options.wide_multiplier < 1) return InitError(Untranslated("-publicapiwidemultiplier: a number of at least 1"));

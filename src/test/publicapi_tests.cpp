@@ -13,6 +13,9 @@
 
 #include <bitassets/launch.h>
 #include <bitassets/state.h>
+#include <addresstype.h>
+#include <core_io.h>
+#include <txmempool.h>
 #include <grpc/descriptors.h>
 #include <grpc/protobuf.h>
 #include <grpc/server.h>
@@ -647,6 +650,135 @@ BOOST_AUTO_TEST_CASE(logo_uploads_through_the_service)
     BOOST_CHECK_EQUAL(StatusOf(r), 429);
     BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
     BOOST_CHECK_EQUAL(StatusOf(post(again, "198.51.100.7")), 200);
+}
+
+BOOST_AUTO_TEST_CASE(logo_store_bounds_each_owner)
+{
+    // One uploader at its bound replaces its own oldest logo, never another's: one client cannot push every logo out.
+    using publicapi::LogoStore;
+    const auto t0{LogoStore::Clock::now()};
+    LogoStore store{4, std::chrono::hours{1}, /*max_per_owner=*/2};
+    store.Put("a1", {"A", "image/png"}, t0, "alice");
+    store.Put("b1", {"B", "image/png"}, t0, "bob");
+    for (int i{0}; i < 20; ++i) store.Put(strprintf("m%d", i), {"M", "image/png"}, t0, "mallory");
+    BOOST_CHECK(store.Get("a1", t0));
+    BOOST_CHECK(store.Get("b1", t0));
+    BOOST_CHECK(store.Get("m19", t0));
+    BOOST_CHECK(store.Get("m18", t0));
+    BOOST_CHECK(!store.Get("m17", t0));
+    BOOST_CHECK_EQUAL(store.Entries(), 4U);
+    // Uploaded again by another: refreshed, still its first uploader's.
+    store.Put("a1", {"A", "image/png"}, t0, "mallory");
+    store.Put("m20", {"M", "image/png"}, t0, "mallory");
+    BOOST_CHECK(store.Get("a1", t0));
+    BOOST_CHECK(!store.Get("m18", t0));
+    // Expired logos give their owner's room back.
+    store.Put("a2", {"A", "image/png"}, t0 + std::chrono::minutes{61}, "alice");
+    store.Put("a3", {"A", "image/png"}, t0 + std::chrono::minutes{61}, "alice");
+    BOOST_CHECK(store.Get("a2", t0 + std::chrono::minutes{61}));
+    BOOST_CHECK(store.Get("a3", t0 + std::chrono::minutes{61}));
+}
+
+BOOST_AUTO_TEST_CASE(logo_global_budget_taken_by_valid_uploads_only)
+{
+    // All clients' budget of uploads is taken only by a logo the rules take: junk from many clients spends none of it.
+    grpcsrv::Options options;
+    options.rest_prefix = publicapi::REST_PREFIX;
+    options.rest = publicapi::MakeRestRouter(Pool());
+    options.max_request_bytes = 256 << 10;
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    service_options.logo_global_per_minute = 6; // a burst of 1
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    server.SetGuard([&](const grpcsrv::CallInfo& call) { return service->Guard(call); });
+    const auto post{[&](const std::string& body, const std::string& ip) {
+        return Http1(server, strprintf("POST /api/v1/logos HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: %u\r\n\r\n%s", body.size(), body), *Lookup(ip, 1, false));
+    }};
+    for (int i{1}; i <= 30; ++i) BOOST_CHECK_EQUAL(StatusOf(post(R"({"base64":"AAAA"})", strprintf("203.0.113.%d", i))), 400);
+    const std::vector<unsigned char> logo{ParseHex(LOGO_PNG_PALETTE)};
+    const std::string good{R"({"base64":")" + EncodeBase64(logo) + R"("})"};
+    BOOST_CHECK_EQUAL(StatusOf(post(good, "198.51.100.1")), 200);
+    const std::string r{post(good, "198.51.100.2")};
+    BOOST_CHECK_EQUAL(StatusOf(r), 429);
+    BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(broadcast_global_budget_and_no_replacement, TestChain100Setup)
+{
+    // All clients' budget of broadcasts is taken only by a transaction past the cheap checks: junk ({"hex":"00"}) from
+    // many clients spends none of it. Two broadcasts of one coin at once: one is taken, the other refused (never a
+    // replacement, even at a higher fee).
+    grpcsrv::Options options;
+    options.rest_prefix = publicapi::REST_PREFIX;
+    options.rest = publicapi::MakeRestRouter(Pool());
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    service_options.broadcast_global_per_minute = 18; // a burst of 3
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    server.SetGuard([&](const grpcsrv::CallInfo& call) { return service->Guard(call); });
+    const auto post{[&](const std::string& hex, const std::string& ip) {
+        const std::string body{R"({"hex":")" + hex + R"("})"};
+        return Http1(server, strprintf("POST /api/v1/broadcast HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: %u\r\n\r\n%s", body.size(), body), *Lookup(ip, 1, false));
+    }};
+    for (int i{1}; i <= 30; ++i) BOOST_CHECK_EQUAL(StatusOf(post("00", strprintf("203.0.113.%d", i))), 400);
+    // Two spends of one coin, the second at a higher fee.
+    const CScript to{GetScriptForDestination(WitnessV0KeyHash{coinbaseKey.GetPubKey()})};
+    const CAmount value{m_coinbase_txns[0]->vout[0].nValue};
+    const CMutableTransaction a{CreateValidMempoolTransaction(m_coinbase_txns[0], 0, 1, coinbaseKey, to, value - 10'000, /*submit=*/false)};
+    const CMutableTransaction b{CreateValidMempoolTransaction(m_coinbase_txns[0], 0, 1, coinbaseKey, to, value - 100'000, /*submit=*/false)};
+    std::string ra, rb;
+    std::thread ta{[&] { ra = post(EncodeHexTx(CTransaction{a}), "198.51.100.1"); }};
+    std::thread tb{[&] { rb = post(EncodeHexTx(CTransaction{b}), "198.51.100.2"); }};
+    ta.join();
+    tb.join();
+    BOOST_CHECK_MESSAGE((StatusOf(ra) == 200) != (StatusOf(rb) == 200), ra + "\n" + rb);
+    const std::string& refused{StatusOf(ra) == 200 ? rb : ra};
+    BOOST_CHECK_MESSAGE(refused.find("no replacement") != std::string::npos, refused);
+    const Txid kept{CTransaction{StatusOf(ra) == 200 ? a : b}.GetHash()};
+    BOOST_CHECK(WITH_LOCK(m_node.mempool->cs, return m_node.mempool->size()) == 1);
+    BOOST_CHECK(m_node.mempool->exists(kept));
+    // Both past the cheap checks: two of the three; the third goes, the fourth is refused for the budget.
+    BOOST_CHECK_EQUAL(StatusOf(post(EncodeHexTx(CTransaction{a}), "198.51.100.3")), StatusOf(ra) == 200 ? 200 : 400);
+    const std::string r{post(EncodeHexTx(CTransaction{a}), "198.51.100.4")};
+    BOOST_CHECK_EQUAL(StatusOf(r), 429);
+    BOOST_CHECK(!HeaderOf(r, "retry-after").empty());
+}
+
+BOOST_AUTO_TEST_CASE(connections_counted_by_wide_network)
+{
+    // Connections are counted by the client's /64 and by its /48 (Options::wide_prefix) too; IPv4 by address alone.
+    const auto addr{[](const std::string& text) { return *LookupHost(text, false); }};
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("2001:db8:1:2::5"), 48, 64), "2001:db8:1::/48");
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("2001:db8:1:ffff::5"), 48, 64), "2001:db8:1::/48");
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("2001:db8:1:2::5"), 48, 128), "2001:db8:1::/48");
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("2001:db8:1:2::5"), 64, 64), "");
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("2001:db8:1:2::5"), 0, 64), "");
+    BOOST_CHECK_EQUAL(grpcsrv::Server::WideKey(addr("203.0.113.1"), 48, 64), "");
+}
+
+BOOST_AUTO_TEST_CASE(broadcast_and_logo_budgets_by_wide_network)
+{
+    // A client's budget of broadcasts and logos is its IPv6 network's (wide_prefix): its /64s share it.
+    grpcsrv::Options options;
+    grpcsrv::Server server{Pool(), options};
+    publicapi::Options service_options;
+    service_options.network = "regtest";
+    service_options.broadcast_burst = 2;
+    service_options.logo_burst = 2;
+    const auto service{publicapi::RegisterService(server, Pool(), m_node, service_options)};
+    const std::map<std::string, std::string> headers;
+    for (const std::string method : {"Broadcast", "UploadLogo"}) {
+        const auto call{[&](const std::string& client) { return service->Guard(grpcsrv::CallInfo{.path = "/flush.dex.v1.DexService/" + method, .headers = headers, .client = client}); }};
+        BOOST_CHECK(!call("2001:db8:7:1::/64"));
+        BOOST_CHECK(!call("2001:db8:7:2::/64"));
+        const auto refused{call("2001:db8:7:3::/64")};
+        BOOST_REQUIRE_MESSAGE(refused, method);
+        BOOST_CHECK(refused->code == Code::RESOURCE_EXHAUSTED);
+        BOOST_CHECK(!call("2001:db8:8:1::/64"));
+        BOOST_CHECK(!call("203.0.113.1"));
+    }
 }
 
 BOOST_FIXTURE_TEST_CASE(state_snapshot_kept_for_its_state_only, TestChain100Setup)

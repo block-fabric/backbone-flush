@@ -113,30 +113,46 @@ size_t ReplyCache::Bytes() const
     return m_bytes;
 }
 
-void LogoStore::Expire(Clock::time_point now)
+void LogoStore::Drop(std::list<Entry>::iterator it)
 {
-    while (!m_order.empty() && now - m_order.back().at >= m_ttl) {
-        m_index.erase(m_order.back().sha256);
-        m_order.pop_back();
+    if (!it->owner.empty()) {
+        if (const auto owned{m_owned.find(it->owner)}; owned != m_owned.end() && --owned->second == 0) m_owned.erase(owned);
     }
+    m_index.erase(it->sha256);
+    m_order.erase(it);
 }
 
-void LogoStore::Put(const std::string& sha256, Logo logo, Clock::time_point now)
+void LogoStore::Expire(Clock::time_point now)
+{
+    while (!m_order.empty() && now - m_order.back().at >= m_ttl) Drop(std::prev(m_order.end()));
+}
+
+void LogoStore::Put(const std::string& sha256, Logo logo, Clock::time_point now, const std::string& owner)
 {
     LOCK(m_mutex);
     Expire(now);
     if (const auto it{m_index.find(sha256)}; it != m_index.end()) {
-        // Uploaded again: kept from now on, as the newest.
+        // Uploaded again: kept from now on, as the newest (still its first uploader's).
         it->second->at = now;
         m_order.splice(m_order.begin(), m_order, it->second);
         return;
     }
-    m_order.push_front(Entry{sha256, std::make_shared<const Logo>(std::move(logo)), now});
-    m_index[sha256] = m_order.begin();
-    while (m_order.size() > m_max_entries) {
-        m_index.erase(m_order.back().sha256);
-        m_order.pop_back();
+    // An owner at its bound: its own oldest makes room (the oldest last in the order).
+    if (m_max_per_owner > 0 && !owner.empty()) {
+        if (const auto owned{m_owned.find(owner)}; owned != m_owned.end() && owned->second >= m_max_per_owner) {
+            for (auto it{m_order.end()}; it != m_order.begin();) {
+                --it;
+                if (it->owner == owner) {
+                    Drop(it);
+                    break;
+                }
+            }
+        }
     }
+    m_order.push_front(Entry{sha256, std::make_shared<const Logo>(std::move(logo)), now, owner});
+    m_index[sha256] = m_order.begin();
+    if (!owner.empty()) ++m_owned[owner];
+    while (m_order.size() > m_max_entries) Drop(std::prev(m_order.end()));
 }
 
 std::shared_ptr<const LogoStore::Logo> LogoStore::Get(const std::string& sha256, Clock::time_point now)

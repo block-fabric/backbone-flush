@@ -286,7 +286,8 @@ Blocks of stake are made by validators who bond ECX to a key. Values on mainnet 
 To run a validator:
 
 ```sh
-# one 32-byte secret key in hex per line
+# one 32-byte secret key in hex per line; yours and readable by you alone, or flushd refuses to start (8.3.6)
+chmod 600 /path/to/keys.txt
 flushd -validatorkeyfile=/path/to/keys.txt
 flush-cli getstakinginfo                         # its keys, whether it produces, its next slot
 flush-cli createbond "<validator x-only pubkey>" 10

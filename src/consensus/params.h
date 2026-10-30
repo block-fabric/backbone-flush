@@ -303,7 +303,8 @@ struct SidechainParams {
      * Failed and Succeeded), and nothing it does not (the scores of pending bundles): the rules of the eCash
      * networks, which a node can follow through an enforcer alone (-mainchaingrpc). Then
      *  - a bundle of this chain stays its bundle until the mainchain closes it (no unproposed_expiry_blocks):
-     *    an enforcer's block producer keeps a bundle handed to it, and proposes and upvotes it, until then;
+     *    an enforcer's block producer keeps a bundle handed to it, and proposes and upvotes it, until then
+     *    (from peg_fix_height: or until events_unproposed_expiry_blocks pass without a proposal);
      *  - a bundle of the slot other than this chain's holds back neither a new bundle nor a refund
      *    (pending_min_score is not used): without scores, any miner could freeze both for the bundles' whole
      *    life with one bare proposal. What keeps two bundles with the same withdrawals from both being paid
@@ -328,6 +329,29 @@ struct SidechainParams {
      * reorg of the mainchain shallower than this cannot leave a bundle handed over on a branch this chain left.
      */
     int bundle_handoff_depth{6};
+    /**
+     * The peg fix (Flush 8.3.6): from this block (of this chain), in ApplyMainEvents (sidechain::State)
+     *  - the deposits of the mainchain block that activated this chain in its slot are credited (the enforcer
+     *    reports them in that block, whose coinbase activates the slot before its transactions are checked);
+     *    before, the bound left that block out with what came before it;
+     *  - with main_events_only, a payout of a bundle this chain does not have that has to be matched to a
+     *    withdrawal of this chain's pending bundle drops that bundle, as without main_events_only: it could no
+     *    longer be paid as it is (BundleTx), would never be handed to the mainchain, and would hold its other
+     *    withdrawals for ever (no new bundle, no refund);
+     *  - with main_events_only, this chain's bundle that the mainchain has not proposed
+     *    events_unproposed_expiry_blocks after the block that committed to it fails (main_events_only had no
+     *    expiry at all).
+     * Never (the maximum) unless a network sets it; regtest 0, unless -testactivationheight=pegfix@<height>.
+     */
+    int peg_fix_height{std::numeric_limits<int>::max()};
+    bool PegFixActive(int height) const { return height >= peg_fix_height; }
+    /**
+     * With main_events_only, from peg_fix_height: mainchain blocks after its commitment in which the mainchain has
+     * to propose this chain's bundle, or it fails. Well beyond bundle_handoff_depth, after which the bundle is
+     * handed to an enforcer, which proposes it in the first block it mines: a bundle failed while an enforcer still
+     * holds it could be proposed and paid next to the one that takes its withdrawals after it.
+     */
+    int events_unproposed_expiry_blocks{1008};
 };
 
 /**

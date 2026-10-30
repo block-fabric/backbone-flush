@@ -1697,6 +1697,169 @@ BOOST_AUTO_TEST_CASE(events_only_foreign_payout_spares_the_bundle)
     }
 }
 
+BOOST_AUTO_TEST_CASE(peg_fix_foreign_payout_into_the_bundle)
+{
+    // The peg fix (SidechainParams::peg_fix_height), rules of the eCash networks: a payout of a bundle this chain does
+    // not have that has to be matched to a withdrawal of this chain's pending bundle (no other pays the same) removes
+    // it, and the bundle can no longer be paid as it is (BundleTx). Before the fix the bundle stayed for ever: never
+    // handed to the mainchain, no new bundle, its other withdrawals not refundable. From it the bundle is dropped,
+    // and they are free again.
+    for (const bool fixed : {false, true}) {
+        Consensus::SidechainParams params;
+        params.main_single_payout = false;
+        params.main_events_only = true;
+        params.bundle_retry_delay = 2;
+        params.peg_fix_height = fixed ? 0 : std::numeric_limits<int>::max();
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        const COutPoint a{MakeWithdrawal(state, key, pay, 1, params)};
+        const COutPoint b{MakeWithdrawal(state, key, pay, 1, params, /*salt=*/1)};
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(0, mainchain, 2, params, payouts, reason), reason);
+        std::vector<COutPoint> taken;
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params, &taken)};
+        BOOST_REQUIRE(bundle);
+        BOOST_REQUIRE_EQUAL(taken.size(), 2U);
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(bundle->GetHash().ToUint256(), 2, uint256{0xa}, params, reason), reason);
+        Extend(mainchain, 1, [&](sidechain::MainBlock& block) {
+            sidechain::MainDeposit change;
+            change.destination = WITHDRAWAL_RETURN_DEST;
+            change.bundle = uint256{0xf0};
+            change.payouts.emplace_back(COIN - 1000, pay);
+            block.deposits.push_back(change);
+            block.bundles.push_back({uint256{0xf0}, true});
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(1, mainchain, 3, params, payouts, reason), reason);
+        BOOST_CHECK_EQUAL(side.Withdrawals(), 1U);
+        const COutPoint left{state.GetWithdrawal(a) ? a : b};
+        BOOST_CHECK(!state.BundleTx());
+        if (!fixed) {
+            // Frozen: the bundle stays, with nothing to hand over; no refund, no new bundle.
+            BOOST_CHECK(state.Bundle());
+            BOOST_CHECK(!state.CheckRefund(SignRefund(key, left), reason));
+            BOOST_CHECK_EQUAL(reason, "bad-sc-refund-in-bundle");
+            BOOST_CHECK(!state.NextBundle(10, uint256{0xb}, params));
+            continue;
+        }
+        BOOST_CHECK(!state.Bundle());
+        BOOST_CHECK_EQUAL(state.BundleMainHeight(), -1);
+        BOOST_CHECK_MESSAGE(state.CheckRefund(SignRefund(key, left), reason), reason);
+        std::vector<COutPoint> next;
+        BOOST_CHECK(state.NextBundle(4, uint256{0xb}, params, &next));
+        BOOST_CHECK(next == std::vector<COutPoint>{left});
+    }
+}
+
+BOOST_AUTO_TEST_CASE(peg_fix_unproposed_bundle_expires)
+{
+    // The peg fix, rules of the eCash networks: this chain's bundle the mainchain has not proposed
+    // events_unproposed_expiry_blocks after the block that committed to it fails (its withdrawals refundable, or in
+    // the next bundle after the retry delay); one proposed in time stays. Before the fix none expired.
+    for (const int variant : {0, 1, 2}) { // 0: before the fix; 1: never proposed; 2: proposed in time
+        Consensus::SidechainParams params;
+        params.main_single_payout = false;
+        params.main_events_only = true;
+        params.bundle_retry_delay = 2;
+        params.unproposed_expiry_blocks = 3;
+        params.events_unproposed_expiry_blocks = 10;
+        params.peg_fix_height = variant == 0 ? std::numeric_limits<int>::max() : 5;
+        SideStore side;
+        sidechain::State& state{side.state};
+        CKey key;
+        key.MakeNewKey(/*fCompressed=*/true);
+        const CScript pay{GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey().GetID()})};
+        const COutPoint withdrawal{MakeWithdrawal(state, key, pay, 1, params)};
+        sidechain::Mainchain mainchain;
+        Extend(mainchain, 1);
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(0, mainchain, 2, params, payouts, reason), reason);
+        const auto bundle{state.NextBundle(2, uint256{0xa}, params)};
+        BOOST_REQUIRE(bundle);
+        const uint256 hash{bundle->GetHash().ToUint256()};
+        BOOST_REQUIRE_MESSAGE(state.StartBundle(hash, 2, uint256{0xa}, params, reason), reason);
+        BOOST_REQUIRE_EQUAL(state.BundleMainHeight(), 1);
+        // Mainchain blocks 1 to 10: nine past the commitment (block 1), and past unproposed_expiry_blocks.
+        Extend(mainchain, 10, [&](sidechain::MainBlock& b) {
+            if (variant == 2 && mainchain.Height() + 1 == 4) b.proposed.push_back(hash);
+        });
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(10, mainchain, 6, params, payouts, reason), reason);
+        BOOST_CHECK(state.Bundle());
+        // Block 11: ten past it.
+        Extend(mainchain, 1);
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(11, mainchain, 7, params, payouts, reason), reason);
+        if (variant != 1) {
+            BOOST_CHECK(state.Bundle());
+            BOOST_CHECK_EQUAL(state.LastFailureHeight(), -1);
+            continue;
+        }
+        BOOST_CHECK(!state.Bundle());
+        BOOST_CHECK_EQUAL(state.LastFailureHeight(), 7);
+        BOOST_CHECK(state.GetWithdrawal(withdrawal));
+        BOOST_CHECK_MESSAGE(state.CheckRefund(SignRefund(key, withdrawal), reason), reason);
+        BOOST_CHECK(!state.NextBundle(8, uint256{0xb}, params));
+        BOOST_CHECK(state.NextBundle(9, uint256{0xb}, params));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(peg_fix_deposits_of_the_activation_block)
+{
+    // The deposits of the mainchain block that activated this chain in its slot (the enforcer reports them there: the
+    // coinbase activates the slot before the block's transactions are checked) are credited from peg_fix_height; before
+    // it they were left out with what came before. The blocks before stay another sidechain's.
+    for (const bool fixed : {false, true}) {
+        Consensus::SidechainParams params;
+        params.main_activation_height = 3;
+        params.peg_fix_height = fixed ? 0 : std::numeric_limits<int>::max();
+        SideStore side;
+        sidechain::State& state{side.state};
+        sidechain::Mainchain mainchain;
+        const auto deposit{[](sidechain::MainBlock& b, CAmount amount) {
+            sidechain::MainDeposit d;
+            d.destination = "anything";
+            d.amount = amount;
+            b.deposits.push_back(d);
+        }};
+        Extend(mainchain, 1);                                                          // 0
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { deposit(b, 1 * COIN); }); // 1
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { deposit(b, 2 * COIN); }); // 2
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { deposit(b, 3 * COIN); }); // 3: the activation
+        Extend(mainchain, 1, [&](sidechain::MainBlock& b) { deposit(b, 4 * COIN); }); // 4
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(state.ApplyMainEvents(4, mainchain, 1, params, payouts, reason), reason);
+        std::vector<CAmount> amounts;
+        for (const CTxOut& out : payouts) amounts.push_back(out.nValue);
+        BOOST_CHECK(amounts == (fixed ? std::vector<CAmount>{3 * COIN, 4 * COIN} : std::vector<CAmount>{4 * COIN}));
+    }
+    // An activation not known (0) is as it was, with the fix or not: from mainchain block 1 on.
+    for (const bool fixed : {false, true}) {
+        Consensus::SidechainParams params;
+        params.peg_fix_height = fixed ? 0 : std::numeric_limits<int>::max();
+        SideStore side;
+        sidechain::Mainchain mainchain;
+        for (int i{0}; i < 2; ++i) {
+            Extend(mainchain, 1, [&](sidechain::MainBlock& b) {
+                sidechain::MainDeposit d;
+                d.destination = "anything";
+                d.amount = (i + 1) * COIN;
+                b.deposits.push_back(d);
+            });
+        }
+        std::string reason;
+        std::vector<CTxOut> payouts;
+        BOOST_REQUIRE_MESSAGE(side.state.ApplyMainEvents(1, mainchain, 1, params, payouts, reason), reason);
+        BOOST_REQUIRE_EQUAL(payouts.size(), 1U);
+        BOOST_CHECK_EQUAL(payouts[0].nValue, 2 * COIN);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(events_only_reorg_of_the_record)
 {
     // A reorg of the mainchain: the record drops blocks, and the state built on them is taken back with the

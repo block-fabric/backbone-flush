@@ -35,6 +35,11 @@
 #include <cstdlib>
 #include <fstream>
 
+#ifndef WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 namespace pos {
 
 namespace {
@@ -89,6 +94,24 @@ std::unique_ptr<Producer> Producer::FromArgs(node::NodeContext& node, const Fast
     const ArgsManager& args{*node.args};
     if (!args.IsArgSet("-validatorkeyfile")) return nullptr;
     const fs::path key_path{args.GetPathArg("-validatorkeyfile")};
+#ifndef WIN32
+    // Hot keys: as -mainchainrpcpasswordfile, the file must be this user's and readable by no one else. (On Windows its
+    // access list is not checked.)
+    {
+        struct stat st;
+        const std::string name{fs::PathToString(key_path)};
+        if (::stat(key_path.c_str(), &st) == 0) {
+            if (st.st_uid != geteuid()) {
+                error = strprintf("the validator key file %s is not owned by this user: make it this user's, readable by its owner only (chown, then chmod 600 %s)", name, name);
+                return nullptr;
+            }
+            if (st.st_mode & (S_IRWXG | S_IRWXO)) {
+                error = strprintf("the validator key file %s can be read or written by other users: make it readable by its owner only (chmod 600 %s)", name, name);
+                return nullptr;
+            }
+        }
+    }
+#endif
     std::ifstream file{key_path.std_path()};
     if (!file.is_open()) {
         error = strprintf("cannot read the validator key file %s", fs::PathToString(key_path));

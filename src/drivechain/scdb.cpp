@@ -41,7 +41,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     // BitAssets' own rules (the reveal depth) count as well.
     // (Not asset_volume_window: no rule, only the search index of the assets, which has a layout of its own.)
     // (refund_grace_blocks, main_behind_margin and bundle_handoff_depth are policy, and not in it.)
-    static_assert(sizeof(Consensus::SidechainParams) == 160, "a new sidechain parameter goes into the fingerprint");
+    static_assert(sizeof(Consensus::SidechainParams) == 168, "a new sidechain parameter goes into the fingerprint");
     HashWriter hasher{};
     hasher << std::string{"Sidechain parameters"} << ParamsFingerprint(params) << sidechain.slot << sidechain.min_withdrawal
            << sidechain.max_bundle_withdrawals << sidechain.bundle_retry_delay << sidechain.main_activation_height
@@ -80,6 +80,7 @@ uint256 ParamsFingerprint(const Consensus::DrivechainParams& params, const Conse
     if (sidechain.v7_height != std::numeric_limits<int>::max()) hasher << std::string{"v7"} << sidechain.v7_height << sidechain.launch_security_share_v7;
     if (sidechain.v8_height != std::numeric_limits<int>::max()) hasher << std::string{"v8"} << sidechain.v8_height;
     if (sidechain.v9_height != std::numeric_limits<int>::max()) hasher << std::string{"v9"} << sidechain.v9_height;
+    if (sidechain.peg_fix_height != std::numeric_limits<int>::max()) hasher << std::string{"pegfix"} << sidechain.peg_fix_height << sidechain.events_unproposed_expiry_blocks;
     return hasher.GetHash();
 }
 

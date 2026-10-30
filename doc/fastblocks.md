@@ -1197,7 +1197,9 @@ whole UTXO set and the mainchain's escrow changes.)
 
 ## Producer and anchorer
 
-- `-validatorkeyfile=<file>`: 32-byte secret keys in hex, one per line. At
+- `-validatorkeyfile=<file>`: 32-byte secret keys in hex, one per line. On
+  Unix the file must be owned by the node's user and readable by no one else
+  (`chmod 600`), or the node refuses to start (8.3.6). At
   each slot one of them leads, the node builds a PoS block on its best chain,
   with the acknowledgement of the first committed ticket it can carry, notes
   the slot in its slashing protection file (synced to disk before signing),

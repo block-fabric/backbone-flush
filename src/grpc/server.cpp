@@ -165,6 +165,10 @@ public:
         return callbacks.empty();
     }
 
+    //! Set as the call is made, before its handler runs.
+    void SetClient(std::string client) { m_client = std::move(client); }
+    std::string Client() const override { return m_client; }
+
     void SetHeader(const std::string& name, const std::string& value) override EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
         LOCK(m_mutex);
@@ -312,6 +316,7 @@ private:
     mutable Mutex m_mutex;
     std::vector<std::pair<std::string, std::string>> m_headers GUARDED_BY(m_mutex);
     std::string m_raw_type GUARDED_BY(m_mutex);
+    std::string m_client;
     std::string m_out GUARDED_BY(m_mutex);
     bool m_finished GUARDED_BY(m_mutex){false};
     bool m_cancelled GUARDED_BY(m_mutex){false};
@@ -507,6 +512,7 @@ void BeginCall(Server& server, Request& r, bool http2)
         if (r.method != "GET" && r.method != "POST") return refuse({Code::UNIMPLEMENTED, "the REST face takes GET (and POST where a route has a body)"});
         r.rest = true;
         r.call = std::make_shared<Call>(Protocol::REST, true, nullptr, max_response);
+        r.call->SetClient(r.client);
         return;
     }
     if (!kind) {
@@ -517,6 +523,7 @@ void BeginCall(Server& server, Request& r, bool http2)
         return;
     }
     r.call = std::make_shared<Call>(kind->protocol, kind->json, method, max_response);
+    r.call->SetClient(r.client);
     if (!entry) {
         r.call->Finish({Code::UNIMPLEMENTED, "unknown procedure " + r.path});
         return;
@@ -651,6 +658,7 @@ void EndRequest(Server& server, Request& r)
             }
             const bool json{params["encoding"] != "proto"};
             r.call = std::make_shared<Call>(Protocol::CONNECT_UNARY, json, &method, server.GetOptions().max_response_bytes);
+            r.call->SetClient(r.client);
             std::string message{params["message"]};
             if (params["base64"] == "1") {
                 const auto decoded{pb::Base64Decode(message)};
@@ -1539,6 +1547,12 @@ void Server::Run(std::function<void()> task)
 
 std::vector<CService> Server::Bound() const { return m_bound; }
 
+std::string Server::WideKey(const CNetAddr& addr, int wide_prefix, int ipv6_prefix)
+{
+    if (!addr.IsIPv6() || wide_prefix <= 0 || wide_prefix >= std::min(ipv6_prefix, 128)) return {};
+    return CSubNet{addr, static_cast<uint8_t>(wide_prefix)}.ToString();
+}
+
 std::string Server::AddressKey(const CNetAddr& addr, int ipv6_prefix)
 {
     // An IPv6 client usually has a whole prefix (a /64 at least) to rotate its addresses in: bounded as one.
@@ -1624,10 +1638,21 @@ void Server::AcceptLoop()
             // Connections by address: bounded, but for the proxies in front (which carry everyone's).
             const bool proxy{std::any_of(m_options.trusted_proxies.begin(), m_options.trusted_proxies.end(), [&](const CSubNet& s) { return s.Match(peer); })};
             const std::string ip{proxy ? std::string{} : AddressKey(peer, m_options.ipv6_prefix)};
+            // And by IPv6 network (Options::wide_prefix), shorter than the client's prefix.
+            const std::string wide{proxy || m_options.max_connections_per_wide <= 0 ? std::string{} : WideKey(peer, m_options.wide_prefix, m_options.ipv6_prefix)};
             LOCK(m_mutex);
-            if (!ip.empty() && m_options.max_connections_per_ip > 0 && m_per_ip[ip] >= m_options.max_connections_per_ip) {
-                LogDebug(BCLog::HTTP, "%s: connection from %s refused: %d connections from it already\n", m_name, peer.ToStringAddrPort(), m_per_ip[ip]);
-                continue;
+            if (!ip.empty() && m_options.max_connections_per_ip > 0) {
+                if (const auto it{m_per_ip.find(ip)}; it != m_per_ip.end() && it->second >= m_options.max_connections_per_ip) {
+                    LogDebug(BCLog::HTTP, "%s: connection from %s refused: %d connections from it already\n", m_name, peer.ToStringAddrPort(), it->second);
+                    continue;
+                }
+            }
+            if (!wide.empty()) {
+                if (const auto it{m_per_wide.find(wide)}; it != m_per_wide.end() && it->second >= m_options.max_connections_per_wide) {
+                    LogDebug(BCLog::HTTP, "%s: connection from %s refused: %d connections from its network %s already\n", m_name, peer.ToStringAddrPort(), it->second, wide);
+                    continue;
+                }
+                ++m_per_wide[wide];
             }
             if (!ip.empty()) ++m_per_ip[ip];
             ++m_connections;
@@ -1642,11 +1667,12 @@ void Server::AcceptLoop()
                     ++it;
                 }
             }
-            m_connection_threads.emplace_back(std::thread(&util::TraceThread, "grpcconn", [this, shared, peer, done, ip] {
+            m_connection_threads.emplace_back(std::thread(&util::TraceThread, "grpcconn", [this, shared, peer, done, ip, wide] {
                 ServeConnection(shared, peer);
-                if (!ip.empty()) {
+                if (!ip.empty() || !wide.empty()) {
                     LOCK(m_mutex);
-                    if (--m_per_ip[ip] <= 0) m_per_ip.erase(ip);
+                    if (!ip.empty() && --m_per_ip[ip] <= 0) m_per_ip.erase(ip);
+                    if (!wide.empty() && --m_per_wide[wide] <= 0) m_per_wide.erase(wide);
                 }
                 --m_connections;
                 *done = true;

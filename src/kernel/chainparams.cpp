@@ -711,6 +711,10 @@ public:
             consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v9 only if a test asks (-testactivationheight=v9@<height>).
             consensus.sidechain.v9_height = opts.dep_opts.v9_height.value_or(std::numeric_limits<int>::max());
+            // The peg fix from the first block, unless a test asks (-testactivationheight=pegfix@<height>); a bundle with the
+            // enforcer's events alone fails unproposed after as many blocks as with the scores (unproposed_expiry_blocks below).
+            consensus.sidechain.peg_fix_height = opts.dep_opts.peg_fix_height.value_or(0);
+            consensus.sidechain.events_unproposed_expiry_blocks = 20;
             // A short window of volume for the search index, that tests can see expire.
             consensus.sidechain.asset_volume_window = 10;
             // A tenth of the regtest mainchain's withdrawal_min_score (30).
@@ -985,6 +989,15 @@ public:
         consensus.sidechain.refund_grace_blocks = base->GetConsensus().sidechain.refund_grace_blocks;
         consensus.sidechain.bundle_retry_delay = base->GetConsensus().sidechain.bundle_retry_delay;
         consensus.pos.main_activation_height = consensus.sidechain.main_activation_height;
+        // The peg fix (SidechainParams::peg_fix_height): a bundle the mainchain has not proposed a week (1,008 blocks) after
+        // its commitment fails; it is handed to an enforcer a day (bundle_handoff_depth) after it, and the enforcer proposes
+        // it in the first block it mines: six days for that. (A day on the test network, against two hours there.)
+        consensus.sidechain.events_unproposed_expiry_blocks = chain == ChainType::ECASH_TESTNET ? 144 : 1008;
+        // TODO(owner): PLACEHOLDER -- never until set. The height (of this chain) of the peg fix on each eCash network: set it
+        // before the release, above the tip, with every node upgraded ahead of it. (Mainnet: 1.5 ECX deposited, no
+        // withdrawal, no bundle so far; slot 46's activation block, 978,331, has no deposit to it, so the fix changes no
+        // block there.)
+        consensus.sidechain.peg_fix_height = std::numeric_limits<int>::max();
         if (chain == ChainType::ECASH) {
             // Hard fork, eCash mainnet (Flush 8.3.6, user decision 2026-10-30): from epoch 19 (one-hour epochs from the genesis
             // time, 2026-10-29 23:17:51 UTC: 2026-10-30 18:17:51 UTC) a validator set of 3 is active, 4 before
