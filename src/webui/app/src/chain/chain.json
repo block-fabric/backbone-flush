@@ -9,7 +9,7 @@
     "color": "#7d94ab",
     "iconColor": "#08090b",
     "iconHue": 0,
-    "mark": ["M4 6h24", "M8 12.5h17", "M12 19h10", "M15 25.5h4"]
+    "mark": ["M4 6h24", "M7.5 12.5h17", "M11 19h10", "M14 25.5h4"]
   },
   "exclusiveThemes": ["launchpad", "launchpadday"],
   "defaultTheme": "launchpad",
