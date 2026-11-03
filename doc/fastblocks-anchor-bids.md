@@ -18,7 +18,8 @@ a ticket nor for the BMM block of a stall, while the node:
 - has a block of more work than its tip that it is still connecting (as the producer already held back);
 - knows a header of more work than its tip whose block has not come yet: for up to 10 minutes without the tip
   moving, so a long catch-up waits as long as it takes, but a header whose block never comes (a leader can sign one
-  claiming anchors no block backs) cannot hold the bids back for good;
+  claiming anchors no block backs) cannot hold the bids back for good. A header one block above the tip is how
+  every new block comes, so it counts only once its block is 15 seconds late;
 - has no peers whose handshake is done, or has had them for less than `-validatoranchorbidcatchup` seconds (60 by
   default, 0 on regtest): time for their headers to come, before it trusts its tip.
 

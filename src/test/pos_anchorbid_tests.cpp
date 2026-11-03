@@ -1359,8 +1359,18 @@ BOOST_AUTO_TEST_CASE(not_while_behind)
     in.peers_for = DEFAULT_ANCHOR_CATCHUP_SECONDS;
     BOOST_CHECK(CatchUpWait(in).kind.empty());
 
-    // A header whose block never comes (one claiming anchors no block backs) holds the bids back for the patience only.
+    // The next block on its way (its header first, its block a second later: every 15 s on mainnet, 8.3.9's first run
+    // logged it each time) is not being behind; it is once its block is a slot late.
     in.better_header = true;
+    in.header_lead = 1;
+    in.stuck_for = 1;
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    in.stuck_for = CATCHUP_HEADER_GRACE_SECONDS;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    in.header_lead = 2;
+    in.stuck_for = 0;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    // A header whose block never comes (one claiming anchors no block backs) holds the bids back for the patience only.
     in.header_lead = 1;
     in.stuck_for = CATCHUP_HEADER_PATIENCE_SECONDS - 1;
     BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
@@ -1368,7 +1378,7 @@ BOOST_AUTO_TEST_CASE(not_while_behind)
     BOOST_CHECK(CatchUpWait(in).kind.empty());
     // A branch of more anchors at or below the tip's height is a better chain too.
     in.header_lead = 0;
-    in.stuck_for = 0;
+    in.stuck_for = CATCHUP_HEADER_GRACE_SECONDS;
     BOOST_CHECK(CatchUpWait(in).reason.find("more anchors") != std::string::npos);
 
     // No wait for peers (regtest, or -validatoranchorbidcatchup=0): a lone node bids, but never while it connects a better

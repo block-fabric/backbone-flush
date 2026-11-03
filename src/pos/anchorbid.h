@@ -430,6 +430,9 @@ struct CatchUpInputs {
 //! How long a better header whose block does not come holds the bids back, the tip not moving: a header can claim
 //! anchors no block backs (a leader that signs one and never sends its block), so it cannot hold them back forever.
 inline constexpr int64_t CATCHUP_HEADER_PATIENCE_SECONDS{600};
+//! A header at most one block above the tip is how every new block comes (its header, then its block, a second or two
+//! later): it holds the bids back only once its block has not come for this long (a slot).
+inline constexpr int64_t CATCHUP_HEADER_GRACE_SECONDS{15};
 //! -validatoranchorbidcatchup's default (0 on regtest).
 inline constexpr int64_t DEFAULT_ANCHOR_CATCHUP_SECONDS{60};
 

@@ -841,7 +841,9 @@ CatchUp CatchUpWait(const CatchUpInputs& in)
     if (in.better_block) return {"block", "catching up: this node is connecting a better block than its tip"};
     // (A chain stalled everywhere restarts all the same: its peers have no better header, so the node bids once the
     // sync window is over. Not initial block download as such, for the same reason: Producer::Behind.)
-    if (in.better_header && in.stuck_for < CATCHUP_HEADER_PATIENCE_SECONDS) {
+    // (Not the next block on its way: one block ahead is behind only once its block is late.)
+    const bool arriving{in.header_lead <= 1 && in.stuck_for < CATCHUP_HEADER_GRACE_SECONDS};
+    if (in.better_header && !arriving && in.stuck_for < CATCHUP_HEADER_PATIENCE_SECONDS) {
         if (in.header_lead > 0) {
             return {"header", strprintf("catching up: a better chain is known, %d block%s above this node's tip, its blocks still coming",
                                         in.header_lead, in.header_lead == 1 ? "" : "s")};
