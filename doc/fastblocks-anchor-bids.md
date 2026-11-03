@@ -8,6 +8,29 @@ hours halts the chain. The bid policy says what the anchorer offers, and how it
 raises its offer as the chain nears that halt. It is consensus-neutral: what a node
 bids is its own business; the chain only sees which commitment landed.
 
+## Since 8.3.9: not while behind
+
+An anchor is for a block of the node's own chain, and anchors decide the best chain (more anchors win, whatever the
+length). So a node that is behind must not bid: its anchor would make its stale chain the best one, and take back
+what the network made in the meantime. Neither trigger bids (the validator's anchorer, the merged miner), neither for
+a ticket nor for the BMM block of a stall, while the node:
+
+- has a block of more work than its tip that it is still connecting (as the producer already held back);
+- knows a header of more work than its tip whose block has not come yet: for up to 10 minutes without the tip
+  moving, so a long catch-up waits as long as it takes, but a header whose block never comes (a leader can sign one
+  claiming anchors no block backs) cannot hold the bids back for good;
+- has no peers whose handshake is done, or has had them for less than `-validatoranchorbidcatchup` seconds (60 by
+  default, 0 on regtest): time for their headers to come, before it trusts its tip.
+
+A chain stalled everywhere still restarts: its nodes' peers have no better header, so they bid once the window is
+over. `getanchorbidpolicy`'s decision says why a node waits (kind `catchup`), and the log says it once
+(`no anchor bid: ...`, then `caught up with the network's chain`).
+
+The incident: on 2026-11-03 a validator came back from a 16-hour outage holding tip 22,509 of Flush mainnet, two
+seconds after loading and with no peers yet. Its stall prevention saw the unanchored run past the limit and built
+a BMM block on that tip and bid for it, before the network's 2,927 newer blocks (which had no anchor) came in. The bid
+landed, and every node reorganized onto it. `pos_anchorbid_tests.cpp` (`not_while_behind`) replays it.
+
 ## Since 8.3.7: when the anchorer bids
 
 Demand-driven anchoring (the owner's decisions, 2026-10-30), node policy only: no consensus change. With Fees (the
@@ -348,6 +371,7 @@ without a restart, and keeps the fields it changed in the node's settings
 | `valueatrisk` | `-validatoranchorbidvalueatrisk` | 1 |
 | `reservepct`, `reservetarget` | `-validatoranchorbidreservepct`, `-validatoranchorbidreservetarget` | 20 (0 on regtest unless an anchor option is given), 0.01 |
 | `turns`, `turnbackup` | `-validatoranchorbidturns`, `-validatoranchorbidturnbackup` | true (false on regtest unless an anchor option is given), 2 |
+| (not a policy field: seconds with peers before the tip is trusted) | `-validatoranchorbidcatchup` | 60 (0 on regtest) |
 
 Checks: `floor ≤ max`, `fixed ≤ max`, amounts within `MAX_MONEY`, `feeshare`
 0–100, `escalationstart` in (0, 1], the curve 1–8 points with pressures in [0, 1]

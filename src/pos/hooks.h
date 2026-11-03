@@ -432,6 +432,8 @@ public:
     };
     /** A validator's own anchorer: none if this node is not a validator (its policy may be off). */
     std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /** Not while behind (8.3.9): why this node must not bid for an anchor now, either trigger (pos::CatchUpWait). */
+    CatchUp CatchUpNow() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /** A bid of the anchorer, and what became of it. */
     struct AnchorBidRecord {
         //! (As PastBid::Status: NO_BMM, the block carried no BMM commitment of any sidechain; TOO_SOON, it was found less
@@ -748,6 +750,15 @@ private:
     mutable int64_t m_wait_run GUARDED_BY(m_anchor_mutex){-1};
     mutable int m_wait_blocks GUARDED_BY(m_anchor_mutex){0};
     mutable uint256 m_wait_tip GUARDED_BY(m_anchor_mutex);
+    //! Not while behind (8.3.9): -validatoranchorbidcatchup; since when the node has had a peer (-1: none); the tip, and
+    //! when a better header's wait began or the tip last moved during it (-1: no better header); why the bids wait as the
+    //! last round found it (empty: caught up), and its kind as logged.
+    mutable int64_t m_catchup_seconds GUARDED_BY(m_anchor_mutex){0};
+    mutable int64_t m_peers_since GUARDED_BY(m_anchor_mutex){-1};
+    mutable uint256 m_catchup_tip GUARDED_BY(m_anchor_mutex);
+    mutable int64_t m_catchup_mark GUARDED_BY(m_anchor_mutex){-1};
+    mutable std::string m_catchup_holding GUARDED_BY(m_anchor_mutex);
+    mutable std::string m_catchup_kind GUARDED_BY(m_anchor_mutex);
     //! What the transactions of each block of stake no anchor covers move (the sum of their outputs), by block: read once
     //! a block (ValueAtRisk), the blocks of the run only.
     mutable Mutex m_risk_mutex;

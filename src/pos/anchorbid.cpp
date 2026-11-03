@@ -836,4 +836,26 @@ CAmount StaleOffer(std::span<const PastBid> bids, int64_t now)
     return stale;
 }
 
+CatchUp CatchUpWait(const CatchUpInputs& in)
+{
+    if (in.better_block) return {"block", "catching up: this node is connecting a better block than its tip"};
+    // (A chain stalled everywhere restarts all the same: its peers have no better header, so the node bids once the
+    // sync window is over. Not initial block download as such, for the same reason: Producer::Behind.)
+    if (in.better_header && in.stuck_for < CATCHUP_HEADER_PATIENCE_SECONDS) {
+        if (in.header_lead > 0) {
+            return {"header", strprintf("catching up: a better chain is known, %d block%s above this node's tip, its blocks still coming",
+                                        in.header_lead, in.header_lead == 1 ? "" : "s")};
+        }
+        return {"header", "catching up: a branch of more anchors is known, its blocks still coming"};
+    }
+    if (in.sync_seconds > 0) {
+        if (in.peers <= 0) return {"peers", "no peers: this node cannot tell whether its tip is the network's"};
+        if (in.peers_for < in.sync_seconds) {
+            return {"settling", strprintf("connected to peers %d s ago: taking in their best chain for %d s before it trusts its tip",
+                                          in.peers_for, in.sync_seconds)};
+        }
+    }
+    return {};
+}
+
 } // namespace pos

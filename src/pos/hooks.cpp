@@ -1967,6 +1967,27 @@ bool FastBlocksHooks::FollowerRound(sidechain::Follower& follower) const
                        off ? "bid strategy off" : "\"Anchor my validator\" off", m_params.MaxUnanchoredSlots(slot));
         }
     }
+    // Not while behind (8.3.9, pos::CatchUpWait): an anchor is for a block of this node's chain, and anchors decide the
+    // best chain, so a node back on a stale tip takes in its peers' chain first. Both triggers, and both what a stall
+    // mines (a BMM block on the tip) and tickets.
+    if (validator || mining.enabled) {
+        const CatchUp wait{CatchUpNow()};
+        LOCK(m_anchor_mutex);
+        if (wait.kind != m_catchup_kind) {
+            if (wait.kind.empty()) {
+                LogInfo("FastBlocks: caught up with the network's chain: anchor bids may go out again");
+            } else {
+                LogInfo("FastBlocks: no anchor bid: %s", wait.reason);
+            }
+            m_catchup_kind = wait.kind;
+        }
+        m_catchup_holding = wait.reason;
+        if (!wait.kind.empty()) return true;
+    } else {
+        LOCK(m_anchor_mutex);
+        m_catchup_holding.clear();
+        m_catchup_kind.clear();
+    }
     // These reads precede m_anchor_mutex: never acquire cs_main while holding the anchor lock.
     // A quiet chain needs no anchor of its own (user decision 2026-10-26): leaders and seeds come from the mainchain record
     // and the newest anchor's set, however old (SetFor), so epochs go on. What bids without fees is work waiting for an
@@ -2359,6 +2380,52 @@ std::optional<FastBlocksHooks::ValidatorBid> FastBlocksHooks::ValidatorAnchoring
 {
     LOCK(m_anchor_mutex);
     return m_validator;
+}
+
+CatchUp FastBlocksHooks::CatchUpNow() const
+{
+    ChainstateManager* chainman{Chainman()};
+    if (!chainman) return {};
+    const int64_t now{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
+    // The peers whose handshake is done (the connections' lock first, with no other held).
+    int peers{0};
+    if (m_node && m_node->connman) {
+        m_node->connman->ForEachNode([&](CNode* node) {
+            if (node->fSuccessfullyConnected && !node->fDisconnect) ++peers;
+        });
+    }
+    CatchUpInputs in;
+    uint256 tip_hash;
+    {
+        LOCK(::cs_main);
+        in.better_block = Producer::Behind(*chainman);
+        const CBlockIndex* tip{chainman->ActiveChain().Tip()};
+        const CBlockIndex* best{chainman->m_best_header};
+        if (tip) tip_hash = tip->GetBlockHash();
+        if (tip && best && best->nChainWork > tip->nChainWork && !(best->nStatus & BLOCK_FAILED_VALID)) {
+            in.better_header = true;
+            in.header_lead = best->nHeight - tip->nHeight;
+        }
+    }
+    LOCK(m_anchor_mutex);
+    in.sync_seconds = m_catchup_seconds;
+    in.peers = peers;
+    if (peers == 0) {
+        m_peers_since = -1;
+    } else if (m_peers_since < 0) {
+        m_peers_since = now;
+    }
+    in.peers_for = m_peers_since < 0 ? 0 : now - m_peers_since;
+    // The patience of a better header runs from when it was first known, again whenever the tip moves: a node taking
+    // in a long chain is never out of it, a header whose block never comes is.
+    if (!in.better_header) {
+        m_catchup_mark = -1;
+    } else if (m_catchup_mark < 0 || m_catchup_tip != tip_hash) {
+        m_catchup_mark = now;
+    }
+    m_catchup_tip = tip_hash;
+    in.stuck_for = m_catchup_mark < 0 ? 0 : now - m_catchup_mark;
+    return CatchUpWait(in);
 }
 
 namespace {
@@ -3065,6 +3132,13 @@ FastBlocksHooks::AnchorBidReport FastBlocksHooks::GetAnchorBidReport(int64_t slo
             report.decision.reason += m_turn_said;
         }
     }
+    // (Catching up, as the last round found it: no bid, whatever the policy says.)
+    if (!m_catchup_holding.empty() && (report.anchor_trigger || report.mine_trigger)) {
+        report.decision.bid = false;
+        report.decision.amount = 0;
+        report.decision.kind = "catchup";
+        report.decision.reason = "no bid: " + m_catchup_holding;
+    }
     if (report.stale > 0 && report.decision.kind != "replace" && report.decision.bid && report.decision.amount < report.stale + REPLACEMENT_BUMP) {
         report.warnings.push_back(strprintf("A bid of %s that did not land may still be held by other nodes: a new bid on the same coin must pay more, and max or the cap keep this one below it.", FormatMoney(report.stale)));
     }
@@ -3145,6 +3219,9 @@ void FastBlocksHooks::StartServices(node::NodeContext& node) const
         m_bid_defaults = defaults;
         m_bid_overrides = overrides;
         m_node_policy = policy;
+        // Not while behind (8.3.9): the time with peers before the tip is trusted (none on regtest: a lone node bids).
+        const int64_t catchup{m_chain_params.GetChainType() == ChainType::REGTEST ? 0 : DEFAULT_ANCHOR_CATCHUP_SECONDS};
+        m_catchup_seconds = std::max<int64_t>(0, node.args ? node.args->GetIntArg("-validatoranchorbidcatchup", catchup) : catchup);
     }
     // The bids made and what landed cost, as before the restart (the period's cap, the stale rule).
     if (node.args) LoadBids(node.args->GetDataDirNet() / BID_FILE);

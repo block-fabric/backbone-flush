@@ -1326,4 +1326,60 @@ BOOST_AUTO_TEST_CASE(stale_rule_bids_that_could_not_land)
     BOOST_CHECK_EQUAL(StaleOffer(std::vector<PastBid>{{S::MISSED, 378, now - 30}, {S::NO_BMM, 878, now - 20}}, now), 378);
 }
 
+BOOST_AUTO_TEST_CASE(not_while_behind)
+{
+    // Back from an outage on a stale tip (eCash mainnet, 2026-11-03): no peers 2 s after loading, where 8.3.8 bid at
+    // once; then peers, the network's better chain, its blocks; caught up, the bids go out.
+    CatchUpInputs in{.sync_seconds = DEFAULT_ANCHOR_CATCHUP_SECONDS};
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "peers");
+    in.peers = 4;
+    in.peers_for = 2;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "settling");
+    in.better_header = true;
+    in.header_lead = 2927;
+    in.stuck_for = 3;
+    const CatchUp header{CatchUpWait(in)};
+    BOOST_CHECK_EQUAL(header.kind, "header");
+    BOOST_CHECK(header.reason.find("2927 blocks above") != std::string::npos);
+    in.better_block = true;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "block");
+    // A long catch-up never runs out of patience: the tip moves, and stuck_for starts again.
+    in.better_block = false;
+    in.header_lead = 900;
+    in.peers_for = 3600;
+    in.stuck_for = 20;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    in = CatchUpInputs{.peers = 4, .peers_for = 3600, .sync_seconds = DEFAULT_ANCHOR_CATCHUP_SECONDS};
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    BOOST_CHECK(CatchUpWait(in).reason.empty());
+
+    // A chain stalled everywhere restarts: peers on the same tip, no better header, so it bids once the window is over.
+    in = CatchUpInputs{.peers = 2, .peers_for = DEFAULT_ANCHOR_CATCHUP_SECONDS - 1, .sync_seconds = DEFAULT_ANCHOR_CATCHUP_SECONDS};
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "settling");
+    in.peers_for = DEFAULT_ANCHOR_CATCHUP_SECONDS;
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+
+    // A header whose block never comes (one claiming anchors no block backs) holds the bids back for the patience only.
+    in.better_header = true;
+    in.header_lead = 1;
+    in.stuck_for = CATCHUP_HEADER_PATIENCE_SECONDS - 1;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    in.stuck_for = CATCHUP_HEADER_PATIENCE_SECONDS;
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    // A branch of more anchors at or below the tip's height is a better chain too.
+    in.header_lead = 0;
+    in.stuck_for = 0;
+    BOOST_CHECK(CatchUpWait(in).reason.find("more anchors") != std::string::npos);
+
+    // No wait for peers (regtest, or -validatoranchorbidcatchup=0): a lone node bids, but never while it connects a better
+    // block, nor while a better header's blocks come.
+    in = CatchUpInputs{};
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    in.better_header = true;
+    in.header_lead = 3;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    in.better_block = true;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "block");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

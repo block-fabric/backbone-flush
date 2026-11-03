@@ -403,6 +403,40 @@ inline constexpr int64_t MIN_BID_LEAD_SECONDS{4};
  */
 CAmount StaleOffer(std::span<const PastBid> bids, int64_t now);
 
+/**
+ * Not while behind (8.3.9): what the node knows of its chain against the network's, for both triggers. An anchor is
+ * for a block of the node's own chain, and anchors decide the best chain: back from an outage on a stale tip, before
+ * its peers' blocks came in, an 8.3.8 node's stall bid built a BMM block on that tip and landed it, and the 2,927
+ * blocks the network had made without an anchor in the meantime were taken back (eCash mainnet, 2026-11-03).
+ */
+struct CatchUpInputs {
+    //! A block of more work than the tip that the node has and is connecting (Producer::Behind).
+    bool better_block{false};
+    //! A header of more work than the tip whose block has not come yet, `header_lead` blocks above the tip.
+    bool better_header{false};
+    int header_lead{0};
+    //! Peers whose handshake is done, and the seconds since the node last had none.
+    int peers{0};
+    int64_t peers_for{0};
+    //! The seconds since the better header was first known or the tip last moved, whichever is later.
+    int64_t stuck_for{0};
+    //! The seconds with peers before the node trusts its tip (-validatoranchorbidcatchup); 0: no wait for peers.
+    int64_t sync_seconds{0};
+};
+
+//! How long a better header whose block does not come holds the bids back, the tip not moving: a header can claim
+//! anchors no block backs (a leader that signs one and never sends its block), so it cannot hold them back forever.
+inline constexpr int64_t CATCHUP_HEADER_PATIENCE_SECONDS{600};
+//! -validatoranchorbidcatchup's default (0 on regtest).
+inline constexpr int64_t DEFAULT_ANCHOR_CATCHUP_SECONDS{60};
+
+//! Why the node must not bid for an anchor yet: `kind` "block", "header", "peers" or "settling"; empty if it may.
+struct CatchUp {
+    std::string kind;
+    std::string reason;
+};
+CatchUp CatchUpWait(const CatchUpInputs& inputs);
+
 } // namespace pos
 
 #endif // BITCOIN_POS_ANCHORBID_H
