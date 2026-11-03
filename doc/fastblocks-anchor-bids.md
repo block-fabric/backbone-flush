@@ -23,7 +23,13 @@ a ticket nor for the BMM block of a stall, while the node:
   default, 0 on regtest): time for their headers to come, before it trusts its tip.
 
 A chain stalled everywhere still restarts: its nodes' peers have no better header, so they bid once the window is
-over. `getanchorbidpolicy`'s decision says why a node waits (kind `catchup`), and the log says it once
+over. A new chain starts too: on its genesis block or block 1 there is no history to take back, so the wait for peers
+does not apply and its first node bids and produces alone (a better block or header still holds it back).
+
+The producer of blocks of stake holds back the same way, for the peers (and, as before, while it connects a better
+block), but not for a better header: a leader can sign one and never send its block, and that would halt blocks of
+stake everywhere. A block it signed on a stale tip would fork the chain, and the same slot signed again on the best
+chain is a double proposal. `getanchorbidpolicy`'s decision says why a node waits (kind `catchup`), and the log says it once
 (`no anchor bid: ...`, then `caught up with the network's chain`).
 
 The incident: on 2026-11-03 a validator came back from a 16-hour outage holding tip 22,509 of Flush mainnet, two

@@ -425,6 +425,8 @@ std::optional<uint256> Producer::Produce(int64_t slot, std::string& error, Retry
     uint256 tip_hash;
     uint256 leader_key;
     const CKey* key{nullptr};
+    // (Before cs_main: it reads the connections, with no other lock held.)
+    const CatchUp catch_up{m_hooks.CatchUpNow(/*headers=*/false)};
     {
         LOCK(::cs_main);
         const CBlockIndex* tip{chainman.ActiveChain().Tip()};
@@ -445,6 +447,10 @@ std::optional<uint256> Producer::Produce(int64_t slot, std::string& error, Retry
         // it has and has yet to connect, not a better header: a leader can sign a header that claims
         // an acknowledgement (more anchors than any chain) and never send its block.
         if (Behind(chainman)) return fail("the node is still taking in the best chain");
+        // Nor before it knows its peers' chain (8.3.9): back on a stale tip with no peers yet, its block forks the chain, and
+        // the same slot signed again on the best chain is a double proposal. Not a better header, as above; nor on a new
+        // chain's genesis or first block, where the first node starts alone (pos::CatchUpWait).
+        if (!catch_up.kind.empty()) return fail(catch_up.reason);
         if (const auto last{FastBlocksHooks::LastPosSlot(tip, params)}; last && *last >= slot) return fail("the chain has a block of this slot or a later one");
         if (SlotTime(slot, params) <= tip->GetMedianTimePast()) return fail("the slot is not after the median time of the chain");
         const sidechain::StoreView& view{chainman.ActiveChainstate().SideCache()};

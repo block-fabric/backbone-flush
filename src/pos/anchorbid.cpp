@@ -848,7 +848,7 @@ CatchUp CatchUpWait(const CatchUpInputs& in)
         }
         return {"header", "catching up: a branch of more anchors is known, its blocks still coming"};
     }
-    if (in.sync_seconds > 0) {
+    if (in.sync_seconds > 0 && !in.bootstrap) {
         if (in.peers <= 0) return {"peers", "no peers: this node cannot tell whether its tip is the network's"};
         if (in.peers_for < in.sync_seconds) {
             return {"settling", strprintf("connected to peers %d s ago: taking in their best chain for %d s before it trusts its tip",

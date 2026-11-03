@@ -422,6 +422,9 @@ struct CatchUpInputs {
     int64_t stuck_for{0};
     //! The seconds with peers before the node trusts its tip (-validatoranchorbidcatchup); 0: no wait for peers.
     int64_t sync_seconds{0};
+    //! The tip is the genesis block or block 1: no history to take back, so no wait for peers (a new chain's first node
+    //! starts alone).
+    bool bootstrap{false};
 };
 
 //! How long a better header whose block does not come holds the bids back, the tip not moving: a header can claim

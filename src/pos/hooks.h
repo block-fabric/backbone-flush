@@ -432,8 +432,12 @@ public:
     };
     /** A validator's own anchorer: none if this node is not a validator (its policy may be off). */
     std::optional<ValidatorBid> ValidatorAnchoring() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
-    /** Not while behind (8.3.9): why this node must not bid for an anchor now, either trigger (pos::CatchUpWait). */
-    CatchUp CatchUpNow() const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
+    /**
+     * Not while behind (8.3.9): why this node must not bid for an anchor now, either trigger (pos::CatchUpWait). Without
+     * `headers`, for the producer: not a better header (a leader can sign one and never send its block, which would halt
+     * blocks of stake everywhere), only a better block and the peers.
+     */
+    CatchUp CatchUpNow(bool headers = true) const EXCLUSIVE_LOCKS_REQUIRED(!m_anchor_mutex);
     /** A bid of the anchorer, and what became of it. */
     struct AnchorBidRecord {
         //! (As PastBid::Status: NO_BMM, the block carried no BMM commitment of any sidechain; TOO_SOON, it was found less

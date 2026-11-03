@@ -2382,7 +2382,7 @@ std::optional<FastBlocksHooks::ValidatorBid> FastBlocksHooks::ValidatorAnchoring
     return m_validator;
 }
 
-CatchUp FastBlocksHooks::CatchUpNow() const
+CatchUp FastBlocksHooks::CatchUpNow(bool headers) const
 {
     ChainstateManager* chainman{Chainman()};
     if (!chainman) return {};
@@ -2402,6 +2402,7 @@ CatchUp FastBlocksHooks::CatchUpNow() const
         const CBlockIndex* tip{chainman->ActiveChain().Tip()};
         const CBlockIndex* best{chainman->m_best_header};
         if (tip) tip_hash = tip->GetBlockHash();
+        in.bootstrap = !tip || tip->nHeight <= 1;
         if (tip && best && best->nChainWork > tip->nChainWork && !(best->nStatus & BLOCK_FAILED_VALID)) {
             in.better_header = true;
             in.header_lead = best->nHeight - tip->nHeight;
@@ -2425,6 +2426,8 @@ CatchUp FastBlocksHooks::CatchUpNow() const
     }
     m_catchup_tip = tip_hash;
     in.stuck_for = m_catchup_mark < 0 ? 0 : now - m_catchup_mark;
+    // (The anchor's patience is kept above whoever asks: the producer's question only leaves the header out.)
+    if (!headers) in.better_header = false;
     return CatchUpWait(in);
 }
 

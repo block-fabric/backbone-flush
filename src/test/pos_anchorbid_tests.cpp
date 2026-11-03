@@ -1380,6 +1380,22 @@ BOOST_AUTO_TEST_CASE(not_while_behind)
     BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
     in.better_block = true;
     BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "block");
+
+    // A new chain: on its genesis block or block 1 there is no history to take back, so its first node starts alone,
+    // without peers; from block 2 on, it waits for them as any other.
+    in = CatchUpInputs{.sync_seconds = DEFAULT_ANCHOR_CATCHUP_SECONDS, .bootstrap = true};
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    in.peers = 1;
+    in.peers_for = 1;
+    BOOST_CHECK(CatchUpWait(in).kind.empty());
+    // ...but even then not while a peer's better chain comes in.
+    in.better_header = true;
+    in.header_lead = 5;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "header");
+    in.better_block = true;
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "block");
+    in = CatchUpInputs{.sync_seconds = DEFAULT_ANCHOR_CATCHUP_SECONDS, .bootstrap = false};
+    BOOST_CHECK_EQUAL(CatchUpWait(in).kind, "peers");
 }
 
 BOOST_AUTO_TEST_SUITE_END()
