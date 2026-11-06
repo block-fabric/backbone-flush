@@ -108,7 +108,9 @@ std::unique_ptr<WalletDatabase> MakeWalletDatabase(const std::string& name, cons
 //! -fallbackfee default
 // Not zero as in Bitcoin: a young chain has too few transactions to estimate
 // fees from, and a wallet that cannot pay without configuration is of no use.
-inline constexpr CAmount DEFAULT_FALLBACK_FEE = 20000;
+// 2 sat/vB: Flush's blocks are mostly empty, so the wallet almost always falls
+// back; Bitcoin's 20 sat/vB made users overpay tenfold (2026-11-06).
+inline constexpr CAmount DEFAULT_FALLBACK_FEE = 2000;
 //! -discardfee default
 inline constexpr CAmount DEFAULT_DISCARD_FEE{10'000};
 //! -mintxfee default
