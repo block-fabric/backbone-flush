@@ -337,6 +337,26 @@ class PublicApiPsbtTest(LayersTest):
         assert_equal(again.status, 409)
         assert again.json()["error"]["reason"] in ("ticker_taken", "reservation_spent")
 
+        self.log.info("psbt/claim (8.4.0): the creator's fees, from the creator's address only")
+        funder.buyfromlaunch("0x" + launch["asset"], 5)
+        self.bmm()
+        owed = n0.getlaunch("PSBTX")["creator_fees_owed"]
+        assert_greater_than(owed, 0)
+        assert_equal(self.post(api, "psbt/claim", {"address": empty, "launch": "PSBTX"}).status, 400)
+        assert_equal(self.post(api, "psbt/claim", {"address": address, "launch": "PSBTX", "nonce": nonce}).status, 400)
+        claim = self.ok(self.post(api, "psbt/claim", {"address": address, "coins": coins()}, {"launch": "psbtx"}))
+        assert_equal((claim["verb"], claim["ticker"], claim["asset"]), ("claim", "PSBTX", launch["asset"]))
+        decoded = self.check_psbt(n0, claim["psbt"], address)
+        # On its curve, nothing minted: no result output, the marker first, then the change.
+        assert_equal(decoded["tx"]["vout"][0]["scriptPubKey"]["type"], "nulldata")
+        self.ok(self.broadcast(api, {"psbt": self.sign(ext, claim["psbt"])}))
+        block = self.bmm()
+        assert_equal(n0.getlaunch("PSBTX")["creator_fees_owed"], 0)
+        paid = n0.getblock(block, 2)["tx"][0]["vout"]
+        assert any(o["scriptPubKey"].get("address") == address and o["value"] == owed for o in paid), paid
+        nothing = self.post(api, "psbt/claim", {"address": address, "launch": "PSBTX", "coins": coins()})
+        assert_equal(nothing.json()["error"].get("reason"), "nothing_owed")
+
         self.log.info("The coins named by the client: the ones given only, another address's skipped")
         utxo = coins()[0]
         named = self.ok(self.post(api, "psbt/reserve", {"address": address, "commitment": commit("NAMEDX", os.urandom(32).hex()), "coins": [utxo]}))

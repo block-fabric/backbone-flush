@@ -129,7 +129,7 @@ quotes 2, builds `no-store`, uploaded logos a year: `logos/{sha256}`) and an `ET
 | `quote/position?pool=&price_lower=&price_upper=&amount_a=&amount_b=` | QuotePosition | `previewposition` |
 | `build/{buy\|sell\|swap\|deposit\|withdraw\|launch\|register\|curve\|pool\|auction\|order\|position\|reposition\|settle\|bid\|collect\|claim\|pegin\|pegout}?…` | BuildAction | the action, unsigned (below); `facts` (what to show beside it), `deposit_address` (pegin with an address) |
 | POST `broadcast` `{"hex": "…"}` or (8.3.0) `{"psbt": "…", "max_burn_units": "…"}` | Broadcast | `{ txid }`; a PSBT whose inputs are all signed is finalized here (as `finalizepsbt`) and extracted, else 400 `the PSBT is not complete: input N not signed`; `max_burn_units` caps what an unspendable output holds (sendrawtransaction's `maxburnamount`): a launch's first buy, the `burn_units` of its build |
-| POST `psbt/reserve`, `psbt/launch`, `psbt/register` | BuildPsbt | 8.3.0: a launch's two steps (and a registration's) as unsigned PSBTs for a wallet that signs what it is given (below). Cost 8, `no-store` |
+| POST `psbt/reserve`, `psbt/launch`, `psbt/register` | BuildPsbt | 8.3.0: a launch's two steps (and a registration's) as unsigned PSBTs for a wallet that signs what it is given (below); 8.4.0: `psbt/claim`, a creator's claim. Cost 8, `no-store` |
 | POST `psbt/reservation` `{"reservation": "txid:vout"}` | GetReservation | 8.3.2: how deep a reservation is, by its output alone: `{ reservation, status, confirmations, needed, ready, height }` (below). Cost 4, `no-store` |
 | POST `logos` `{"base64": "…"}` | UploadLogo | 8.1.0: `{ "sha256": "<64 hex>", "url": "/api/v1/logos/<sha256>" }` (200; `Cache-Control: no-store`), the logo kept in memory by its SHA-256 for an hour from its last upload (uploaded again, an hour from then), at most 1024 logos (the one uploaded longest ago dropped first). Checked with the chain's logo rules (`bitassets::CheckLogo`: PNG or JPEG, 256×256, at most 32 KiB, no metadata): else 400 with the reason (`bad-ba-logo-…`). The `url` is relative: the site prefixes its own origin and gives it as a link's `logo_url` (doc/flush-links.md). Charged as a broadcast: 6 a minute per client (3 at once), 120 in all (429, Retry-After), and 4 units of the client's rate |
 | `logos/{sha256}` | GetUploadedLogo | 8.1.0: the logo uploaded with that SHA-256 (any case), as the image (`image/png` or `image/jpeg`, the type its rules found), `Cache-Control: public, max-age=31536000, immutable` (its content is its hash's); 404 when none is kept (never uploaded, or more than an hour ago), 400 when not 64 hex digits |
@@ -230,7 +230,7 @@ website ──GET /api/v1/launches/X/quote──▶ node (the chain's quote: amo
   marker, and hands it to the node's own mempool and relay (`BroadcastTransaction`, the node's policy, the default
   maximum fee rate). Rate-limited per client and in all; off with `-publicapibroadcast=0`.
 
-### Unsigned transactions: a launch from a wallet extension (8.3.0)
+### Unsigned transactions: a launch (8.3.0) or a claim (8.4.0) from a wallet extension
 
 The ECX Wallet extension signs only a PSBT someone else built. For a launch, the node builds both of its
 transactions as its own wallet's `reserveasset` and `launchtoken` would (and `registerasset`'s for a
@@ -304,6 +304,18 @@ A `ticker` or a `nonce` here is refused (400): the node is not to see them befor
 | `ticker`, `name`, `description`, `links`, `logo_sha256`, `logo_url`, `supply`, `decimals`, `fee_bps`, `allocation_bps`, `first_buy_ecx`, `slippage_bps`, `split`, `keep_control`, `expires_in` | launch: exactly `build/launch`'s, same names and units (the query string the site builds for `build/launch`, as it is). `logo_sha256` must be a logo uploaded here (`POST logos`, kept an hour): its bytes go into the launch |
 | `min_buy`, `max_buy` | launch, optional: launchtoken's bounds of a buy on the curve (ECX) |
 | `ticker`, `name`, `description`, `links`, `logo_sha256`, `supply`, `decimals` | register: exactly `build/register`'s |
+
+`POST psbt/claim` (8.4.0): `claimlaunch`'s transaction, for the creator signing in a wallet extension.
+
+| Field | |
+|---|---|
+| `address`, `coins` | as above; the address must be the launch's **creator** (400 otherwise): a claim pays the creator only, and its tokens go to the one result output, whose script the rules require be the creator's |
+| `launch` | the launch, by ticker (any case) or id (body or query) |
+
+It pays what the next block would: the creator's fees once at least the chain's smallest payout (by that block's
+coinbase, to the creator's address), and the tokens due (the allocation vested since graduation, the locked
+position's fees in the token) in one result output; the marker holds no ECX. Nothing owed now: 400 with `reason`
+`nothing_owed`. The reply's `facts` say what it pays; `ticker` and `asset` name the launch.
 
 The launch's parameters go through `build/launch` itself (`Build`: every check, and the payload the app's link would
 carry, its first buy's floor the quote less `slippage_bps`), then into launchtoken's options as the app makes them from

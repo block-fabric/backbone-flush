@@ -2451,12 +2451,51 @@ private:
     {
         const bitassets::State state{tip.State()};
         const std::string verb{req.GetString("verb")};
-        if (verb != "reserve" && verb != "launch" && verb != "register") Fail(Code::INVALID_ARGUMENT, "verb: reserve, launch or register");
+        if (verb != "reserve" && verb != "launch" && verb != "register" && verb != "claim") Fail(Code::INVALID_ARGUMENT, "verb: reserve, launch, register or claim");
         const std::string address{req.GetString("address")};
         const CScript script{PsbtAddress(address)};
         const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
         const bitassets::LaunchRules launch_rules{bitassets::LaunchRulesAt(rules, tip.height + 1)};
         BlockCache blocks;
+
+        if (verb == "claim") {
+            // claimlaunch's transaction (8.4.0): the creator's address pays its fee and gets what the claim pays, its fees
+            // by the coinbase and its tokens in the one result output, whose script the rules require be the creator's.
+            if (!req.GetString("nonce").empty() || !req.GetString("reservation").empty() || !req.GetString("commitment").empty()) {
+                Fail(Code::INVALID_ARGUMENT, "psbt/claim takes the launch and the creator's address only");
+            }
+            const auto [token, record]{ResolveLaunch(state, req.GetString("launch"))};
+            if (record.creator != script) Fail(Code::INVALID_ARGUMENT, "address: not this launch's creator (a claim pays the creator only: send it from the creator's address)");
+            // What the block after the tip would pay, as the rules count it (bitassets/state.cpp, ClaimLaunch).
+            const int height{tip.height + 1};
+            const uint64_t fees{record.creator_fees >= bitassets::MinChnPayout(height) ? record.creator_fees : 0};
+            uint64_t units{0};
+            if (record.Graduated() && !record.allocation_claimed && record.allocation > 0) {
+                const uint64_t vested{record.AllocationVested(height)};
+                units = vested - std::min(vested, record.allocation_paid);
+            }
+            if (record.v5 && record.creator_tokens > 0 && units <= bitassets::MAX_AMOUNT - record.creator_tokens) units += record.creator_tokens;
+            if (fees == 0 && units == 0) {
+                ApiError e{Code::FAILED_PRECONDITION, "nothing is owed to this launch's creator now"};
+                e.status.reason = "nothing_owed";
+                throw e;
+            }
+            std::vector<bitassets::OutToken> outs;
+            if (units > 0) outs.emplace_back(std::nullopt);
+            const CScript marker{bitassets::MarkerScript(bitassets::MarkerOf(bitassets::Operation{bitassets::ClaimLaunch{token}}, outs))};
+            const PsbtBuilt built{MakePsbtTx(script, outs, marker, 0, {}, req, state, tip, blocks)};
+            Message m{PsbtReply(verb, built, 0, address, state, tip)};
+            const std::string label{Label(state, token)};
+            m.SetString("ticker", label);
+            m.SetString("asset", Hex(token));
+            m.SetString("summary", strprintf("Pay the creator of %s what it is owed", label));
+            Fact(m, "Fees paid", strprintf("%s %s (by the coinbase of the block that takes it)", FormatMoney(static_cast<CAmount>(fees)), Coin()));
+            if (units > 0) {
+                const auto asset{state.GetAsset(token)};
+                Fact(m, "Tokens paid", strprintf("%s %s", Decimal(units, asset ? asset->decimals : 0, 12), label));
+            }
+            return m;
+        }
 
         if (verb == "reserve") {
             // The node never sees the ticker nor the nonce before the reveal (whoever runs it may make blocks): the client

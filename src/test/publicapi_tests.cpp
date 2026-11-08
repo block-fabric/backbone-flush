@@ -420,11 +420,17 @@ BOOST_AUTO_TEST_CASE(psbt_routes_and_launch_plans)
     BOOST_CHECK(m.request->GetBool("keep_control"));
     BOOST_CHECK_EQUAL(m.request->StringAt("links", 0), "https://a.example/?a,b");
     BOOST_CHECK_EQUAL(m.request->Count("coins"), 1U);
-    for (const char* verb : {"reserve", "register"}) {
+    for (const char* verb : {"reserve", "register", "claim"}) {
         auto v{publicapi::Route(Pool(), "POST", std::string{"psbt/"} + verb, "", R"({"address":"a1"})")};
         BOOST_REQUIRE(std::holds_alternative<grpcsrv::RestMatch>(v));
         BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(v).request->GetString("verb"), verb);
     }
+    // 8.4.0: a creator's claim names its launch, in the query or the body.
+    auto claim{publicapi::Route(Pool(), "POST", "psbt/claim", "launch=ROYAL", R"({"address":"a1"})")};
+    const std::string claim_why{std::holds_alternative<grpcsrv::Status>(claim) ? std::get<grpcsrv::Status>(claim).message : std::string{}};
+    BOOST_REQUIRE_MESSAGE(std::holds_alternative<grpcsrv::RestMatch>(claim), claim_why);
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(claim).request->GetString("launch"), "ROYAL");
+    BOOST_CHECK_EQUAL(std::get<grpcsrv::RestMatch>(claim).request->GetString("verb"), "claim");
     // The nonce, the reservation and the commitment in the body only, never in a URL.
     for (const char* secret : {"nonce", "reservation", "commitment"}) {
         auto q{publicapi::Route(Pool(), "POST", "psbt/launch", std::string{secret} + "=" + nonce, "{}")};
