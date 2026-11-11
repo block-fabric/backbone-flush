@@ -1,27 +1,31 @@
 <script lang="ts">
-  // The price of an order book from the market index's candles (getpoolcandles of the book's id: its trades at 5m, 1h,
-  // 4h or 1d), the wallet's own orders drawn at their limits. Asked again with each block (ba.version), never by a timer.
-  // A node without the market index (or without the method) says so.
+  // The price of a market over time, in candles, with its period buttons (owner decision, 2026-11-11: 1H, 1D, 1W, All):
+  // the market index's candles of a pool or of a launch's curve (getpoolcandles of its id: ba/candles.ts), asked again
+  // with each block (ba.version), never by a timer. A node without the market index (-dexindex) has none: the price as
+  // this app saw it, block by block, is drawn in their place (`series`), and the page says so.
   import { errorText } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { rpc } from '../../lib/rpc';
+  import Chart from './Chart.svelte';
   import { compactNumber } from './axis';
-  import { CANDLE_INTERVALS, candlesOf, formatCandleTime, type Candle, type CandleInterval, type OrderMark } from './bookchart';
+  import { candlesOf, formatCandleTime, PERIODS, type Candle, type Period } from './candles';
   import { ba } from './store.svelte';
 
-  let { pool, marks = [], quoteLabel, tall = 200 }: { pool: string; marks?: readonly OrderMark[]; quoteLabel: string; tall?: number } = $props();
+  let { pool, quoteLabel, tall = 200, series = [] }: { pool: string; quoteLabel: string; tall?: number; /** The prices this app saw (x: the height), for a node without candles. */ series?: readonly { x: number; y: number }[] } = $props();
 
-  let interval = $state<CandleInterval>('1h');
+  let period = $state<Period>('1D');
+  const asked = $derived(PERIODS.find((p) => p.id === period) ?? PERIODS[1]);
+  const interval = $derived(asked.interval);
   let candles = $state.raw<Candle[]>([]);
   let error = $state('');
   $effect(() => {
     const id = pool;
-    const iv = interval;
+    const p = asked;
     void ba.version;
     if (!id) return;
     let live = true;
     rpc
-      .raw<unknown>('getpoolcandles', [id, iv])
+      .raw<unknown>('getpoolcandles', p.span ? [id, p.interval, Math.floor(Date.now() / 1000) - p.span] : [id, p.interval])
       .then((r) => {
         if (!live) return;
         candles = candlesOf(r).slice(-120);
@@ -39,8 +43,8 @@
 
   let width = $state(520);
   const pad = { l: 48, r: 8, t: 10, b: 22 };
-  const lo = $derived(Math.min(...candles.map((c) => c.l), ...marks.map((m) => m.price)));
-  const hi = $derived(Math.max(...candles.map((c) => c.h), ...marks.map((m) => m.price)));
+  const lo = $derived(Math.min(...candles.map((c) => c.l)));
+  const hi = $derived(Math.max(...candles.map((c) => c.h)));
   const span = $derived(hi - lo || hi * 0.1 || 1);
   const Y = (p: number) => pad.t + (1 - (p - (lo - span * 0.05)) / (span * 1.1)) * (tall - pad.t - pad.b);
   const slot = $derived(Math.max(1, width - pad.l - pad.r) / Math.max(1, candles.length));
@@ -54,17 +58,20 @@
   const shown = $derived(hover !== null ? candles[hover] : candles.at(-1));
 </script>
 
-<div class="book-candles">
-  <div class="ba-chips" role="group" aria-label="Interval">
-    {#each CANDLE_INTERVALS as iv (iv)}<button type="button" class="ba-chip" aria-pressed={interval === iv} onclick={() => (interval = iv)}>{iv}</button>{/each}
+<div class="candles" data-testid="price-chart">
+  <div class="ba-chips" role="group" aria-label="Period">
+    {#each PERIODS as p (p.id)}<button type="button" class="ba-chip" aria-pressed={period === p.id} onclick={() => (period = p.id)}>{p.id}</button>{/each}
   </div>
   <div class="ba-chart" bind:clientWidth={width}>
     {#if error}
-      <p class="ba-empty">{t('No candles for this book from this node (its market index, -dexindex):')} {error}</p>
+      {#if series.length > 1}
+        <Chart points={series} step label={t('The price as this app saw it')} formatX={(x) => t('block %1', String(Math.round(x)))} />
+      {/if}
+      <p class="ba-help" data-testid="no-candles">This node keeps no price history (its market index is off): the chart shows the prices this app saw while it ran.</p>
     {:else if candles.length === 0}
-      <p class="ba-empty">No trade in this book yet.</p>
+      <p class="ba-empty">No trades in this period. The chart starts with the first trade.</p>
     {:else}
-      <svg {width} height={tall} viewBox="0 0 {width} {tall}" role="img" aria-label={t('The price of the book, in candles')} onpointermove={move} onpointerleave={() => (hover = null)}>
+      <svg {width} height={tall} viewBox="0 0 {width} {tall}" role="img" aria-label={t('The price, in candles')} onpointermove={move} onpointerleave={() => (hover = null)}>
         {#each [hi, (hi + lo) / 2, lo] as tk, i (i)}
           <line class="grid" x1={pad.l} x2={width - pad.r} y1={Y(tk)} y2={Y(tk)} />
           <text class="axis" x={pad.l - 6} y={Y(tk) + 3.5} text-anchor="end">{compactNumber(tk, 4)}</text>
@@ -72,9 +79,6 @@
         {#each candles as c, i (c.t)}
           <line class="wick" class:up={c.c >= c.o} x1={X(i)} x2={X(i)} y1={Y(c.h)} y2={Y(c.l)} />
           <rect class="body" class:up={c.c >= c.o} x={X(i) - Math.max(1, slot * 0.35)} width={Math.max(2, slot * 0.7)} y={Math.min(Y(c.o), Y(c.c))} height={Math.max(1, Math.abs(Y(c.o) - Y(c.c)))} />
-        {/each}
-        {#each marks as m (m.order)}
-          <line class="mine {m.side}" x1={pad.l} x2={width - pad.r} y1={Y(m.price)} y2={Y(m.price)}><title>{t('Your order at %1', String(Number(m.price.toPrecision(10))))}</title></line>
         {/each}
         <text class="axis" x={pad.l} y={tall - 6}>{formatCandleTime(candles[0].t, interval)}</text>
         <text class="axis" x={width - pad.r} y={tall - 6} text-anchor="end">{formatCandleTime(candles[candles.length - 1].t, interval)}</text>
@@ -85,7 +89,7 @@
 </div>
 
 <style>
-  .book-candles {
+  .candles {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -101,16 +105,6 @@
   }
   .body.up {
     fill: var(--positive);
-  }
-  .mine {
-    stroke-dasharray: 4 3;
-    stroke-width: 1.5;
-  }
-  .mine.bid {
-    stroke: var(--positive);
-  }
-  .mine.ask {
-    stroke: var(--negative);
   }
   .readout {
     font-size: 0.85rem;

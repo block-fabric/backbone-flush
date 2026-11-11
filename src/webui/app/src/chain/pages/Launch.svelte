@@ -8,15 +8,14 @@
   import { selectable, stacked } from '../../lib/actions';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
-  import { nav } from '../../lib/nav.svelte';
+  import { go, nav } from '../../lib/nav.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import CreateWizard from '../ba/CreateWizard.svelte';
   import HiddenToggle from '../ba/HiddenToggle.svelte';
-  import LaunchView from '../ba/LaunchView.svelte';
-  import { launchRoute, parseDexRoute } from '../ba/assetactions';
+  import { assetRoute } from '../ba/assetactions';
   import type { MarketKind } from '../ba/create';
   import { approx, formatAmount, formatPercent, formatPrice } from '../ba/model';
   import { ba, followDexRoute, launchesRead, loadLaunchFlags, startBitAssets } from '../ba/store.svelte';
@@ -44,14 +43,11 @@
   const hiddenCount = $derived(showHidden ? 0 : curves.filter((l) => hiddenAsset(l.token, l.ticker)).length);
   const list = $derived((showHidden ? curves : curves.filter((l) => !hiddenAsset(l.token, l.ticker))).slice().sort((x, y) => approx(y.raised) - approx(x.raised) || y.height - x.height));
   const more = $derived(Math.max(0, launchesRead.total - launchesRead.list.length));
-  const route = $derived(parseDexRoute(nav.tab).launch);
-  const open = (token: string) => (nav.tab = launchRoute(token));
+  const open = (token: string) => go('assets', assetRoute(token));
 </script>
 
 <div class="page ba-page launch-page">
-  {#if route}
-    <LaunchView token={route.token} side={route.side} back={() => (nav.tab = 'launches')} />
-  {:else if wizard}
+  {#if wizard}
     <button type="button" class="btn ghost small ba-back" onclick={() => (nav.tab = 'launches')}><Icon name="back" size={15} /> Back to Launch</button>
     <header class="page-head">
       <h1>{simple ? 'Create an asset' : 'Create asset'}</h1>

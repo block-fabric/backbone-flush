@@ -14,7 +14,7 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetActions from './AssetActions.svelte';
-  import { launchRoute } from './assetactions';
+  import { assetRoute } from './assetactions';
   import AssetBadge from './AssetBadge.svelte';
   import { compactNumber } from './axis';
   import { claimable, creatorAllocation, launchCurveFacts, launchDecimals, type Launch, type LaunchPage } from './launch';
@@ -65,7 +65,7 @@
   }
 
   function open(l: Launch) {
-    go('launch', launchRoute(l.token));
+    go('assets', assetRoute(l.token));
   }
 
   async function claim(l: Launch) {

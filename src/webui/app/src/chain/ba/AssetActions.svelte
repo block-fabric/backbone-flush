@@ -10,7 +10,7 @@
   import { go } from '../../lib/nav.svelte';
   import { wallets } from '../../lib/state.svelte';
   import type { Command } from '../../lib/commands.svelte';
-  import { ACTION_LABELS, assetActions, assetRoute, launchRoute, marketsOf, poolRoute, swapRoute, type AssetAction } from './assetactions';
+  import { ACTION_LABELS, assetActions, assetRoute, marketsOf, poolRoute, swapRoute, type AssetAction } from './assetactions';
   import { approx } from './model';
   import { assetTextOf, ba, holdingOf, sendAsset } from './store.svelte';
 
@@ -44,9 +44,9 @@
         claim?.();
         return;
       case 'buy':
-        return go('launch', launchRoute(id, 'buy'));
+        return go('assets', assetRoute(id, 'buy'));
       case 'sell-curve':
-        return go('launch', launchRoute(id, 'sell'));
+        return go('assets', assetRoute(id, 'sell'));
       case 'swap':
         return go('trade', swapRoute(id, 'get'));
       case 'sell':
@@ -54,7 +54,7 @@
       case 'add-liquidity':
         return go('pools', poolRoute(markets.bestPool));
       case 'view-market':
-        return launch || markets.curve ? go('launch', launchRoute(id, 'buy')) : go('pools', poolRoute(markets.bestPool));
+        return launch || markets.curve ? go('assets', assetRoute(id)) : go('pools', poolRoute(markets.bestPool));
       case 'open-market':
         return go('assets', assetRoute(id, 'liquidity'));
       case 'send':

@@ -149,7 +149,7 @@ export function dexRoute(page: string, tab: string): DexRoute {
     case 'auctions':
       return { page: 'my-assets', tab: 'closing' };
     case 'launches':
-      return { page: 'launch', tab: a ? `launches/${a}/${b === 'sell' ? 'sell' : 'buy'}` : 'launches' };
+      return a ? { page: 'assets', tab: `asset/${a}/${b === 'sell' ? 'sell' : 'buy'}` } : { page: 'launch', tab: 'launches' };
     case 'fund':
     case 'launch':
     case 'register':

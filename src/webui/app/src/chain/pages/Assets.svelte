@@ -38,7 +38,8 @@
   let filter = $state<Filter>('all');
   let sort = $state<Sort>('newest');
   // The asset opened is in the route ("asset/<id>", ba/assetactions.ts): back, forward and a reload keep it.
-  const shown = $derived(parseDexRoute(nav.tab).asset?.id ?? null);
+  const opened = $derived(parseDexRoute(nav.tab).asset ?? null);
+  const shown = $derived(opened?.id ?? null);
   const show = (id: string | null) => (nav.tab = id ? assetRoute(id) : '');
   let lookupError = $state('');
   let looking = $state(false);
@@ -182,7 +183,7 @@
 
 <div class="page ba-page assets-page">
   {#if shown}
-    <AssetView id={shown} onback={() => show(null)} />
+    {#key shown}<AssetView id={shown} box={opened?.box ?? ''} onback={() => show(null)} />{/key}
   {:else}
     <header class="page-head">
       <h1>Assets</h1>

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canCurve, curveDecimals, curveAssetParams, curveMaxUnits, curveSplit, curveSupplyProblem, FIXED_PARAMS, launchParamsOf, launchTokenOptions, unitsText, wholeUnits } from './create';
 import { marketBadge, marketOf } from './registry';
-import { candlesOf, depthOf, levelAt, orderMarks } from './bookchart';
 import type { Auction, Pool } from './model';
 
 const ACTIVE = launchParamsOf({ fee: 1.15, params_active: true, params_height: 20, fee_min: 0.3, fee_max: 5, fee_default: 1.15, supply_min_units: '1000000', supply_max_units: '8198552921648689600', supply_multiple_units: 8, decimals_max: 12, decimals_default: 6, supply_default: '1000000000' });
@@ -75,28 +74,6 @@ describe('the registry: the market of each asset', () => {
     const auction = { base_id: A, status: 'open' } as Auction;
     expect(marketOf(A, [], [auction]).status).toBe('auction');
     expect(marketOf(A, [], [{ ...auction, status: 'ended' }]).status).toBe('none');
-  });
-});
-
-describe('the charts of a book', () => {
-  const book = { asks: [{ price: 1.1, amount: 2 }, { price: 1.2, amount: 3, price_exact: '1.2' }], bids: [{ price: 0.9, amount: 1 }, { price: 0.95, amount: 4 }], mid_exact: '1.025' };
-  it('the depth: running totals each way from the middle, the exact middle', () => {
-    const d = depthOf(book);
-    expect(d.bids.map((b) => [b.price, b.total])).toEqual([[0.95, 4], [0.9, 5]]);
-    expect(d.asks.map((a) => [a.price, a.total])).toEqual([[1.1, 2], [1.2, 5]]);
-    expect(d.midText).toBe('1.025');
-    expect(d.asks[1].priceText).toBe('1.2');
-    expect(d.lo).toBeLessThanOrEqual(0.9);
-    expect(d.hi).toBeGreaterThanOrEqual(1.2);
-    expect(levelAt(d, 0.92)?.total).toBe(4);
-    expect(levelAt(d, 1.15)?.total).toBe(2);
-    expect(depthOf(null).bids).toEqual([]);
-  });
-  it('candles checked, oldest first; the own orders as marks', () => {
-    expect(candlesOf({ items: [{ t: 2, o: 1, h: 2, l: 0.5, c: 1.5, v: 3 }, { t: 1, o: '1', h: '1', l: '1', c: '1', v: '0' }, { t: 3, o: 1, h: 0, l: 1, c: 1 }] }).map((c) => c.t)).toEqual([1, 2]);
-    expect(candlesOf('nope')).toEqual([]);
-    const marks = orderMarks([{ order: 'x', sells_id: 'A', buys_id: 'B', price: 2, remaining: 1 }, { order: 'y', sells_id: 'B', buys_id: 'A', price: 0.5, remaining: 3 }, { order: 'z', sells_id: 'A', buys_id: 'C', price: 1, remaining: 1 }], 'A', 'B');
-    expect(marks).toEqual([{ order: 'x', side: 'ask', price: 2, remaining: 1 }, { order: 'y', side: 'bid', price: 2, remaining: 3 }]);
   });
 });
 

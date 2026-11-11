@@ -46,6 +46,24 @@ export function ecxPoolsOf(asset: string, pools: readonly Pool[]): Pool[] {
     .sort((x, y) => Number(poolEmpty(x)) - Number(poolEmpty(y)) || (poolEcx(y) ?? 0) - (poolEcx(x) ?? 0) || x.created - y.created);
 }
 
+/** Where an asset trades now (owner decision, 2026-11-11: the Market chip of Assets and of an asset's page). */
+export type MarketState = 'curve' | 'pool' | 'pool-empty' | 'none';
+
+/**
+ * The market of an asset from its pools (listpools by asset, or those read) and its launch when known: on its launch
+ * curve until it graduates (then nothing else trades it); else in a pool that holds liquidity; else a pool with nothing
+ * in it ("Pool, empty": its Trade box gives way to Add liquidity); else none. `pool`: its pool with ECX (the first of
+ * ecxPoolsOf), else any pool shown; `curvePool`: the id of its curve's pool, for its candles.
+ */
+export function marketState(asset: string, pools: readonly Pool[], launch?: { status: string; pool?: string } | null): { state: MarketState; pool: Pool | null; curvePool: string } {
+  const curve = pools.find((p) => p.curve === 'launch' && (p.asset_a_id === asset || p.asset_b_id === asset));
+  if (launch ? launch.status !== 'graduated' : !!curve) return { state: 'curve', pool: null, curvePool: curve?.pool ?? launch?.pool ?? '' };
+  const own = pools.filter((p) => isShownPool(p) && (p.asset_a_id === asset || p.asset_b_id === asset));
+  const pool = ecxPoolsOf(asset, pools)[0] ?? own.find((p) => !poolEmpty(p)) ?? own[0] ?? null;
+  if (!pool) return { state: 'none', pool: null, curvePool: '' };
+  return { state: own.some((p) => !poolEmpty(p)) ? 'pool' : 'pool-empty', pool, curvePool: '' };
+}
+
 /** Whether a position of concentrated liquidity covers the full range of its pool (its lowest and highest ticks to the spacing). */
 export function isFullRange(p: Pick<Position, 'tick_lower' | 'tick_upper'>, spacing: number): boolean {
   const s = spacing > 0 ? spacing : 1;

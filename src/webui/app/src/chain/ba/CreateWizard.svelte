@@ -34,7 +34,7 @@
   import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, feeSplitOf, feeSplitOptions, feeSplitProblems, formatBps, launchProblems, MAX_SPLIT_ADDRESSES, rulesOf, shareKind, shareRecipientText, shareText, type FeeDestination, type LaunchStats } from './launch';
   import AddressInput from '../../components/AddressInput.svelte';
   import { amountParam, CHN_ID, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
-  import { launchRoute } from './assetactions';
+  import { assetRoute } from './assetactions';
   import { ba, fundingOf, noteFunding, notePending, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
@@ -343,7 +343,7 @@
           if (!done) return;
           toast('success', t('Launching'), t('%1 is on its curve with the next block.', name));
           void refreshBitAssets();
-          go('launch', launchRoute(done.token));
+          go('assets', assetRoute(done.token));
           return;
         }
         await notePending({ wallet, name, asset: previewId, supply: unitsText(supplyValue, decimals), decimals, data: {}, public: true, time: Math.floor(Date.now() / 1000), reservation: reservation.txid, launch: options });

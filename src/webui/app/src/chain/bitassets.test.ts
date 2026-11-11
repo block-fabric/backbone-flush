@@ -116,6 +116,8 @@ let previewExists = false;
 let paramsOn = false;
 /** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
 let launchCount = 2;
+/** The market index's candles (getpoolcandles, -dexindex): none on a node without it (the method fails). */
+let candles: { t: number; o: number; h: number; l: number; c: number; v: number }[] | null = null;
 /** Launches of the test's own, after the others (My launches: a curve never traded, one traded). */
 let extraLaunches: Record<string, unknown>[] = [];
 const MOON = id('m');
@@ -226,7 +228,9 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return { assets: page, cursor: from + limit < list.length ? String(from + limit) : null, total: list.length };
     }
     case 'getasset': {
-      const a = byArg(p[0]);
+      // The launched tokens are assets too (their pages: ba/AssetView.svelte).
+      const launched = p[0] === assetArg(MOON) ? asset(MOON, { label: 'MOON', name: 'MOON', display_name: 'To the moon', seq: '2001-0001', decimals: 6, supply: 1000000000, minted: 1000000000, fixed: true }) : p[0] === assetArg(STAR) ? asset(STAR, { label: 'STAR', name: 'STAR', seq: '2001-0002', decimals: 6, supply: 1020000000, minted: 1020000000, fixed: true }) : undefined;
+      const a = byArg(p[0]) ?? (dexOn ? launched : undefined);
       if (!a) fail('No such asset is registered');
       return a;
     }
@@ -345,6 +349,9 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
         ? { amount_in: amount, amount_out: past ? 400000000 : 2469135.802469, back: past ? '100.00000000' : '0.00000000', fee: '0.02000000', price: 0.00000081, spot_price: 0.0000008, price_after: 0.00000082, price_impact: 1.2, progress_after: past ? 100 : 40.4, graduates: past }
         : { amount_in: amount, amount_out: 0.79, back: '0.00000000', fee: '0.00800000', price: 0.00000079, spot_price: 0.0000008, price_after: 0.00000079, price_impact: 1.3, progress_after: 39.8, graduates: false };
     }
+    case 'getpoolcandles':
+      if (!candles) fail('This node keeps no market index (-dexindex)', -1);
+      return candles;
     case 'getlaunchlog':
       return [{ height: 15, token: MOON, created: false, graduated: false, orders: 2, coin_in: '10.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 12000000, fees: '0.10000000', reserve_coin: '450.00000000', reserve_tokens: 625000000 }, { height: 12, token: MOON, created: true, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 4000000, fees: '0.01000000', reserve_coin: '251.00000000', reserve_tokens: 1120000000 }, { height: 13, token: STAR, created: false, graduated: false, orders: 1, coin_in: '1.00000000', coin_out: '0.00000000', tokens_in: 0, tokens_out: 1, fees: '0.01000000', reserve_coin: '1.00000000', reserve_tokens: 1 }];
     case 'launchtoken':
@@ -474,6 +481,7 @@ beforeEach(() => {
   previewExists = false;
   paramsOn = false;
   launchCount = 2;
+  candles = null;
   extraLaunches = [];
   store = null;
   locked = false;
@@ -720,6 +728,7 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: '$GOLD #1739-0029' })).toBeTruthy());
     expect(called('getasset').some((c) => (c.params as unknown[])[0] === assetArg(GOLD))).toBe(true);
     expect(screen.getByText('One gram of gold', { selector: '.info span' })).toBeTruthy();
+    await fireEvent.click(screen.getByRole('tab', { name: 'Changes' }));
     expect(screen.getByRole('table', { name: 'History of its data' })).toBeTruthy();
     expect(screen.getByText('You control it')).toBeTruthy();
     // A private name is found by its hash.
@@ -1305,8 +1314,11 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     render(DialogHost);
     await refreshBitAssets();
     await loaded();
+    // In Manage, shown because the wallet holds its control coin; the two markets, each by what the state allows.
     const open = await screen.findByRole('region', { name: 'Open a market' });
-    await fireEvent.click(within(open).getByRole('button', { name: /Bonding curve/ }));
+    expect(screen.getByTestId('asset-manage').contains(open)).toBe(true);
+    expect(within(open).getAllByRole('button').map((b) => b.textContent?.trim().split(/\s{2,}|(?<=curve|fund)/)[0])).toEqual(['Launch curve', 'A pool you fund']);
+    await fireEvent.click(within(open).getByRole('button', { name: /Launch curve/ }));
     await fireEvent.input(within(open).getByLabelText(/Amount on the curve/), { target: { value: '80000' } });
     await fireEvent.click(within(open).getByRole('button', { name: /Put it on a curve/ }));
     await answer('yes');
@@ -1314,296 +1326,8 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
   });
 });
 
-// Simple mode (lib/uimode.svelte.ts, user decision 2026-10-16): Swap with a plain quote, My assets, Create a
-// token; pools, liquidity and auctions in Advanced. The same calls as Advanced.
-describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: pool kinds", () => {
-  /** A stable pool of GOLD and CHN beside the default one, and shares of it. */
-  function stablePool() {
-    pools.push({ ...pools[0], pool: id('s'), reserve_a: 400, reserve_b: 40, shares: 1264911, swaps: 1, curve: 'stable', fee: 0.05, fee_millionths: 500, amp: 100, default_kind: false });
-    mine.liquidity.push({ pool: id('s'), asset_a: 'GOLD', asset_b: 'CHN', asset_a_id: GOLD, asset_b_id: CHN_ID, shares: 100000, percent: 7.9, value_a: 31.6, value_b: 3.16 });
-  }
-
-  it('Swap: every pool of the pair and a route compared; the best route sent by swaproute with its pools, another pool by swappools, the default one by swapasset', async () => {
-    dexOn = true;
-    stablePool();
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    await waitFor(() => expect(ba.dex?.curves_active).toBe(true));
-    await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(GOLD));
-    const ways = () => within(screen.getByRole('list', { name: 'Ways to trade' })).getAllByRole('button');
-    const swapFor = async (amount: string) => {
-      await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: amount } });
-      await waitFor(() => expect(ways().length).toBe(3));
-    };
-    await swapFor('0.5');
-    // Best first: the route through SILVER (a weighted pool, then a stable one), then the stable pool, then the default one.
-    expect(ways()[0].textContent).toMatch(/Weighted.*Stable/s);
-    expect(ways()[0].getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('heading', { name: 'The route' })).toBeTruthy();
-    expect(within(screen.getByRole('list', { name: 'Route' })).getAllByRole('listitem').length).toBe(2);
-    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('in a Weighted pool at 0.3%'));
-    await answer('yes');
-    await waitFor(() => expect(called('swaproute')[0]?.params).toEqual([['CHN', assetArg(SILVER), assetArg(GOLD)], '0.5', 0.5, '5.47', [id('q'), id('r')]]));
-    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
-
-    // The stable pool of the pair, picked: by its id.
-    await swapFor('0.5');
-    await fireEvent.click(ways().find((b) => /Stable/.test(b.textContent ?? '') && !/Weighted/.test(b.textContent ?? ''))!);
-    await waitFor(() => expect(screen.getByText('Pool fee (0.05%)')).toBeTruthy());
-    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('swappools')[0]?.params).toEqual(['CHN', '0.5', [id('s')], 0.5, '5.17']));
-    await waitFor(() => expect((document.querySelector('#swap-amount') as HTMLInputElement).value).toBe(''));
-
-    // The default pool, picked: swapasset as before the pool kinds.
-    await swapFor('0.5');
-    await fireEvent.click(ways().find((b) => /Constant product/.test(b.textContent ?? ''))!);
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'The pool' })).toBeTruthy());
-    await fireEvent.click(screen.getByRole('button', { name: /^Swap$/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['CHN', '0.5', assetArg(GOLD), 0.5, 10, '4.87']));
-  });
-
-  it('a pool of another kind: its kind in the list, its page with its depth, one asset put in and one taken out by its id', async () => {
-    dexOn = true;
-    stablePool();
-    nav.tab = 'pools';
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    const row = await waitFor(() => {
-      const r = within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((x) => /Stable/.test(x.textContent ?? ''));
-      if (!r) throw new Error('no stable pool');
-      return r;
-    });
-    expect(row.textContent).toContain('0.05%');
-    expect(row.textContent).toContain('A 100');
-    await fireEvent.click(row);
-    await waitFor(() => expect(called('getpoolcurve')[0]?.params).toEqual([id('s'), 16]));
-    await waitFor(() => expect(screen.getByRole('table', { name: 'Slippage, selling GOLD' })).toBeTruthy());
-    // getpoolcurve's order (CHN first) turned into the page's (GOLD first): selling GOLD at 0.1% gets about 0.0499 CHN.
-    const first = within(screen.getByRole('table', { name: 'Slippage, selling GOLD' })).getAllByRole('row')[1];
-    expect(first.textContent).toContain('0.0499');
-    expect(screen.getByText(id('s'))).toBeTruthy();
-
-    await fireEvent.input(document.querySelector('#pv-add-a')!, { target: { value: '10' } });
-    await waitFor(() => expect(screen.getByText(/One asset alone/)).toBeTruthy());
-    // The node's quote of the shares (quotepoolliquidity), by asset id.
-    expect(called('quotepoolliquidity').at(-1)?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }]);
-    expect(screen.getByText('4321')).toBeTruthy();
-    await fireEvent.click(within(screen.getByRole('form', { name: 'Add liquidity to this pool' })).getByRole('button', { name: /Add liquidity/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('addpoolliquidity')[0]?.params).toEqual([id('s'), { [assetArg(GOLD)]: '10' }, 1]));
-
-    await fireEvent.click(screen.getByRole('button', { name: /GOLD alone/ }));
-    await waitFor(() => expect(called('quotepoolliquidity').some((c) => (c.params as unknown[])[3] === assetArg(GOLD))).toBe(true));
-    // The quote's amounts by label, CHN first in the node's order: 2.5 GOLD.
-    await waitFor(() => expect(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByText(/^2\.5/)).toBeTruthy());
-    await fireEvent.click(within(screen.getByRole('form', { name: 'Take liquidity out of this pool' })).getByRole('button', { name: 'Take out' }));
-    await answer('yes');
-    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 100, assetArg(GOLD), 1]));
-  });
-
-  it('My assets: shares of a pool of another kind, with its kind, taken out by its id', async () => {
-    dexOn = true;
-    stablePool();
-    mine.liquidity = mine.liquidity.filter((l) => l.pool === id('s'));
-    nav.tab = 'liquidity';
-    render(MyAssets);
-    render(DialogHost);
-    await loaded();
-    await waitFor(() => expect(document.querySelector('.position .pool-kind')?.textContent).toMatch(/Stable/));
-    await fireEvent.click(await screen.findByRole('button', { name: 'Take out…' }));
-    await fireEvent.click(screen.getByRole('button', { name: '50%' }));
-    await fireEvent.click(screen.getByRole('button', { name: 'Take out' }));
-    await answer('yes');
-    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('s'), 50, null, 1]));
-    expect(called('removeliquidity')).toEqual([]);
-  });
-});
-
-describe.runIf(CHAIN.name === 'Layers')("Layers' DEX: concentrated liquidity and dynamic fees", () => {
-  /** A concentrated GOLD/CHN pool with a dynamic fee: 1 GOLD = 0.1 CHN (the node: 1 CHN = 10 GOLD). */
-  function clPool() {
-    pools.push({ ...pools[0], pool: id('k'), reserve_a: 50, reserve_b: 5, price: 0.1, shares: 0, swaps: 3, curve: 'concentrated', fee: 0.3, fee_millionths: 3000, default_kind: false, dynamic_fee: true, fee_now: 0.8, concentrated: { sqrt_price_x96: 'ab', tick: 23027, liquidity: '5000000', tick_spacing: 60 } });
-  }
-
-  it('a concentrated pool\'s page: its fee now, its liquidity by price, a range picked, previewed in the node\'s order, opened', async () => {
-    dexOn = true;
-    clPool();
-    nav.tab = 'pools';
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Pools' })).getAllByRole('row').find((r) => /Concentrated/.test(r.textContent ?? ''))!);
-    // The fee for the next block, tagged dynamic.
-    expect(row.textContent).toMatch(/0\.8%\s*dynamic/);
-    await fireEvent.click(row);
-    await waitFor(() => expect(called('getpoolticks')[0]?.params).toEqual([id('k'), 500]));
-    await waitFor(() => expect(screen.getByRole('img', { name: /The liquidity of the pool by price/ }).querySelectorAll('rect.bar').length).toBe(1));
-    // The full range by default (user decision, 2026-10-23); a range of one's own on asking: ±5% around 0.1 CHN for 1 GOLD at first.
-    await fireEvent.click(screen.getByRole('button', { name: 'Custom range' }));
-    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.095');
-    expect((document.querySelector('#cl-upper') as HTMLInputElement).value).toBe('0.105');
-    await fireEvent.click(screen.getByRole('button', { name: '±20%' }));
-    expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.08');
-    await fireEvent.input(document.querySelector('#cl-amount-a')!, { target: { value: '5' } });
-    await waitFor(() => expect(screen.getByTestId('position-preview').textContent).toContain('In range'));
-    // To the node: CHN in GOLD, the bounds turned over (1/0.12 to 1/0.08).
-    const asked = called('previewposition').at(-1)?.params as unknown[];
-    expect(asked[0]).toBe(id('k'));
-    expect(asked[1] as number).toBeCloseTo(1 / 0.12, 9);
-    expect(asked[2] as number).toBeCloseTo(12.5, 9);
-    expect(asked[3]).toEqual({ [assetArg(GOLD)]: '5' });
-    // What goes in, in the page's order: 5 GOLD and 0.5 CHN.
-    expect(screen.getByTestId('position-preview').textContent).toMatch(/Goes in\s*5\s*GOLD\s*0\.5\s*CHN/);
-    await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), asked[1], asked[2], { [assetArg(GOLD)]: '5' }, 1, 10]));
-    // A range above the price: GOLD alone, CHN's field off.
-    await fireEvent.input(document.querySelector('#cl-lower')!, { target: { value: '0.2' } });
-    await fireEvent.input(document.querySelector('#cl-upper')!, { target: { value: '0.3' } });
-    await waitFor(() => expect((document.querySelector('#cl-amount-b') as HTMLInputElement).disabled).toBe(true));
-  });
-
-  it('Positions: in range or not, their fees, collected, part taken out, one closed', async () => {
-    dexOn = true;
-    clPool();
-    nav.tab = 'positions';
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    await waitFor(() => expect(screen.getByTestId('in-range')).toBeTruthy());
-    expect(screen.getByTestId('out-of-range')).toBeTruthy();
-    // In the page's order: the fees of GOLD first (0.25), then of CHN (0.01).
-    const first = screen.getByRole('region', { name: `Position ${id('o').slice(0, 8)}` });
-    expect(within(first).getByTestId('fees').textContent).toMatch(/0\.25\s*GOLD/);
-    expect(within(first).getByRole('img', { name: /Its range, 0\.0952381 to 0\.105263, and the price, 0\.1/ })).toBeTruthy();
-    await fireEvent.click(within(first).getByRole('button', { name: 'Collect' }));
-    await answer('yes');
-    await waitFor(() => expect(called('changeposition')[0]?.params).toEqual([id('o'), { collect: true }]));
-    // Once the collect is done.
-    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
-    await fireEvent.click(within(first).getByRole('button', { name: 'Remove' }));
-    await fireEvent.click(within(first).getByRole('button', { name: 'Take out' }));
-    await answer('yes');
-    await waitFor(() => expect(called('changeposition')[1]?.params).toEqual([id('o'), { remove: 50, collect: true }]));
-    await waitFor(() => expect(within(first).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', false));
-    const second = screen.getByRole('region', { name: `Position ${id('u').slice(0, 8)}` });
-    expect(within(second).getByRole('button', { name: 'Collect' })).toHaveProperty('disabled', true);
-    await fireEvent.click(within(second).getByRole('button', { name: 'Close' }));
-    await answer('yes');
-    await waitFor(() => expect(called('changeposition')[2]?.params).toEqual([id('u'), { close: true }]));
-  });
-});
-
-describe.runIf(CHAIN.name === 'Layers')("Layers' launches", () => {
-  it('Launches: the counts, the list filtered and sorted, a page at a time', async () => {
-    dexOn = true;
-    launchCount = 60;
-    nav.tab = 'launches';
-    render(Dex);
-    await loaded();
-    const rows = () => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').slice(1);
-    await waitFor(() => expect(rows().length).toBe(50));
-    expect(rows()[0].textContent).toMatch(/MOON.*To the moon.*40/s);
-    expect(rows()[1].textContent).toContain('graduated');
-    expect(screen.getByText(/Showing 50 of 60 launches/)).toBeTruthy();
-    await fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    await waitFor(() => expect(rows().length).toBe(60));
-    expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'all', sort: 'newest', limit: 50, cursor: '50' }]);
-    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
-    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Graduated' }));
-    await waitFor(() => expect(rows().length).toBe(1));
-    expect(rows()[0].textContent).toContain('STAR');
-    await fireEvent.click(within(screen.getByRole('group', { name: 'Filter launches' })).getByRole('button', { name: 'Near graduation' }));
-    await fireEvent.change(screen.getByRole('combobox', { name: 'Sort launches' }), { target: { value: 'progress' } });
-    await waitFor(() => expect(called('listlaunches').at(-1)?.params).toEqual([{ status: 'curve', sort: 'progress', min_progress: 80, limit: 50 }]));
-  });
-
-  it('a launch on its curve: progress, the curve, a buy quoted and sent, one passing the end, the recent blocks, the creator paid', async () => {
-    dexOn = true;
-    nav.tab = 'launches';
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('MOON'))!);
-    await fireEvent.click(row);
-    await waitFor(() => expect(screen.getByRole('img', { name: /The bonding curve of the launch/ })).toBeTruthy());
-    expect(screen.getByText(/200 of 500 CHN raised/)).toBeTruthy();
-    expect(screen.getByText('Creator allocation 2%')).toBeTruthy();
-    // The recent blocks of this launch only, newest first.
-    await waitFor(() => expect(within(screen.getByRole('table', { name: 'Recent blocks' })).getAllByRole('row').length).toBe(3));
-    await waitFor(() => expect(screen.getByText('this wallet')).toBeTruthy());
-
-    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
-    await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toContain('2,469,135.802469'));
-    expect(called('quotelaunch').at(-1)?.params).toEqual([assetArg(MOON), '2', 'buy']);
-    await fireEvent.click(screen.getByRole('form', { name: 'Trade on the curve' }).querySelector('button[type="submit"]')!);
-    await answer('yes');
-    // The least confirmed is the least signed: the quote less 1%.
-    await waitFor(() => expect(called('buyfromlaunch')[0]?.params).toEqual([assetArg(MOON), '2', 1, '2444444.444444']));
-
-    await waitFor(() => expect((document.querySelector('#launch-amount') as HTMLInputElement).value).toBe(''));
-    // 400 CHN (more than the 10 the wallet held).
-    wallets.balances.w = { trusted: 1000_00000000n, untrustedPending: 0n, immature: 0n };
-    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '400' } });
-    await waitFor(() => expect(screen.getByTestId('launch-graduates')).toBeTruthy());
-    expect(screen.getByTestId('launch-quote').textContent).toMatch(/100 CHN: the buy passes the curve's end/);
-
-    await fireEvent.click(screen.getByRole('button', { name: /Pay the creator/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('claimlaunch')[0]?.params).toEqual([assetArg(MOON)]));
-  });
-
-  it('a graduated launch: trades in its pool, no curve to buy from', async () => {
-    dexOn = true;
-    nav.tab = 'launches';
-    render(Dex);
-    await loaded();
-    const row = await waitFor(() => within(screen.getByRole('table', { name: 'Launches' })).getAllByRole('row').find((r) => r.textContent?.includes('STAR'))!);
-    await fireEvent.click(row);
-    await waitFor(() => expect(screen.getByTestId('launch-graduated').textContent).toContain('Graduated — trades in its pool'));
-    expect(screen.queryByRole('form', { name: 'Trade on the curve' })).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: /Its pool/ }));
-    expect(nav.tab).toBe('pools');
-  });
-
-  it('Launch an asset: the create wizard, a reservation of the wallet launched with what it is and its options, the allocation flagged', async () => {
-    dexOn = true;
-    tickersOn = true;
-    nav.tab = 'launch';
-    render(Dex);
-    render(DialogHost);
-    await loaded();
-    // A reservation of this wallet (IRON, deep enough), not one a registration uses.
-    await fireEvent.click(await screen.findByRole('button', { name: /IRON/ }));
-    await waitFor(() => expect(screen.getByText(/Reserved by this wallet/)).toBeTruthy());
-    await fireEvent.input(document.querySelector('#issue-display')!, { target: { value: 'Iron age' } });
-    await fireEvent.input(document.querySelector('#issue-info')!, { target: { value: 'An iron asset.' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    // Before the launch parameters: a billion of 6 decimals, fixed.
-    expect(screen.getByTestId('curve-fixed-supply').textContent).toContain('1,000,000,000');
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(screen.getByRole('radio', { name: /Launch on a curve/ }).getAttribute('aria-checked')).toBe('true');
-    await fireEvent.input(document.querySelector('#launch-first')!, { target: { value: '1' } });
-    await fireEvent.input(document.querySelector('#launch-allocation')!, { target: { value: '2' } });
-    await waitFor(() => expect(screen.getByText(/Dilution\./)).toBeTruthy());
-    await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    const review = await screen.findByTestId('launch-review');
-    expect(review.textContent).toMatch(/at 500 CHN raised/);
-    expect(review.textContent).toMatch(/20M \(2%\), minted at graduation/);
-    expect(review.textContent).toMatch(/1\.15% of each trade: 80% to you, 20% to the chain's security/);
-    await fireEvent.click(screen.getByRole('button', { name: /^Launch$/ }));
-    await answer('yes');
-    await waitFor(() => expect(called('launchtoken')[0]?.params).toEqual(['IRON', { display_name: 'Iron age', info: 'An iron asset.', allocation: 2, first_buy: '1' }]));
-    // Then its page.
-    await waitFor(() => expect(nav.tab).toBe('launches'));
-  });
-});
-
+// Simple mode (lib/uimode.svelte.ts, user decision 2026-10-16): Swap with a plain quote, Portfolio, Create an asset;
+// Assets, Pools and Launch in Advanced. The same calls as Advanced.
 describe('Simple mode', () => {
   beforeEach(() => {
     prefs.uiMode = 'simple';
@@ -2178,16 +1902,17 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     nav.tab = `swap/get/${SILVER}`;
     await waitFor(() => expect((document.querySelector('#swap-get') as HTMLElement).dataset.value).toBe(SILVER));
     shown.unmount();
-    // A launch's page from the route, its panel on the side named, focused.
+    // A launch's old route: the asset's page, its Trade box on the side named, focused.
     nav.page = 'launch';
     nav.tab = `launches/${MOON}/sell`;
     shown = render(Dex, { props: { page: 'pools' } });
     await loaded();
+    expect([nav.page, nav.tab]).toEqual(['assets', `asset/${MOON}/sell`]);
     await waitFor(() => expect(document.activeElement?.id).toBe('launch-amount'));
     expect(screen.getByLabelText('You sell')).toBeTruthy();
-    // Back: the list, its route without the launch.
-    await fireEvent.click(screen.getByRole('button', { name: /All launches/ }));
-    await waitFor(() => expect(nav.tab).toBe('launches'));
+    // Back: the table of assets, its route without the asset.
+    await fireEvent.click(screen.getByRole('button', { name: /All assets/ }));
+    await waitFor(() => expect(nav.tab).toBe(''));
     shown.unmount();
     // My launches: Claim first for its creator; Buy in its menu, to the launch's page.
     nav.page = 'my-assets';
@@ -2198,7 +1923,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(moon.querySelector<HTMLButtonElement>('.act')!.dataset.action).toBe('claim');
     await fireEvent.click(within(moon).getByRole('button', { name: /^More actions for/ }));
     await fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: 'Buy' }));
-    expect([nav.page, nav.tab]).toEqual(['launch', `launches/${MOON}/buy`]);
+    expect([nav.page, nav.tab]).toEqual(['assets', `asset/${MOON}/buy`]);
     shown.unmount();
     // Browse assets: each card has its actions, outside its button.
     nav.page = 'assets';
@@ -2328,6 +2053,121 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(F)]: '100', ECX: '2' }, 1, 50]));
     expect(asked).toEqual(['reserveasset+registerasset', 'createpool', 'openposition']);
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('done'));
+  });
+
+  it('the asset page, on its curve: where it trades in a chip, the curve and "its pool opens by itself" in Markets, the Trade box on the curve, the asset fixed', async () => {
+    dexOn = true;
+    candles = [{ t: 1_700_000_000, o: 0.0000008, h: 0.00000082, l: 0.0000008, c: 0.00000081, v: 3 }, { t: 1_700_003_600, o: 0.00000081, h: 0.0000009, l: 0.00000081, c: 0.00000088, v: 2 }];
+    mine.assets.push({ asset: MOON, label: 'MOON', decimals: 6, balance: 5000, pending: 0, outputs: 1, control: false, control_pending: false, supply: 1000000000, fixed: true });
+    nav.tab = `asset/${MOON}`;
+    render(Dex, { props: { page: 'assets' } });
+    render(DialogHost);
+    await loaded();
+    const page = await screen.findByTestId('asset-page');
+    await waitFor(() => expect(page.dataset.market).toBe('curve'));
+    expect(screen.getByTestId('market-chip').textContent).toBe('On curve 40.0%');
+    expect(screen.getByTestId('asset-price').textContent).toMatch(/0\.00000081 ECX/);
+    // The sections, in their order.
+    const order = ['asset-markets', 'asset-position', 'asset-manage', 'asset-activity', 'asset-details'].map((x) => screen.getByTestId(x));
+    for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Markets: the curve, with its progress and fee; its pool at graduation, which nobody can open before.
+    const rows = within(screen.getByTestId('asset-markets')).getAllByTestId('market-row');
+    expect(rows.map((r) => r.dataset.kind)).toEqual(['curve', 'pool-at-graduation']);
+    expect(rows[0].textContent).toMatch(/Launch curve.*1% fee.*200 of 500 ECX raised/);
+    expect(rows[1].textContent).toMatch(/Opens by itself at graduation.*Nobody can open one before then/);
+    expect(screen.queryByTestId('add-liquidity')).toBeNull();
+    // The figures of a day from the node's candles: +10%, 5 ECX.
+    await waitFor(() => expect(screen.getByTestId('asset-stats').textContent).toMatch(/24 h change\s*\+10\.0%.*24 h volume\s*5 ECX.*Market cap\s*810 ECX/));
+    // The Trade box: no asset to pick, the route is the curve, its fee, impact and slippage limit.
+    const box = screen.getByTestId('trade-box');
+    expect(box.dataset.route).toBe('curve');
+    expect(box.querySelector('[role="combobox"], select')).toBeNull();
+    await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
+    await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toMatch(/Route\s*Launch curve.*Price impact\s*1\.20%.*Fee \(1%\)/));
+    expect(within(box).getByText('Slippage limit')).toBeTruthy();
+    await fireEvent.click(box.querySelector('button[type="submit"]')!);
+    await answer('yes');
+    await waitFor(() => expect(called('buyfromlaunch')[0]?.params).toEqual([assetArg(MOON), '2', 1, '2444444.444444']));
+    // Selling: the same box, the same asset.
+    await fireEvent.click(within(box).getByRole('button', { name: 'Sell', pressed: false }));
+    expect(screen.getByLabelText('You sell')).toBeTruthy();
+    // Activity: its trades block by block; Details: its launch.
+    expect(within(screen.getByTestId('asset-activity')).getByRole('table', { name: 'Recent blocks' })).toBeTruthy();
+    expect(screen.getByTestId('launch-facts').textContent).toMatch(/Launched\s*block 12/);
+    // The creator is this wallet: Manage, with the fees to claim.
+    expect(within(screen.getByTestId('asset-manage')).getByTestId('claim-fees')).toHaveProperty('disabled', false);
+  });
+
+  it('the asset page, in a pool: buy and sell by the best route, the asset fixed (no picker); Your position; Manage only for its controller', async () => {
+    nav.tab = `asset/${GOLD}`;
+    const shown = render(Dex, { props: { page: 'assets' } });
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('asset-page').dataset.market).toBe('pool'));
+    expect(screen.getByTestId('market-chip').textContent).toBe('Pool');
+    expect(screen.getByTestId('asset-price').textContent).toMatch(/0\.1 ECX/);
+    // A node without the market index: no figure of a day is made up.
+    expect(screen.getByTestId('asset-stats').textContent).toMatch(/24 h change\s*–.*24 h volume\s*–/);
+    const rows = within(screen.getByTestId('asset-markets')).getAllByTestId('market-row');
+    expect(rows.map((r) => r.dataset.kind)).toEqual(['pool']);
+    expect(rows[0].textContent).toMatch(/Pool GOLD \/ ECX.*0\.3% fee.*50 ECX of liquidity/);
+    // The box: Trade GOLD, against ECX; nothing to pick.
+    const box = screen.getByTestId('trade-box');
+    expect(within(box).getByRole('heading', { name: /Trade GOLD/ })).toBeTruthy();
+    expect(document.querySelector('#swap-pay')).toBeNull();
+    expect(document.querySelector('#swap-get')).toBeNull();
+    expect(box.querySelector('[role="combobox"], select')).toBeNull();
+    await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '0.5' } });
+    await waitFor(() => expect(screen.getByTestId('swap-venue').textContent).toMatch(/Pool GOLD \/ ECX · 0\.3%/));
+    expect(box.textContent).toMatch(/Price impact.*Slippage limit|Slippage limit.*Price impact/s);
+    await fireEvent.click(box.querySelector('button[type="submit"]')!);
+    await answer('yes');
+    await waitFor(() => expect(called('swapasset')[0]?.params).toEqual(['ECX', '0.5', assetArg(GOLD), 0.5, 10, '4.9']));
+    // Sell: the asset is paid, ECX got.
+    await fireEvent.click(within(box).getByRole('button', { name: 'Sell', pressed: false }));
+    await fireEvent.input(document.querySelector('#swap-amount')!, { target: { value: '10' } });
+    await waitFor(() => expect(called('quoteswap').at(-1)?.params).toEqual([assetArg(GOLD), '10', 'ECX']));
+    // Your position; Manage, for its controller (mint, data, burn; no market to open: it has one).
+    expect(screen.getByTestId('asset-position').textContent).toMatch(/Balance\s*200 GOLD.*Worth\s*20 ECX.*Pool share\s*6\.32%/);
+    const manage = screen.getByTestId('asset-manage');
+    expect(within(manage).getByRole('button', { name: /Mint more/ })).toBeTruthy();
+    expect(within(manage).getByRole('button', { name: /Burn some/ })).toBeTruthy();
+    expect(screen.queryByTestId('open-market')).toBeNull();
+    // The pool's row opens the pool's page.
+    await fireEvent.click(rows[0].querySelector('button.link-row')!);
+    expect([nav.page, nav.tab]).toEqual(['pools', `pools/${id('p')}`]);
+    shown.unmount();
+    // Another asset's page starts clean: SILVER is not controlled (no Manage), has no market (no Trade box).
+    nav.tab = `asset/${SILVER}`;
+    render(Dex, { props: { page: 'assets' } });
+    await waitFor(() => expect(screen.getByTestId('market-chip').textContent).toBe('No market'));
+    expect(screen.getByTestId('asset-page').dataset.market).toBe('none');
+    expect(screen.getByTestId('asset-price').textContent).toMatch(/No price yet/);
+    expect(screen.queryByTestId('asset-manage')).toBeNull();
+    expect(screen.queryByTestId('trade-box')).toBeNull();
+    expect(screen.getByTestId('no-market')).toBeTruthy();
+    expect(within(screen.getByTestId('asset-markets')).getByTestId('market-row').dataset.kind).toBe('none');
+    // A holder that does not control it can still burn its own.
+    expect(within(screen.getByTestId('asset-position')).getByRole('button', { name: /Burn some/ })).toBeTruthy();
+  });
+
+  it('a form never keeps an asset from before: the Trade box follows the page\'s asset, its amount cleared', async () => {
+    pools.push({ ...pools[0], pool: id('q'), asset_a: 'SILVER', asset_a_id: SILVER });
+    nav.tab = `asset/${GOLD}/sell`;
+    render(Dex, { props: { page: 'assets' } });
+    await loaded();
+    const amount = () => document.querySelector('#swap-amount') as HTMLInputElement;
+    await waitFor(() => expect(within(screen.getByTestId('trade-box')).getByRole('heading', { name: /Trade GOLD/ })).toBeTruthy());
+    await fireEvent.input(amount(), { target: { value: '7' } });
+    await waitFor(() => expect(called('quoteswap').at(-1)?.params).toEqual([assetArg(GOLD), '7', 'ECX']));
+    // The other asset's page, by the route (a link, a row): its own box, on Buy, empty.
+    nav.tab = `asset/${SILVER}`;
+    await waitFor(() => expect(within(screen.getByTestId('trade-box')).getByRole('heading', { name: /Trade SILVER/ })).toBeTruthy());
+    expect(amount().value).toBe('');
+    expect(within(screen.getByTestId('trade-box')).getByRole('button', { name: 'Buy', pressed: true })).toBeTruthy();
+    await fireEvent.input(amount(), { target: { value: '1' } });
+    await waitFor(() => expect((called('quoteswap').at(-1)?.params as unknown[])[2]).toBe(assetArg(SILVER)));
+    expect(called('quoteswap').some((c) => (c.params as unknown[])[0] === assetArg(GOLD) && (c.params as unknown[])[1] === '1')).toBe(false);
   });
 
   it('New pool: only the assets held that have no pool and are not on a launch curve; the others with why; a pick opens that asset\'s page, the asset fixed', async () => {
@@ -2470,13 +2310,14 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     // Buying it: the confirmation carries the tag.
     await fireEvent.input(document.querySelector('#launch-amount')!, { target: { value: '2' } });
     await waitFor(() => expect(screen.getByTestId('launch-quote').textContent).toBeTruthy());
-    await fireEvent.click(screen.getByRole('form', { name: 'Trade on the curve' }).querySelector('button[type="submit"]')!);
+    await fireEvent.click(screen.getByTestId('trade-box').querySelector('button[type="submit"]')!);
     await waitFor(() => expect(screen.getByTestId('dialog-tag').textContent).toBe('Unlocked Supply'));
     await answer('no');
     expect(screen.getByTestId('launch-tokens-owed').textContent).toMatch(/^10 MOON/);
     // Not graduated: no pool kind yet. Claim covers the tokens owed (no fees owed).
     expect(screen.queryByTestId('launch-pool-kind')).toBeNull();
-    await fireEvent.click(screen.getByRole('button', { name: 'Pay the creator what it is owed' }));
+    // The creator is this wallet: Claim creator fees, in Manage.
+    await fireEvent.click(within(screen.getByTestId('asset-manage')).getByTestId('claim-fees'));
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('and 10 tokens owed'));
     await answer('yes');
     await waitFor(() => expect(called('claimlaunch').length).toBe(1));

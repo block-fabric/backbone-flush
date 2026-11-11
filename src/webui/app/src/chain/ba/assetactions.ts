@@ -107,16 +107,12 @@ export function poolRoute(pool: string): string {
 }
 
 /** What a route names (the parts after its head): an asset and its side for Swap, an asset's page and its box, a pool. */
-export function launchRoute(token: string, side: 'buy' | 'sell' = 'buy'): string {
-  return `launches/${token}/${side}`;
-}
-export function parseDexRoute(tab: string): { swap?: { side: 'get' | 'pay'; id: string }; asset?: { id: string; box: AssetBox }; launch?: { token: string; side: 'buy' | 'sell' }; pool?: string } {
+export function parseDexRoute(tab: string): { swap?: { side: 'get' | 'pay'; id: string }; asset?: { id: string; box: AssetBox }; pool?: string } {
   const [head, a, b] = tab.split('/');
   // An id: 64 characters (hex on the chain; letters or digits in the tests).
   const hex = (x: string | undefined) => !!x && /^[0-9a-z]{64}$/i.test(x);
   if (head === 'swap' && (a === 'get' || a === 'pay') && hex(b)) return { swap: { side: a, id: b } };
   if (head === 'asset' && hex(a)) return { asset: { id: a, box: b === 'buy' || b === 'sell' || b === 'liquidity' ? b : '' } };
-  if (head === 'launches' && hex(a)) return { launch: { token: a, side: b === 'sell' ? 'sell' : 'buy' } };
   if (head === 'pools' && hex(a)) return { pool: a };
   return {};
 }

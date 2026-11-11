@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Open a market for an asset that exists (its page, ba/AssetView.svelte): a bonding curve (curveasset: its controller puts
-  // part of the supply on a curve, 3/4 sold there, 1/4 into the locked pool at graduation; from the launch parameters,
-  // never launched, no pool with the coin yet), a pool (Create pool: any kind and fee tier), an order-book listing (a
-  // limit order in its book: Order book) or a Dutch auction (Sell by auction). The same choices as flush.markets' asset
-  // page (its "Open a market", which writes flush: links of the same calls).
+  // Open a market for an asset that exists, from the Manage section of its page (ba/AssetView.svelte; owner decision,
+  // 2026-11-11: two markets, each offered only when the asset's state allows it, with why otherwise): a launch curve
+  // (curveasset: its controller puts part of the supply on a curve, 3/4 sold there, 1/4 into the locked pool at
+  // graduation; from the launch parameters, never launched, no pool with the coin yet), or a pool it funds (the page's Add
+  // liquidity box, ba/AddLiquidity.svelte: a standard pool with ECX, made and funded in one step; never for an asset on
+  // its curve, nor one that has a pool already).
   import Icon from '../../components/Icon.svelte';
   import SafeText from '../../components/SafeText.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
@@ -17,10 +18,11 @@
   import { amountParam, assetArg, formatUnits, isChn, unitsAtMost, type Asset, type Pool } from './model';
   import { assetTextOf, ba, refreshBitAssets } from './store.svelte';
   import { assetRoute } from './assetactions';
+  import { poolFormState } from './pools';
   import { nav } from '../../lib/nav.svelte';
   import { TICKER } from '../config';
 
-  let { asset, pools, launched }: { asset: Asset; pools: readonly Pool[]; launched: boolean } = $props();
+  let { asset, pools, launched, onCurve = false }: { asset: Asset; pools: readonly Pool[]; launched: boolean; /** On its launch curve now (not graduated). */ onCurve?: boolean } = $props();
 
   let stats = $state<LaunchStats | null>(null);
   $effect(() => {
@@ -36,6 +38,15 @@
   // Its pool with the coin of the default kind: the one a curve graduates into.
   const ecxPool = $derived(pools.some((p) => (isChn(p.asset_a_id) || isChn(p.asset_b_id)) && p.default_kind !== false && p.curve !== 'book' && p.curve !== 'launch'));
   const curveOk = $derived(canCurve({ params, controlled: !!holding?.control, launched, ecxPool, heldUnits }));
+
+  // The pool: by the rules of the one pool form (ba/pools.ts).
+  const poolOk = $derived.by(() => {
+    const st = poolFormState({ asset: asset.asset, wallet: wallets.current !== null, onCurve, pools, curvesActive: ba.dex?.curves_active === true });
+    if (!st.ok) return { ok: false, reason: st.reason };
+    if (st.mode !== 'create') return { ok: false, reason: 'It has a pool already: add liquidity to it from its row in Markets.' };
+    if (!holding || heldUnits <= 0n) return { ok: false, reason: 'This wallet holds none of it to put in a pool.' };
+    return { ok: true, reason: '' };
+  });
 
   let open = $state<'' | 'curve'>('');
   let amount = $state<bigint | null>(null);
@@ -87,17 +98,17 @@
   }
 </script>
 
-<section class="panel open-market" aria-label="Open a market">
-  <div class="panel-head"><h3>Open a market</h3></div>
-  <div class="panel-body stack">
+<section class="open-market" aria-label="Open a market" data-testid="open-market">
+  <h4>Open a market</h4>
+  <div class="stack">
     <div class="choices">
-      <button type="button" class="panel choice" aria-expanded={open === 'curve'} disabled={!curveOk.ok} title={curveOk.reason || undefined} onclick={() => (open = open === 'curve' ? '' : 'curve')}>
-        <strong><Icon name="issue" size={15} /> Bonding curve</strong>
+      <button type="button" class="panel choice" data-testid="open-curve" aria-expanded={open === 'curve'} disabled={!curveOk.ok} title={curveOk.reason || undefined} onclick={() => (open = open === 'curve' ? '' : 'curve')}>
+        <strong><Icon name="issue" size={15} /> Launch curve</strong>
         <span class="faint small">{curveOk.ok ? t('Sell part of the supply from a curve until it raises enough, then a locked pool.') : t(curveOk.reason)}</span>
       </button>
-      <button type="button" class="panel choice" disabled={wallets.current === null} onclick={() => (nav.tab = assetRoute(asset.asset, 'liquidity'))}>
-        <strong><Icon name="swap" size={15} /> Pool</strong>
-        <span class="faint small">With {TICKER} or another asset, any kind and fee tier, at your price.</span>
+      <button type="button" class="panel choice" data-testid="open-pool" disabled={!poolOk.ok} title={poolOk.reason || undefined} onclick={() => (nav.tab = assetRoute(asset.asset, 'liquidity'))}>
+        <strong><Icon name="pool" size={15} /> A pool you fund</strong>
+        <span class="faint small">{poolOk.ok ? t('With %1, at your price: made and funded in one step.', TICKER) : t(poolOk.reason)}</span>
       </button>
     </div>
     {#if open === 'curve' && curveOk.ok}
@@ -119,6 +130,9 @@
 </section>
 
 <style>
+  h4 {
+    margin: 0 0 0.5rem;
+  }
   .stack {
     display: flex;
     flex-direction: column;

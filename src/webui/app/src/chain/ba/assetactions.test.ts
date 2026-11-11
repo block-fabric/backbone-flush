@@ -1,7 +1,7 @@
 // The actions of an asset's row (ba/assetactions.ts): from its markets, the most relevant first; the routes that carry
 // the asset and its side.
 import { describe, expect, it } from 'vitest';
-import { assetActions, launchRoute, marketsOf, parseDexRoute, poolRoute, swapRoute, type ActionContext } from './assetactions';
+import { assetActions, assetRoute, marketsOf, parseDexRoute, poolRoute, swapRoute, type ActionContext } from './assetactions';
 import { CHN_ID, type Pool } from './model';
 
 const A = 'a1'.repeat(32);
@@ -57,9 +57,12 @@ describe('the actions of an asset', () => {
   it('the routes carry the asset and its side, and read back', () => {
     expect(parseDexRoute(swapRoute(A, 'get'))).toEqual({ swap: { side: 'get', id: A } });
     expect(parseDexRoute(swapRoute(A, 'pay'))).toEqual({ swap: { side: 'pay', id: A } });
-    expect(parseDexRoute(launchRoute(A, 'sell'))).toEqual({ launch: { token: A, side: 'sell' } });
-    expect(parseDexRoute(`launches/${A}`)).toEqual({ launch: { token: A, side: 'buy' } });
+    // An asset's page, and the box it opens on.
+    expect(parseDexRoute(assetRoute(A))).toEqual({ asset: { id: A, box: '' } });
+    expect(parseDexRoute(assetRoute(A, 'sell'))).toEqual({ asset: { id: A, box: 'sell' } });
+    expect(parseDexRoute(assetRoute(A, 'liquidity'))).toEqual({ asset: { id: A, box: 'liquidity' } });
+    expect(parseDexRoute(`asset/${A}/nonsense`)).toEqual({ asset: { id: A, box: '' } });
     expect(parseDexRoute(poolRoute(B))).toEqual({ pool: B });
-    for (const tab of ['swap', 'pools', 'launches', 'swap/get/x', 'pools/../x']) expect(parseDexRoute(tab)).toEqual({});
+    for (const tab of ['swap', 'pools', 'launches', `launches/${A}`, 'asset', 'asset/x', 'swap/get/x', 'pools/../x']) expect(parseDexRoute(tab)).toEqual({});
   });
 });

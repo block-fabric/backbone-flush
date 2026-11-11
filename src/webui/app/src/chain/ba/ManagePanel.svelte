@@ -20,7 +20,9 @@
   import { swapRoute } from './assetactions';
   import { assetTextOf, ba, nameOf, refreshBitAssets, sendAsset, tickersActive } from './store.svelte';
 
-  let { holding }: { holding: Holding } = $props();
+  /** embedded: in the Manage section of the asset's own page (ba/AssetView.svelte; owner decision, 2026-11-11), which
+   *  has the asset's name, balance, Send and Trade already: the actions alone. */
+  let { holding, embedded = false }: { holding: Holding; embedded?: boolean } = $props();
 
   const id = $derived(holding.asset);
   const arg = $derived(assetArg(holding.asset));
@@ -268,7 +270,8 @@
   }
 </script>
 
-<section class="panel manage" aria-label={t('Manage %1', holding.label)}>
+<section class="manage" class:panel={!embedded} class:embedded aria-label={t('Manage %1', holding.label)}>
+  {#if !embedded}
   <header class="head">
     <AssetBadge {id} label={holding.label} size="l" showLabel={false} />
     <div class="who">
@@ -283,6 +286,9 @@
     <button type="button" class="btn" disabled={balance <= 0n} onclick={() => { sendAsset(id); go('send'); }}><Icon name="send" size={15} /> Send</button>
     <button type="button" class="btn" onclick={() => go('trade', swapRoute(id, 'pay'))}><Icon name="swap" size={15} /> Trade</button>
   </div>
+  {:else if holding.control_pending}
+    <p class="faint small">The control coin is moving, with a transaction waiting for a block: minting and changes are possible again after it.</p>
+  {/if}
 
   <div class="actions">
     {#if control && !holding.fixed}
@@ -388,6 +394,9 @@
     flex-direction: column;
     gap: 0.9rem;
     padding: 1.1rem;
+  }
+  .manage.embedded {
+    padding: 0;
   }
   .head {
     display: flex;
