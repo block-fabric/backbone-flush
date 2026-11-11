@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { spanStats, candlesOf, PERIODS } from './candles';
 import { MAX_TICK, MIN_TICK } from './cl';
 import type { Pool } from './model';
-import { CURVE_REFUSAL, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
+import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, emptyPoolCheck, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -45,6 +45,25 @@ describe('the one pool form, by the state of its asset', () => {
     expect(form({ asset: ECX }).ok).toBe(false);
     expect(form({ pools: [cl], curvesActive: false }).ok).toBe(false);
     expect(form({ pools: [pool()], curvesActive: false })).toMatchObject({ ok: true, mode: 'add' });
+  });
+});
+
+describe("an empty pool's price is someone else's (security review 2026-11-11)", () => {
+  it('needs an explicit word when it is far from the reference, or when there is none', () => {
+    expect(EMPTY_POOL_TOLERANCE).toBe(3);
+    expect(emptyPoolCheck(0.1, [])).toEqual({ reference: null, deviation: null, acknowledge: true });
+    expect(emptyPoolCheck(0.1, [undefined, 0, NaN])).toMatchObject({ reference: null, acknowledge: true });
+    expect(emptyPoolCheck(undefined, [0.1])).toMatchObject({ acknowledge: true });
+    expect(emptyPoolCheck(0, [0.1])).toMatchObject({ acknowledge: true });
+    const far = emptyPoolCheck(5, [0.1]);
+    expect(far.acknowledge).toBe(true);
+    expect(far.deviation).toBeCloseTo(4900, 6);
+    expect(emptyPoolCheck(0.05, [0.1])).toMatchObject({ acknowledge: true });
+    expect(emptyPoolCheck(0.05, [0.1]).deviation).toBeCloseTo(-50, 6);
+    // Within the tolerance: shown, not asked about. The first reference that is a price is the one used.
+    expect(emptyPoolCheck(0.102, [0.1])).toMatchObject({ reference: 0.1, acknowledge: false });
+    expect(emptyPoolCheck(0.104, [0.1]).acknowledge).toBe(true);
+    expect(emptyPoolCheck(0.1, [undefined, 0.1, 9])).toMatchObject({ reference: 0.1, acknowledge: false });
   });
 });
 

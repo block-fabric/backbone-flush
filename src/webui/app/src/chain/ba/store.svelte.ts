@@ -855,6 +855,7 @@ export function resetBitAssets(): void {
   Object.assign(ba, { info: null, dex: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
   Object.assign(launchesRead, { list: [], total: 0, loaded: false });
+  known.clear();
   flagsAt = -1;
 }
 

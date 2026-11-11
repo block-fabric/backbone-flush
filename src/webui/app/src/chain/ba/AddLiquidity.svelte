@@ -8,7 +8,10 @@
   //  - its pool is empty: both amounts go in and set the price again (createpool of the pool's own kind);
   //  - its pool has liquidity: at the pool's price (addpoolliquidity by the pool's id);
   //  - its pool is concentrated on the chain (a graduated launch's): over the full range, always (openposition with
-  //    prices of 0); never a price range to pick;
+  //    prices of 0); never a price range to pick. When that pool has nothing in it, its price was set by whoever made
+  //    it, who may be a stranger: the form shows that price as the price the user accepts, compares it with a reference
+  //    (another pool of the asset with liquidity, its launch's price), and takes an explicit tick when they differ by
+  //    more than a few percent or when there is no reference (ba/pools.ts emptyPoolCheck; security review 2026-11-11);
   //  - the asset is on its launch curve: refused here, with the reason, as consensus refuses it (bad-ba-launch-pooled):
   //    its pool opens by itself at graduation.
   // On a node from before the pool kinds, a pool is made and added to by addliquidity (the default kind, 0.3%).
@@ -23,8 +26,8 @@
   import { depositAmounts, FEE_TIERS, feeNow, kindOf, kindParam, type LiquidityQuote, type PoolPreview } from './kinds';
   import type { Launch } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, MIN_OPEN_CHN, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
-  import { CURVE_REFUSAL, poolFormState, poolSides, type PoolFormMode } from './pools';
-  import { ba, decimalsOf, labelOf, nameOf, refreshBitAssets } from './store.svelte';
+  import { CURVE_REFUSAL, ecxPoolsOf, EMPTY_POOL_TOLERANCE, emptyPoolCheck, poolEmpty, poolFormState, poolSides, type PoolFormMode } from './pools';
+  import { ba, decimalsOf, labelOf, launchById, nameOf, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
   let {
@@ -68,6 +71,16 @@
   const any = $derived((aUnits ?? 0n) > 0n || (eUnits ?? 0n) > 0n);
   const typedPrice = $derived(both ? Number(eUnits) / 1e8 / (Number(aUnits) / 10 ** decimals) : undefined);
   const poolPrice = $derived(pool ? poolSides(pool).price : undefined);
+  /** The pool is there with nothing in it, at a price someone else may have set: the user would be its first provider at that price. */
+  const strangerPrice = $derived(mode === 'full-range' && !!pool && poolEmpty(pool));
+  /** A price to hold it against: another pool of the asset with ECX that holds liquidity (the deepest), else its launch's. */
+  const guard = $derived.by(() => {
+    if (!strangerPrice || !pool) return null;
+    const others = ecxPoolsOf(asset, [...pools, ...ba.pools.filter((p) => !pools.some((x) => x.pool === p.pool))]).filter((p) => p.pool !== pool.pool && !poolEmpty(p));
+    const launch = launchById(asset);
+    return emptyPoolCheck(poolPrice, [...others.map((p) => poolSides(p).price), launch ? Number(launch.price) || undefined : undefined]);
+  });
+  let acknowledged = $state(false);
   const amounts = $derived(
     depositAmounts([
       { id: asset, units: aUnits, text: (u) => amountParam(u, decimals) },
@@ -162,7 +175,7 @@
     if (shares === 0n) return t('Too little: it makes no share of the pool.');
     return '';
   });
-  const ready = $derived(form.ok && any && (!setsPrice || both) && !problem && !quoteError && (!curvesActive || shares !== null));
+  const ready = $derived(form.ok && any && (!setsPrice || both) && !problem && !quoteError && (!curvesActive || shares !== null) && (!guard?.acknowledge || acknowledged));
 
   /** What each mode calls, in the wallet's words, for what was confirmed. */
   function callOf(m: PoolFormMode, p: Pool | null, sA: bigint, sE: bigint, sKind: Record<string, string | number | boolean>, sSlip: number): { method: string; params: unknown[] } {
@@ -179,6 +192,8 @@
     return { method: 'createpool', params: [assetArg(asset), a, TICKER, e, sKind, sSlip] };
   }
 
+  const deviationText = (d: number | null) => (d === null ? '–' : `${d > 0 ? '+' : ''}${Math.abs(d) >= 1000 ? d.toFixed(0) : d.toFixed(1)}%`);
+
   let busy = $state(false);
   async function add() {
     const wallet = wallets.current;
@@ -191,6 +206,9 @@
     const sKind = { ...kind };
     const sSlip = slippage;
     const sFee = poolFee;
+    const sGuard = guard ? { ...guard } : null;
+    const sPrice = poolPrice;
+    if (sGuard?.acknowledge && !acknowledged) return;
     busy = true;
     try {
       // The asset's state, from the node now: a form never asks the wallet for what the chain would refuse.
@@ -221,8 +239,10 @@
         informative:
           sMode === 'create' || sMode === 'reopen'
             ? t('Your two amounts set its price: 1 %1 = %2 %3. Fee %4% of each swap. One transaction, one confirmation; liquidity covers every price.', label, formatPrice(Number(sE) / 1e8 / (Number(sA) / 10 ** decimals)), TICKER, String(sFee))
-            : t('At the pool\'s price; at most %1% less should it move first. Liquidity covers every price. Fee %2% of each swap.', String(sSlip), String(sFee)),
-        level: 'question',
+            : sGuard
+              ? t('This pool is empty: you are its first provider, and you accept its price, %1 %2 for 1 %3, set by whoever made the pool. %4 Whoever trades against a wrong price takes the difference from you. Fee %5% of each swap.', formatPrice(sPrice), TICKER, label, sGuard.reference === null ? t('There is no other market to compare it with.') : t('Elsewhere it trades at %1 %2: this pool is %3 from that.', formatPrice(sGuard.reference), TICKER, deviationText(sGuard.deviation)), String(sFee))
+              : t('At the pool\'s price; at most %1% less should it move first. Liquidity covers every price. Fee %2% of each swap.', String(sSlip), String(sFee)),
+        level: sGuard ? 'warning' : 'question',
         choices: [
           { id: 'no', label: 'Cancel' },
           { id: 'yes', label: 'Add liquidity', kind: 'primary' },
@@ -235,6 +255,7 @@
       toast('success', t('Adding liquidity'), sMode === 'create' ? t('The pool of %1 is made and funded with the next block.', nameOf(asset)) : t('%1 into the pool, with the next block.', what));
       aText = '';
       eText = '';
+      acknowledged = false;
       void refreshBitAssets();
     } catch (e) {
       await inform(t('Add liquidity'), errorText(e), 'error');
@@ -254,6 +275,19 @@
       {:else if mode === 'reopen'}Its pool is empty. You are the first back in, so your two amounts set the price.
       {:else}Either amount, or both: they go in at the pool's price{#if poolPrice}, {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />{/if}.{/if}
     </p>
+    {#if guard}
+      <div class="ba-problems stranger" class:bad={guard.acknowledge} role="alert" data-testid="empty-pool-price">
+        <p><strong>This pool is empty: its starting price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.</strong> You would be its first provider, and you accept that price. It was set by whoever made the pool, not by you; if it is wrong, whoever trades against it takes the difference from you.</p>
+        {#if guard.reference !== null}
+          <p data-testid="empty-pool-reference">Elsewhere <SafeText text={label} /> trades at {formatPrice(guard.reference)} {TICKER}: this pool's price is <strong translate="no">{deviationText(guard.deviation)}</strong> from that.</p>
+        {:else}
+          <p data-testid="empty-pool-reference">There is no other market of <SafeText text={label} /> to compare this price with.</p>
+        {/if}
+        {#if guard.acknowledge}
+          <label class="check"><input type="checkbox" data-testid="empty-pool-ack" bind:checked={acknowledged} /> <span>{guard.reference === null ? t('I checked this price myself and accept it.') : t('I accept this price though it is more than %1% from the other market.', String(EMPTY_POOL_TOLERANCE))}</span></label>
+        {/if}
+      </div>
+    {/if}
     <UnitsInput id="al-asset" label={label} {decimals} bind:units={aUnits} bind:text={aText} max={heldAsset} unit={label} />
     <UnitsInput id="al-ecx" label={TICKER} decimals={8} bind:units={eUnits} bind:text={eText} max={heldEcx} unit={TICKER} />
     {#if mode === 'create' && curvesActive}
@@ -290,6 +324,9 @@
   }
   .title {
     margin: 0;
+  }
+  .stranger p {
+    margin: 0 0 0.4rem;
   }
   .wide {
     flex: 1 1 auto;

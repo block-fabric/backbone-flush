@@ -119,6 +119,28 @@ export function poolFormState(o: {
   return { ok: true, reason: '', mode: 'add', pool };
 }
 
+/**
+ * The most an empty pool's price may differ from a reference, in percent, before the form asks for an explicit word
+ * (security review 2026-11-11).
+ */
+export const EMPTY_POOL_TOLERANCE = 3;
+
+/**
+ * The price of a pool with nothing in it was set by whoever made it, who may be a stranger: anyone can open an empty
+ * pool of an asset at an absurd price, and the first to put liquidity in at that price hands the difference to whoever
+ * trades against it next (security review 2026-11-11). So the one pool form never funds such a pool silently: it shows
+ * the price, compares it with a reference where there is one (another pool of the asset that holds liquidity, the price
+ * its launch graduated at), and asks for an explicit acknowledgement when they differ by more than
+ * EMPTY_POOL_TOLERANCE percent, or when there is no reference at all. `deviation`: of the pool's price from the
+ * reference, in percent, signed.
+ */
+export function emptyPoolCheck(price: number | undefined, references: readonly (number | undefined)[]): { reference: number | null; deviation: number | null; acknowledge: boolean } {
+  const reference = references.find((r): r is number => r !== undefined && Number.isFinite(r) && r > 0) ?? null;
+  if (!(price !== undefined && price > 0) || reference === null) return { reference, deviation: null, acknowledge: true };
+  const deviation = (price / reference - 1) * 100;
+  return { reference, deviation, acknowledge: Math.abs(deviation) > EMPTY_POOL_TOLERANCE };
+}
+
 /** What a pool is said to be on the pages: its fee alone ("0.3% fee"); never its curve. */
 export function poolFeeText(p: Parameters<typeof kindOf>[0]): string {
   const k = kindOf(p);
