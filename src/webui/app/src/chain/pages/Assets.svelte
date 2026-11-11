@@ -8,13 +8,14 @@
   import { errorText } from '../../lib/dialogs.svelte';
   import { t, tn } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
-  import { go, nav, takeFocus } from '../../lib/nav.svelte';
+  import { nav, takeFocus } from '../../lib/nav.svelte';
   import { rpc } from '../../lib/rpc';
   import '../ba/ba.css';
   import AssetBadge from '../ba/AssetBadge.svelte';
   import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetActions from '../ba/AssetActions.svelte';
   import AssetView from '../ba/AssetView.svelte';
+  import { assetRoute, parseDexRoute } from '../ba/assetactions';
   import { untrack } from 'svelte';
   import { assetArg, formatAmount, formatPrice, isSeq, type Asset } from '../ba/model';
   import { assetById, ba, chnPrice, hasPool, launchGraduation, noteKnownAssets, startBitAssets } from '../ba/store.svelte';
@@ -36,7 +37,9 @@
   let query = $state('');
   let filter = $state<Filter>('all');
   let sort = $state<Sort>('newest');
-  let shown = $state<string | null>(null);
+  // The asset opened is in the route ("asset/<id>", ba/assetactions.ts): back, forward and a reload keep it.
+  const shown = $derived(parseDexRoute(nav.tab).asset?.id ?? null);
+  const show = (id: string | null) => (nav.tab = id ? assetRoute(id) : '');
   let lookupError = $state('');
   let looking = $state(false);
   /** An asset found by its hash or number that the list does not hold (its name is private). */
@@ -139,7 +142,7 @@
   $effect(() => {
     void nav.focus;
     const key = takeFocus('assets');
-    if (key) shown = key;
+    if (key) show(key);
   });
 
   const FILTERS: { id: Filter; label: string }[] = [
@@ -158,7 +161,7 @@
     if (!q) return;
     const exact = ba.assets.find((a) => a.label === q || a.seq === q || `0x${a.asset}` === q.toLowerCase());
     if (exact) {
-      shown = exact.asset;
+      show(exact.asset);
       return;
     }
     if (!(isSeq(q) || /^0x[0-9a-fA-F]{64}$/.test(q) || q.length <= 64)) return;
@@ -168,7 +171,7 @@
       const a = await rpc.raw<Asset>('getasset', [q]);
       found = a;
       noteKnownAssets([a]);
-      shown = a.asset;
+      show(a.asset);
     } catch (e) {
       lookupError = errorText(e);
     } finally {
@@ -179,11 +182,11 @@
 
 <div class="page ba-page assets-page">
   {#if shown}
-    <AssetView id={shown} onback={() => (shown = null)} />
+    <AssetView id={shown} onback={() => show(null)} />
   {:else}
     <header class="page-head">
-      <h1>Browse assets</h1>
-      {#if ba.info}<span class="muted">{formatCount(ba.info.assets)} assets · {formatCount(ba.info.pools)} pools · {formatCount(ba.info.auctions)} auctions · next block {formatCount(ba.info.height)}</span>{/if}
+      <h1>Assets</h1>
+      {#if ba.info}<span class="muted">{formatCount(ba.info.assets)} assets · {formatCount(ba.info.pools)} pools · next block {formatCount(ba.info.height)}</span>{/if}
       <CreateAssetButton />
     </header>
 
@@ -240,7 +243,7 @@
           {@const price = chnPrice(a.asset)}
           {@const market = marketOf(a.asset, ba.pools, ba.auctions, launchGraduation[a.asset])}
           <li class="tile-item">
-            <button type="button" class="panel tile" onclick={() => (shown = a.asset)}>
+            <button type="button" class="panel tile" onclick={() => show(a.asset)}>
               <span class="top">
                 <AssetBadge id={a.asset} label={a.label} display={a.display_name ?? ""} seq={a.seq} />
                 {#if controlled.has(a.asset)}<span class="ba-tag accent" title="This wallet holds its control coin"><Icon name="crown" size={12} /></span>{/if}
@@ -271,7 +274,7 @@
       <p class="ba-help">{t('This node lists %1 assets at a time: type a name to find others, or a number or hash and press Enter.', formatCount(200))}</p>
     {/if}
     {#if found && !list.some((a) => a.asset === found?.asset)}
-      <p class="ba-help">Found by its hash: <button type="button" class="btn small ghost" onclick={() => (shown = found?.asset ?? null)}><AssetBadge id={found.asset} label={found.label} display={found.display_name ?? ''} seq={found.seq} size="s" /></button> <span class="faint" translate="no">{assetArg(found.asset)}</span></p>
+      <p class="ba-help">Found by its hash: <button type="button" class="btn small ghost" onclick={() => show(found?.asset ?? null)}><AssetBadge id={found.asset} label={found.label} display={found.display_name ?? ''} seq={found.seq} size="s" /></button> <span class="faint" translate="no">{assetArg(found.asset)}</span></p>
     {/if}
   {/if}
 </div>

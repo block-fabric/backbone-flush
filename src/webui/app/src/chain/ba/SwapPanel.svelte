@@ -1,15 +1,14 @@
 <script lang="ts">
-  // A swap: pay an amount of one asset into its pool with another, get what the pool gives (quoted by the
-  // node: quoteswap), at least that less the slippage chosen; the price, the spot price, the price impact
-  // (asked about above 2%, refused above 10%, as the wallet refuses it), the pool's fee; the curve of the pool,
-  // and where the trade moves it. The Swap card of the Trade tab of the Qt window of BitAssets.
+  // The one swap form (owner decision, 2026-11-11): pay an amount of one asset, get another, by the route the node quotes
+  // as the best over every venue (getswapquote: the pair's pools, its launch curve, and the routes through others;
+  // quoteroute), at least that less the slippage limit; the fee, the price impact (asked about above 2%, refused above
+  // 10%, as the wallet refuses it). The route is picked for the user, never by them: no list of ways to trade. One hop in
+  // the pool of the default kind goes by swapasset; one pool of another kind by swappools; a route by swaproute, its pools
+  // named (ba/kinds.ts executionOf).
   //
-  // Layers' DEX: a pair may have pools of several kinds, and a trade may go through several pools. Every venue of the pair
-  // is quoted (getswapquote: its pools of every kind, constant product, stable, weighted, concentrated, its order book and
-  // its launch's curve, and the best route over all of them) and the best routes (quoteroute); the best of all is the
-  // default way (user decision, 2026-10-23), or the one the user picks. One hop in
-  // the pool of the default kind goes as before (swapasset); one pool of another kind by swappools; a route by swaproute,
-  // its pools named (ba/kinds.ts executionOf).
+  // On Swap the two assets are picked, or come from the route ("swap/get/<id>", "swap/pay/<id>": ba/assetactions.ts). On
+  // an asset's page (`asset`: the Trade box of ba/AssetView.svelte) the asset is fixed by the page, against ECX, with Buy
+  // and Sell for its side: no picker, and nothing kept from a form opened before.
   import { untrack } from 'svelte';
   import SafeText from '../../components/SafeText.svelte';
   import AssetBadge from './AssetBadge.svelte';
@@ -24,12 +23,12 @@
   import { amountParam, approx, assetArg, CHN_ID, curvePoints, formatAmount, formatPrice, formatUnits, isChn, lessSlippage, MAX_IMPACT, minChnPayout, minChnText, unitsAtMost, unitsOf, WARN_IMPACT, type SwapQuote, type Amount } from './model';
   import { compactNumber } from './axis';
   import { hiddenAsset } from './visible.svelte';
-  import { assetById, ba, decimalsOf, labelOf, mintableLaunch, nameOf, poolById, poolsOf, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, decimalsOf, labelOf, mintableLaunch, nameOf, poolById, poolsOf, refreshBitAssets } from './store.svelte';
   import { liquidityState } from './liquidity';
-  import { nav } from '../../lib/nav.svelte';
-  import { parseDexRoute } from './assetactions';
-  import PoolKind from './PoolKind.svelte';
-  import { chooseOption, CURVE_NAMES, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, venueOf, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
+  import { go, nav } from '../../lib/nav.svelte';
+  import { parseDexRoute, poolRoute } from './assetactions';
+  import { chooseOption, executionOf, feeNow, feePercent, flipKind, kindOf, tradeOptions, type MarketQuote, type RouteQuote, type TradeOption } from './kinds';
+  import { hopParts } from './pools';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
@@ -40,8 +39,35 @@
   const simple = $derived(simpleMode());
   let moreOptions = $state(false);
 
-  let pay = $state(CHN_ID);
-  let get = $state('');
+  let {
+    asset = '',
+    side: firstSide = 'buy',
+  }: {
+    /** The asset the form is fixed on (an asset's page): traded against ECX. */
+    asset?: string;
+    /** Its side at first, there. */
+    side?: 'buy' | 'sell';
+  } = $props();
+  const fixed = $derived(asset !== '');
+  let side = $state<'buy' | 'sell'>(untrack(() => firstSide));
+
+  let pay = $state(untrack(() => (asset && firstSide === 'sell' ? asset : CHN_ID)));
+  let get = $state(untrack(() => (asset && firstSide !== 'sell' ? asset : asset ? CHN_ID : '')));
+  // Fixed: the pair follows the asset of the page and the side picked, nothing else.
+  $effect(() => {
+    const a = asset;
+    const sd = side;
+    if (!a) return;
+    untrack(() => {
+      const p = sd === 'sell' ? a : CHN_ID;
+      const g = sd === 'sell' ? CHN_ID : a;
+      if (pay !== p || get !== g) {
+        pay = p;
+        get = g;
+        amountText = '';
+      }
+    });
+  });
   let amountText = $state('');
   let amount = $state<bigint | null>(null);
   let slippage = $state(0.5);
@@ -54,8 +80,6 @@
   let routes = $state<RouteQuote | null>(null);
   /** Whether the quotes asked for have not all come back yet. */
   let quoting = $state(false);
-  /** The way the user picked (an option's key; '' for the best). */
-  let picked = $state('');
 
   /** The assets that trade in a pool: those the lists offer. */
   const traded = $derived([...new Set(ba.pools.flatMap((p) => [p.asset_a_id, p.asset_b_id]))].filter((id) => !isChn(id)));
@@ -67,7 +91,7 @@
   const routed = $derived(parseDexRoute(nav.tab).swap);
   $effect(() => {
     const r = routed;
-    if (!r) return;
+    if (!r || fixed) return;
     untrack(() => {
       if (r.side === 'get') {
         get = r.id;
@@ -78,17 +102,9 @@
       }
     });
   });
-  // A pair asked for by another page (an asset's Trade button).
-  $effect(() => {
-    if (!tradeIntent.pay && !tradeIntent.get) return;
-    if (tradeIntent.pay) pay = tradeIntent.pay;
-    if (tradeIntent.get) get = tradeIntent.get;
-    tradeIntent.pay = '';
-    tradeIntent.get = '';
-  });
   // Something to get by default: the first asset that trades with what is paid.
   $effect(() => {
-    if (get && get !== pay) return;
+    if (fixed || (get && get !== pay)) return;
     const other = ba.pools.find((p) => p.asset_a_id === pay || p.asset_b_id === pay);
     get = other ? (other.asset_a_id === pay ? other.asset_b_id : other.asset_a_id) : (choices.find((c) => c.id !== pay)?.id ?? '');
   });
@@ -126,7 +142,6 @@
       quoteError = '';
       market = null;
       routes = null;
-      picked = '';
       quoted = key;
     }
     const withPool = !!pool && !pool.abandoned;
@@ -201,21 +216,29 @@
       },
     }),
   );
-  const chosen = $derived<TradeOption | null>(chooseOption(options, picked));
+  /** The best of them: the route is the node's, never picked by the user (owner decision, 2026-11-11). */
+  const chosen = $derived<TradeOption | null>(chooseOption(options, ''));
   /** Whether the trade goes as before the pool kinds: one hop in the default pool (swapasset, its curve and quote). */
   const plain = $derived(!chosen || (chosen.pools.length === 1 && chosen.defaultPools));
   const out = $derived(chosen ? chosen.out : null);
   /** Which pool or route the trade goes through, in words. */
-  const venue = $derived(chosen ? venueOf(chosen, labelOf) : '');
+  /** A step of the route in words: "MOON launch curve · 1%", "Pool GOLD / ECX · 0.3%" (labels: text of the chain). */
+  function hopWords(h: TradeOption['hops'][number]): string {
+    const p = hopParts(h);
+    if (p.venue === 'curve') return t('%1 launch curve · %2', labelOf(p.base), p.fee);
+    if (p.venue === 'book') return t('Order book %1 / %2', labelOf(p.base), labelOf(p.quote));
+    return t('Pool %1 / %2 · %3', labelOf(p.base), labelOf(p.quote), p.fee);
+  }
+  const venue = $derived(chosen ? chosen.hops.map(hopWords).join(' → ') : '');
   const least = $derived(out !== null ? lessSlippage(out, slip) : null);
   const impact = $derived(chosen?.impact ?? 0);
   const problem = $derived.by(() => {
     if (!get || pay === get) return 'Pick two different assets.';
     if (!chosen) {
-      if (!pool && pairPools.length === 0 && !routable) return simple ? 'No market trades these two yet.' : 'No pool trades these two yet: make one in Pools.';
+      if (!pool && pairPools.length === 0 && !routable) return 'No market trades these two yet.';
       if (pool?.abandoned && pairPools.length === 0 && !routable) return 'This pool is closed: nobody provides liquidity to it any more. It holds only the minimum every pool keeps for good; adding liquidity reopens it.';
       if (quoteError) return quoteError;
-      if (amount !== null && !quoting && (market || routes || !pool)) return simple ? 'No market trades these two yet.' : 'No pool or route trades these two yet: make a pool in Pools.';
+      if (amount !== null && !quoting && (market || routes || !pool)) return 'No market trades these two yet.';
       return '';
     }
     if (out !== null && isChn(get) && out < minChnPayout()) return `Too little: the least ${TICKER} a pool pays out is ${minChnText()} ${TICKER}.`;
@@ -225,8 +248,7 @@
   });
 
   function openPool(id: string) {
-    tradeIntent.pool = id;
-    nav.tab = 'pools';
+    go('pools', poolRoute(id));
   }
 
   // The curve of the pool, what it holds now and after the trade (in the asset paid).
@@ -286,7 +308,7 @@
     }
     const sPlain = sChosen.pools.length === 1 && sChosen.defaultPools;
     // The way it goes, hop by hop, each pool by its kind (a route, or a pool of another kind).
-    const along = sHops.map((h) => t('%1 to %2 in a %3 pool at %4', nameOf(h.from), nameOf(h.to), t(CURVE_NAMES[h.kind.curve]), feePercent(feeNow(h.kind)))).join('; ');
+    const along = sHops.map((h) => t('%1 to %2 by %3', nameOf(h.from), nameOf(h.to), hopWords(h))).join('; ');
     const r = await ask({
       title: t('Swap'),
       message: t('Pay %1 %2 for about %3 %4?', formatUnits(sAmount, sPayDecimals), payLabel, formatUnits(sOut, sGetDecimals), getLabel),
@@ -317,27 +339,40 @@
   }
 </script>
 
-<div class="ba-split swap">
-  <form class="panel ba-form card" onsubmit={(e) => { e.preventDefault(); void swap(); }}>
-    <div class="leg">
-      <AssetSelect id="swap-pay" label="You pay" bind:value={pay} {choices} />
-      <UnitsInput id="swap-amount" label="Amount" decimals={payDecimals} bind:units={amount} bind:text={amountText} max={held} unit={labelOf(pay)} />
-    </div>
-    <button type="button" class="btn icon flip" title="Swap the other way" aria-label="Swap the other way" onclick={flip}><Icon name="swap" size={18} /></button>
-    <div class="leg">
-      <AssetSelect id="swap-get" label="You get" bind:value={get} {choices} />
-      <div class="field">
-        <span class="label">About</span>
-        <output class="get num" for="swap-amount" aria-live="polite">{out !== null ? formatUnits(out, getDecimals) : '–'}</output>
+<div class="swap" class:ba-split={!fixed} data-testid={fixed ? 'trade-box' : undefined}>
+  <form class="panel ba-form card" aria-label={fixed ? t('Trade %1', labelOf(asset)) : undefined} onsubmit={(e) => { e.preventDefault(); void swap(); }}>
+    {#if fixed}
+      <h3 class="title">Trade <SafeText text={labelOf(asset)} /></h3>
+      <div class="ba-chips" role="group" aria-label="Buy or sell">
+        <button type="button" class="ba-chip" aria-pressed={side === 'buy'} onclick={() => (side = 'buy')}>Buy</button>
+        <button type="button" class="ba-chip" aria-pressed={side === 'sell'} onclick={() => (side = 'sell')}>Sell</button>
       </div>
-    </div>
+      <UnitsInput id="swap-amount" label={side === 'buy' ? t('You pay (%1)', TICKER) : t('You sell')} decimals={payDecimals} bind:units={amount} bind:text={amountText} max={held} unit={labelOf(pay)} />
+      <div class="field">
+        <span class="label">You get about</span>
+        <output class="get num" for="swap-amount" aria-live="polite">{out !== null ? formatUnits(out, getDecimals) : '–'} <SafeText text={labelOf(get)} /></output>
+      </div>
+    {:else}
+      <div class="leg">
+        <AssetSelect id="swap-pay" label="You pay" bind:value={pay} {choices} />
+        <UnitsInput id="swap-amount" label="Amount" decimals={payDecimals} bind:units={amount} bind:text={amountText} max={held} unit={labelOf(pay)} />
+      </div>
+      <button type="button" class="btn icon flip" title="Swap the other way" aria-label="Swap the other way" onclick={flip}><Icon name="swap" size={18} /></button>
+      <div class="leg">
+        <AssetSelect id="swap-get" label="You get" bind:value={get} {choices} />
+        <div class="field">
+          <span class="label">About</span>
+          <output class="get num" for="swap-amount" aria-live="polite">{out !== null ? formatUnits(out, getDecimals) : '–'}</output>
+        </div>
+      </div>
+    {/if}
 
     {#if simple}
       <button type="button" class="btn ghost small more" aria-expanded={moreOptions} onclick={() => (moreOptions = !moreOptions)}><Icon name={moreOptions ? 'chevron' : 'chevron-right'} size={14} /> More options</button>
     {/if}
     {#if !simple || moreOptions}
     <div class="field">
-      <span class="label">Slippage</span>
+      <span class="label">Slippage limit</span>
       <div class="ba-chips" role="group" aria-label="Slippage">
         {#each [0.1, 0.5, 1, 3] as s (s)}
           <button type="button" class="ba-chip" aria-pressed={custom.trim() === '' && slippage === s} onclick={() => { slippage = s; custom = ''; }}>{s}%</button>
@@ -364,49 +399,31 @@
         <dt>Price</dt><dd>1 <SafeText text={labelOf(get)} /> = {formatPrice(chosen.price ?? (out > 0n ? Number(amount) / 10 ** payDecimals / (Number(out) / 10 ** getDecimals) : undefined))} <SafeText text={labelOf(pay)} /></dd>
         {#if chosen.spotPrice !== undefined}<dt>Before the trade</dt><dd>{formatPrice(chosen.spotPrice)}</dd>{/if}
         {#if chosen.impact !== undefined}<dt>Price impact</dt><dd class:ba-good={impact <= 1} class:ba-warn={impact > 1 && impact <= 5} class:ba-bad={impact > 5}>{impact.toFixed(2)}%</dd>{/if}
-        <dt>{chosen.pools.length > 1 ? 'Route' : 'Pool'}</dt><dd data-testid="swap-venue"><SafeText text={venue} /></dd>
+        <dt>Route</dt><dd data-testid="swap-venue"><SafeText text={venue} /></dd>
         <dt>At least</dt><dd class="strong">{formatUnits(least, getDecimals)} <SafeText text={labelOf(get)} /></dd>
         {#if chosen && chosen.pools.length === 1}
-          <dt>Pool fee ({feePercent(feeNow(chosen.hops[0].kind))})</dt><dd>{formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /></dd>
+          <dt>Fee ({feePercent(feeNow(chosen.hops[0].kind))})</dt><dd>{formatAmount(chosen.feePaid ?? 0, payDecimals)} <SafeText text={labelOf(pay)} /></dd>
         {:else if chosen}
-          <dt>Fees</dt><dd>{chosen.hops.map((h) => feePercent(feeNow(h.kind))).join(' + ')}, one per pool</dd>
+          <dt>Fees</dt><dd>{chosen.hops.map((h) => feePercent(feeNow(h.kind))).join(' + ')}, one per step</dd>
         {/if}
       </dl>
     {:else if pool && !pool.abandoned && reserves}
       <p class="ba-help">1 <SafeText text={labelOf(get)} /> = {formatPrice(reserves.pay / reserves.get)} <SafeText text={labelOf(pay)} /> in the pool now.</p>
     {/if}
 
-    {#if !simple && options.length > 1}
-      <div class="field">
-        <span class="label">Ways to trade</span>
-        <ul class="ways" aria-label="Ways to trade">
-          {#each options as o, i (o.key)}
-            <li>
-              <button type="button" class="way" aria-pressed={chosen?.key === o.key} onclick={() => (picked = i === 0 ? '' : o.key)}>
-                <span class="hops">
-                  {#each o.hops as h, k (k)}{#if k > 0}<Icon name="chevron-right" size={12} />{/if}<PoolKind kind={h.kind} />{/each}
-                  {#if o.pools.length > 1}<span class="faint small">via {#each o.path.slice(1, -1) as mid, k (k)}{#if k > 0}, {/if}<SafeText text={labelOf(mid)} />{/each}</span>{/if}
-                </span>
-                <span class="gets num">{formatUnits(o.out, getDecimals)}</span>
-                <span class="faint small">{#if i === 0}best{:else if o.impact !== undefined}{o.impact.toFixed(2)}%{/if}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-        <span class="hint">Each pool, book and curve of the pair, and routes through others: the best is used unless you pick another.</span>
-      </div>
-    {/if}
-
-    <div class="row"><button type="submit" class="btn primary wide" disabled={busy || quoting || wallets.current === null || amount === null || out === null || !!problem}><Icon name="swap" size={16} /> {busy ? 'Swapping…' : 'Swap'}</button></div>
+    <div class="row"><button type="submit" class="btn primary wide" disabled={busy || quoting || wallets.current === null || amount === null || out === null || !!problem}><Icon name="swap" size={16} /> {busy ? 'Swapping…' : fixed ? (side === 'buy' ? 'Buy' : 'Sell') : 'Swap'}</button></div>
+    {#if fixed}<p class="ba-help">The asset is fixed by this page. The route is chosen for you.</p>{/if}
   </form>
 
-  {#if simple}
+  {#if fixed}
+  <!-- An asset's page: the form alone. -->
+  {:else if simple}
   <section class="panel">
     <div class="panel-head"><h3>How a swap works</h3></div>
     <div class="panel-body how">
       <p>Each asset trades with {TICKER} in a <Term id="pool">market</Term> that anyone can use. Its price follows what it holds: buying makes it dearer.</p>
       <p>You see what you get before you confirm. The swap happens with the next block, in a minute or so; the asset then shows in Portfolio.</p>
-      <p class="muted small">Markets, liquidity and the curve of each market are in Advanced mode.</p>
+      <p class="muted small">Pools and the launch curves are in Advanced mode.</p>
     </div>
   </section>
   {:else}
@@ -418,13 +435,13 @@
           {#each chosen.hops as h, k (k)}
             <li>
               <span class="step-assets"><AssetBadge id={h.from} label={labelOf(h.from)} size="s" /> <Icon name="chevron-right" size={12} /> <AssetBadge id={h.to} label={labelOf(h.to)} size="s" /></span>
-              <PoolKind kind={h.kind} showDefault />
+              <SafeText class="faint small" text={hopWords(h)} />
               {#if h.out !== undefined}<span class="faint small">gives {formatAmount(h.out, decimalsOf(h.to))} <SafeText text={labelOf(h.to)} /></span>{/if}
               <button type="button" class="btn ghost small" onclick={() => openPool(h.pool)}>Pool</button>
             </li>
           {/each}
         </ol>
-        <p class="ba-help">{#if chosen.pools.length > 1}The trade goes through each pool in turn, in one transaction: an order of its block, cleared at the end of it with the block's other orders, at one price per pool.{:else}A pool of another kind than the one Add liquidity makes: the trade names it by its id.{/if} Should it give less than the least shown, what went in comes back.</p>
+        <p class="ba-help">{#if chosen.pools.length > 1}The trade goes through each step in turn, in one transaction: an order of its block, cleared at the end of it with the block's other orders, at one price per step.{:else}An order of its block, cleared at the end of it with the block's other orders.{/if} Should it give less than the least shown, what went in comes back.</p>
       {:else if pool && !pool.abandoned && reserves}
         <Chart points={curve} marks={marks} logX yZero area={false} label={t('The curve of the pool: what it holds of each asset')} formatX={(x) => compactNumber(x, 4)} formatY={(y) => formatPrice(y, 4)} tall={220} />
         <p class="ba-help">The pool holds {formatPrice(reserves.pay)} <SafeText text={labelOf(pay)} /> and {formatPrice(reserves.get)} <SafeText text={labelOf(get)} />; their product never falls. The trade moves it along the curve, from the first point to the second: the further, the worse the price.</p>
@@ -439,6 +456,9 @@
 <style>
   .card {
     padding: 1.2rem;
+  }
+  .title {
+    margin: 0;
   }
   .leg {
     display: grid;
@@ -480,42 +500,6 @@
   .how p {
     margin: 0;
     line-height: 1.45;
-  }
-  .ways {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .way {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
-    align-items: center;
-    gap: 0.6rem;
-    width: 100%;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-s);
-    background: transparent;
-    color: inherit;
-    text-align: start;
-    cursor: pointer;
-  }
-  .way[aria-pressed='true'] {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-  }
-  .hops {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.3rem;
-    min-width: 0;
-  }
-  .gets {
-    font-weight: 650;
   }
   .route {
     display: flex;

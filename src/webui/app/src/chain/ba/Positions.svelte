@@ -7,7 +7,8 @@
   import Icon from '../../components/Icon.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
-  import { nav } from '../../lib/nav.svelte';
+  import { go, nav } from '../../lib/nav.svelte';
+  import { poolRoute } from './assetactions';
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
@@ -16,7 +17,7 @@
   import { flipped, positionSides, rangeBar, type Position } from './cl';
   import { depositAmounts, kindOf } from './kinds';
   import { amountParam, approx, formatAmount, formatPrice, isChn, unitsAtMost, type Pool } from './model';
-  import { ba, decimalsOf, poolById, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, poolById, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
   let list = $state<Position[] | null>(null);
@@ -132,8 +133,7 @@
     }
   }
   function openPool(id: string) {
-    tradeIntent.pool = id;
-    nav.tab = 'pools';
+    go('pools', poolRoute(id));
   }
 </script>
 

@@ -6,7 +6,8 @@
   import Icon from '../../components/Icon.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { go } from '../../lib/nav.svelte';
-  import { dropFunding, fundPosition, fundStageOf, labelOf, makeFundedPool, tradeIntent, type PendingFund } from './store.svelte';
+  import { poolRoute } from './assetactions';
+  import { dropFunding, fundPosition, fundStageOf, labelOf, makeFundedPool, type PendingFund } from './store.svelte';
 
   let { fund }: { fund: PendingFund } = $props();
 
@@ -22,8 +23,7 @@
     }
   }
   function openPool() {
-    tradeIntent.pool = fund.pool ?? '';
-    go('pools', 'pools');
+    go('pools', fund.pool ? poolRoute(fund.pool) : 'pools');
   }
   const price = $derived(Number(fund.quoteAmount) / Number(fund.amount));
 </script>

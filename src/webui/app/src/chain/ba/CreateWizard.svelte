@@ -34,7 +34,8 @@
   import { curveShape, DEFAULT_RULES, FEE_DESTINATIONS, feeDestinationText, feeFlowOptions, feeFlowProblems, feeSplitOf, feeSplitOptions, feeSplitProblems, formatBps, launchProblems, MAX_SPLIT_ADDRESSES, rulesOf, shareKind, shareRecipientText, shareText, type FeeDestination, type LaunchStats } from './launch';
   import AddressInput from '../../components/AddressInput.svelte';
   import { amountParam, CHN_ID, DATA_FIELDS, dataProblems, dataToSet, displayNameProblem, formatPrice, formatUnits, hashName, MAX_AMOUNT, MAX_DECIMALS, MAX_DISPLAY_NAME_BYTES, MAX_INFO, MAX_TICKER, minChnPayout, minChnText, MIN_TICKER, nameProblem, normalizeDisplayName, smallestAmount, tickerOf, tickerProblem, type DataField } from './model';
-  import { ba, fundingOf, noteFunding, notePending, openMarketFor, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, tradeIntent, type PendingIssue } from './store.svelte';
+  import { launchRoute } from './assetactions';
+  import { ba, fundingOf, noteFunding, notePending, pendingOf, pendingOpOf, recentlyRegistered, refreshBitAssets, registerParams, startBitAssets, tickersActive, type PendingIssue } from './store.svelte';
   import Term from '../../components/Term.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './terms';
@@ -163,7 +164,7 @@
     signingkey: 'An x-only public key (64 hex digits) the issuer signs with',
   };
 
-  // --- The supply: what the wallet gets (none, pool, auction), or what the curve and its pool hold (a curve) ---
+  // --- The supply: what the wallet gets (none, pool), or what the curve and its pool hold (a curve) ---
   // 8 by default (6 for a curve: the rules'), the same as flush.markets' wizard.
   let decimals = $state(8);
   let supplyText = $state('');
@@ -342,8 +343,7 @@
           if (!done) return;
           toast('success', t('Launching'), t('%1 is on its curve with the next block.', name));
           void refreshBitAssets();
-          tradeIntent.launch = done.token;
-          go('pools', 'launches');
+          go('launch', launchRoute(done.token));
           return;
         }
         await notePending({ wallet, name, asset: previewId, supply: unitsText(supplyValue, decimals), decimals, data: {}, public: true, time: Math.floor(Date.now() / 1000), reservation: reservation.txid, launch: options });
@@ -365,7 +365,6 @@
         reservation: '',
         ...(logo && logosSoon ? { logo: logo.base64 } : {}),
         ...(curve ? { launch: launchOptionsNow() } : {}),
-        ...(market === 'auction' ? { follow: market } : {}),
       };
       // Straight into a pool: what goes in, taken now (what the review showed).
       const fund = pooled && poolTokens !== null && poolChn !== null ? { amount: amountParam(poolTokens, decimals), quoteAmount: amountParam(poolChn, 8), fee: poolFee } : null;
@@ -436,7 +435,7 @@
     {#if simple}
       <p class="ba-help lead">An <Term id="asset">asset</Term> of your own: points, tickets, shares. Give it a name and an amount; you can send it, swap it, and make more later with its <Term id="controlcoin">control coin</Term>.</p>
     {:else}
-      <p class="ba-help lead">An asset of your own: shares, points, tickets, a stablecoin. Say what it is, its supply, and its market: none yet, a bonding curve, a pool or an auction.</p>
+      <p class="ba-help lead">An asset of your own: shares, points, tickets, a stablecoin. Say what it is, its supply, and where it trades: on a launch curve, in a pool you fund, or nowhere yet.</p>
     {/if}
 
     {#if step !== 'done'}
@@ -624,10 +623,8 @@
               </div>
               {#if poolPrice !== undefined}<p class="ba-help" data-testid="fund-price">Its price: 1 <SafeText text={name} /> = {formatPrice(poolPrice)} {TICKER}, the ratio of the two. Both go in over the full range: your liquidity at every price.</p>{/if}
               {#if poolProblem}<p class="ba-problems" role="status">{poolProblem}</p>{/if}
-            {:else if market === 'auction'}
-              <p class="ba-help">First the asset is registered, with its supply to your wallet. Once it is in your assets, this app offers to sell some of it by Dutch auction: a price that falls block by block from where you start it.</p>
             {:else}
-              <p class="ba-help">The supply goes to your wallet. Open a market any time later from its page: a curve, a pool, an order book or an auction.</p>
+              <p class="ba-help">The supply goes to your wallet. Open a market any time later from its page: a launch curve or a pool.</p>
             {/if}
             <div class="row"><button type="button" class="btn" onclick={back}>Back</button><button type="submit" class="btn primary" disabled={!canNext}>Next</button></div>
           </form>
@@ -679,7 +676,7 @@
               {#if !reservation}<li><strong>Now: the reservation.</strong> It hides the name, so that nobody can see it coming and take it first.</li>{/if}
               <li><strong>{tn('%n block(s) later (about %1): the registration.', depth, niceTimeOffset(depth * spacing))}</strong> {curve ? 'The launch puts it on its curve, with your first buy if any.' : 'Not sooner, so that whoever makes a block cannot take the name first.'} This app sends it by itself while it runs.</li>
               {#if curve}<li><strong>Then: on its curve</strong>, until it raises {rules.graduation} {TICKER}; then its locked pool.</li>
-              {:else}<li><strong>The block after: in your assets</strong>, with its supply and its control coin{#if market === 'auction'}; then start its auction{/if}.</li>{/if}
+              {:else}<li><strong>The block after: in your assets</strong>, with its supply and its control coin.</li>{/if}
               {#if pooled}
                 <li><strong>Then: its pool</strong>, at your price, nothing in it yet. Your wallet confirms it, from its card or its notice.</li>
                 <li><strong>The block after: your liquidity</strong>, the asset and {TICKER}, over the full range. Your wallet confirms it too.</li>
@@ -701,10 +698,7 @@
             {#if createdOp}<PendingCard op={createdOp} />{/if}
             {#if createdFund}<FundCard fund={createdFund} />{/if}
             <div class="row">
-              {#if createdFollow === 'auction' && createdAsset}
-                <button type="button" class="btn primary" onclick={() => openMarketFor(createdAsset.asset, 'auction')}>Start its auction</button>
-              {/if}
-              <button type="button" class="btn" class:primary={!createdAsset || createdFollow !== 'auction'} onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Create another</button>
+              <button type="button" class="btn primary" onclick={() => go('my-assets', 'issuing')}>Follow it</button><button type="button" class="btn" onclick={again}>Create another</button>
             </div>
           </div>
         {/if}

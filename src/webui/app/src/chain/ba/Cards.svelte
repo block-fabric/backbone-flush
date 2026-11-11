@@ -1,35 +1,31 @@
 <script lang="ts">
-  // The cards of BitAssets on the home of the dashboard (My assets, the table of what the wallet holds, is
-  // ba/HeldAssets.svelte above them: one card since user feedback 2026-10-19): the markets (the pools that trade
-  // most, with their prices), and the auctions running (the ones that end soonest, at their price now). Each opens
-  // its page.
+  // The card of BitAssets on the home of the dashboard (My assets, the table of what the wallet holds, is
+  // ba/HeldAssets.svelte above it: one card since user feedback 2026-10-19): the markets (the pools that trade most,
+  // with their prices). It opens Pools; an asset of it, the asset's page. The auctions' card is gone with the auctions
+  // (owner decision, 2026-11-11).
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import Card from '../../views/home/Card.svelte';
   import { formatCount } from '../../lib/format';
-  import { go, goTo } from '../../lib/nav.svelte';
+  import { go } from '../../lib/nav.svelte';
   import './ba.css';
   import AssetBadge from './AssetBadge.svelte';
-  import { formatAmount, formatPrice, isChn, unitPrice } from './model';
-  import { ba, decimalsOf, startBitAssets } from './store.svelte';
+  import { assetRoute } from './assetactions';
+  import { formatPrice, isChn } from './model';
+  import { isShownPool, poolEmpty } from './pools';
+  import { ba, startBitAssets } from './store.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
 
   $effect(() => startBitAssets());
-  // Simple mode (lib/uimode.svelte.ts): no auctions card (Advanced's), the actions in plain words.
+  // Simple mode (lib/uimode.svelte.ts): the actions in plain words.
   const simple = $derived(simpleMode());
 
+  /** The pools shown as pools (no order book, no launch curve) that hold liquidity. */
+  const open = $derived(ba.pools.filter((p) => isShownPool(p) && !poolEmpty(p)));
   const markets = $derived(
-    ba.pools
-      .filter((p) => !p.abandoned)
+    open
       .slice()
       .sort((a, b) => b.swaps - a.swaps)
-      .slice(0, 3),
-  );
-  const ending = $derived(
-    ba.auctions
-      .filter((a) => a.status === 'open')
-      .slice()
-      .sort((a, b) => a.end_height - b.end_height)
       .slice(0, 3),
   );
 </script>
@@ -37,10 +33,10 @@
 {#if ba.loaded && !ba.error}
   <div class="ba-cards">
     <Card title="Markets" icon="swap" open={() => (simple ? go('trade', 'swap') : go('pools', 'pools'))} openLabel={simple ? 'Open Swap' : 'Open the pools'} stat>
-      <span class="value num">{formatCount(ba.pools.filter((p) => !p.abandoned).length)}</span>
+      <span class="value num">{formatCount(open.length)}</span>
       <dl class="pairs">
-        <dt>{simple ? 'Assets to swap' : 'Pools with liquidity'}</dt><dd class="num">{ba.pools.filter((p) => !p.abandoned).length}</dd>
-        <dt>Trades, all told</dt><dd class="num">{formatCount(ba.pools.reduce((n, p) => n + p.swaps, 0))}</dd>
+        <dt>{simple ? 'Assets to swap' : 'Pools with liquidity'}</dt><dd class="num">{open.length}</dd>
+        <dt>Trades, all told</dt><dd class="num">{formatCount(open.reduce((n, p) => n + p.swaps, 0))}</dd>
       </dl>
       {#if markets.length === 0}
         <p class="muted">No pool trades yet.</p>
@@ -49,7 +45,7 @@
           {#each markets as p (p.pool)}
             {@const asset = isChn(p.asset_a_id) ? p.asset_b_id : p.asset_a_id}
             <li>
-              <button type="button" class="link" onclick={() => goTo('assets', '', asset)}><AssetBadge id={asset} label={isChn(p.asset_a_id) ? p.asset_b : p.asset_a} size="s" /></button>
+              <button type="button" class="link" onclick={() => go('assets', assetRoute(asset))}><AssetBadge id={asset} label={isChn(p.asset_a_id) ? p.asset_b : p.asset_a} size="s" /></button>
               <span class="num small">{formatPrice(isChn(p.asset_a_id) ? (p.price ? 1 / p.price : undefined) : p.price)} <SafeText text={isChn(p.asset_a_id) ? p.asset_a : p.asset_b} /></span>
             </li>
           {/each}
@@ -57,35 +53,9 @@
       {/if}
       {#snippet actions()}
         <button type="button" class="btn grow" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>
-        <button type="button" class="btn ghost" onclick={() => go('assets')}>Browse assets</button>
+        <button type="button" class="btn ghost" onclick={() => go('assets')}>Assets</button>
       {/snippet}
     </Card>
-
-    {#if !simple}
-    <Card title="Auctions" icon="gavel" open={() => go('auctions')} openLabel="Open the auctions" stat>
-      <span class="value num">{formatCount(ba.auctions.filter((a) => a.status === 'open').length)}</span>
-      <dl class="pairs">
-        <dt>Taking bids</dt><dd class="num">{ba.auctions.filter((a) => a.status === 'open').length}</dd>
-        <dt>Upcoming</dt><dd class="num">{ba.auctions.filter((a) => a.status === 'upcoming').length}</dd>
-      </dl>
-      {#if ending.length === 0}
-        <p class="muted">No auction is taking bids.</p>
-      {:else}
-        <ul class="mini">
-          {#each ending as a (a.auction)}
-            {@const up = unitPrice(a.unit_price)}
-            <li>
-              <button type="button" class="link" onclick={() => goTo('auctions', '', a.auction)}>{formatAmount(a.remaining, decimalsOf(a.base_id), { max: 2 })} <SafeText text={a.base} /></button>
-              <span class="num small">{#if up.kind === 'each'}{up.price}{:else if up.kind === 'buys'}1/{up.amount}{:else}–{/if} <SafeText text={a.quote} /></span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-      {#snippet actions()}
-        <button type="button" class="btn grow" onclick={() => go('auctions', 'sell')}><Icon name="gavel" size={15} /> Sell</button>
-      {/snippet}
-    </Card>
-    {/if}
   </div>
 {/if}
 

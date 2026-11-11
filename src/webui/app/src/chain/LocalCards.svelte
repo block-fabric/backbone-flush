@@ -1,6 +1,6 @@
 <script lang="ts">
   // The cards of Layers on the home of the dashboard: FastBlocks' (fb/Cards.svelte: Staking, Finality, Next slots)
-  // and BitAssets' (ba/Cards.svelte: Markets, Auctions). Each opens its page.
+  // and BitAssets' (ba/Cards.svelte: Markets). Each opens its page.
   // Above them, My assets: the table of what the wallet holds (ba/HeldAssets.svelte, as on the Overview), one card
   // since user feedback 2026-10-19 (no totals).
   import BaCards from './ba/Cards.svelte';

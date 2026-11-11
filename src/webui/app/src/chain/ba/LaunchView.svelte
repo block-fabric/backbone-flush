@@ -13,7 +13,8 @@
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
-  import { nav } from '../../lib/nav.svelte';
+  import { go } from '../../lib/nav.svelte';
+  import { poolRoute, swapRoute } from './assetactions';
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
@@ -24,8 +25,8 @@
   import { compactNumber } from './axis';
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { claimable, creatorAllocation, curvePointAt, feeDestinationText, shareKind, shareRecipientText, shareText, poolKindText, curveSeries, curveShape, launchDecimals, launchSupply, rulesOf, type Launch, type LaunchLogRow, type LaunchQuote, type LaunchStats } from './launch';
-  import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, minChnPayout, minChnText, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
-  import { ba, nameOf, noteKnownAssets, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { amountParam, approx, assetArg, formatAmount, formatPercent, formatPrice, formatUnits, lessSlippage, minChnPayout, minChnText, unitsAtMost, unitsOf, type Amount, type Asset } from './model';
+  import { ba, nameOf, noteKnownAssets, noteLaunches, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
   /** side: the panel's side the route names (Markets "launches/<token>/sell": ba/assetactions.ts), focused once shown. */
@@ -256,13 +257,10 @@
 
   function openPool() {
     if (!launch) return;
-    tradeIntent.pool = launch.pool;
-    nav.tab = 'pools';
+    go('pools', poolRoute(launch.pool));
   }
   function swap() {
-    tradeIntent.pay = CHN_ID;
-    tradeIntent.get = token;
-    nav.tab = 'swap';
+    go('trade', swapRoute(token, 'get'));
   }
 </script>
 

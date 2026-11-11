@@ -12,6 +12,7 @@
   import { t, followLocale, loadLocale } from './lib/i18n.svelte';
   import { handleShortcut } from './lib/keyboard';
   import { go, nav, PAGES, type PageId } from './lib/nav.svelte';
+  import { RETIRED_PAGES } from './chain/local';
   import { host } from './lib/rpc';
   import { app, applySnapshot, loadPrefs, phaseEvents, prefs, subscribe, toast } from './lib/state.svelte';
   import { applyLook } from './lib/customthemes';
@@ -56,6 +57,8 @@
     // The tray menu, or another part of the app, asks for a page.
     const offNavigate = on<{ page: PageId; tab: string }>('navigate', ({ page, tab }) => {
       if (page in PAGES) go(page, tab);
+      // A page retired from the interface (chain/local.ts RETIRED_PAGES): the nearest page kept, never an error.
+      else if (page in RETIRED_PAGES) go(RETIRED_PAGES[page].page, RETIRED_PAGES[page].tab);
     });
 
     (async () => {

@@ -12,7 +12,8 @@
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount } from '../../lib/format';
-  import { nav } from '../../lib/nav.svelte';
+  import { go } from '../../lib/nav.svelte';
+  import { assetRoute, swapRoute } from './assetactions';
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
@@ -26,7 +27,7 @@
   import { alignDepth, CURVE_HELP, DYNAMIC_FEE_HELP, feeNow, feePercent, depositAmounts, kindOf, quoteAmounts, sharesOf, type LiquidityQuote, type PoolCurve } from './kinds';
   import { amountParam, approx, assetArg, curvePoints, formatAmount, formatPercent, formatPrice, formatUnits, isChn, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
   import { swapFeeSplit } from './fees';
-  import { ba, decimalsOf, launchAllocation, loadLaunchFlags, nameOf, priceSeries, refreshBitAssets, swapParts, tradeIntent } from './store.svelte';
+  import { ba, decimalsOf, launchAllocation, loadLaunchFlags, nameOf, priceSeries, refreshBitAssets, swapParts } from './store.svelte';
   import { TICKER } from '../config';
 
   let { pool, back }: { pool: Pool; back: () => void } = $props();
@@ -71,19 +72,7 @@
   const aligned = $derived(depth ? alignDepth(depth, pool) : []);
 
   function swapIn() {
-    tradeIntent.pay = pool.asset_b_id;
-    tradeIntent.get = pool.asset_a_id;
-    nav.tab = 'swap';
-  }
-  function openBook() {
-    tradeIntent.bookBase = isChn(pool.asset_a_id) ? pool.asset_b_id : pool.asset_a_id;
-    tradeIntent.bookQuote = isChn(pool.asset_a_id) ? pool.asset_a_id : pool.asset_b_id;
-    nav.tab = 'book';
-  }
-  function addDefault() {
-    tradeIntent.a = pool.asset_a_id;
-    tradeIntent.b = pool.asset_b_id;
-    nav.tab = 'liquidity';
+    go('trade', swapRoute(isChn(pool.asset_a_id) ? pool.asset_b_id : pool.asset_a_id, 'get'));
   }
 
   const held = (id: string, decimals: number) => {
@@ -282,7 +271,6 @@
     {#if pool.abandoned}<span class="ba-tag danger">Closed: no liquidity</span>{/if}
     <span class="grow"></span>
     <button type="button" class="btn primary" disabled={pool.abandoned} onclick={swapIn}><Icon name="swap" size={15} /> Swap</button>
-    {#if kind.default_kind}<button type="button" class="btn" onclick={addDefault}><Icon name="plus" size={15} /> {pool.abandoned ? 'Reopen it' : 'Add liquidity'}</button>{/if}
   </header>
   <section class="ba-figures">
     <div class="panel ba-figure"><span class="muted">Price</span><strong>{formatPrice(pool.price)}</strong><span class="faint"><SafeText text={pool.asset_b} /> for 1 <SafeText text={pool.asset_a} /></span></div>
@@ -396,10 +384,8 @@
         {/if}
       </form>
     </div>
-  {:else if book}
-    <p class="ba-help">An order book: limit orders to buy or sell at a price, which trade at the end of each block in one batch. <button type="button" class="btn small" onclick={openBook}><Icon name="book" size={14} /> Its order book</button></p>
   {:else if kind.curve === 'launch'}
-    <p class="ba-help">A launch's curve: buy and sell the asset on its page (Launches), until it graduates into its pool with {TICKER}. <button type="button" class="btn small" onclick={() => { tradeIntent.launch = pool.asset_a_id; nav.tab = 'launches'; }}>Its launch</button></p>
+    <p class="ba-help">A launch's curve: buy and sell the asset on its page, until it graduates into its pool with {TICKER}. <button type="button" class="btn small" onclick={() => go('assets', assetRoute(isChn(pool.asset_a_id) ? pool.asset_b_id : pool.asset_a_id))}>Its page</button></p>
   {:else if !kind.default_kind || (ba.dex && ba.dex.curves_height >= 0)}
     <p class="ba-help">Liquidity by a pool's id (one asset alone, pools of other kinds) comes with the pool kinds{#if ba.dex && ba.dex.curves_height >= 0}, from block {formatCount(ba.dex.curves_height)}{/if}.</p>
   {/if}

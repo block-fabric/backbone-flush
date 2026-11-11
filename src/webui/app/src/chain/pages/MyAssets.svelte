@@ -19,12 +19,13 @@
   import '../ba/ba.css';
   import { barWidth } from '../ba/actions';
   import AssetBadge from '../ba/AssetBadge.svelte';
-  import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetName from '../ba/AssetName.svelte';
+  import CreateAssetButton from '../ba/CreateAssetButton.svelte';
   import AssetActions from '../ba/AssetActions.svelte';
   import LocalTxCell from '../LocalTxCell.svelte';
   import { assetMovesOf } from '../txinfo.svelte';
   import ManagePanel from '../ba/ManagePanel.svelte';
+  import { poolRoute } from '../ba/assetactions';
   import MyLaunches from '../ba/MyLaunches.svelte';
   import HiddenToggle from '../ba/HiddenToggle.svelte';
   import { withoutHidden } from '../ba/visible.svelte';
@@ -55,7 +56,7 @@
     assetText,
   } from '../ba/model';
   import { simpleMode } from '../../lib/uimode.svelte';
-  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, displayNameOf, dropPending, fundingOf, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, tradeIntent, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
+  import { ACTIVITY_PAGE, auctionById, ba, baView, chnPrice, decimalsOf, displayNameOf, dropPending, fundingOf, MAX_ACTIVITY, nameOf, pendingOf, pendingOpOf, poolById, poolOf, refreshBitAssets, registerNow, startBitAssets, type PendingIssue, unlockHoldings } from '../ba/store.svelte';
   import PendingCard from '../../components/PendingCard.svelte';
   import FundCard from '../ba/FundCard.svelte';
   import { TICKER } from '../config';
@@ -194,8 +195,7 @@
     return pool.asset_a_id === pos.asset_a_id ? kindOf(pool) : flipKind(kindOf(pool));
   }
   function openPool(pos: Position) {
-    tradeIntent.pool = pos.pool;
-    go('pools', 'pools');
+    go('pools', poolRoute(pos.pool));
   }
   function preview(pos: Position): { a: bigint; b: bigint } | null {
     const pool = poolOfPosition(pos);
@@ -247,10 +247,7 @@
     }
   }
   function addMore(pos: Position) {
-    if (byId(pos)) return openPool(pos);
-    tradeIntent.a = pos.asset_a_id;
-    tradeIntent.b = pos.asset_b_id;
-    go('trade', 'liquidity');
+    openPool(pos);
   }
 
   /** Read more of the activity (it shows the newest ACTIVITY_PAGE at first: audit port-2 #13). */
@@ -298,7 +295,8 @@
     <header class="page-head">
       <h1>Portfolio</h1>
       <div class="row">
-        <CreateAssetButton />
+        <!-- Simple mode has no Launch page in its navigation: the one create wizard is reached from here. -->
+        {#if simple}<CreateAssetButton />{/if}
         {#if simple}<button type="button" class="btn small" onclick={() => go('trade', 'swap')}><Icon name="swap" size={15} /> Swap</button>{/if}
         <button type="button" class="btn small ghost" onclick={() => go('receive')} title="Assets are received at any address of this wallet"><Icon name="receive" size={15} /> Receive</button>
       </div>
@@ -473,7 +471,7 @@
       {/if}
     {:else if tab === 'auctions'}
       {#if receipts.length === 0}
-        <div class="panel ba-empty">No auction of this wallet. Sell an amount of an asset at a price that falls block by block.<div class="row center"><button type="button" class="btn primary" onclick={() => go('auctions', 'sell')}>Sell by auction</button></div></div>
+        <div class="panel ba-empty">No auction of this wallet.</div>
       {:else}
         <div class="ba-cols">
           {#each receipts as r (r.id)}
@@ -498,7 +496,6 @@
                   {#if action === 'collect'}<button type="button" class="btn primary small" onclick={() => collect(a)}>Collect</button>
                   {:else if action === 'cancel'}<button type="button" class="btn small" onclick={() => collect(a)}>Cancel it: take everything back</button>
                   {:else if action === 'wait'}<span class="faint small">It can be collected once it ends (after block {formatCount(a.end_height)}) or sells out.</span>{/if}
-                  <button type="button" class="btn small ghost" onclick={() => go('auctions')}>View</button>
                 </div>
               {/if}
             </section>

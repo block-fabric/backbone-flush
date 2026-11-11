@@ -15,7 +15,9 @@
   import { launchFeeParts, launchFeeSplit } from './fees';
   import { DEFAULT_RULES, type LaunchStats } from './launch';
   import { amountParam, assetArg, formatUnits, isChn, unitsAtMost, type Asset, type Pool } from './model';
-  import { assetTextOf, ba, openMarketFor, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetTextOf, ba, refreshBitAssets } from './store.svelte';
+  import { assetRoute } from './assetactions';
+  import { nav } from '../../lib/nav.svelte';
   import { TICKER } from '../config';
 
   let { asset, pools, launched }: { asset: Asset; pools: readonly Pool[]; launched: boolean } = $props();
@@ -77,7 +79,6 @@
       open = '';
       amountText = '';
       void refreshBitAssets();
-      tradeIntent.launch = asset.asset;
     } catch (e) {
       await inform(t('Put it on a curve'), errorText(e), 'error');
     } finally {
@@ -94,17 +95,9 @@
         <strong><Icon name="issue" size={15} /> Bonding curve</strong>
         <span class="faint small">{curveOk.ok ? t('Sell part of the supply from a curve until it raises enough, then a locked pool.') : t(curveOk.reason)}</span>
       </button>
-      <button type="button" class="panel choice" disabled={wallets.current === null} onclick={() => openMarketFor(asset.asset, 'pool')}>
+      <button type="button" class="panel choice" disabled={wallets.current === null} onclick={() => (nav.tab = assetRoute(asset.asset, 'liquidity'))}>
         <strong><Icon name="swap" size={15} /> Pool</strong>
         <span class="faint small">With {TICKER} or another asset, any kind and fee tier, at your price.</span>
-      </button>
-      <button type="button" class="panel choice" onclick={() => openMarketFor(asset.asset, 'book')}>
-        <strong><Icon name="book" size={15} /> Order book</strong>
-        <span class="faint small">List it with a limit order, at your price.</span>
-      </button>
-      <button type="button" class="panel choice" disabled={!holding} onclick={() => openMarketFor(asset.asset, 'auction')}>
-        <strong><Icon name="gavel" size={15} /> Dutch auction</strong>
-        <span class="faint small">A price that falls block by block.</span>
       </button>
     </div>
     {#if open === 'curve' && curveOk.ok}

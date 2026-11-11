@@ -7,12 +7,12 @@
   import Icon, { type IconName } from '../../components/Icon.svelte';
   import MenuButton from '../../components/MenuButton.svelte';
   import { t } from '../../lib/i18n.svelte';
-  import { go, goTo } from '../../lib/nav.svelte';
+  import { go } from '../../lib/nav.svelte';
   import { wallets } from '../../lib/state.svelte';
   import type { Command } from '../../lib/commands.svelte';
-  import { ACTION_LABELS, assetActions, launchRoute, marketsOf, poolRoute, swapRoute, type AssetAction } from './assetactions';
+  import { ACTION_LABELS, assetActions, assetRoute, launchRoute, marketsOf, poolRoute, swapRoute, type AssetAction } from './assetactions';
   import { approx } from './model';
-  import { assetTextOf, ba, holdingOf, openMarketIntent, sendAsset } from './store.svelte';
+  import { assetTextOf, ba, holdingOf, sendAsset } from './store.svelte';
 
   let {
     id,
@@ -44,9 +44,9 @@
         claim?.();
         return;
       case 'buy':
-        return go('pools', launchRoute(id, 'buy'));
+        return go('launch', launchRoute(id, 'buy'));
       case 'sell-curve':
-        return go('pools', launchRoute(id, 'sell'));
+        return go('launch', launchRoute(id, 'sell'));
       case 'swap':
         return go('trade', swapRoute(id, 'get'));
       case 'sell':
@@ -54,17 +54,16 @@
       case 'add-liquidity':
         return go('pools', poolRoute(markets.bestPool));
       case 'view-market':
-        return launch || markets.curve ? go('pools', launchRoute(id, 'buy')) : go('pools', poolRoute(markets.bestPool));
+        return launch || markets.curve ? go('launch', launchRoute(id, 'buy')) : go('pools', poolRoute(markets.bestPool));
       case 'open-market':
-        openMarketIntent.asset = id;
-        return goTo('assets', '', id);
+        return go('assets', assetRoute(id, 'liquidity'));
       case 'send':
         sendAsset(id);
         return go('send');
       case 'receive':
         return go('receive');
       case 'view':
-        return goTo('assets', '', id);
+        return go('assets', assetRoute(id));
     }
   }
 

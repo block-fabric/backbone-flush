@@ -21,6 +21,8 @@ export interface SearchFilters {
   exclude_retired?: boolean;
   exclude_keywords?: string[];
   has_pool?: boolean;
+  /** searchpools: false lists the pools nobody provides to as well (Pools: "Needs liquidity"). */
+  exclude_abandoned?: boolean;
   has_logo?: boolean;
   active_within_blocks?: number;
   min_supply?: number;

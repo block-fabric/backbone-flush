@@ -17,7 +17,8 @@
   import UnitsInput from './UnitsInput.svelte';
   import LogoPicker, { type PickedLogo } from './LogoPicker.svelte';
   import { amountParam, approx, assetArg, DATA_FIELDS, dataProblems, dataUpdates, displayNameProblem, MAX_DISPLAY_NAME_BYTES, normalizeDisplayName, formatAmount, formatUnits, unitsAtMost, unitsOf, type Asset, type DataField, type Holding } from './model';
-  import { assetTextOf, ba, nameOf, refreshBitAssets, sellIntent, sendAsset, tickersActive, tradeIntent } from './store.svelte';
+  import { swapRoute } from './assetactions';
+  import { assetTextOf, ba, nameOf, refreshBitAssets, sendAsset, tickersActive } from './store.svelte';
 
   let { holding }: { holding: Holding } = $props();
 
@@ -280,8 +281,7 @@
 
   <div class="quick">
     <button type="button" class="btn" disabled={balance <= 0n} onclick={() => { sendAsset(id); go('send'); }}><Icon name="send" size={15} /> Send</button>
-    <button type="button" class="btn" onclick={() => { tradeIntent.pay = id; tradeIntent.get = '0'.repeat(64); go('trade', 'swap'); }}><Icon name="swap" size={15} /> Trade</button>
-    <button type="button" class="btn" disabled={balance <= 0n} onclick={() => { sellIntent.asset = id; go('auctions', 'sell'); }}><Icon name="gavel" size={15} /> Auction</button>
+    <button type="button" class="btn" onclick={() => go('trade', swapRoute(id, 'pay'))}><Icon name="swap" size={15} /> Trade</button>
   </div>
 
   <div class="actions">

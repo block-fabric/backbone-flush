@@ -9,7 +9,7 @@
   import { errorText, inform, ask, walletRpc } from '../../lib/dialogs.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { formatCount, shortHash } from '../../lib/format';
-  import { go, goTo } from '../../lib/nav.svelte';
+  import { go, goTo, nav } from '../../lib/nav.svelte';
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
@@ -23,8 +23,9 @@
   import PoolKind from './PoolKind.svelte';
   import { flipKind, kindOf } from './kinds';
   import type { Launch } from './launch';
-  import { approx, assetArg, AUCTION_STATUS, auctionProgress, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type Auction, type DataField, type Pool } from './model';
-  import { assetTextOf, ba, chnPrice, openMarketIntent, displayNameOf, nameOf, priceSeries, refreshBitAssets, sellIntent, tradeIntent } from './store.svelte';
+  import { approx, assetArg, DATA_FIELDS, formatAmount, formatPercent, formatPrice, isChn, unitPrice, type Asset, type AssetHistory, type DataField, type Pool } from './model';
+  import { assetTextOf, ba, chnPrice, displayNameOf, nameOf, priceSeries, refreshBitAssets } from './store.svelte';
+  import { assetRoute, launchRoute, parseDexRoute, swapRoute } from './assetactions';
   import { ignoreAsset, ignoreName, unignoreAsset, unignoreName } from './hide.svelte';
   import { ignoredAsset } from './visible.svelte';
   import { TICKER } from '../config';
@@ -53,22 +54,20 @@
     if (key === loadedAt) return;
     loadedAt = key;
     const arg = assetArg(id);
-    // Its pools and auctions asked of the node by asset: the lists of the store are pages (audit 7 E-BA3).
+    // Its pools asked of the node by asset: the lists of the store are pages (audit 7 E-BA3).
     Promise.all([
       rpc.raw<Asset>('getasset', [arg]),
       rpc.raw<AssetHistory>('getassethistory', [arg]).catch(() => ({})),
       rpc.raw<Pool[]>('listpools', [arg, 1000, 0]).catch(() => []),
-      rpc.raw<Auction[]>('listauctions', [false, 100, 0, arg]).catch(() => null),
       // A launched token (Layers' launches): its launch.
       rpc.raw<Launch>('getlaunch', [arg]).catch(() => null),
     ])
-      .then(([a, h, p, au, l]) => {
+      .then(([a, h, p, l]) => {
         if (loadedAt !== key) return;
         asset = a;
         launched = l && typeof l === 'object' ? l : null;
         history = h ?? {};
         pools = p ?? [];
-        ownAuctions = au;
         error = '';
       })
       .catch((e) => {
@@ -81,8 +80,6 @@
   const holding = $derived(ba.mine?.assets.find((a) => a.asset === id) ?? null);
   const controlled = $derived(!!holding?.control);
   const price = $derived(chnPrice(id));
-  let ownAuctions = $state<Auction[] | null>(null);
-  const auctions = $derived(ownAuctions ?? ba.auctions.filter((a) => a.base_id === id || a.quote_id === id));
   // Its pool with CHN of the default kind (constant product, 0.3%) first: the price the pages show (store chnPrice).
   const chnPool = $derived(pools.find((p) => (isChn(p.asset_b_id) || isChn(p.asset_a_id)) && p.default_kind !== false) ?? pools.find((p) => isChn(p.asset_b_id) || isChn(p.asset_a_id)));
   const series = $derived(chnPool ? priceSeries(chnPool, id).map((p) => ({ x: p.h, y: p.p })) : []);
@@ -97,8 +94,8 @@
 
   // Opened on its "Open a market" (an asset row's action): there, once.
   $effect(() => {
-    if (!asset || openMarketIntent.asset !== id) return;
-    openMarketIntent.asset = '';
+    if (!asset || parseDexRoute(nav.tab).asset?.box !== 'liquidity') return;
+    nav.tab = assetRoute(id);
     queueMicrotask(() => {
       const at = document.getElementById('open-market');
       at?.scrollIntoView?.({ block: 'start' });
@@ -106,21 +103,8 @@
     });
   });
 
-  function trade(other: string) {
-    tradeIntent.pay = other;
-    tradeIntent.get = id;
-    go('trade', 'swap');
-  }
-
-  function makePool() {
-    tradeIntent.a = id;
-    tradeIntent.b = '0'.repeat(64);
-    go('trade', 'liquidity');
-  }
-
-  function sell() {
-    sellIntent.asset = id;
-    go('auctions', 'sell');
+  function trade() {
+    go('trade', swapRoute(id, 'get'));
   }
 
   async function retire() {
@@ -175,7 +159,6 @@
       <div class="hero-actions">
         <!-- What can be done with it now, from its markets (ba/AssetActions.svelte): Swap, Buy on its curve, Open a market… -->
         <AssetActions {id} label={asset.label} launch={launched} />
-        {#if holding && approx(holding.balance) > 0}<button type="button" class="btn" onclick={sell}><Icon name="gavel" size={15} /> Sell by auction</button>{/if}
         {#if controlled}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="crown" size={15} /> Manage</button>{/if}
         {#if controlled && !asset.fixed && ba.info?.tickers_active}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="edit" size={15} /> {asset.display_name ? 'Change display name' : 'Add a display name'}</button>{/if}
         {#if controlled && !asset.fixed && (ba.info?.logo_height ?? -1) >= 0}<button type="button" class="btn" onclick={() => goTo('my-assets', '', id)}><Icon name="picture" size={15} /> {asset.logo ? 'Change logo' : 'Add a logo'}</button>{/if}
@@ -224,21 +207,21 @@
             <div class="panel-head"><h3>Launch</h3>{#if launched.status === 'graduated'}<span class="ba-tag accent">graduated</span>{:else}<span class="ba-tag">on its curve</span>{/if}</div>
             <div class="panel-body">
               <p class="ba-help">{#if launched.status === 'graduated'}Launched on a bonding curve; it graduated into its locked pool with {TICKER}.{:else}On its bonding curve: {formatPercent(Number(launched.progress))} of the way to graduation.{/if}{#if launched.allocation > 0} The creator's allocation is {launched.allocation}% of the supply, minted at graduation.{/if}</p>
-              <button type="button" class="btn small" onclick={() => { tradeIntent.launch = id; go('pools', 'launches'); }}>Its launch</button>
+              <button type="button" class="btn small" onclick={() => go('launch', launchRoute(id))}>Its launch</button>
             </div>
           </section>
         {/if}
         <section class="panel">
-          <div class="panel-head"><h3>Markets</h3>{#if pools.length === 0}<button type="button" class="btn small" onclick={makePool}><Icon name="plus" size={14} /> Make a pool</button>{/if}</div>
+          <div class="panel-head"><h3>Markets</h3></div>
           {#if pools.length === 0}
-            <p class="ba-empty">No pool trades it yet. Make one with {TICKER}, and set its first price.</p>
+            <p class="ba-empty">No market yet.</p>
           {:else}
             <ul class="ba-list">
               {#each pools as p (p.pool)}
                 {@const other = p.asset_a_id === id ? p.asset_b_id : p.asset_a_id}
                 {@const up = unitPrice(p.asset_a_id === id ? p.price : p.price ? 1 / p.price : undefined)}
                 <li>
-                  <button type="button" class="ba-row" onclick={() => trade(other)}>
+                  <button type="button" class="ba-row" onclick={trade}>
                     <AssetBadge id={other} label={p.asset_a_id === id ? p.asset_b : p.asset_a} size="s" showLabel={false} />
                     <span class="main">
                       <AssetName label={p.asset_a_id === id ? p.asset_b : p.asset_a} display={displayNameOf(other) ?? ''} id={other} />
@@ -290,27 +273,6 @@
             </dl>
           </div>
         </section>
-
-        {#if auctions.length}
-          <section class="panel">
-            <div class="panel-head"><h3>Auctions</h3></div>
-            <ul class="ba-list">
-              {#each auctions as a (a.auction)}
-                {@const prog = auctionProgress(a, ba.height)}
-                <li>
-                  <button type="button" class="ba-row" onclick={() => goTo('auctions', '', a.auction)}>
-                    <Icon name="gavel" size={18} />
-                    <span class="main">
-                      <span>{formatAmount(a.remaining, a.base_id === id ? asset.decimals : 8)} <SafeText text={a.base} /> for <SafeText text={a.quote} /></span>
-                      <span class="ba-bar"><span use:barWidth={prog.sold}></span></span>
-                    </span>
-                    <span class="side"><span class="small">{t(AUCTION_STATUS[a.status] ?? 'Ended')}</span></span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          </section>
-        {/if}
 
         <section class="panel">
           <div class="panel-head"><h3>History of its data</h3></div>

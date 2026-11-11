@@ -6,7 +6,8 @@
   // transaction of the wallet. Simple mode: a compact list.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
-  import { go, goTo } from '../../lib/nav.svelte';
+  import { go } from '../../lib/nav.svelte';
+  import { assetRoute } from './assetactions';
   import { wallets } from '../../lib/state.svelte';
   import { simpleMode } from '../../lib/uimode.svelte';
   import './ba.css';
@@ -47,7 +48,7 @@
   {:else if ba.mineState === 'error' && !ba.mine}
     <p class="muted">The assets of the wallet could not be read: <SafeText text={ba.mineError} /></p>
   {:else if held.rows.length === 0 && held.controlledOnly.length === 0}
-    <p class="muted empty">No assets yet. <button type="button" class="btn small" onclick={() => go('issue')}>Register new asset</button> <button type="button" class="btn ghost small" onclick={() => go('trade', 'swap')}>Get assets in Swap</button></p>
+    <p class="muted empty">No assets yet. <button type="button" class="btn small" onclick={() => go('issue')}>Create asset</button> <button type="button" class="btn ghost small" onclick={() => go('trade', 'swap')}>Get assets in Swap</button></p>
   {:else}
     <!-- One compact row per asset (user feedback 2026-10-19): the asset as the app shows it everywhere (its logo, its
          name, its $TICKER and its number: AssetBadge), the crown if the wallet controls it, its balance and its worth;
@@ -56,9 +57,9 @@
       <thead class:sr-only={simple}><tr><th scope="col" class="c-asset">Asset</th><th scope="col" class="c-balance num">Quantity</th><th scope="col" class="c-value num">{TICKER} worth</th></tr></thead>
       <tbody>
         {#each shown as r (r.holding.asset)}
-          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => goTo('assets', '', r.holding.asset)}>
+          <tr class="hrow" data-testid="held-row" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => go('assets', assetRoute(r.holding.asset))}>
             <td class="c-asset">
-              <button type="button" class="asset" onclick={(e) => { e.stopPropagation(); goTo('assets', '', r.holding.asset); }}>
+              <button type="button" class="asset" onclick={(e) => { e.stopPropagation(); go('assets', assetRoute(r.holding.asset)); }}>
                 <AssetBadge id={r.holding.asset} label={r.holding.label} seq={r.seq} size="s" />
                 {#if r.holding.control}<span class="crown" title="You control this asset"><Icon name="crown" size={12} label="You control this asset" /></span>{/if}
               </button>
@@ -73,7 +74,7 @@
     {#if held.controlledOnly.length}
       <p class="small controlled" data-testid="controlled-only"><span class="muted">You control, without holding any:</span>
         {#each held.controlledOnly as r (r.holding.asset)}
-          <button type="button" class="chip" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => goTo('assets', '', r.holding.asset)}>
+          <button type="button" class="chip" title={assetTitle(r.holding.label, displayNameOf(r.holding.asset), r.seq, r.holding.asset)} onclick={() => go('assets', assetRoute(r.holding.asset))}>
             <AssetBadge id={r.holding.asset} label={r.holding.label} size="s" />
             <span class="crown" title="You control this asset"><Icon name="crown" size={11} label="You control this asset" /></span>
           </button>
@@ -83,7 +84,7 @@
   {/if}
   {#if home && wallets.current !== null}
     <div class="actions">
-      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create an asset' : 'Issue'}</button>
+      <button type="button" class="btn small" onclick={() => go('issue')}><Icon name="issue" size={15} /> {simpleMode() ? 'Create an asset' : 'Create asset'}</button>
       <button type="button" class="btn ghost small" onclick={() => go('send')}>Send</button>
     </div>
   {/if}

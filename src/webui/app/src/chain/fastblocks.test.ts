@@ -470,10 +470,10 @@ describe('the explorer of FastBlocks', () => {
 describe('the pages of FastBlocks', () => {
   it('are in the Chain section and the menus, before the tools, with Alt+6 to Alt+9 and a quick action', () => {
     const own = (LOCAL_PAGES as readonly LocalPage[]).map((p) => p.id);
-    // The pages of the assets (user decision, 2026-10-24: Browse assets, Portfolio, Create asset, Markets, Swap), then Staking, one section.
-    expect(own).toEqual(['assets', 'my-assets', 'launch', 'pools', 'trade', 'staking', 'issue', 'auctions']);
-    // Register new asset (issue) is a tab of Launch, Auctions one of Swap's Advanced (user decision, 2026-10-23).
-    const navPages = own.filter((id) => id !== 'issue' && id !== 'auctions');
+    // The pages of the assets (owner decision, 2026-11-11: Portfolio, Assets, Swap, Pools, Launch), then Staking, one section.
+    expect(own).toEqual(['my-assets', 'assets', 'trade', 'pools', 'launch', 'staking', 'issue']);
+    // Create asset (issue) is Launch's wizard.
+    const navPages = own.filter((id) => id !== 'issue');
     expect(NAV_SECTIONS.find((s) => s.title === 'Chain')!.pages).toEqual(['peg', ...navPages, 'explorer']);
     expect(AREAS.find((a) => a.id === 'chain')!.tabs.map((t) => t.page)).toEqual(['peg', ...navPages, 'explorer']);
     expect(chainBeforeTools(HOME_QUICK_ACTIONS.map((q) => q.page), (p) => p)).toBeNull();

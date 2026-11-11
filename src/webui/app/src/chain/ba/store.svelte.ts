@@ -9,7 +9,7 @@
 // a pool": PendingFund), and the prices of the pools as the app saw them (the charts).
 import { BridgeError, request, setExactMethods } from '../../lib/bridge';
 import { errorText, walletRpc, walletRpcIfAuthorized, withKeys } from '../../lib/dialogs.svelte';
-import { go } from '../../lib/nav.svelte';
+import { go, nav } from '../../lib/nav.svelte';
 import { publishPending, type PendingOp } from '../../lib/pending.svelte';
 import { t } from '../../lib/i18n.svelte';
 import { every } from '../../lib/poll';
@@ -20,9 +20,12 @@ import { loadHiding } from './hide.svelte';
 import { swapFeeParts, type SwapFeeParts } from './fees';
 import type { DexInfo, PoolPreview } from './kinds';
 import type { LaunchOptionValue } from './create';
+import type { Launch } from './launch';
+import { assetRoute, poolRoute } from './assetactions';
 import { flipped, turn } from './cl';
 import { assetArg, assetIdentity, assetText, escapeName, shortId, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
 import { TICKER } from '../config';
+import { dexRoute, type DexPage } from '../local';
 
 // Amounts past 2^53 units read exactly, wherever the methods are called (audit 7 E-BA6).
 setExactMethods(EXACT_METHODS);
@@ -250,10 +253,6 @@ export const ba = $state({
 
 /** What another page asks the Send page to send (an asset, by id). */
 export const sendIntent = $state({ asset: '' });
-/** What another page asks the Trade page to show: a pair to swap (pay, get), a pool to add to, a pool or a launch to open (by id), a book (its base and quote). */
-export const tradeIntent = $state({ pay: '', get: '', a: '', b: '', pool: '', launch: '', bookBase: '', bookQuote: '', createA: '', createB: '' });
-/** An asset whose page is opened on its "Open a market" (ba/AssetActions.svelte): AssetView scrolls to it, once. */
-export const openMarketIntent = $state({ asset: '' });
 /**
  * The launches whose creator kept the control coin (v5 keep_control: mintable, more can be made), by token, from every
  * listlaunches and getlaunch the pages read (noteLaunches), and once per block for the pages that list assets
@@ -264,6 +263,21 @@ export const mintableLaunch = $state<Record<string, boolean>>({});
 export const launchGraduation = $state<Record<string, number>>({});
 /** Each launch's creator allocation (percent of the supply, minted at graduation), from the same reads: its pool's tag. */
 export const launchAllocation = $state<Record<string, number>>({});
+/**
+ * The launches read for the pages that list assets (loadLaunchFlags: the newest 200, once per block): Assets' market
+ * column and prices, Pools' "Opening at graduation", Launch's list, New pool's choices (owner decision, 2026-11-11).
+ */
+export const launchesRead = $state({ list: [] as Launch[], total: 0, loaded: false });
+/** A launch among those read, by its token. */
+export function launchById(token: string): Launch | undefined {
+  return launchesRead.list.find((l) => l.token === token);
+}
+/** Whether an asset is on its launch curve now, as far as the lists read tell: its launch not graduated, or a pool of the kind "launch". */
+export function onCurve(id: string): boolean {
+  const l = launchById(id);
+  if (l) return l.status !== 'graduated';
+  return ba.pools.some((p) => p.curve === 'launch' && (p.asset_a_id === id || p.asset_b_id === id));
+}
 export function noteLaunches(list: readonly { token: string; mintable?: boolean; graduation?: Amount; allocation?: number }[] | null | undefined): void {
   for (const l of list ?? []) {
     if (!l || typeof l.token !== 'string') continue;
@@ -278,28 +292,25 @@ export function loadLaunchFlags(): void {
   if (flagsAt === ba.version) return;
   flagsAt = ba.version;
   void rpc
-    .raw<{ launches?: { token: string; mintable?: boolean; graduation?: Amount; allocation?: number }[] }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
-    .then((page) => noteLaunches(page?.launches))
+    .raw<{ launches?: Launch[]; total?: number }>('listlaunches', [{ status: 'all', sort: 'newest', limit: 200 }])
+    .then((page) => {
+      noteLaunches(page?.launches);
+      const list = page?.launches ?? [];
+      if (!same(launchesRead.list, list)) launchesRead.list = list;
+      launchesRead.total = page?.total ?? list.length;
+      launchesRead.loaded = true;
+    })
     .catch(() => undefined);
 }
 
-/** What another page asks the Auctions page to sell. */
-export const sellIntent = $state({ asset: '' });
-
-/** Open a market for an asset that exists: its pool with the coin (Create pool), or its auction (Sell by auction). */
-export function openMarketFor(asset: string, kind: 'pool' | 'auction' | 'book'): void {
-  if (kind === 'pool') {
-    tradeIntent.createA = asset;
-    tradeIntent.createB = '0'.repeat(64);
-    go('trade', 'create');
-  } else if (kind === 'book') {
-    tradeIntent.bookBase = asset;
-    tradeIntent.bookQuote = '0'.repeat(64);
-    go('trade', 'book');
-  } else {
-    sellIntent.asset = asset;
-    go('auctions', 'sell');
-  }
+/**
+ * What a page of the DEX does with the tab asked of it (chain/local.ts dexRoute): a tab at home on another page moves
+ * there, a retired one lands on the nearest page kept, an unknown one becomes the page's own. Called in an $effect.
+ */
+export function followDexRoute(page: DexPage): void {
+  const to = dexRoute(page, nav.tab);
+  if (to.page !== page) go(to.page, to.tab);
+  else if (to.tab !== nav.tab) nav.tab = to.tab;
 }
 
 /** Open the Send page with an asset chosen. */
@@ -547,12 +558,9 @@ async function registerReadyOnce(wallet: string): Promise<void> {
       if (ba.journal.funding.some((f) => f.wallet === wallet && f.asset === p.asset && !f.pool)) {
         // Straight into a pool: its own notice, once the pool can be made (fundReady).
       } else if (p.launch) {
-        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => { tradeIntent.launch = p.asset; go('pools', 'launches'); } }]);
-      } else if (p.follow) {
-        const follow = p.follow;
-        toast('success', t('Asset registered'), follow === 'pool' ? t('%1 is in your assets: now seed its pool.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)) : t('%1 is in your assets: now start its auction.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 15000, [{ label: follow === 'pool' ? t('Create its pool') : t('Start its auction'), run: () => openMarketFor(p.asset, follow) }]);
+        toast('success', t('Asset launched'), t('%1 is on its bonding curve.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => go('assets', assetRoute(p.asset)) }]);
       } else {
-        toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => go('my-assets', 'holdings') }]);
+        toast('success', t('Asset registered'), t('%1 is in your assets, with its supply and its control coin.', assetText(p.name, p.display_name, assetById(p.asset)?.seq, p.asset)), 8000, [{ label: t('Open'), run: () => go('assets', assetRoute(p.asset)) }]);
       }
       changed = true;
       continue;
@@ -843,8 +851,8 @@ export function resetBitAssets(): void {
   saveTimer = null;
   Object.assign(ba, { info: null, dex: null, assets: [], pools: [], auctions: [], receiptAuctions: [], mine: null, activity: [], transfers: [], transfersWallet: null, mineState: 'none', mineError: '', wallet: null, height: -1, error: '', loaded: false, journal: emptyJournal(), version: 0 });
   sendIntent.asset = '';
-  Object.assign(tradeIntent, { pay: '', get: '', a: '', b: '', pool: '', launch: '' });
-  sellIntent.asset = '';
+  Object.assign(launchesRead, { list: [], total: 0, loaded: false });
+  flagsAt = -1;
 }
 
 // --- Pools being made and funded over the full range (PendingFund) ---

@@ -14,11 +14,12 @@
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
   import AssetActions from './AssetActions.svelte';
+  import { launchRoute } from './assetactions';
   import AssetBadge from './AssetBadge.svelte';
   import { compactNumber } from './axis';
   import { claimable, creatorAllocation, launchCurveFacts, launchDecimals, type Launch, type LaunchPage } from './launch';
   import { approx, assetArg, assetText, formatAmount, formatPercent, formatPrice, formatUnits, type Amount } from './model';
-  import { assetById, ba, noteLaunches, refreshBitAssets, tradeIntent } from './store.svelte';
+  import { assetById, ba, noteLaunches, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
   let launches = $state<Launch[]>([]);
@@ -64,8 +65,7 @@
   }
 
   function open(l: Launch) {
-    tradeIntent.launch = l.token;
-    go('pools', 'launches');
+    go('launch', launchRoute(l.token));
   }
 
   async function claim(l: Launch) {
