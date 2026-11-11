@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The card of BitAssets on the home of the dashboard (My assets, the table of what the wallet holds, is
+  // The card of BitAssets on the home of the dashboard (the table of what the wallet holds, is
   // ba/HeldAssets.svelte above it: one card since user feedback 2026-10-19): the markets (the pools that trade most,
   // with their prices). It opens Pools; an asset of it, the asset's page. The auctions' card is gone with the auctions
   // (owner decision, 2026-11-11).

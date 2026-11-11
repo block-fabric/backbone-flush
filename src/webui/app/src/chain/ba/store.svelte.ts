@@ -5,8 +5,8 @@
 // And a journal of what the chain does not keep, in a file of the data directory of the network (host methods
 // bitassets.store.*, src/webui/local.cpp): the assets being created (the name, supply, decimals and data to
 // register once the reservation is deep enough, as chains-qt kept them in QSettings; registered by themselves,
-// as chains-qt did), the pools it is making and funding over the full range (Pools' New pool, Launch's "straight into
-// a pool": PendingFund), and the prices of the pools as the app saw them (the charts).
+// as chains-qt did), the pools it is making and funding for an asset the wizard registers (Launch's "straight into a
+// pool you fund": PendingFund), and the prices of the pools as the app saw them (the charts).
 import { BridgeError, request, setExactMethods } from '../../lib/bridge';
 import { errorText, walletRpc, walletRpcIfAuthorized, withKeys } from '../../lib/dialogs.svelte';
 import { go, nav } from '../../lib/nav.svelte';
@@ -144,7 +144,7 @@ export type MineState = 'none' | 'loading' | 'ok' | 'locked' | 'error';
 
 /**
  * The newest assets the store keeps (one listassets call), for their names on the pages: never the whole list (user
- * feedback 2026-10-19: hundreds of thousands of assets, millions later). Browse assets and the pickers ask the node
+ * feedback 2026-10-19: hundreds of thousands of assets, millions later). Assets and the pickers ask the node
  * as the user searches (ba/search.ts: searchassets, paged by a cursor).
  */
 export const ASSET_PAGE = 500;

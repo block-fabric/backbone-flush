@@ -3,7 +3,7 @@
 // wallet, kept with the app's preferences (per network, as asset ids are), so that they survive a restart. Hiding is
 // display-only: the coins stay in the wallet, and an asset comes back when unignored. ECX is never hidden.
 //
-// Every list of assets asks `assetHidden` (Browse assets, the Send picker, Trade, Auctions, My assets, the home's
+// Every list of assets asks `assetHidden` (Assets, the Send picker, Swap, Pools, Launch, Portfolio, the home's
 // "Your assets", the Transactions page through chainTxHidden, the notices), each with a "show hidden" toggle.
 import { host } from '../../lib/rpc';
 import { wallets } from '../../lib/state.svelte';

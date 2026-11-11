@@ -28,7 +28,7 @@
     disabled?: boolean;
     placeholder?: string;
     onpick?: (id: string) => void;
-    /** Filters at the top of the list (as those of Browse assets): one at a time, "All" first. */
+    /** Filters at the top of the list (as those of Assets): one at a time, "All" first. */
     chips?: readonly PickChip[];
   } = $props();
   let chip = $state('');

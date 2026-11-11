@@ -49,7 +49,7 @@
     const twins = lookAlikes(list);
     return [{ id: CHN_ID, label: TICKER, seq: '' }, ...list.map((c) => (twins.has(c.id) ? { ...c, warn: t('Another asset you hold has this name: check its number') } : c))];
   });
-  // The filters of Browse assets.
+  // The filters of Assets.
   const sendChips: PickChip[] = [
     { id: 'market', label: 'With a market', test: (c) => c.id === CHN_ID || hasPool(c.id) },
     { id: 'mintable', label: 'Unlocked Supply', test: (c) => c.id === CHN_ID || assetById(c.id)?.fixed === false },

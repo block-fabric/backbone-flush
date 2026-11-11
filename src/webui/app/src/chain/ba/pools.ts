@@ -125,31 +125,22 @@ export function poolFormState(o: {
 // open a pool of an asset at an absurd price (empty, or with dust in it), and whoever then puts real liquidity in at
 // that price hands the difference to the next trader. So the one pool form never funds such a pool silently
 // (priceGuard): it shows the pool's price as the price the user accepts, compares it with a reference that a stranger
-// cannot move cheaply, and takes an explicit tick when they differ, or when there is no such reference.
+// cannot move cheaply, and takes an explicit tick when they differ, or when there is no such reference. Nothing is
+// ever valued at the pool's own price for this (third review): that price is the one in doubt.
 
 /** The most a thin pool's price may differ from the reference, in percent, before the form asks for an explicit word: about what a day's trading moves a price, far below what makes the attack pay. */
 export const EMPTY_POOL_TOLERANCE = 3;
 /**
- * A pool that holds less ECX than this is thin whatever goes in: dust costs an attacker nothing, and a price backed by
- * less than a whole ECX is nobody's market.
+ * A pool that holds less ECX than this is thin whatever goes in, even at a price that agrees with the reference: dust
+ * costs an attacker nothing, and a price backed by less than a whole ECX is nobody's market.
  */
 export const THIN_POOL_ECX = 1;
 /**
  * The least ECX another pool must hold for its price to count as a reference: enough that moving it costs more than the
- * attack is likely to win, so that a second dust pool at the same absurd price is not taken for a market.
+ * attack is likely to win, so that a second dust pool at the same absurd price is not taken for a market. Also the
+ * least a pool must hold to vouch for its own price when nothing else does.
  */
 export const REFERENCE_MIN_ECX = 10;
-
-/**
- * Whether the user's deposit would be most of a pool's liquidity, so that the pool's price is in effect the price the
- * user accepts, not a market's: the pool holds nothing, or less ECX than the floor, or less than what goes in (the
- * deposit in ECX: its ECX and its asset at the pool's price).
- */
-export function thinPool(pool: Pick<Pool, 'abandoned' | 'curve' | 'reserve_a' | 'reserve_b' | 'asset_a_id' | 'asset_b_id'>, depositEcx: number): boolean {
-  if (poolEmpty(pool)) return true;
-  const ecx = poolEcx(pool) ?? 0;
-  return ecx < THIN_POOL_ECX || ecx < depositEcx;
-}
 
 /**
  * The reference a thin pool's price is held against: the price the asset's launch graduated at, which is the curve's
@@ -172,12 +163,14 @@ export interface PriceGuard {
   reference: number | null;
   /** Of the pool's price from the reference, in percent, signed; null without a reference. */
   deviation: number | null;
+  /** The deposit would be most of the pool (it is empty, holds little, or less than what goes in). */
+  thin: boolean;
   /** The explicit word is needed: no price, no reference, or further from it than EMPTY_POOL_TOLERANCE. */
   acknowledge: boolean;
 }
 
-/** A price held against a reference. */
-export function emptyPoolCheck(price: number | undefined, references: readonly (number | null | undefined)[]): PriceGuard {
+/** A price held against a reference: how far it is, and whether that is beyond the tolerance (no reference: always). */
+export function emptyPoolCheck(price: number | undefined, references: readonly (number | null | undefined)[]): Omit<PriceGuard, 'thin'> {
   const reference = references.find((r): r is number => r !== undefined && r !== null && Number.isFinite(r) && r > 0) ?? null;
   if (!(price !== undefined && price > 0) || reference === null) return { price, reference, deviation: null, acknowledge: true };
   const deviation = (price / reference - 1) * 100;
@@ -185,13 +178,30 @@ export function emptyPoolCheck(price: number | undefined, references: readonly (
 }
 
 /**
- * The guard of a deposit into a pool that exists: null when the pool is deep enough that its price is a market's (no
- * warning); else the pool's price against its reference, and whether the explicit word is needed. The same answer is
- * worked out again from the node's fresh lists right before the wallet is asked (ba/AddLiquidity.svelte add()).
+ * The guard of a deposit into a pool that exists, in one place (ba/AddLiquidity.svelte asks it as the user types, and
+ * again on the node's fresh lists right before the wallet is asked). null: nothing to say, the pool's price is a
+ * market's. Else what the form shows, and whether it needs the user's explicit word:
+ *  - With a reference (referencePrice), the pool's price is ALWAYS held against it, whatever the pool's depth: beyond
+ *    EMPTY_POOL_TOLERANCE the word is needed. Within it, the price is only shown, and only when the deposit would be
+ *    most of the pool; the deposit is valued at the reference, never at the pool's own price (an attacker who sets the
+ *    pool's price near zero would otherwise make a real deposit look smaller than the dust in it).
+ *  - Without a reference, nothing vouches for the price but the pool itself: the word is needed unless the pool's ECX
+ *    alone is at least REFERENCE_MIN_ECX (what would make it a reference for another pool) and more than the ECX going
+ *    in. The asset side of the deposit is not valued at all then.
+ * depositAsset: whole units of the asset going in; depositEcx: the ECX going in, alone.
  */
-export function priceGuard(o: { asset: string; pool: Pool; pools: readonly Pool[]; depositEcx: number; launchPrice?: number }): PriceGuard | null {
-  if (!thinPool(o.pool, o.depositEcx)) return null;
-  return emptyPoolCheck(poolSides(o.pool).price, [referencePrice(o.asset, o.pool.pool, o.pools, o.launchPrice)]);
+export function priceGuard(o: { asset: string; pool: Pool; pools: readonly Pool[]; depositAsset: number; depositEcx: number; launchPrice?: number }): PriceGuard | null {
+  const price = poolSides(o.pool).price;
+  const held = poolEmpty(o.pool) ? 0 : (poolEcx(o.pool) ?? 0);
+  const ecxIn = Number.isFinite(o.depositEcx) && o.depositEcx > 0 ? o.depositEcx : 0;
+  const assetIn = Number.isFinite(o.depositAsset) && o.depositAsset > 0 ? o.depositAsset : 0;
+  const check = emptyPoolCheck(price, [referencePrice(o.asset, o.pool.pool, o.pools, o.launchPrice)]);
+  if (check.reference === null) {
+    const deep = held >= REFERENCE_MIN_ECX && held > ecxIn;
+    return deep ? null : { ...check, thin: true };
+  }
+  const thin = held < THIN_POOL_ECX || held < ecxIn + assetIn * check.reference;
+  return check.acknowledge || thin ? { ...check, thin } : null;
 }
 
 /** What a pool is said to be on the pages: its fee alone ("0.3% fee"); never its curve. */

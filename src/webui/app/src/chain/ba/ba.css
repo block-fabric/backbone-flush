@@ -101,7 +101,7 @@
   background: var(--danger-soft);
 }
 
-/* The curve of a pool (Layers' DEX: ba/PoolKind.svelte): a tag of its own colour per curve. */
+/* The curve of a pool, as a tag of its own colour per curve (not shown since 2026-11-11: one kind of pool; kept for the themes that style it). */
 .ba-kind {
   display: inline-flex;
   align-items: center;

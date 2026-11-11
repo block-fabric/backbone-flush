@@ -9,8 +9,9 @@
   //  - its pool has liquidity: at the pool's price (addpoolliquidity by the pool's id);
   //  - its pool is concentrated on the chain (a graduated launch's): over the full range, always (openposition with
   //    prices of 0); never a price range to pick;
-  //  - whenever the deposit would be most of a pool's liquidity (the pool is empty, holds dust, or holds less than what
-  //    goes in), the pool's price is in effect a stranger's: the form shows it as the price the user accepts, compares
+  //  - a pool's price may be a stranger's: wherever the asset has a reference price the pool's is held against it,
+  //    whatever the pool's depth, and where the deposit would be most of the pool (empty, dust, less than what goes in)
+  //    or nothing vouches for the price, the form shows it as the price the user accepts. It compares
   //    it with a reference a stranger cannot move cheaply (the price its launch graduated at, else the deepest other
   //    pool of real depth), and takes an explicit tick when they differ by more than a few percent or when there is no
   //    such reference; the same guard is worked out again from the node's fresh lists before the wallet is asked, and
@@ -83,16 +84,14 @@
     const end = curveShape(approx(l.graduation), launchSupply(l, approx(l.supply))).endPrice;
     return Number.isFinite(end) && end > 0 ? end : undefined;
   }
-  /** What goes in, in ECX: its ECX, and its asset at the pool's price. */
-  const depositEcx = (a: bigint | null, e: bigint | null, price: number | undefined) => Number(e ?? 0n) / 1e8 + (Number(a ?? 0n) / 10 ** decimals) * (price ?? 0);
-  /** The guard of a deposit into `p`, with these pools known for its reference. */
+  /** The guard of a deposit into `p`, with these pools known for its reference (ba/pools.ts priceGuard: nothing valued at the pool's own price). */
   function guardOf(p: Pool, known: readonly Pool[], a: bigint | null, e: bigint | null): PriceGuard | null {
-    return priceGuard({ asset, pool: p, pools: known, depositEcx: depositEcx(a, e, poolSides(p).price), launchPrice: graduationPrice() });
+    return priceGuard({ asset, pool: p, pools: known, depositAsset: Number(a ?? 0n) / 10 ** decimals, depositEcx: Number(e ?? 0n) / 1e8, launchPrice: graduationPrice() });
   }
   /**
-   * The deposit would be most of the pool's liquidity (an empty pool, dust, or less than what goes in): its price is in
-   * effect a stranger's, and the user accepts it. Not for a pool the user's own two amounts price (a new one, or one
-   * everyone left: create, reopen).
+   * The pool's price is far from the asset's reference price, or nothing vouches for it, or the deposit would be most
+   * of the pool: the user accepts that price, and is told. Not for a pool the user's own two amounts price (a new one,
+   * or one everyone left: create, reopen).
    */
   const guard = $derived.by(() => {
     if (!pool || setsPrice || !mode) return null;
@@ -252,7 +251,7 @@
           const nowPrice = poolSides(fresh).price;
           const moved = !(sPrice !== undefined && sPrice > 0 && nowPrice !== undefined && nowPrice > 0) ? !poolEmpty(fresh) && sPrice !== nowPrice : Math.abs(nowPrice / sPrice - 1) * 100 > sSlip;
           const again = sMode === 'add' || sMode === 'full-range' ? guardOf(fresh, now, sA, sE) : null;
-          const changed = !!again !== !!sGuard || (again?.acknowledge ?? false) !== (sGuard?.acknowledge ?? false) || (again?.reference ?? null) !== (sGuard?.reference ?? null);
+          const changed = !!again !== !!sGuard || (again?.acknowledge ?? false) !== (sGuard?.acknowledge ?? false) || (again?.thin ?? false) !== (sGuard?.thin ?? false) || (again?.reference ?? null) !== (sGuard?.reference ?? null);
           if (moved || changed || (again?.acknowledge && !sAck)) {
             await inform(
               t('Add liquidity'),
@@ -280,7 +279,7 @@
           sMode === 'create' || sMode === 'reopen'
             ? t('Your two amounts set its price: 1 %1 = %2 %3. Fee %4% of each swap. One transaction, one confirmation; liquidity covers every price.', label, formatPrice(Number(sE) / 1e8 / (Number(sA) / 10 ** decimals)), TICKER, String(sFee))
             : sGuard
-              ? t('What you put in would be most of this pool: you accept its price, %1 %2 for 1 %3, which is not a market\'s but whoever made or last moved the pool\'s. %4 Whoever trades against a wrong price takes the difference from you. Fee %5% of each swap.', formatPrice(sPrice), TICKER, label, sGuard.reference === null ? t('There is no market deep enough to compare it with.') : t('Its reference price is %1 %2: this pool is %3 from that.', formatPrice(sGuard.reference), TICKER, deviationText(sGuard.deviation)), String(sFee))
+              ? t('You accept this pool\'s price, %1 %2 for 1 %3, which is not a market\'s but whoever made or last moved the pool\'s. %4 Whoever trades against a wrong price takes the difference from you. Fee %5% of each swap.', formatPrice(sPrice), TICKER, label, sGuard.reference === null ? t('There is no market deep enough to compare it with.') : t('Its reference price is %1 %2: this pool is %3 from that.', formatPrice(sGuard.reference), TICKER, deviationText(sGuard.deviation)), String(sFee))
               : t('At the pool\'s price; at most %1% less should it move first. Liquidity covers every price. Fee %2% of each swap.', String(sSlip), String(sFee)),
         level: sGuard ? 'warning' : 'question',
         choices: [
@@ -317,7 +316,7 @@
     </p>
     {#if guard}
       <div class="ba-problems stranger" class:bad={guard.acknowledge} role="alert" data-testid="empty-pool-price">
-        <p><strong>{#if poolEmpty(pool!)}This pool is empty: its starting price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{:else}This pool holds very little: its price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{/if}</strong> What you put in would be most of it, so you accept that price. It was set by whoever made or last moved the pool, not by you; if it is wrong, whoever trades against it takes the difference from you.</p>
+        <p><strong>{#if poolEmpty(pool!)}This pool is empty: its starting price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{:else if guard.thin}This pool holds very little: its price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{:else}This pool's price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{/if}</strong> {#if guard.thin}What you put in would be most of it, so you accept that price.{:else}By adding to it you accept that price.{/if} It was set by whoever made or last moved the pool, not by you; if it is wrong, whoever trades against it takes the difference from you.</p>
         {#if guard.reference !== null}
           <p data-testid="empty-pool-reference">The reference price of <SafeText text={label} /> is {formatPrice(guard.reference)} {TICKER}: this pool's price is <strong translate="no">{deviationText(guard.deviation)}</strong> from that.</p>
         {:else}

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { spanStats, candlesOf, PERIODS } from './candles';
 import { MAX_TICK, MIN_TICK } from './cl';
 import type { Pool } from './model';
-import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, emptyPoolCheck, priceGuard, REFERENCE_MIN_ECX, referencePrice, THIN_POOL_ECX, thinPool, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
+import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, emptyPoolCheck, priceGuard, REFERENCE_MIN_ECX, referencePrice, THIN_POOL_ECX, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -64,42 +64,72 @@ describe("a thin pool's price is someone else's (security reviews 2026-11-11)", 
     expect(emptyPoolCheck(0.104, [0.1]).acknowledge).toBe(true);
   });
 
-  it('is guarded whenever the deposit would be most of the pool: empty, dust, or less than what goes in', () => {
-    expect(THIN_POOL_ECX).toBe(1);
-    expect(thinPool(emptyCl, 0)).toBe(true);
-    // Dust at an absurd price is as thin as nothing.
-    expect(thinPool(pool({ reserve_a: 0.0001, reserve_b: 0.0005, price: 5 }), 0)).toBe(true);
-    expect(thinPool(pool({ reserve_b: 0.99 }), 0.01)).toBe(true);
-    // 50 ECX in it: a market for a deposit of 10, not for one of 80.
-    expect(thinPool(pool(), 10)).toBe(false);
-    expect(thinPool(pool(), 80)).toBe(true);
-    expect(priceGuard({ asset: A, pool: pool(), pools: [pool()], depositEcx: 10 })).toBeNull();
-    expect(priceGuard({ asset: A, pool: pool(), pools: [pool()], depositEcx: 80 })).toMatchObject({ price: 0.1, reference: null, acknowledge: true });
+  const guard = (target: Pool, others: Pool[], depositAsset: number, depositEcx: number, launchPrice?: number) => priceGuard({ asset: A, pool: target, pools: [target, ...others], depositAsset, depositEcx, launchPrice });
+  const deep = pool();
+  const dustHigh = pool({ pool: 'x'.repeat(64), reserve_a: 0.0001, reserve_b: 0.0005, price: 5 });
+  const dustLow = pool({ pool: 'x'.repeat(64), reserve_a: 5000, reserve_b: 0.0005, price: 0.0000001 });
+  const dustTwin = (price: number) => pool({ pool: 'y'.repeat(64), reserve_a: 0.0002, reserve_b: 0.0002 * price, price });
+
+  it('an empty pool: its price against the reference; no reference, the explicit word', () => {
+    const empty = pool({ pool: 'x'.repeat(64), curve: 'concentrated', reserve_a: 0, reserve_b: 0, price: 5 });
+    expect(guard(empty, [deep], 10, 5)).toMatchObject({ price: 5, reference: 0.1, thin: true, acknowledge: true });
+    expect(guard(empty, [], 10, 5)).toEqual({ price: 5, reference: null, deviation: null, thin: true, acknowledge: true });
+    // Close to a real reference: shown (the user is the first provider), no word needed.
+    expect(guard({ ...empty, price: 0.101 }, [deep], 10, 1)).toMatchObject({ reference: 0.1, thin: true, acknowledge: false });
+    // The price its launch graduated at is a reference too, before any pool.
+    expect(guard(empty, [deep], 10, 5, 4.9)).toMatchObject({ reference: 4.9, acknowledge: false });
   });
 
-  it('takes no dust pool for a reference: the graduation price first, then the deepest other pool of real depth, else none', () => {
-    expect(REFERENCE_MIN_ECX).toBe(10);
-    const target = pool({ pool: 'x'.repeat(64), reserve_a: 0.0001, reserve_b: 0.0005, price: 5 });
-    const dust = pool({ pool: 'y'.repeat(64), reserve_a: 0.0002, reserve_b: 0.001, price: 5 });
-    const shallow = pool({ pool: 'z'.repeat(64), reserve_a: 99, reserve_b: 9.9, price: 0.1 });
-    const deep = pool();
-    const deeper = pool({ pool: 'w'.repeat(64), reserve_a: 1000, reserve_b: 200, price: 0.2 });
-    // A second dust pool at the same absurd price does not make it a market.
-    expect(referencePrice(A, target.pool, [target, dust])).toBeNull();
-    expect(priceGuard({ asset: A, pool: target, pools: [target, dust], depositEcx: 5 })).toMatchObject({ reference: null, acknowledge: true });
-    expect(referencePrice(A, target.pool, [target, dust, shallow])).toBeNull();
-    // The pool itself is never its own reference, however deep.
-    expect(referencePrice(A, deep.pool, [deep])).toBeNull();
-    expect(referencePrice(A, target.pool, [target, dust, deep])).toBe(0.1);
-    expect(referencePrice(A, target.pool, [target, deep, deeper])).toBe(0.2);
-    // The price its launch graduated at comes before any pool.
-    expect(referencePrice(A, target.pool, [target, deeper], 0.03)).toBe(0.03);
-    expect(referencePrice(A, target.pool, [target, deeper], NaN)).toBe(0.2);
-    const g = priceGuard({ asset: A, pool: target, pools: [target, dust, deep], depositEcx: 5 });
-    expect(g).toMatchObject({ price: 5, reference: 0.1, acknowledge: true });
+  it('a dust pool at an absurd high price is guarded as an empty one', () => {
+    const g = guard(dustHigh, [deep], 10, 5);
+    expect(g).toMatchObject({ price: 5, reference: 0.1, thin: true, acknowledge: true });
     expect(g?.deviation).toBeCloseTo(4900, 6);
-    // Close to a real reference: shown, no word needed.
-    expect(priceGuard({ asset: A, pool: pool({ pool: 'x'.repeat(64), reserve_a: 0, reserve_b: 0, abandoned: true, price: 0.101 }), pools: [deep], depositEcx: 5 })).toMatchObject({ reference: 0.1, acknowledge: false });
+    expect(guard(dustHigh, [], 10, 5)).toMatchObject({ reference: null, acknowledge: true });
+  });
+
+  it('a dust pool at a near-zero price: the deposit is never valued at the pool\'s own price, so it does not look small', () => {
+    // 1000 of the asset and no ECX: at the pool's price that is 0.0001 ECX, less than the dust in it. Not counted so.
+    expect(guard(dustLow, [deep], 1000, 0)).toMatchObject({ reference: 0.1, thin: true, acknowledge: true });
+    expect(guard(dustLow, [deep], 1000, 0)?.deviation).toBeCloseTo(-99.9999, 3);
+    // Without a reference the asset side is not valued at all: the word is needed.
+    expect(guard(dustLow, [], 1000, 0)).toMatchObject({ reference: null, thin: true, acknowledge: true });
+    expect(guard(dustLow, [], 0, 0)).toMatchObject({ acknowledge: true });
+  });
+
+  it('a spoofed dust reference pool is no reference', () => {
+    expect(REFERENCE_MIN_ECX).toBe(10);
+    expect(THIN_POOL_ECX).toBe(1);
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, dustTwin(5)])).toBeNull();
+    expect(guard(dustHigh, [dustTwin(5)], 10, 5)).toMatchObject({ reference: null, acknowledge: true });
+    expect(guard(dustLow, [dustTwin(0.0000001)], 1000, 0)).toMatchObject({ reference: null, acknowledge: true });
+    // Under the depth that counts, however close to it; the pool itself is never its own reference.
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, pool({ pool: 'z'.repeat(64), reserve_a: 99, reserve_b: 9.9 })])).toBeNull();
+    expect(referencePrice(A, deep.pool, [deep])).toBeNull();
+    // A real one wins over the twin; the deepest of several; the graduation price before any.
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, dustTwin(5), deep])).toBe(0.1);
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, deep, pool({ pool: 'w'.repeat(64), reserve_a: 1000, reserve_b: 200, price: 0.2 })])).toBe(0.2);
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, deep], 0.03)).toBe(0.03);
+    expect(referencePrice(A, dustHigh.pool, [dustHigh, deep], NaN)).toBe(0.1);
+  });
+
+  it('a deep honest pool: no prompt', () => {
+    // 50 ECX in it, no other market: it vouches for itself for a deposit smaller than it.
+    expect(guard(deep, [], 100, 10)).toBeNull();
+    expect(guard(deep, [], 1e9, 0)).toBeNull();
+    // With a reference it agrees with, and a deposit smaller than it at the reference's price.
+    const other = pool({ pool: 'w'.repeat(64), reserve_a: 2000, reserve_b: 200, price: 0.1 });
+    expect(guard(deep, [other], 100, 10)).toBeNull();
+    // More going in than it holds: shown as the price accepted; no word needed while it agrees with the reference.
+    expect(guard(deep, [other], 1000, 0)).toMatchObject({ thin: true, acknowledge: false });
+    // However deep, a price far from the reference always needs the word.
+    expect(guard(pool({ reserve_a: 100, reserve_b: 500, price: 5 }), [other], 1, 0.1)).toMatchObject({ reference: 0.1, thin: false, acknowledge: true });
+  });
+
+  it('no reference at all: the word, unless the pool\'s own ECX is deep and more than the ECX going in', () => {
+    expect(guard(deep, [], 0, 80)).toMatchObject({ reference: null, thin: true, acknowledge: true });
+    expect(guard(pool({ reserve_a: 99, reserve_b: 9.9 }), [], 1, 0.1)).toMatchObject({ reference: null, acknowledge: true });
+    expect(guard(pool({ reserve_a: 100, reserve_b: 10 }), [], 1, 0.1)).toBeNull();
+    expect(guard(pool({ reserve_a: 100, reserve_b: 10 }), [], 1, 10)).toMatchObject({ acknowledge: true });
   });
 });
 

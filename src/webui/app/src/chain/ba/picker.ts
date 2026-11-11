@@ -17,7 +17,7 @@ export interface PickChoice {
   warn?: string;
 }
 
-/** A filter of the picker, as the chips at the top of Browse assets (With a market, Unlocked Supply...). */
+/** A filter of the picker, as the chips at the top of a list of assets (With a market, Unlocked Supply...). */
 export interface PickChip {
   id: string;
   label: string;

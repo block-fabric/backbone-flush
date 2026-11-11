@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Create an asset: the one wizard behind "Register an asset" (My assets) and "Launch an asset" (Trade), the same steps
+  // Create an asset: the one wizard, opened from Launch (pages/Launch.svelte; owner decision, 2026-11-11), the same steps
   // as flush.markets' (scratch contract "The ONE create wizard"): what it is (its ticker, checked as the chain checks it
   // and asked of the node: is it free?; a display name, a description, a logo, the issuer's data), its supply and
   // decimals, its market (none; a bonding curve with its trade fee, the creator's allocation and the bounds of a buy;
@@ -46,7 +46,7 @@
     market: initialMarket = 'none',
     heading = true,
   }: {
-    /** Shown as a tab (My assets, Trade), under its heading. */
+    /** Shown under the heading of its page (Launch). */
     embedded?: boolean;
     /** The market chosen at first: "Register an asset" none, "Launch" a bonding curve. */
     market?: MarketKind;

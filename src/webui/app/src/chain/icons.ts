@@ -10,7 +10,7 @@ export const LOCAL_ICONS = {
   slash: 'M13.5 4.5l6 6M11.5 6.5l6 6M14.8 5.8l-5.3 5.3M18.2 9.2l-5.3 5.3M11.2 11.8L4 19M3 21h9',
   /** Assets: a cut gem. */
   gem: 'M7 4h10l4 5.5L12 21 3 9.5zM3 9.5h18M9.5 4L8 9.5l4 11.5 4-11.5L14.5 4',
-  /** My assets: coins stacked, one standing. */
+  /** Portfolio (once My assets): coins stacked, one standing. */
   holdings: 'M4 16.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5M4 12.5c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5M4 8.5C4 7.1 6.7 6 10 6s6 1.1 6 2.5S13.3 11 10 11 4 9.9 4 8.5zM4 8.5v8M16 8.5v8M18 7.2c1.2.4 2 1 2 1.8v6.5c0 .8-.8 1.4-2 1.8',
   /** Issue an asset: a gem with a spark. */
   issue: 'M5 8h8l3 4-7 8-7-8zM2 12h14M18.5 2.5v5M16 5h5',

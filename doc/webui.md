@@ -417,19 +417,19 @@ mode"). `lib/uimode.svelte.ts` holds it:
   | Chains, the template | none (Move coins is the chain's own) |
   | Thunder | Payments, How busy (Throughput); Batch pay stays Advanced's (user decision) |
   | BitNames | Get a name, My names |
-  | BitAssets | My assets, Swap (Browse assets in Advanced; Create a token is a tab of My assets) |
+  | BitAssets | Portfolio, Swap (Assets, Pools and Launch in Advanced; Create an asset from Portfolio and Home) |
   | zSide | Private payments (Private) |
   | Hivemind | Questions (Markets), My bets (Portfolio) |
   | FastBlocks | Stake and earn (Staking) |
-  | Layers | Stake and earn, My assets, Swap (Browse assets in Advanced) |
+  | Layers, Flush | Portfolio, Swap, Stake and earn (Assets, Pools and Launch in Advanced) |
 * Pages marked `advanced: true` in `PAGES` (the advanced transactions, the
   tools, the node window, solo mining, the kit) leave Home's quick actions in
   Simple mode as well.
 * **Names told apart** (user feedback 2026-10-19): the section is *Wallet*,
   the page that creates, opens, backs up and encrypts wallets is **Manage
-  wallets** (id `wallets`); on BitAssets and Layers the market of every asset
-  is **Browse assets** (id `assets`), what the wallet holds **My assets**
-  (`my-assets`). The ids, and so the links, shortcuts and `go()` calls that
+  wallets** (id `wallets`); on BitAssets, Layers and Flush the table of every
+  asset is **Assets** (id `assets`; once Browse assets), what the wallet holds
+  **Portfolio** (`my-assets`; once My assets). The ids, and so the links, shortcuts and `go()` calls that
   name them, are unchanged.
 * **The sidebar folds** into a rail of icons (user feedback 2026-10-19): the
   button at its foot, **Ctrl+B**, or the palette ("Collapse the sidebar");
@@ -613,21 +613,65 @@ passphrase for them) are keyed methods. The parity with the Assets page of `bita
 
 Every asset of the chain is read, in pages of 1000 (`listassets` with its skip), up to 20 000: past that,
 the newest 20 000, and what the user types on Assets is asked of the node too (`listassets` with its
-match), so the newest are never left out (audit port-2 #4). Assets draws 240 cards at a time ("Show
-more"). The activity of the wallet shows the newest 200, more on "Show older activity". Every
+match), so the newest are never left out (audit port-2 #4). Assets lists a page of 100 at a time ("Show
+more"); with the node's search (`searchassets`) the list is the node's, never read whole. The activity of the wallet shows the newest 200, more on "Show older activity". Every
 confirmation names an asset by its label and number ("GOLD (#1739-0029)"), or the start of its hash
 for a private name: labels are printable ASCII, so look-alikes (G0LD, GOLD) are told apart as the pickers
 tell them (audit port-2 #5). Alt+6 opens Assets. In a narrow panel the tables are cards.
 
-| Page | What it does |
+The interface of the assets and their markets was made simpler on 2026-11-11 (owner decision, after the app
+proved confusing): five pages, one detail page per asset, one pool form. Products kept: launch curves,
+swaps, regular liquidity pools. Retired from the interface (still valid on the chain until a later fork
+refuses new ones; no consensus or RPC code changed): the order book, the auctions, stable and weighted
+pools, concentrated price ranges, the market index and the Advanced links. The rules the pages keep:
+
+* **A form opens from an asset or a pool, with that asset fixed.** No form has an asset to pick but Swap,
+  and none keeps an asset from a form opened before: the asset is in the route (`asset/<id>`,
+  `asset/<id>/buy|sell|liquidity`, `pools/<pool>`, `swap/get|pay/<id>`: `chain/ba/assetactions.ts`).
+* **A form offers only what the asset's state allows, and says why otherwise** (`chain/ba/pools.ts`
+  `poolFormState`, `chain/ba/create.ts` `canCurve`), as consensus has it (`src/bitassets/state.cpp`): an
+  asset on its launch curve takes no pool and no liquidity until it graduates (`bad-ba-launch-pooled`);
+  a curve needs the control coin, an asset never launched, and no pool with ECX. The state is read
+  again from the node before the wallet is asked.
+* **One way to do each thing**: one pool form (`chain/ba/AddLiquidity.svelte`), one create wizard
+  (`chain/ba/CreateWizard.svelte`), one swap form (`chain/ba/SwapPanel.svelte`).
+* **One kind of pool is shown.** A pool the user makes is a standard (constant-product) pool with ECX at
+  a fee tier, made and funded in one transaction (`createpool`). A pool that came from a graduated
+  launch is concentrated on the chain: it is shown as any pool, and liquidity added to it always covers
+  the full range (`openposition` with prices of 0). There is no price-range picker.
+* **A pool's price is never accepted silently when it may be a stranger's** (security reviews
+  2026-11-11; one pure function, `chain/ba/pools.ts` `priceGuard`, tested in `chain/ba/pools.test.ts`).
+  Where the asset has a reference price (the price its launch graduated at, else the deepest other pool
+  holding at least 10 ECX; a dust pool is no reference), the pool's price is always held against it,
+  whatever the pool's depth, and the form takes an explicit tick beyond 3%. Without a reference the tick
+  is needed unless the pool's own ECX is at least 10 and more than the ECX going in. Nothing is valued at
+  the pool's own price for this. The form shows the pool's price as the price the user accepts, says it
+  again in the confirmation, and reads the pool again from the node before the wallet is asked: it stops
+  if the price moved past the slippage limit or the guard's answer changed. A pool the user's own two
+  amounts price (a new one, or one everyone left) needs only the price shown.
+* **No tabs inside tabs**; old tabs and pages land on the nearest page kept (`chain/local.ts`
+  `dexRoute`, `RETIRED_PAGES`), never on an error.
+
+| Page (id) | What it does |
 |---|---|
-| Assets | Every asset as a card (its mark in the colour of its hash, label, number, description, supply, price in CHN, tags): search by name, number or hash, Enter asking the node for a private name; filters (held or controlled, with a market, mintable, fixed supply, dead) and sorts (newest, oldest, name, supply, value, most traded). An asset (`ba/AssetView.svelte`): supply, minted, burned, price, value, what the wallet holds; its markets, its price as the app saw it, its auctions; its data, every field, and the history of each; who controls it; retiring it once dead |
-| My assets | Holdings with their worth; an asset's panel (`ba/ManagePanel.svelte`): Send, Trade, Auction; with its control coin, mint more, change every field of its data, give control, fix the supply; burn some. Being issued: the steps of each asset, registered by itself, "Register now" on a locked wallet, a reservation the app did not make registered with what is typed, Release. Pool shares taken out (a part, with what it gives). My auctions collected or cancelled. Activity |
-| Issue | A wizard: name (the rules of the chain, free or taken), decimals and supply, description and the issuer's commitment, addresses and keys, a public or private name, review with the two steps on the way; the reservation, then the registration once the reservation is `reveal_depth` blocks deep |
-| Trade | Swap (`ba/SwapPanel.svelte`): quoted by the node, the price impact (asked above 2%, refused above 10%), the least after the slippage, the fee, the curve of the pool. Pools (`ba/PoolsPanel.svelte`): each with its price, holdings, volume; one opened with its curve and its price over time. Add liquidity (`ba/LiquidityPanel.svelte`): at the pool's price, or setting the price of a new pool or one everyone left |
-| Auctions | Running, upcoming, sold out or ended, collected; an auction (`ba/AuctionView.svelte`): its price falling block by block, a bid quoted by the node, buying all that is left; selling by auction with its price line drawn first |
+| Portfolio (`my-assets`) | What the wallet holds (a row opens the asset's page; Trade, Manage, Add liquidity start there), what it is creating, its launches with the creator fees to claim (`ba/MyLaunches.svelte`), its pool shares with the fees to collect (a row opens the pool's page), and its activity under a tab. "Closing old markets", only if the wallet has any: its open order-book orders (`ba/MyOrders.svelte`: cancel, collect), its auctions (collect, or cancel before any bid) and its positions of a price range (`ba/Positions.svelte`: collect, remove, close). Nothing new of those kinds is started anywhere |
+| Assets (`assets`) | One table: asset, price in ECX, change and volume of a day, market cap, where it trades (On curve N%, Pool, Pool empty, No market), what the wallet holds; a click on a column sorts; filters All, On curve, Has a pool, No market, Held by you; search by name, number or hash (Enter asks the node for a private name), a page at a time. A row opens **the asset page** (`ba/AssetView.svelte`): header and chips, price in candles with period buttons (`ba/Candles.svelte`), Markets, the Trade box beside it (`ba/CurveTrade.svelte` on its curve, the swap form after; Add liquidity in its place when its only market is an empty pool), Your position, Manage (only for the holder of the control coin or the launch's creator: `ba/ManagePanel.svelte`, claim creator fees, `ba/OpenMarket.svelte`), Activity, Details |
+| Swap (`trade`) | The one swap form: quoted by the node over every venue, the best route used (never picked from a list), the price impact (asked above 2%, refused above 10%), the least after the slippage limit, the fee |
+| Pools (`pools`) | A table of the pools (liquidity in ECX, volume of a day, fee, your share), the pools "opening at graduation" (the assets on their curve), and New pool (`ba/NewPool.svelte`): only the assets held that have no pool and are not on a curve; picking one opens its page on Add liquidity. A row opens **the pool page** (`ba/PoolView.svelte`): figures, price, what is in it, Your share with Add liquidity, Remove liquidity, Collect fees |
+| Launch (`launch`) | The assets on their curve (price, raised of the graduation target with a bar, fee) and Create asset, the wizard: identity, supply, market (on a curve, straight into a pool you fund, none yet: three equals, only the chosen one's options shown, with every launch option: fee, creator allocation, first buy, fee destination, keeping the control coin), review |
 | Send | An asset chosen at the top of the page, sent to an address with its amount checked (`chain/LocalSend.svelte`) |
-| Home | Cards: My assets (worth, held, controlled, being issued), Markets, Auctions |
+| Home | Cards: your assets and their worth, the pools that trade most |
+
+Figures the node does not give are not shown or are a dash, never made up: the chain lists no holders
+and no swap of a pool one by one; the change and the volume of a day come from the market index
+(`-dexindex`: `getpoolcandles`, `searchpools`) and are a dash without it; the fees a pool earned over a
+day are not kept.
+
+Action links (`flush:`, [flush-links.md](flush-links.md)) are read and confirmed by the host
+(`src/webui/linkhost.cpp`), not by these pages: `launch`, `buy`, `sell`, `swap`, `register`, `curve`,
+`pool`, `route`, `deposit`, `withdraw` work as before. `auction`, `order` and `position` links are still
+taken by the host, which asks in its own dialog: refusing them is a change of the host (C++), left to a
+decision of the owner.
 
 **The journal.** The chain keeps no history of prices, and nothing of an asset being created but its
 secret reservation. The app keeps them in a file of the data directory of the network,

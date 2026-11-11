@@ -1,9 +1,10 @@
 <script lang="ts">
-  // An asset of the wallet: what it holds, and what it can do with it. Any holder sends, trades, sells by
-  // auction and burns; the holder of the control coin also mints more, changes the data (every field of it),
-  // gives the control coin away, or burns it to fix the supply for good. The panel of an asset of My assets in
-  // the Qt window of BitAssets, with every field of the data (the Qt window had the description and the
-  // commitment).
+  // An asset of the wallet, managed: any holder burns some; the holder of the control coin also mints more, changes
+  // the data (every field of it), its logo and display name, gives the control coin away, or burns it to fix the supply
+  // for good. In the Manage section of the asset's page (ba/AssetView.svelte, `embedded`; owner decision, 2026-11-11),
+  // which is shown only to the holder of the control coin or the launch's creator; a holder who does not control it has
+  // Burn alone, under Your position. The panel of an asset of My assets in the Qt window of BitAssets, with every field
+  // of the data (the Qt window had the description and the commitment).
   import SafeText from '../../components/SafeText.svelte';
   import AddressInput from '../../components/AddressInput.svelte';
   import Icon from '../../components/Icon.svelte';

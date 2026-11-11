@@ -1,4 +1,4 @@
-// What the Add liquidity form (ba/LiquidityPanel.svelte) works with: the pool addliquidity names (the default kind,
+// What the swap form (ba/SwapPanel.svelte) and, before 2026-11-11, the Add liquidity form of then worked with: the pool addliquidity names (the default kind,
 // constant product at 0.3%, which getpool by the pair reads), never a pool of another kind of the same pair (a
 // concentrated, stable or weighted one, a launch curve, an order book: those are added to by their id, from their
 // page); and what the pool read again on submit means for what was typed.

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The launches this wallet made (My assets): their creator's address is one of the wallet's "launch creator" addresses
+  // The launches this wallet made (Portfolio): their creator's address is one of the wallet's "launch creator" addresses
   // (getaddressesbylabel; launchtoken and curveasset give each launch one). For each, a row: the asset (it opens the
   // asset's page), its allocation (percent and amount), the curve's progress, what is claimable now (or "at
   // graduation"), and Claim (claimlaunch: the creator's part of the fees owed, and once graduated the allocation minted

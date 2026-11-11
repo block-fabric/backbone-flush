@@ -2157,7 +2157,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     const submit = box.querySelector('button[type="submit"]') as HTMLButtonElement;
     await waitFor(() => expect(submit.disabled).toBe(false));
     await fireEvent.click(submit);
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/you accept its price, 0\.01 ECX for 1 SILVER, which is not a market's but whoever made or last moved the pool's\. There is no market deep enough to compare it with\./));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/You accept this pool's price, 0\.01 ECX for 1 SILVER, which is not a market's but whoever made or last moved the pool's\. There is no market deep enough to compare it with\./));
     await answer('yes');
     // Prices of 0: the full range; with the pool's price, in the node's order (ECX in SILVER: 100), for the wallet to check.
     await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('e'), 0, 0, { [assetArg(SILVER)]: '20', ECX: '0.2' }, 1, 100]));
@@ -2191,7 +2191,7 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await fireEvent.click(screen.getByTestId('empty-pool-ack'));
     await waitFor(() => expect(submit().disabled).toBe(false));
     await fireEvent.click(submit());
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/you accept its price, 5 ECX for 1 GOLD, which is not a market's but whoever made or last moved the pool's\. Its reference price is 0\.1 ECX: this pool is \+4900% from that\./));
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/You accept this pool's price, 5 ECX for 1 GOLD, which is not a market's but whoever made or last moved the pool's\. Its reference price is 0\.1 ECX: this pool is \+4900% from that\./));
     await answer('no');
     expect(called('openposition')).toHaveLength(0);
     shown.unmount();
@@ -2261,6 +2261,24 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/The price of this pool moved while you typed, from 0\.1 to 5 ECX for 1 GOLD: more than your slippage limit\. Nothing was sent\./));
     expect(called('addpoolliquidity')).toHaveLength(0);
     expect(asked).toEqual([]);
+  });
+
+  it('a pool priced near zero does not hide behind its own price: held against the reference whatever its depth (security review 2026-11-11, third finding)', async () => {
+    dexOn = true;
+    // GOLD trades at 0.1 ECX in its pool of 50 ECX. A second pool of GOLD holds dust at a price near zero: valued at
+    // that price, 100 GOLD would look smaller than the dust.
+    clPool(id('x'), { reserve_a: 5000, reserve_b: 0.0005, price: 0.0000001, swaps: 1, fee: 1 });
+    render(AddLiquidity, { props: { asset: GOLD, pools: [pools[1]], onCurve: false } });
+    render(DialogHost);
+    await refreshBitAssets();
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByTestId('empty-pool-reference').textContent).toMatch(/The reference price of GOLD is 0\.1 ECX: this pool's price is -100\.0% from that/));
+    expect(screen.getByTestId('empty-pool-price').textContent).toMatch(/This pool holds very little/);
+    await new Promise((r) => setTimeout(r, 400));
+    const submit = screen.getByTestId('add-liquidity-box').querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByTestId('empty-pool-ack')).toBeTruthy();
+    expect(called('openposition')).toHaveLength(0);
   });
 
   it('the guard\'s answer is checked again on fresh lists: a pool that became thin at the same price stops the form (security review 2026-11-11)', async () => {

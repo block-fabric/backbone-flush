@@ -53,7 +53,7 @@ export interface LocalPage {
   simpleSummary?: string;
   /**
    * Not a page of its own in the navigation: a tab of another page of the chain (BitAssets: Register new asset
-   * under My assets). go('<id>') and its commands lead there (to `tab`, then the tab asked for, "issue/…").
+   * under Launch). go('<id>') and its commands lead there (to `tab`, then the tab asked for, "issue/…").
    */
   tabOf?: { page: string; tab: string };
 }
