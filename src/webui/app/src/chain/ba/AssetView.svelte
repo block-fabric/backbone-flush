@@ -31,6 +31,7 @@
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
+  import AddLiquidity from './AddLiquidity.svelte';
   import AssetBadge from './AssetBadge.svelte';
   import AssetName from './AssetName.svelte';
   import Candles from './Candles.svelte';
@@ -325,7 +326,7 @@
                   <button type="button" class="mmain link-row" onclick={() => go('pools', poolRoute(p.pool))}>
                     <span><strong>Pool <SafeText text={s.base.label} /> / <SafeText text={s.quote.label} /></strong> <span class="faint">· <span translate="no">{poolFeeText(p)}</span> fee</span></span>
                     {#if empty}
-                      <span class="faint small">Nothing in it yet.{#if s.price} Its starting price is {formatPrice(s.price)} <SafeText text={s.quote.label} /> for 1 <SafeText text={s.base.label} />.{/if} It cannot be traded until someone adds liquidity.</span>
+                      <span class="faint small">Nothing in it yet. {#if s.price}Its starting price is {formatPrice(s.price)} <SafeText text={s.quote.label} /> for 1 <SafeText text={s.base.label} />. {/if}It cannot be traded until someone adds liquidity.</span>
                     {:else}
                       <span class="faint small">{#if poolEcx(p) !== undefined}{formatAmount(poolEcx(p) ?? 0, 8, { max: 4 })} {TICKER} of liquidity · {/if}{formatCount(p.swaps)} swaps</span>
                     {/if}
@@ -475,17 +476,9 @@
 
       <div class="col side" data-testid="asset-box" data-box={liquidityBox ? 'liquidity' : market.state === 'none' ? 'none' : 'trade'}>
         {#if liquidityBox}
-          <section class="panel note">
-            <div class="panel-body stack">
-              <h3>Add liquidity</h3>
-              {#if onCurve}
-                <p class="ba-problems" role="status" data-testid="liquidity-refused">This asset is on its launch curve: its pool opens by itself at graduation. Until then the chain takes no pool and no liquidity for it.</p>
-              {:else}
-                <p class="ba-help">Its pool has nothing in it: it cannot be traded until someone adds liquidity.</p>
-              {/if}
-              {#if market.state !== 'pool-empty'}<div class="row"><button type="button" class="btn small" onclick={() => setBox('')}>Back to Trade</button></div>{/if}
-            </div>
-          </section>
+          <!-- In place of Trade: asked for, or its only market is a pool with nothing in it. -->
+          {#key id}<AddLiquidity asset={id} {pools} {onCurve} />{/key}
+          {#if market.state === 'pool' || onCurve}<div class="row"><button type="button" class="btn small ghost" onclick={() => setBox('')}><Icon name="back" size={14} /> Back to Trade</button></div>{/if}
         {:else if onCurve && launch}
           {#key id}<CurveTrade {launch} side={box === 'sell' ? 'sell' : 'buy'} focus={box === 'buy' || box === 'sell'} />{/key}
         {:else if market.state === 'pool'}

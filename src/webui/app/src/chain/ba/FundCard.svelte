@@ -1,13 +1,14 @@
 <script lang="ts">
-  // A pool being made and funded over the full range (ba/store.svelte.ts PendingFund): its steps, where it is, and the
-  // step that needs the user's word now (the wallet confirms each: createpool, then openposition), never a dialog by
-  // itself. In Launch (straight into a pool), Pools (New pool) and Portfolio (Being issued).
+  // A pool being made and funded for an asset the create wizard registers (ba/store.svelte.ts PendingFund): its steps,
+  // where it is, and the step that needs the user's word now, never a dialog by itself: its pool with ECX, made and funded
+  // in one transaction (createpool; owner decision, 2026-11-11). One started before that day keeps its two steps
+  // (createpool, then openposition over the full range). In Launch (the wizard's last page) and Portfolio.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { t } from '../../lib/i18n.svelte';
   import { go } from '../../lib/nav.svelte';
   import { poolRoute } from './assetactions';
-  import { dropFunding, fundPosition, fundStageOf, labelOf, makeFundedPool, type PendingFund } from './store.svelte';
+  import { dropFunding, fundPosition, fundStageOf, labelOf, makeFundedPool, poolById, type PendingFund } from './store.svelte';
 
   let { fund }: { fund: PendingFund } = $props();
 
@@ -36,15 +37,19 @@
   </div>
   <ol class="steps">
     <li class:ok={stage !== 'asset'} class:now={stage === 'asset'}>{stage === 'asset' ? t('The asset: being registered') : t('The asset: registered')}</li>
-    <li class:ok={stage === 'position' || stage === 'done'} class:now={stage === 'pool' || stage === 'pool-sent'}>{stage === 'pool' ? t('Its pool: your confirmation') : stage === 'pool-sent' ? t('Its pool: in the next block') : t('Its pool')}</li>
-    <li class:ok={stage === 'done'} class:now={stage === 'position'}>{stage === 'position' ? t('Your liquidity, over the full range: your confirmation') : stage === 'done' ? t('Your liquidity, over the full range: sent') : t('Your liquidity, over the full range')}</li>
+    {#if fund.standard}
+      <li class:ok={stage === 'done'} class:now={stage === 'pool'}>{stage === 'pool' ? t('Its pool, made and funded in one step: your confirmation') : stage === 'done' ? t('Its pool, made and funded: sent') : t('Its pool, made and funded in one step')}</li>
+    {:else}
+      <li class:ok={stage === 'position' || stage === 'done'} class:now={stage === 'pool' || stage === 'pool-sent'}>{stage === 'pool' ? t('Its pool: your confirmation') : stage === 'pool-sent' ? t('Its pool: in the next block') : t('Its pool')}</li>
+      <li class:ok={stage === 'done'} class:now={stage === 'position'}>{stage === 'position' ? t('Your liquidity, over the full range: your confirmation') : stage === 'done' ? t('Your liquidity, over the full range: sent') : t('Your liquidity, over the full range')}</li>
+    {/if}
   </ol>
   <p class="faint small">{fund.amount} <SafeText text={fund.name} /> and {fund.quoteAmount} <SafeText text={labelOf(fund.quote)} /> go in.</p>
   {#if fund.error}<p class="ba-problems bad" role="status"><SafeText text={fund.error} /></p>{/if}
   <div class="row">
-    {#if stage === 'pool'}<button type="button" class="btn small primary" disabled={busy} onclick={() => run(() => makeFundedPool(fund))}>Make its pool</button>
+    {#if stage === 'pool'}<button type="button" class="btn small primary" disabled={busy} onclick={() => run(() => makeFundedPool(fund))}>{fund.standard ? 'Make and fund its pool' : 'Make its pool'}</button>
     {:else if stage === 'position'}<button type="button" class="btn small primary" disabled={busy} onclick={() => run(() => fundPosition(fund))}>Put in your liquidity</button>{/if}
-    {#if fund.pool && (stage === 'position' || stage === 'done')}<button type="button" class="btn small" onclick={openPool}>Open the pool</button>{/if}
+    {#if fund.pool && (stage === 'position' || stage === 'done') && poolById(fund.pool)}<button type="button" class="btn small" onclick={openPool}>Open the pool</button>{/if}
     {#if stage !== 'done' && !fund.poolTx}<button type="button" class="btn small ghost" onclick={() => dropFunding(fund)}>Forget it</button>{/if}
   </div>
 </section>

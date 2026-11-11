@@ -19,6 +19,7 @@ import MyAssets from './pages/MyAssets.svelte';
 import Dex from '../test/DexHarness.svelte';
 import { dexRoute, RETIRED_PAGES } from './local';
 import AssetView from './ba/AssetView.svelte';
+import AddLiquidity from './ba/AddLiquidity.svelte';
 import {
   assetArg,
   auctionBuysAt,
@@ -52,7 +53,6 @@ import {
   isTicker,
   normalizeDisplayName,
   tickerProblem,
-  minChnText,
   type Asset,
   type Auction,
   type Holdings,
@@ -116,6 +116,8 @@ let previewExists = false;
 let paramsOn = false;
 /** The launches the fake node knows (Layers' launches), and how many more past them (pages). */
 let launchCount = 2;
+/** The wallet's positions of concentrated liquidity (listpositions); null: two of a range in the pool k. */
+let positions: Record<string, unknown>[] | null = null;
 /** The market index's candles (getpoolcandles, -dexindex): none on a node without it (the method fails). */
 let candles: { t: number; o: number; h: number; l: number; c: number; v: number }[] | null = null;
 /** Launches of the test's own, after the others (My launches: a curve never traded, one traded). */
@@ -317,7 +319,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     case 'changeposition':
       return { txid: id('7') };
     case 'listpositions':
-      return [
+      return positions ?? [
         { position: id('o'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 22500, tick_upper: 23520, price_lower: 9.5, price_upper: 10.5, liquidity: '12345', in_range: true, amount0: 0.5, amount1: 5, fees0: 0.01, fees1: 0.25 },
         { position: id('u'), pool: id('k'), asset0: 'CHN', asset1: 'GOLD', tick_lower: 24000, tick_upper: 24840, price_lower: 11, price_upper: 12, liquidity: '999', in_range: false, amount0: 0.3, amount1: 0, fees0: 0, fees1: 0 },
       ];
@@ -481,6 +483,7 @@ beforeEach(() => {
   previewExists = false;
   paramsOn = false;
   launchCount = 2;
+  positions = null;
   candles = null;
   extraLaunches = [];
   store = null;
@@ -1972,38 +1975,184 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(called('swappools')[0]?.params).toEqual(['ECX', '0.5', [id('s')], 0.5, '5.17']));
   });
 
-  it('Pools: the concentrated pools; a position over the full range by default (prices of 0), a custom range on asking', async () => {
+  it('the one pool form is refused for an asset on its launch curve, with the reason, before any confirmation (consensus: bad-ba-launch-pooled)', async () => {
     dexOn = true;
-    clPool();
-    nav.tab = 'pools';
-    render(Dex);
+    mine.assets.push({ asset: MOON, label: 'MOON', decimals: 6, balance: 5000, pending: 0, outputs: 1, control: false, control_pending: false, supply: 1000000000, fixed: true });
+    // Asked for by its route (an old link, a typed one): the box says why not; nothing to type, nothing to confirm.
+    nav.tab = `asset/${MOON}/liquidity`;
+    const shown = render(Dex, { props: { page: 'assets' } });
     render(DialogHost);
     await loaded();
-    const row = await waitFor(() => {
-      const r = document.querySelector<HTMLElement>(`[data-testid="pool-row"][data-pool="${id('k')}"]`);
-      expect(r).not.toBeNull();
-      return r!;
-    });
-    await fireEvent.click(row);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Full range' }).getAttribute('aria-pressed')).toBe('true'));
-    expect(document.querySelector('#cl-lower')).toBeNull();
-    await fireEvent.input(document.querySelector('#cl-amount-a')!, { target: { value: '5' } });
-    await fireEvent.input(document.querySelector('#cl-amount-b')!, { target: { value: '0.5' } });
-    await waitFor(() => expect(screen.getByTestId('position-preview').textContent).toContain('Full range'));
-    expect(called('previewposition').at(-1)?.params).toEqual([id('k'), 0, 0, { [assetArg(GOLD)]: '5', ECX: '0.5' }]);
-    await fireEvent.click(screen.getByRole('button', { name: /Open the position/ }));
-    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toContain('over the full range'));
-    await answer('yes');
-    // With the price shown, in the node's order (ECX in GOLD: 10), for the wallet to check at signing.
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('k'), 0, 0, { [assetArg(GOLD)]: '5', ECX: '0.5' }, 1, 10]));
-    // A range of one's own: its bounds, ±5% at first, to the node turned over (ECX in GOLD).
-    await fireEvent.click(screen.getByRole('button', { name: 'Custom range' }));
-    await waitFor(() => expect((document.querySelector('#cl-lower') as HTMLInputElement).value).toBe('0.095'));
-    await fireEvent.input(document.querySelector('#cl-amount-a')!, { target: { value: '5' } });
-    await waitFor(() => expect((called('previewposition').at(-1)?.params as number[])[1]).toBeCloseTo(1 / 0.105, 6));
+    const box = await screen.findByTestId('add-liquidity-box');
+    await waitFor(() => expect(box.dataset.mode).toBe('refused'));
+    expect(within(box).getByTestId('liquidity-refused').textContent).toMatch(/on its launch curve: its pool opens by itself at graduation/);
+    expect(box.querySelector('input, select, button[type="submit"]')).toBeNull();
+    expect(screen.queryByTestId('add-liquidity')).toBeNull();
+    shown.unmount();
+    // A page whose lists are behind the chain (it does not know of the curve yet): the form asks the node again
+    // before the wallet, and stops there.
+    render(AddLiquidity, { props: { asset: MOON, pools: [], onCurve: false } });
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '100' } });
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '1' } });
+    const submit = () => screen.getByTestId('add-liquidity-box').querySelector('button[type="submit"]') as HTMLButtonElement;
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    await fireEvent.click(submit());
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/on its launch curve/));
+    expect(called('createpool')).toHaveLength(0);
+    expect(called('addliquidity')).toHaveLength(0);
+    expect(asked).toEqual([]);
   });
 
-  it('Launch, straight into a pool: reserved and registered in one question, then its pool and the full range funded, each on the user\'s word', async () => {
+  it('New pool: the asset picked is the asset of the form; a standard pool at a fee tier, made and funded in one transaction', async () => {
+    dexOn = true;
+    nav.tab = 'new';
+    render(Dex, { props: { page: 'pools' } });
+    render(DialogHost);
+    await loaded();
+    await fireEvent.click(await screen.findByTestId('new-pool-asset'));
+    // SILVER's page, its Add liquidity box in place of Trade: the asset fixed, nothing to pick.
+    expect([nav.page, nav.tab]).toEqual(['assets', `asset/${SILVER}/liquidity`]);
+    const box = await screen.findByTestId('add-liquidity-box');
+    await waitFor(() => expect(box.dataset.mode).toBe('create'));
+    expect(box.dataset.asset).toBe(SILVER);
+    expect(within(box).getByRole('heading', { name: /Add liquidity · SILVER \/ ECX/ })).toBeTruthy();
+    expect(box.querySelector('[role="combobox"]')).toBeNull();
+    expect(box.textContent).not.toMatch(/Custom range|Concentrated|Constant product/);
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '30' } });
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '0.001' } });
+    await waitFor(() => expect(box.textContent).toMatch(/Too little: a pool opens with at least 0\.01 ECX/));
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '5' } });
+    await waitFor(() => expect(called('previewpool').at(-1)?.params).toEqual([assetArg(SILVER), '30', 'ECX', '5', { curve: 'constant_product', fee: 0.3 }]));
+    await fireEvent.click(within(box).getByRole('button', { name: '1%' }));
+    await waitFor(() => expect(screen.getByTestId('liquidity-summary').textContent).toMatch(/Price\s*0\.166667 ECX per SILVER.*Your pool share\s*100.*You earn\s*1% of each swap/));
+    const submit = box.querySelector('button[type="submit"]') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    await fireEvent.click(submit);
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/Make the pool of \$SILVER #4218-0372 and ECX and put 30 \$SILVER #4218-0372 and 5 ECX in it\?/));
+    expect(document.querySelector('dialog[open]')?.textContent).toMatch(/One transaction, one confirmation/);
+    await answer('yes');
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(SILVER), '30', 'ECX', '5', { curve: 'constant_product', fee: 1 }, 1]));
+    expect(asked).toEqual(['createpool']);
+    expect(called('openposition')).toHaveLength(0);
+  });
+
+  it('a pool with nothing in it: Add liquidity takes the place of Trade; one concentrated on the chain takes the full range, never a range to pick', async () => {
+    dexOn = true;
+    // SILVER's pool was made empty at 0.01 ECX (a concentrated one, as the app made them before 2026-11-11).
+    clPool(id('e'), { asset_a: 'SILVER', asset_a_id: SILVER, reserve_a: 0, reserve_b: 0, price: 0.01, swaps: 0, concentrated: { ...CL, liquidity: '0' } });
+    nav.tab = `asset/${SILVER}`;
+    render(Dex, { props: { page: 'assets' } });
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('asset-page').dataset.market).toBe('pool-empty'));
+    expect(screen.getByTestId('market-chip').textContent).toBe('Pool, empty');
+    expect(screen.getByTestId('asset-box').dataset.box).toBe('liquidity');
+    expect(screen.queryByTestId('trade-box')).toBeNull();
+    const row = within(screen.getByTestId('asset-markets')).getByTestId('market-row');
+    expect(row.dataset.kind).toBe('pool-empty');
+    expect(row.textContent).toMatch(/Nothing in it yet\.\s*Its starting price is 0\.01 ECX for 1 SILVER\..*Needs liquidity/);
+    const box = screen.getByTestId('add-liquidity-box');
+    expect(box.dataset.mode).toBe('full-range');
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '20' } });
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '0.2' } });
+    await waitFor(() => expect(called('previewposition').at(-1)?.params).toEqual([id('e'), 0, 0, { [assetArg(SILVER)]: '20', ECX: '0.2' }]));
+    expect(document.body.textContent).not.toMatch(/Custom range|Full range|Lower price|Upper price|Concentrated/);
+    expect(document.querySelector('#cl-lower')).toBeNull();
+    const submit = box.querySelector('button[type="submit"]') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    await fireEvent.click(submit);
+    await answer('yes');
+    // Prices of 0: the full range; with the pool's price, in the node's order (ECX in SILVER: 100), for the wallet to check.
+    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('e'), 0, 0, { [assetArg(SILVER)]: '20', ECX: '0.2' }, 1, 100]));
+    expect(asked).toEqual(['openposition']);
+  });
+
+  it('a pool\'s page: its figures, what is in it, Your share with Add liquidity (the asset fixed), Remove liquidity and Collect fees', async () => {
+    dexOn = true;
+    nav.tab = `pools/${id('p')}`;
+    let shown = render(Dex, { props: { page: 'pools' } });
+    render(DialogHost);
+    await loaded();
+    const page = await screen.findByTestId('pool-page');
+    expect(screen.getByTestId('pool-figures').textContent).toMatch(/Liquidity\s*50\s*ECX in the pool.*Volume 24 h\s*–.*Swaps\s*4.*Price\s*0\.1/);
+    expect(screen.getByTestId('pool-holds').textContent).toMatch(/GOLD\s*500.*ECX\s*50/);
+    // One kind of pool: no curve, no depth, no range.
+    expect(page.textContent).not.toMatch(/Constant product|Concentrated|Depth|The curve|range/i);
+    const share = screen.getByTestId('pool-share');
+    expect(share.textContent).toMatch(/Share of the pool\s*6\.32%.*Worth\s*31\.62 GOLD · 3\.162 ECX/);
+    expect(within(share).getByRole('button', { name: 'Collect fees' })).toHaveProperty('disabled', true);
+    // Add liquidity: the one form, on this pool's asset, at the pool's price, by the pool's id.
+    await fireEvent.click(within(share).getByRole('button', { name: 'Add liquidity' }));
+    const box = await screen.findByTestId('add-liquidity-box');
+    expect([box.dataset.mode, box.dataset.asset]).toEqual(['add', GOLD]);
+    expect(box.querySelector('[role="combobox"]')).toBeNull();
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '10' } });
+    await waitFor(() => expect(called('quotepoolliquidity').at(-1)?.params).toEqual([id('p'), { [assetArg(GOLD)]: '10' }]));
+    const submit = box.querySelector('button[type="submit"]') as HTMLButtonElement;
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    await fireEvent.click(submit);
+    await answer('yes');
+    await waitFor(() => expect(called('addpoolliquidity')[0]?.params).toEqual([id('p'), { [assetArg(GOLD)]: '10' }, 1]));
+    // Remove liquidity: a part of the share, by the pool's id.
+    await fireEvent.click(within(share).getByRole('button', { name: 'Remove liquidity' }));
+    await fireEvent.click(within(screen.getByTestId('remove-liquidity')).getByRole('button', { name: '50%' }));
+    await fireEvent.click(within(screen.getByTestId('remove-liquidity')).getByRole('button', { name: 'Remove' }));
+    await answer('yes');
+    await waitFor(() => expect(called('removepoolliquidity')[0]?.params).toEqual([id('p'), 50, null, 1]));
+    shown.unmount();
+    // A pool that came from a launch is concentrated on the chain: shown as any pool; the wallet's share is its
+    // position over the full range, whose fees are collected and which is removed by the position.
+    clPool(id('g'), { asset_a: 'STAR', asset_a_id: STAR, reserve_a: 1000, reserve_b: 20, price: 0.02 });
+    positions = [{ position: id('f'), pool: id('g'), asset0: 'CHN', asset1: 'STAR', tick_lower: -887220, tick_upper: 887220, price_lower: 0, price_upper: 1e30, liquidity: '1000000', in_range: true, amount0: 4, amount1: 200, fees0: 0.01, fees1: 0.5 }];
+    nav.tab = `pools/${id('g')}`;
+    shown = render(Dex, { props: { page: 'pools' } });
+    await refreshBitAssets();
+    const own = await screen.findByTestId('pool-share');
+    await waitFor(() => expect(own.textContent).toMatch(/Share of the pool\s*20\.0%.*Worth\s*200 STAR · 4 ECX.*not collected\s*0\.5 STAR · 0\.01 ECX/));
+    expect(screen.getByTestId('pool-page').textContent).not.toMatch(/Concentrated|range/i);
+    await waitFor(() => expect(screen.getByTestId('pool-from-launch')).toBeTruthy());
+    await fireEvent.click(within(own).getByRole('button', { name: 'Collect fees' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition')[0]?.params).toEqual([id('f'), { collect: true }]));
+    await fireEvent.click(within(own).getByRole('button', { name: 'Remove liquidity' }));
+    await fireEvent.click(within(screen.getByTestId('remove-liquidity')).getByRole('button', { name: 'Remove' }));
+    await answer('yes');
+    await waitFor(() => expect(called('changeposition').at(-1)?.params).toEqual([id('f'), { remove: 100, collect: true }]));
+    await waitFor(() => expect(screen.queryByTestId('remove-liquidity')).toBeNull());
+    // Adding to it: over the full range, at its price.
+    await fireEvent.click(within(own).getByRole('button', { name: 'Add liquidity' }));
+    await waitFor(() => expect(screen.getByTestId('add-liquidity-box').dataset.mode).toBe('full-range'));
+  });
+
+  it('before the pool kinds: a pool is made by addliquidity with both amounts, which set the price (audit 7 E-BA1)', async () => {
+    nav.tab = `asset/${SILVER}/liquidity`;
+    const shown = render(Dex, { props: { page: 'assets' } });
+    render(DialogHost);
+    await loaded();
+    const box = await screen.findByTestId('add-liquidity-box');
+    await waitFor(() => expect(box.dataset.mode).toBe('create'));
+    expect(within(box).queryByRole('group', { name: 'Fee tier' })).toBeNull();
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '30' } });
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '5' } });
+    const submit = () => screen.getByTestId('add-liquidity-box').querySelector('button[type="submit"]') as HTMLButtonElement;
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    await fireEvent.click(submit());
+    await answer('yes');
+    await waitFor(() => expect(called('addliquidity')[0]?.params).toEqual([assetArg(SILVER), '30', 'ECX', '5', 1, true]));
+    shown.unmount();
+    // Someone makes the pool while a form that knows of none is filled in: what it showed (a new pool, at this price) is
+    // no longer true, so nothing is sent.
+    pools.push({ ...pools[0], pool: id('q'), asset_a: 'SILVER', asset_a_id: SILVER });
+    render(AddLiquidity, { props: { asset: SILVER, pools: [], onCurve: false } });
+    await fireEvent.input(document.querySelector('#al-asset')!, { target: { value: '30' } });
+    await fireEvent.input(document.querySelector('#al-ecx')!, { target: { value: '5' } });
+    await waitFor(() => expect(submit().disabled).toBe(false));
+    await fireEvent.click(submit());
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/changed while you typed/));
+    expect(called('addliquidity')).toHaveLength(1);
+  });
+
+  it('Launch, straight into a pool you fund: reserved and registered in one question, then a standard pool made and funded in one step, on the user\'s word', async () => {
     dexOn = true;
     nav.tab = 'fund';
     render(Dex);
@@ -2021,18 +2170,18 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await fireEvent.input(document.querySelector('#fund-tokens')!, { target: { value: '100' } });
     await fireEvent.input(document.querySelector('#fund-chn')!, { target: { value: '0.00001' } });
     // The least ECX is the node's (getbitassetsinfo), never a number of the page.
-    await waitFor(() => expect(screen.getByText(new RegExp(`Too little: put in at least ${minChnText().replace('.', '\\.')} ECX`))).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Too little: a pool opens with at least 0\.01 ECX/)).toBeTruthy());
     expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(true);
     await fireEvent.input(document.querySelector('#fund-chn')!, { target: { value: '2' } });
     await waitFor(() => expect(screen.getByTestId('fund-price').textContent).toMatch(/= 0\.02\s*ECX/));
     await fireEvent.click(screen.getByRole('button', { name: '1%' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Next' }));
-    expect(screen.getByTestId('fund-review').textContent).toMatch(/100\s*COPPER and 2\s*ECX, over the full range/);
-    expect(screen.getByTestId('fund-story').textContent).toMatch(/the pool and your liquidity each confirmed when it can go/);
+    expect(screen.getByTestId('fund-review').textContent).toMatch(/100\s*COPPER and 2\s*ECX, at a fee of 1%/);
+    expect(screen.getByTestId('fund-story').textContent).toMatch(/the pool, made and funded in one step, confirmed once the asset is registered/);
     await fireEvent.click(screen.getByRole('button', { name: /Reserve and issue/ }));
     await waitFor(() => expect(asked).toEqual(['reserveasset+registerasset']));
     const F = 'f'.repeat(64);
-    await waitFor(() => expect(store).toMatchObject({ pending: [{ name: 'COPPER', asset: F }], funding: [{ name: 'COPPER', asset: F, quote: CHN_ID, amount: '100', quoteAmount: '2', fee: 1, slippage: 1 }] }));
+    await waitFor(() => expect(store).toMatchObject({ pending: [{ name: 'COPPER', asset: F }], funding: [{ name: 'COPPER', asset: F, quote: CHN_ID, amount: '100', quoteAmount: '2', fee: 1, standard: true, slippage: 1 }] }));
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('asset'));
     // Registered (in a block): its pool on the user's word, never by itself.
     assets.push(asset(F, { label: 'COPPER', name: 'COPPER', seq: '5555-0001', decimals: 8, supply: 500, minted: 500 }));
@@ -2040,19 +2189,16 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await refreshBitAssets();
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('pool'));
     expect(called('createpool')).toHaveLength(0);
-    await fireEvent.click(screen.getByRole('button', { name: 'Make its pool' }));
-    // Concentrated, at the price of the two (2 / 100), nothing put in; previewed first (one made meanwhile is used).
-    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'concentrated', fee: 1 }, 1]));
-    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'concentrated', fee: 1 }]);
-    await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('pool-sent'));
-    clPool(id('n'), { asset_a: 'COPPER', asset_a_id: F, fee: 1, price: 0.02 });
-    await refreshBitAssets();
-    await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('position'));
-    await fireEvent.click(screen.getByRole('button', { name: 'Put in your liquidity' }));
-    // The creator's own ECX and tokens, over the full range (prices of 0).
-    await waitFor(() => expect(called('openposition')[0]?.params).toEqual([id('n'), 0, 0, { [assetArg(F)]: '100', ECX: '2' }, 1, 50]));
-    expect(asked).toEqual(['reserveasset+registerasset', 'createpool', 'openposition']);
+    await fireEvent.click(screen.getByRole('button', { name: 'Make and fund its pool' }));
+    // A standard pool at the tier chosen, both amounts in, in that one transaction; previewed first.
+    await waitFor(() => expect(called('createpool')[0]?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'constant_product', fee: 1 }, 1]));
+    expect(called('previewpool').at(-1)?.params).toEqual([assetArg(F), '100', 'ECX', '2', { curve: 'constant_product', fee: 1 }]);
     await waitFor(() => expect(screen.getByTestId('fund-card').dataset.stage).toBe('done'));
+    // One step: no position to open after it, nothing more to confirm.
+    await refreshBitAssets();
+    expect(called('openposition')).toHaveLength(0);
+    expect(asked).toEqual(['reserveasset+registerasset', 'createpool']);
+    expect(screen.queryByRole('button', { name: 'Put in your liquidity' })).toBeNull();
   });
 
   it('the asset page, on its curve: where it trades in a chip, the curve and "its pool opens by itself" in Markets, the Trade box on the curve, the asset fixed', async () => {

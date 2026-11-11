@@ -85,12 +85,13 @@ export interface PriceSeries {
 }
 
 /**
- * A concentrated pool this app is making at the user's price and funding over the full range, in steps the chain
- * needs apart (user decision, 2026-10-23): the asset registered (Launch's "straight into a pool"; one that exists
- * already, for Pools' New pool), then its pool (createpool, of the curve concentrated, at the price the two amounts
- * name, nothing put in), then, once the pool is in a block, a position over the full range with both amounts
- * (openposition with prices of 0: no bound). Each step a transaction the wallet confirms: the user's word, on its card
- * (ba/FundCard.svelte) or its notice, never a dialog by itself.
+ * A pool this app is making and funding for an asset the create wizard registers (Launch's "straight into a pool you
+ * fund"): the asset registered first, then, on the user's word (its card, ba/FundCard.svelte, or its notice; never a
+ * dialog by itself), its pool with ECX made and funded in one transaction (owner decision, 2026-11-11: createpool of a
+ * standard, constant-product pool at the fee tier chosen, both amounts in, at the price they name). `standard` marks
+ * those. An entry without it is of before that day (user decision, 2026-10-23): a concentrated pool made empty at the
+ * user's price (createpool), then a position over the full range with both amounts (openposition with prices of 0) once
+ * the pool is in a block; such an entry still finishes its second step from its card.
  */
 export interface PendingFund {
   wallet: string;
@@ -104,6 +105,8 @@ export interface PendingFund {
   quoteAmount: string;
   /** The fee tier, in percent (getdexinfo's fee_tiers). */
   fee: number;
+  /** A standard pool, made and funded in one transaction (2026-11-11); absent: the two steps of before. */
+  standard?: boolean;
   slippage: number;
   time: number;
   /** The pool, once made (or found made by someone else), its transaction, and the position's. */
@@ -118,7 +121,7 @@ export interface PendingFund {
   told?: FundStage;
 }
 
-/** Where a pool being funded is: waiting for its asset, for the user's word on its pool, its pool in a block, the user's word on the position, done. */
+/** Where a pool being funded is: waiting for its asset, for the user's word on its pool, then done; of before 2026-11-11: its pool in a block, the user's word on the position, done. */
 export type FundStage = 'asset' | 'pool' | 'pool-sent' | 'position' | 'done';
 
 export interface Journal {
@@ -352,7 +355,7 @@ export function sanitizeJournal(raw: unknown): Journal {
     const day = Date.now() - 86_400_000;
     j.funding = r.funding
       .filter((f) => f && str(f.wallet) && str(f.name) && str(f.asset) && str(f.quote) && str(f.amount) && str(f.quoteAmount) && typeof f.fee === 'number' && Number.isFinite(f.fee) && !(typeof f.doneAt === 'number' && f.doneAt < day))
-      .map((f) => ({ wallet: f.wallet, name: f.name, asset: f.asset, quote: f.quote, amount: f.amount, quoteAmount: f.quoteAmount, fee: f.fee, slippage: typeof f.slippage === 'number' && Number.isFinite(f.slippage) ? f.slippage : 1, time: typeof f.time === 'number' ? f.time : 0, pool: str(f.pool) ? f.pool : undefined, poolTx: str(f.poolTx) ? f.poolTx : undefined, positionTx: str(f.positionTx) ? f.positionTx : undefined, doneAt: typeof f.doneAt === 'number' ? f.doneAt : undefined, error: str(f.error) ? f.error : undefined }))
+      .map((f) => ({ wallet: f.wallet, name: f.name, asset: f.asset, quote: f.quote, amount: f.amount, quoteAmount: f.quoteAmount, fee: f.fee, ...(f.standard === true ? { standard: true } : {}), slippage: typeof f.slippage === 'number' && Number.isFinite(f.slippage) ? f.slippage : 1, time: typeof f.time === 'number' ? f.time : 0, pool: str(f.pool) ? f.pool : undefined, poolTx: str(f.poolTx) ? f.poolTx : undefined, positionTx: str(f.positionTx) ? f.positionTx : undefined, doneAt: typeof f.doneAt === 'number' ? f.doneAt : undefined, error: str(f.error) ? f.error : undefined }))
       .slice(-MAX_PENDING);
   }
   if (r.prices && typeof r.prices === 'object') {
@@ -868,11 +871,11 @@ export function fundingOf(wallet: string | null): PendingFund[] {
 }
 
 /** The kind of the pool of a PendingFund, as createpool and previewpool take it. */
-export function fundKind(f: Pick<PendingFund, 'fee'>): { curve: 'concentrated'; fee: number } {
-  return { curve: 'concentrated', fee: f.fee };
+export function fundKind(f: Pick<PendingFund, 'fee' | 'standard'>): { curve: 'constant_product' | 'concentrated'; fee: number } {
+  return { curve: f.standard ? 'constant_product' : 'concentrated', fee: f.fee };
 }
 
-/** createpool's (and previewpool's) parameters for a pool being funded: at the price its amounts name, nothing put in. */
+/** createpool's (and previewpool's) parameters for a pool being funded: both amounts, at the price they name (a standard pool: both go in; one of before: nothing put in). */
 export function fundPoolParams(f: PendingFund): unknown[] {
   return [assetArg(f.asset), f.amount, assetArg(f.quote), f.quoteAmount, fundKind(f)];
 }
@@ -899,7 +902,7 @@ export function fundPositionParams(f: PendingFund, pool: Pick<Pool, 'asset_a_id'
 
 /** Where a pool being funded is. */
 export function fundStageOf(f: PendingFund): FundStage {
-  if (f.positionTx) return 'done';
+  if (f.positionTx || (f.standard && f.pool)) return 'done';
   if (!f.pool) {
     const known = ba.assets.some((a) => a.asset === f.asset) || (ba.mine?.assets ?? []).some((h) => h.asset === f.asset) || !!assetById(f.asset);
     return known ? 'pool' : 'asset';
@@ -925,8 +928,9 @@ function fundEntry(f: PendingFund): PendingFund | undefined {
 }
 
 /**
- * Make the pool of a PendingFund (the user's word: the wallet confirms createpool): at the price its amounts name, of
- * the curve concentrated, nothing put in. Only the pool this step makes is funded: one of the pair at that tier made by
+ * Make the pool of a PendingFund (the user's word: the wallet confirms createpool): at the price its amounts name; a
+ * standard pool with both amounts in, in that one transaction; one of before 2026-11-11 of the curve concentrated,
+ * nothing put in. Only the pool this step makes is funded: one of the pair at that tier made by
  * someone else first is never used (its price is theirs: security review 2026-10-23); the user is told, and stops.
  */
 export async function makeFundedPool(given: PendingFund): Promise<boolean> {
@@ -934,8 +938,12 @@ export async function makeFundedPool(given: PendingFund): Promise<boolean> {
   const params = fundPoolParams(f);
   try {
     const preview = await rpc.raw<PoolPreview>('previewpool', params).catch(() => null);
-    if (preview?.exists) {
-      f.error = t('Someone opened a concentrated pool of %1 at this fee first, at a price of their own: this app does not put your liquidity in it. Look at its price on its page and open a position there if you want, or forget this one.', f.name);
+    // A standard pool that exists and is empty is opened again by createpool at these amounts; one with providers has a
+    // price of its own. A concentrated one of before: any that exists is someone else's.
+    if (f.standard ? preview?.exists && preview.open : preview?.exists) {
+      f.error = f.standard
+        ? t('Someone opened a pool of %1 at this fee first, at a price of their own: nothing was sent. Add liquidity to it from its page if you want, or forget this one.', f.name)
+        : t('Someone opened a concentrated pool of %1 at this fee first, at a price of their own: this app does not put your liquidity in it. Look at its price on its page and open a position there if you want, or forget this one.', f.name);
       saveJournal();
       return false;
     }
@@ -944,8 +952,9 @@ export async function makeFundedPool(given: PendingFund): Promise<boolean> {
     f.pool = done.pool;
     f.poolTx = done.txid;
     f.error = undefined;
+    if (f.standard) f.doneAt = Date.now();
     saveJournal();
-    toast('success', t('Making its pool'), t('The pool of %1 is made with the next block; then put your liquidity in it.', assetTextOf(f.asset, f.name)));
+    toast('success', t('Making its pool'), f.standard ? t('The pool of %1 is made and funded with the next block.', assetTextOf(f.asset, f.name)) : t('The pool of %1 is made with the next block; then put your liquidity in it.', assetTextOf(f.asset, f.name)));
     void refreshBitAssets();
     return true;
   } catch (e) {
@@ -991,7 +1000,7 @@ async function fundReady(wallet: string): Promise<void> {
   if (funding) return;
   funding = true;
   try {
-    for (const f of ba.journal.funding.filter((x) => x.wallet === wallet && !x.positionTx)) {
+    for (const f of ba.journal.funding.filter((x) => x.wallet === wallet && !x.positionTx && !(x.standard && x.pool))) {
       if (f.pool && !livePools.has(f.pool)) {
         if (ba.pools.some((p) => p.pool === f.pool)) livePools.add(f.pool);
         else {
@@ -1006,7 +1015,7 @@ async function fundReady(wallet: string): Promise<void> {
       const stage = fundStageOf(f);
       if (stage === f.told) continue;
       f.told = stage;
-      if (stage === 'pool') toast('info', t('%1 is registered', assetTextOf(f.asset, f.name)), t('Now make its pool, at your price: your wallet confirms it.'), 15000, [{ label: t('Make its pool'), run: () => void makeFundedPool(f) }]);
+      if (stage === 'pool') toast('info', t('%1 is registered', assetTextOf(f.asset, f.name)), f.standard ? t('Now make and fund its pool, at your price: your wallet confirms it.') : t('Now make its pool, at your price: your wallet confirms it.'), 15000, [{ label: t('Make its pool'), run: () => void makeFundedPool(f) }]);
       else if (stage === 'position') toast('info', t('The pool of %1 is open', assetTextOf(f.asset, f.name)), t('Now put your liquidity in it, over the full range: your wallet confirms it.'), 15000, [{ label: t('Put it in'), run: () => void fundPosition(f) }]);
     }
   } finally {
