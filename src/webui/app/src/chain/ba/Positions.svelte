@@ -1,8 +1,10 @@
 <script lang="ts">
-  // The positions of concentrated liquidity this wallet holds (listpositions): each with its pool and kind, its range on a
-  // bar with the pool's price marked ("In range": it earns the pool's fees; "Out of range": it holds one asset alone and
-  // earns nothing), what it holds now and the fees it earned; and what can be done with it (changeposition): collect its
-  // fees, add to it, take a part out, close it. Prices of the pool's first asset as the lists give it, in its second.
+  // The wallet's positions of concentrated liquidity that have a price range (listpositions, those over the full range
+  // left out: they are pool shares, on their pool's page): each with its pool, its range on a bar with the pool's price
+  // marked ("In range": it earns the pool's fees; "Out of range": it holds one asset alone and earns nothing), what it
+  // holds now and the fees it earned. Price ranges are retired from the interface (owner decision, 2026-11-11): such a
+  // position can only be closed here, in Portfolio's "Closing old markets" (changeposition: collect its fees, take a part
+  // out, close it); none is opened or added to. Prices of the pool's first asset as the lists give it, in its second.
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
@@ -12,15 +14,13 @@
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import AssetBadge from './AssetBadge.svelte';
-  import PoolKind from './PoolKind.svelte';
-  import UnitsInput from './UnitsInput.svelte';
   import { flipped, positionSides, rangeBar, type Position } from './cl';
-  import { depositAmounts, kindOf } from './kinds';
+  import { isFullRange } from './pools';
   import { amountParam, approx, formatAmount, formatPrice, isChn, unitsAtMost, type Pool } from './model';
   import { ba, decimalsOf, poolById, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
-  let list = $state<Position[] | null>(null);
+  let all = $state<Position[] | null>(null);
   let error = $state('');
   /** Pools of the positions not among those the store read (asked by id). */
   let extra = $state<Record<string, Pool>>({});
@@ -29,7 +29,7 @@
     const wallet = wallets.current;
     void ba.version;
     if (wallet === null) {
-      list = null;
+      all = null;
       return;
     }
     let live = true;
@@ -37,9 +37,9 @@
       .raw<Position[]>('listpositions', [], { wallet })
       .then((r) => {
         if (!live) return;
-        list = Array.isArray(r) ? r : [];
+        all = Array.isArray(r) ? r : [];
         error = '';
-        for (const p of list) {
+        for (const p of all) {
           if (poolById(p.pool) || extra[p.pool]) continue;
           rpc
             .raw<Pool>('getpool', [p.pool])
@@ -57,6 +57,8 @@
     };
   });
   const poolOfPosition = (p: Position): Pool | undefined => poolById(p.pool) ?? extra[p.pool];
+  /** Those of a range: one over the full range is a pool share. */
+  const list = $derived(all === null ? null : all.filter((p) => !isFullRange(p, poolOfPosition(p)?.concentrated?.tick_spacing ?? 60)));
 
   /** A position in the page's order, with its pool: its range, amounts and fees of asset_a and asset_b, the price now. */
   function view(p: Position) {
@@ -69,20 +71,10 @@
   }
 
   // --- Changes ---
-  let open = $state<{ id: string; what: 'add' | 'remove' } | null>(null);
+  let open = $state<{ id: string; what: 'remove' } | null>(null);
   let percent = $state(50);
-  let aUnits = $state<bigint | null>(null);
-  let aText = $state('');
-  let bUnits = $state<bigint | null>(null);
-  let bText = $state('');
   let busy = $state(false);
-  const held = (id: string, decimals: number) => {
-    if (isChn(id)) return wallets.current !== null ? (wallets.balances[wallets.current]?.trusted ?? null) : null;
-    const h = ba.mine?.assets.find((x) => x.asset === id);
-    return h ? unitsAtMost(h.balance, decimals) : 0n;
-  };
-
-  async function change(p: Position, what: 'collect' | 'add' | 'remove' | 'close') {
+  async function change(p: Position, what: 'collect' | 'remove' | 'close') {
     const wallet = wallets.current;
     const v = view(p);
     if (wallet === null || busy || !v) return;
@@ -91,14 +83,6 @@
     if (what === 'collect') {
       params = { collect: true };
       message = t('Collect the fees of this position: %1 %2 and %3 %4?', formatAmount(v.feesA, v.da), v.pool.asset_a, formatAmount(v.feesB, v.db), v.pool.asset_b);
-    } else if (what === 'add') {
-      const amounts = depositAmounts([
-        { id: v.pool.asset_a_id, units: aUnits, text: (u) => amountParam(u, v.da) },
-        { id: v.pool.asset_b_id, units: bUnits, text: (u) => amountParam(u, v.db) },
-      ]);
-      if (Object.keys(amounts).length === 0) return;
-      params = { add: amounts };
-      message = t('Add to this position, at most the amounts typed (what its range does not take comes back)?');
     } else if (what === 'remove') {
       params = { remove: percent, collect: true };
       message = t('Take %1% of this position out, and collect its fees?', String(percent));
@@ -123,8 +107,6 @@
       if (!done) return;
       toast('success', t('Changing a position'), t('With the next block.'));
       open = null;
-      aText = '';
-      bText = '';
       void refreshBitAssets({ node: false });
     } catch (e) {
       await inform(t('Change a position'), errorText(e), 'error');
@@ -137,15 +119,9 @@
   }
 </script>
 
-{#if wallets.current === null}
-  <section class="panel ba-empty">No wallet loaded.</section>
-{:else if error}
+{#if error}
   <p class="ba-problems bad" role="alert"><SafeText text={error} /></p>
-{:else if list === null}
-  <section class="panel ba-empty">Reading the positions…</section>
-{:else if list.length === 0}
-  <section class="panel ba-empty">No position of concentrated liquidity. Open one on the page of a concentrated pool: liquidity between two prices, earning the providers' part of the pool's fees while its price is between them.<div class="row center"><button type="button" class="btn primary" onclick={() => (nav.tab = 'pools')}>Pools</button></div></section>
-{:else}
+{:else if list && list.length > 0}
   <div class="ba-cols" aria-label="Positions">
     {#each list as p (p.position)}
       {@const v = view(p)}
@@ -153,7 +129,6 @@
         <header class="head">
           {#if v}
             <span class="pair"><AssetBadge id={v.pool.asset_a_id} label={v.pool.asset_a} size="s" /> <span class="faint">/</span> <AssetBadge id={v.pool.asset_b_id} label={v.pool.asset_b} size="s" /></span>
-            <PoolKind kind={kindOf(v.pool)} />
           {:else}
             <span class="pair"><SafeText text={p.asset0} /> / <SafeText text={p.asset1} /></span>
           {/if}
@@ -173,13 +148,7 @@
             <dt>Fees earned</dt><dd class="strong" data-testid="fees">{formatAmount(v.feesA, v.da)} <SafeText text={v.pool.asset_a} /></dd>
             <dt></dt><dd class="strong">{formatAmount(v.feesB, v.db)} <SafeText text={v.pool.asset_b} /></dd>
           </dl>
-          {#if open?.id === p.position && open.what === 'add'}
-            <form class="ba-form" onsubmit={(e) => { e.preventDefault(); void change(p, 'add'); }}>
-              <UnitsInput id="pos-add-a" label={v.pool.asset_a} decimals={v.da} bind:units={aUnits} bind:text={aText} max={held(v.pool.asset_a_id, v.da)} unit={v.pool.asset_a} />
-              <UnitsInput id="pos-add-b" label={v.pool.asset_b} decimals={v.db} bind:units={bUnits} bind:text={bText} max={held(v.pool.asset_b_id, v.db)} unit={v.pool.asset_b} />
-              <div class="row"><button type="submit" class="btn primary small" disabled={busy}>Add</button><button type="button" class="btn small" onclick={() => (open = null)}>Cancel</button></div>
-            </form>
-          {:else if open?.id === p.position && open.what === 'remove'}
+          {#if open?.id === p.position && open.what === 'remove'}
             <div class="ba-form">
               <div class="field">
                 <label for="pos-percent">Take out {percent}%</label>
@@ -191,7 +160,6 @@
           {:else}
             <div class="row actions">
               <button type="button" class="btn small primary" disabled={busy || (approx(p.fees0) === 0 && approx(p.fees1) === 0)} onclick={() => change(p, 'collect')}>Collect</button>
-              <button type="button" class="btn small" disabled={busy} onclick={() => { open = { id: p.position, what: 'add' }; aText = ''; bText = ''; }}>Add</button>
               <button type="button" class="btn small" disabled={busy} onclick={() => { open = { id: p.position, what: 'remove' }; percent = 50; }}>Remove</button>
               <button type="button" class="btn small danger" disabled={busy} onclick={() => change(p, 'close')}>Close</button>
               <button type="button" class="btn small ghost" onclick={() => openPool(p.pool)}><Icon name="pool" size={14} /> Pool</button>

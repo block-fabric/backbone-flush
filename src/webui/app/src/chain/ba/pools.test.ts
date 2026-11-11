@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { spanStats, candlesOf, PERIODS } from './candles';
 import { MAX_TICK, MIN_TICK } from './cl';
 import type { Pool } from './model';
-import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, emptyPoolCheck, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
+import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, emptyPoolCheck, priceGuard, REFERENCE_MIN_ECX, referencePrice, THIN_POOL_ECX, thinPool, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -48,22 +48,58 @@ describe('the one pool form, by the state of its asset', () => {
   });
 });
 
-describe("an empty pool's price is someone else's (security review 2026-11-11)", () => {
+describe("a thin pool's price is someone else's (security reviews 2026-11-11)", () => {
   it('needs an explicit word when it is far from the reference, or when there is none', () => {
     expect(EMPTY_POOL_TOLERANCE).toBe(3);
-    expect(emptyPoolCheck(0.1, [])).toEqual({ reference: null, deviation: null, acknowledge: true });
-    expect(emptyPoolCheck(0.1, [undefined, 0, NaN])).toMatchObject({ reference: null, acknowledge: true });
+    expect(emptyPoolCheck(0.1, [])).toEqual({ price: 0.1, reference: null, deviation: null, acknowledge: true });
+    expect(emptyPoolCheck(0.1, [undefined, null, 0, NaN])).toMatchObject({ reference: null, acknowledge: true });
     expect(emptyPoolCheck(undefined, [0.1])).toMatchObject({ acknowledge: true });
     expect(emptyPoolCheck(0, [0.1])).toMatchObject({ acknowledge: true });
     const far = emptyPoolCheck(5, [0.1]);
     expect(far.acknowledge).toBe(true);
     expect(far.deviation).toBeCloseTo(4900, 6);
-    expect(emptyPoolCheck(0.05, [0.1])).toMatchObject({ acknowledge: true });
     expect(emptyPoolCheck(0.05, [0.1]).deviation).toBeCloseTo(-50, 6);
-    // Within the tolerance: shown, not asked about. The first reference that is a price is the one used.
+    // Within the tolerance: shown, not asked about.
     expect(emptyPoolCheck(0.102, [0.1])).toMatchObject({ reference: 0.1, acknowledge: false });
     expect(emptyPoolCheck(0.104, [0.1]).acknowledge).toBe(true);
-    expect(emptyPoolCheck(0.1, [undefined, 0.1, 9])).toMatchObject({ reference: 0.1, acknowledge: false });
+  });
+
+  it('is guarded whenever the deposit would be most of the pool: empty, dust, or less than what goes in', () => {
+    expect(THIN_POOL_ECX).toBe(1);
+    expect(thinPool(emptyCl, 0)).toBe(true);
+    // Dust at an absurd price is as thin as nothing.
+    expect(thinPool(pool({ reserve_a: 0.0001, reserve_b: 0.0005, price: 5 }), 0)).toBe(true);
+    expect(thinPool(pool({ reserve_b: 0.99 }), 0.01)).toBe(true);
+    // 50 ECX in it: a market for a deposit of 10, not for one of 80.
+    expect(thinPool(pool(), 10)).toBe(false);
+    expect(thinPool(pool(), 80)).toBe(true);
+    expect(priceGuard({ asset: A, pool: pool(), pools: [pool()], depositEcx: 10 })).toBeNull();
+    expect(priceGuard({ asset: A, pool: pool(), pools: [pool()], depositEcx: 80 })).toMatchObject({ price: 0.1, reference: null, acknowledge: true });
+  });
+
+  it('takes no dust pool for a reference: the graduation price first, then the deepest other pool of real depth, else none', () => {
+    expect(REFERENCE_MIN_ECX).toBe(10);
+    const target = pool({ pool: 'x'.repeat(64), reserve_a: 0.0001, reserve_b: 0.0005, price: 5 });
+    const dust = pool({ pool: 'y'.repeat(64), reserve_a: 0.0002, reserve_b: 0.001, price: 5 });
+    const shallow = pool({ pool: 'z'.repeat(64), reserve_a: 99, reserve_b: 9.9, price: 0.1 });
+    const deep = pool();
+    const deeper = pool({ pool: 'w'.repeat(64), reserve_a: 1000, reserve_b: 200, price: 0.2 });
+    // A second dust pool at the same absurd price does not make it a market.
+    expect(referencePrice(A, target.pool, [target, dust])).toBeNull();
+    expect(priceGuard({ asset: A, pool: target, pools: [target, dust], depositEcx: 5 })).toMatchObject({ reference: null, acknowledge: true });
+    expect(referencePrice(A, target.pool, [target, dust, shallow])).toBeNull();
+    // The pool itself is never its own reference, however deep.
+    expect(referencePrice(A, deep.pool, [deep])).toBeNull();
+    expect(referencePrice(A, target.pool, [target, dust, deep])).toBe(0.1);
+    expect(referencePrice(A, target.pool, [target, deep, deeper])).toBe(0.2);
+    // The price its launch graduated at comes before any pool.
+    expect(referencePrice(A, target.pool, [target, deeper], 0.03)).toBe(0.03);
+    expect(referencePrice(A, target.pool, [target, deeper], NaN)).toBe(0.2);
+    const g = priceGuard({ asset: A, pool: target, pools: [target, dust, deep], depositEcx: 5 });
+    expect(g).toMatchObject({ price: 5, reference: 0.1, acknowledge: true });
+    expect(g?.deviation).toBeCloseTo(4900, 6);
+    // Close to a real reference: shown, no word needed.
+    expect(priceGuard({ asset: A, pool: pool({ pool: 'x'.repeat(64), reserve_a: 0, reserve_b: 0, abandoned: true, price: 0.101 }), pools: [deep], depositEcx: 5 })).toMatchObject({ reference: 0.1, acknowledge: false });
   });
 });
 

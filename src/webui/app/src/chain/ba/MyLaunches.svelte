@@ -1,10 +1,9 @@
 <script lang="ts">
   // The launches this wallet made (My assets): their creator's address is one of the wallet's "launch creator" addresses
-  // (getaddressesbylabel; launchtoken and curveasset give each launch one). For each with an allocation, a row like the
-  // holdings': the asset, its allocation (percent and amount), the curve's progress, what is claimable now (or "at
-  // graduation"); once graduated, Claim (claimlaunch: the allocation minted to the creator's address, and its part of
-  // the fees owed). A launch without an allocation is
-  // listed when the creator is owed fees. Read again with each block.
+  // (getaddressesbylabel; launchtoken and curveasset give each launch one). For each, a row: the asset (it opens the
+  // asset's page), its allocation (percent and amount), the curve's progress, what is claimable now (or "at
+  // graduation"), and Claim (claimlaunch: the creator's part of the fees owed, and once graduated the allocation minted
+  // to the creator's address). Portfolio's "Your launches" (owner decision, 2026-11-11). Read again with each block.
   // TODO(rug protection): the allocation is the creator's whole at graduation; a vesting or lock of it is to come.
   import SafeText from '../../components/SafeText.svelte';
   import { ask, errorText, inform, walletRpc } from '../../lib/dialogs.svelte';
@@ -13,7 +12,6 @@
   import { rpc } from '../../lib/rpc';
   import { toast, wallets } from '../../lib/state.svelte';
   import { barWidth } from './actions';
-  import AssetActions from './AssetActions.svelte';
   import { assetRoute } from './assetactions';
   import AssetBadge from './AssetBadge.svelte';
   import { compactNumber } from './axis';
@@ -50,7 +48,7 @@
     })()
       .then((list) => {
         noteLaunches(list);
-        if (live) launches = list.filter((l) => l.allocation > 0 || claimable(l).fees || claimable(l).tokens);
+        if (live) launches = list;
       })
       .catch(() => undefined);
     return () => {
@@ -103,7 +101,7 @@
        (its percent and amount), the curve's progress as a bar, what can be claimed, and Claim. Narrow, each row stacks:
        the asset and Claim on top, then each value beside its word. -->
   <section class="panel my-launches" aria-labelledby="my-launches-title" data-testid="my-launches">
-    <div class="panel-head"><h3 id="my-launches-title">My launches</h3><span class="muted small">{t('Your allocation and fees, claimable once each graduates')}</span></div>
+    <div class="panel-head"><h3 id="my-launches-title">Your launches</h3><span class="muted small">{t('Creator fees to claim; your allocation, once each graduates')}</span></div>
     <div class="ml-grid ml-head" aria-hidden="true"><span>Asset</span><span>Allocation</span><span>Curve</span><span class="c-claim">Claimable</span><span></span></div>
     <ul class="ba-list" aria-label="My launches">
       {#each launches as l (l.token)}
@@ -111,7 +109,7 @@
         {@const owed = claimable(l)}
         {@const curve = launchCurveFacts(l)}
         <li class="ml-grid ml-row" data-testid="my-launch">
-          <span class="c-asset"><button type="button" class="asset" title={t('Open its launch')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} stacked /></button></span>
+          <span class="c-asset"><button type="button" class="asset" title={t('Open its page')} onclick={() => open(l)}><AssetBadge id={l.token} label={l.ticker} display={l.display_name ?? ''} stacked /></button></span>
           <span class="c-alloc" data-testid="allocation-line">
             <span class="cell-label">Allocation</span>
             {#if a}<span class="alloc"><strong class="num">{a.percent}%</strong> <span class="faint small num" title={formatUnits(a.units, a.decimals)}>{compactUnits(a.units, a.decimals)} <SafeText text={l.ticker} /></span></span>{:else}<span class="faint" title={t('no allocation')}>–</span>{/if}
@@ -132,8 +130,8 @@
             {:else}<span class="faint">–</span>{/if}
           </span>
           <span class="c-action">
-            <!-- Its actions (ba/AssetActions.svelte): Claim first when something is owed, then Buy, Sell, View market… -->
-            <AssetActions id={l.token} label={l.ticker} launch={l} claimable={owed.allocation || owed.fees || owed.tokens} claim={() => claim(l)} busy={busy !== ''} />
+            <!-- Claim when something is owed; everything else on the asset's page, which its row opens. -->
+            <button type="button" class="btn small act" class:primary={owed.allocation || owed.fees || owed.tokens} data-action="claim" disabled={busy !== '' || !(owed.allocation || owed.fees || owed.tokens)} onclick={() => claim(l)}>Claim</button>
           </span>
         </li>
       {/each}

@@ -8,10 +8,14 @@
   //  - its pool is empty: both amounts go in and set the price again (createpool of the pool's own kind);
   //  - its pool has liquidity: at the pool's price (addpoolliquidity by the pool's id);
   //  - its pool is concentrated on the chain (a graduated launch's): over the full range, always (openposition with
-  //    prices of 0); never a price range to pick. When that pool has nothing in it, its price was set by whoever made
-  //    it, who may be a stranger: the form shows that price as the price the user accepts, compares it with a reference
-  //    (another pool of the asset with liquidity, its launch's price), and takes an explicit tick when they differ by
-  //    more than a few percent or when there is no reference (ba/pools.ts emptyPoolCheck; security review 2026-11-11);
+  //    prices of 0); never a price range to pick;
+  //  - whenever the deposit would be most of a pool's liquidity (the pool is empty, holds dust, or holds less than what
+  //    goes in), the pool's price is in effect a stranger's: the form shows it as the price the user accepts, compares
+  //    it with a reference a stranger cannot move cheaply (the price its launch graduated at, else the deepest other
+  //    pool of real depth), and takes an explicit tick when they differ by more than a few percent or when there is no
+  //    such reference; the same guard is worked out again from the node's fresh lists before the wallet is asked, and
+  //    the form stops if the pool's price moved past the slippage limit or the guard's answer changed (ba/pools.ts
+  //    priceGuard; security reviews 2026-11-11);
   //  - the asset is on its launch curve: refused here, with the reason, as consensus refuses it (bad-ba-launch-pooled):
   //    its pool opens by itself at graduation.
   // On a node from before the pool kinds, a pool is made and added to by addliquidity (the default kind, 0.3%).
@@ -26,7 +30,8 @@
   import { depositAmounts, FEE_TIERS, feeNow, kindOf, kindParam, type LiquidityQuote, type PoolPreview } from './kinds';
   import type { Launch } from './launch';
   import { amountParam, approx, assetArg, CHN_ID, formatAmount, formatPercent, formatPrice, formatUnits, MIN_OPEN_CHN, unitsAtMost, unitsOf, type Amount, type Pool } from './model';
-  import { CURVE_REFUSAL, ecxPoolsOf, EMPTY_POOL_TOLERANCE, emptyPoolCheck, poolEmpty, poolFormState, poolSides, type PoolFormMode } from './pools';
+  import { CURVE_REFUSAL, EMPTY_POOL_TOLERANCE, poolEmpty, poolFormState, poolSides, priceGuard, type PoolFormMode, type PriceGuard } from './pools';
+  import { curveShape, launchSupply } from './launch';
   import { ba, decimalsOf, labelOf, launchById, nameOf, refreshBitAssets } from './store.svelte';
   import { TICKER } from '../config';
 
@@ -71,14 +76,27 @@
   const any = $derived((aUnits ?? 0n) > 0n || (eUnits ?? 0n) > 0n);
   const typedPrice = $derived(both ? Number(eUnits) / 1e8 / (Number(aUnits) / 10 ** decimals) : undefined);
   const poolPrice = $derived(pool ? poolSides(pool).price : undefined);
-  /** The pool is there with nothing in it, at a price someone else may have set: the user would be its first provider at that price. */
-  const strangerPrice = $derived(mode === 'full-range' && !!pool && poolEmpty(pool));
-  /** A price to hold it against: another pool of the asset with ECX that holds liquidity (the deepest), else its launch's. */
+  /** The price the asset's launch graduated at (the end of its curve: nobody's to move), when it was launched and graduated. */
+  function graduationPrice(): number | undefined {
+    const l = launchById(asset);
+    if (!l || l.status !== 'graduated') return undefined;
+    const end = curveShape(approx(l.graduation), launchSupply(l, approx(l.supply))).endPrice;
+    return Number.isFinite(end) && end > 0 ? end : undefined;
+  }
+  /** What goes in, in ECX: its ECX, and its asset at the pool's price. */
+  const depositEcx = (a: bigint | null, e: bigint | null, price: number | undefined) => Number(e ?? 0n) / 1e8 + (Number(a ?? 0n) / 10 ** decimals) * (price ?? 0);
+  /** The guard of a deposit into `p`, with these pools known for its reference. */
+  function guardOf(p: Pool, known: readonly Pool[], a: bigint | null, e: bigint | null): PriceGuard | null {
+    return priceGuard({ asset, pool: p, pools: known, depositEcx: depositEcx(a, e, poolSides(p).price), launchPrice: graduationPrice() });
+  }
+  /**
+   * The deposit would be most of the pool's liquidity (an empty pool, dust, or less than what goes in): its price is in
+   * effect a stranger's, and the user accepts it. Not for a pool the user's own two amounts price (a new one, or one
+   * everyone left: create, reopen).
+   */
   const guard = $derived.by(() => {
-    if (!strangerPrice || !pool) return null;
-    const others = ecxPoolsOf(asset, [...pools, ...ba.pools.filter((p) => !pools.some((x) => x.pool === p.pool))]).filter((p) => p.pool !== pool.pool && !poolEmpty(p));
-    const launch = launchById(asset);
-    return emptyPoolCheck(poolPrice, [...others.map((p) => poolSides(p).price), launch ? Number(launch.price) || undefined : undefined]);
+    if (!pool || setsPrice || !mode) return null;
+    return guardOf(pool, [...pools, ...ba.pools.filter((p) => !pools.some((x) => x.pool === p.pool))], aUnits, eUnits);
   });
   let acknowledged = $state(false);
   const amounts = $derived(
@@ -208,7 +226,8 @@
     const sFee = poolFee;
     const sGuard = guard ? { ...guard } : null;
     const sPrice = poolPrice;
-    if (sGuard?.acknowledge && !acknowledged) return;
+    const sAck = acknowledged;
+    if (sGuard?.acknowledge && !sAck) return;
     busy = true;
     try {
       // The asset's state, from the node now: a form never asks the wallet for what the chain would refuse.
@@ -226,6 +245,27 @@
           void refreshBitAssets();
           return;
         }
+        // The pool as the node has it now, not as the page read it a while ago: its price within the slippage limit
+        // of the price shown, and the guard's answer the same (its depth, its reference); else nothing is sent.
+        const fresh = sPool ? now.find((p) => p.pool === sPool.pool) : undefined;
+        if (sPool && fresh) {
+          const nowPrice = poolSides(fresh).price;
+          const moved = !(sPrice !== undefined && sPrice > 0 && nowPrice !== undefined && nowPrice > 0) ? !poolEmpty(fresh) && sPrice !== nowPrice : Math.abs(nowPrice / sPrice - 1) * 100 > sSlip;
+          const again = sMode === 'add' || sMode === 'full-range' ? guardOf(fresh, now, sA, sE) : null;
+          const changed = !!again !== !!sGuard || (again?.acknowledge ?? false) !== (sGuard?.acknowledge ?? false) || (again?.reference ?? null) !== (sGuard?.reference ?? null);
+          if (moved || changed || (again?.acknowledge && !sAck)) {
+            await inform(
+              t('Add liquidity'),
+              moved
+                ? t('The price of this pool moved while you typed, from %1 to %2 %3 for 1 %4: more than your slippage limit. Nothing was sent. Look at it again.', formatPrice(sPrice), formatPrice(nowPrice), TICKER, label)
+                : t('This pool, or the market its price is compared with, changed while you typed: what this form showed you about its price is no longer true. Nothing was sent. Look at it again.'),
+              'warning',
+            );
+            acknowledged = false;
+            void refreshBitAssets();
+            return;
+          }
+        }
       }
       const what = sA > 0n && sE > 0n ? t('%1 %2 and %3 %4', formatUnits(sA, decimals), nameOf(asset), formatUnits(sE, 8), TICKER) : sA > 0n ? `${formatUnits(sA, decimals)} ${nameOf(asset)}` : `${formatUnits(sE, 8)} ${TICKER}`;
       const r = await ask({
@@ -240,7 +280,7 @@
           sMode === 'create' || sMode === 'reopen'
             ? t('Your two amounts set its price: 1 %1 = %2 %3. Fee %4% of each swap. One transaction, one confirmation; liquidity covers every price.', label, formatPrice(Number(sE) / 1e8 / (Number(sA) / 10 ** decimals)), TICKER, String(sFee))
             : sGuard
-              ? t('This pool is empty: you are its first provider, and you accept its price, %1 %2 for 1 %3, set by whoever made the pool. %4 Whoever trades against a wrong price takes the difference from you. Fee %5% of each swap.', formatPrice(sPrice), TICKER, label, sGuard.reference === null ? t('There is no other market to compare it with.') : t('Elsewhere it trades at %1 %2: this pool is %3 from that.', formatPrice(sGuard.reference), TICKER, deviationText(sGuard.deviation)), String(sFee))
+              ? t('What you put in would be most of this pool: you accept its price, %1 %2 for 1 %3, which is not a market\'s but whoever made or last moved the pool\'s. %4 Whoever trades against a wrong price takes the difference from you. Fee %5% of each swap.', formatPrice(sPrice), TICKER, label, sGuard.reference === null ? t('There is no market deep enough to compare it with.') : t('Its reference price is %1 %2: this pool is %3 from that.', formatPrice(sGuard.reference), TICKER, deviationText(sGuard.deviation)), String(sFee))
               : t('At the pool\'s price; at most %1% less should it move first. Liquidity covers every price. Fee %2% of each swap.', String(sSlip), String(sFee)),
         level: sGuard ? 'warning' : 'question',
         choices: [
@@ -277,14 +317,14 @@
     </p>
     {#if guard}
       <div class="ba-problems stranger" class:bad={guard.acknowledge} role="alert" data-testid="empty-pool-price">
-        <p><strong>This pool is empty: its starting price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.</strong> You would be its first provider, and you accept that price. It was set by whoever made the pool, not by you; if it is wrong, whoever trades against it takes the difference from you.</p>
+        <p><strong>{#if poolEmpty(pool!)}This pool is empty: its starting price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{:else}This pool holds very little: its price is {formatPrice(poolPrice)} {TICKER} for 1 <SafeText text={label} />.{/if}</strong> What you put in would be most of it, so you accept that price. It was set by whoever made or last moved the pool, not by you; if it is wrong, whoever trades against it takes the difference from you.</p>
         {#if guard.reference !== null}
-          <p data-testid="empty-pool-reference">Elsewhere <SafeText text={label} /> trades at {formatPrice(guard.reference)} {TICKER}: this pool's price is <strong translate="no">{deviationText(guard.deviation)}</strong> from that.</p>
+          <p data-testid="empty-pool-reference">The reference price of <SafeText text={label} /> is {formatPrice(guard.reference)} {TICKER}: this pool's price is <strong translate="no">{deviationText(guard.deviation)}</strong> from that.</p>
         {:else}
-          <p data-testid="empty-pool-reference">There is no other market of <SafeText text={label} /> to compare this price with.</p>
+          <p data-testid="empty-pool-reference">There is no market of <SafeText text={label} /> deep enough to compare this price with.</p>
         {/if}
         {#if guard.acknowledge}
-          <label class="check"><input type="checkbox" data-testid="empty-pool-ack" bind:checked={acknowledged} /> <span>{guard.reference === null ? t('I checked this price myself and accept it.') : t('I accept this price though it is more than %1% from the other market.', String(EMPTY_POOL_TOLERANCE))}</span></label>
+          <label class="check"><input type="checkbox" data-testid="empty-pool-ack" bind:checked={acknowledged} /> <span>{guard.reference === null ? t('I checked this price myself and accept it.') : t('I accept this price though it is more than %1% from the reference.', String(EMPTY_POOL_TOLERANCE))}</span></label>
         {/if}
       </div>
     {/if}

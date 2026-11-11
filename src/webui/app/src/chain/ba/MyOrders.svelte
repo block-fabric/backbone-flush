@@ -2,7 +2,8 @@
   // The limit orders this wallet holds (listorders, each read whole with getorder: its assets, its limit, what it sold and
   // got): what it sells and buys, its limit, what is left and what waits to be collected, its last block, its status (Open,
   // Filled, Expired, Evicted: a better and larger order took its place in a full book); and what can be done with it
-  // (settleorder): collect what it got (it stays open), cancel it (what is left comes back too), or, once it trades no
+  // (settleorder; Portfolio's "Closing old markets": order books are retired from the interface, owner decision
+  // 2026-11-11, and no order is placed from it any more): collect what it got (it stays open), cancel it (what is left comes back too), or, once it trades no
   // more, collect everything (the order is gone).
   import SafeText from '../../components/SafeText.svelte';
   import { stacked } from '../../lib/actions';
@@ -91,7 +92,7 @@
 </script>
 
 <section class="panel" aria-label="My orders">
-  <div class="panel-head"><h3>My orders</h3><span class="muted small">limit orders of this wallet, in every book</span></div>
+  <div class="panel-head"><h3>Open orders</h3><span class="muted small">limit orders of this wallet in the order books</span></div>
   {#if wallets.current === null}
     <p class="ba-empty">No wallet loaded.</p>
   {:else if error}
@@ -99,7 +100,7 @@
   {:else if list === null}
     <p class="ba-empty">Reading the orders…</p>
   {:else if list.length === 0}
-    <p class="ba-empty">No order: place one above.</p>
+    <p class="ba-empty">No order.</p>
   {:else}
     <div class="ba-wrap">
       <table class="ba-table" use:stacked aria-label="My orders">

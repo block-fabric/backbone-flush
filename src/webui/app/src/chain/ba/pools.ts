@@ -119,26 +119,79 @@ export function poolFormState(o: {
   return { ok: true, reason: '', mode: 'add', pool };
 }
 
-/**
- * The most an empty pool's price may differ from a reference, in percent, before the form asks for an explicit word
- * (security review 2026-11-11).
- */
+// --- A thin pool's price is someone else's (security reviews 2026-11-11) ---
+//
+// The price of a pool that holds little was set by whoever made or last moved it, who may be a stranger: anyone can
+// open a pool of an asset at an absurd price (empty, or with dust in it), and whoever then puts real liquidity in at
+// that price hands the difference to the next trader. So the one pool form never funds such a pool silently
+// (priceGuard): it shows the pool's price as the price the user accepts, compares it with a reference that a stranger
+// cannot move cheaply, and takes an explicit tick when they differ, or when there is no such reference.
+
+/** The most a thin pool's price may differ from the reference, in percent, before the form asks for an explicit word: about what a day's trading moves a price, far below what makes the attack pay. */
 export const EMPTY_POOL_TOLERANCE = 3;
+/**
+ * A pool that holds less ECX than this is thin whatever goes in: dust costs an attacker nothing, and a price backed by
+ * less than a whole ECX is nobody's market.
+ */
+export const THIN_POOL_ECX = 1;
+/**
+ * The least ECX another pool must hold for its price to count as a reference: enough that moving it costs more than the
+ * attack is likely to win, so that a second dust pool at the same absurd price is not taken for a market.
+ */
+export const REFERENCE_MIN_ECX = 10;
 
 /**
- * The price of a pool with nothing in it was set by whoever made it, who may be a stranger: anyone can open an empty
- * pool of an asset at an absurd price, and the first to put liquidity in at that price hands the difference to whoever
- * trades against it next (security review 2026-11-11). So the one pool form never funds such a pool silently: it shows
- * the price, compares it with a reference where there is one (another pool of the asset that holds liquidity, the price
- * its launch graduated at), and asks for an explicit acknowledgement when they differ by more than
- * EMPTY_POOL_TOLERANCE percent, or when there is no reference at all. `deviation`: of the pool's price from the
- * reference, in percent, signed.
+ * Whether the user's deposit would be most of a pool's liquidity, so that the pool's price is in effect the price the
+ * user accepts, not a market's: the pool holds nothing, or less ECX than the floor, or less than what goes in (the
+ * deposit in ECX: its ECX and its asset at the pool's price).
  */
-export function emptyPoolCheck(price: number | undefined, references: readonly (number | undefined)[]): { reference: number | null; deviation: number | null; acknowledge: boolean } {
-  const reference = references.find((r): r is number => r !== undefined && Number.isFinite(r) && r > 0) ?? null;
-  if (!(price !== undefined && price > 0) || reference === null) return { reference, deviation: null, acknowledge: true };
+export function thinPool(pool: Pick<Pool, 'abandoned' | 'curve' | 'reserve_a' | 'reserve_b' | 'asset_a_id' | 'asset_b_id'>, depositEcx: number): boolean {
+  if (poolEmpty(pool)) return true;
+  const ecx = poolEcx(pool) ?? 0;
+  return ecx < THIN_POOL_ECX || ecx < depositEcx;
+}
+
+/**
+ * The reference a thin pool's price is held against: the price the asset's launch graduated at, which is the curve's
+ * and nobody's to move (given by the page from the launch), before the deepest other pool of the asset with ECX that
+ * holds at least REFERENCE_MIN_ECX. The pool itself, thin pools and pools without ECX never count. null: none.
+ */
+export function referencePrice(asset: string, target: string, pools: readonly Pool[], launchPrice?: number): number | null {
+  if (launchPrice !== undefined && Number.isFinite(launchPrice) && launchPrice > 0) return launchPrice;
+  for (const p of ecxPoolsOf(asset, pools)) {
+    if (p.pool === target || poolEmpty(p) || (poolEcx(p) ?? 0) < REFERENCE_MIN_ECX) continue;
+    const price = poolSides(p).price;
+    if (price !== undefined && Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+export interface PriceGuard {
+  /** The pool's price, of the asset in ECX. */
+  price: number | undefined;
+  reference: number | null;
+  /** Of the pool's price from the reference, in percent, signed; null without a reference. */
+  deviation: number | null;
+  /** The explicit word is needed: no price, no reference, or further from it than EMPTY_POOL_TOLERANCE. */
+  acknowledge: boolean;
+}
+
+/** A price held against a reference. */
+export function emptyPoolCheck(price: number | undefined, references: readonly (number | null | undefined)[]): PriceGuard {
+  const reference = references.find((r): r is number => r !== undefined && r !== null && Number.isFinite(r) && r > 0) ?? null;
+  if (!(price !== undefined && price > 0) || reference === null) return { price, reference, deviation: null, acknowledge: true };
   const deviation = (price / reference - 1) * 100;
-  return { reference, deviation, acknowledge: Math.abs(deviation) > EMPTY_POOL_TOLERANCE };
+  return { price, reference, deviation, acknowledge: Math.abs(deviation) > EMPTY_POOL_TOLERANCE };
+}
+
+/**
+ * The guard of a deposit into a pool that exists: null when the pool is deep enough that its price is a market's (no
+ * warning); else the pool's price against its reference, and whether the explicit word is needed. The same answer is
+ * worked out again from the node's fresh lists right before the wallet is asked (ba/AddLiquidity.svelte add()).
+ */
+export function priceGuard(o: { asset: string; pool: Pool; pools: readonly Pool[]; depositEcx: number; launchPrice?: number }): PriceGuard | null {
+  if (!thinPool(o.pool, o.depositEcx)) return null;
+  return emptyPoolCheck(poolSides(o.pool).price, [referencePrice(o.asset, o.pool.pool, o.pools, o.launchPrice)]);
 }
 
 /** What a pool is said to be on the pages: its fee alone ("0.3% fee"); never its curve. */
