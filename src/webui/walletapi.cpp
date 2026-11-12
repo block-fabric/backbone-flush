@@ -875,13 +875,13 @@ UniValue PsbtState(interfaces::Wallet* wallet, const PartiallySignedTransaction&
 std::string OperationName(const bitassets::Marker& marker)
 {
     // In the order of bitassets::Operation.
-    static constexpr std::array<const char*, 30> NAMES{
+    static constexpr std::array<const char*, 31> NAMES{
         "a reservation of an asset name", "a registration of an asset", "a mint", "an update of an asset", "a burn", "a swap",
         "liquidity added to a pool", "liquidity taken out of a pool", "an auction created", "a bid in an auction", "an auction collected",
         "an asset released", "a trade along a route", "an oracle registered", "an attestation of an oracle", "an oracle contract created",
         "an oracle contract settled", "a logo set", "a display name set", "a pool created", "liquidity added to a pool",
         "liquidity taken out of a pool", "a trade through pools", "a launch", "a launch's creator paid", "a position opened",
-        "a position changed", "a limit order placed", "a limit order settled", "an asset put on a bonding curve"};
+        "a position changed", "a limit order placed", "a limit order settled", "an asset put on a bonding curve", "a launch cancelled"};
     static_assert(std::variant_size_v<bitassets::Operation> == NAMES.size());
     if (!marker.operation) return "none: it moves tokens only";
     return NAMES[marker.operation->index()];

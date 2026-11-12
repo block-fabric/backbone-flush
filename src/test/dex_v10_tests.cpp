@@ -192,6 +192,18 @@ struct Chain {
         Require(tx);
         return tx;
     }
+    /** The cancel of `token`'s launch with `inputs`: its units and a control coin (`control`) to `to`, after `listed`. */
+    static CTransaction Cancel(const AssetId& token, const std::vector<COutPoint>& inputs, bool control = true, const CScript& to = CREATOR, std::vector<std::optional<Token>> listed = {})
+    {
+        std::vector<CScript> scripts(listed.size(), HOLDER);
+        listed.emplace_back();
+        scripts.push_back(to);
+        if (control) {
+            listed.emplace_back();
+            scripts.push_back(to);
+        }
+        return MakeTx(inputs, CancelLaunch{token}, listed, 0, scripts);
+    }
     /** What a cancel of `token`'s launch leaves nobody's: what its curve kept beyond its virtual coin, the fees kept for its pool, and what is owed under the least payout. */
     int64_t Dust(const AssetId& token) const
     {
@@ -269,6 +281,32 @@ struct V10OldLaunchSetup : BasicTestingSetup {
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(dex_v10_tests, V10Setup)
+
+BOOST_AUTO_TEST_CASE(marker_and_log_serialization)
+{
+    // The marker of a cancel: its kind, the token; written one way.
+    const AssetId MOON{HashName("MOON")};
+    Marker marker;
+    marker.operation = CancelLaunch{MOON};
+    marker.outputs.push_back({0, std::nullopt});
+    const auto parsed{ParseMarkerScript(MarkerScript(marker))};
+    BOOST_REQUIRE(parsed && parsed->operation);
+    BOOST_CHECK(std::get<CancelLaunch>(*parsed->operation) == CancelLaunch{MOON});
+    BOOST_CHECK(IsCurveOperation(*parsed->operation) && IsDexOperation(*parsed->operation));
+    // A log entry without a cancel is written as it always was (ten fields: 8·4 + 4·8... its bytes unchanged), and one
+    // written before the field reads as not cancelled.
+    LaunchLogEntry entry;
+    entry.coin_in = 7;
+    entry.orders = 2;
+    entry.created = true;
+    DataStream plain;
+    plain << entry.coin_in << entry.coin_out << entry.tokens_in << entry.tokens_out << entry.fees << entry.orders << entry.reserve_coin << entry.reserve_tokens << entry.created << entry.graduated;
+    BOOST_CHECK(sidechain::EncodeValue(entry) == sidechain::StoreBytes(UCharCast(plain.data()), UCharCast(plain.data()) + plain.size()));
+    BOOST_CHECK(sidechain::DecodeValue<LaunchLogEntry>(sidechain::EncodeValue(entry)) == entry);
+    entry.cancelled = true;
+    BOOST_CHECK_EQUAL(sidechain::EncodeValue(entry).size(), plain.size() + 1);
+    BOOST_CHECK(sidechain::DecodeValue<LaunchLogEntry>(sidechain::EncodeValue(entry)) == entry);
+}
 
 BOOST_AUTO_TEST_CASE(extra_markets_retired)
 {
@@ -431,6 +469,404 @@ BOOST_AUTO_TEST_CASE(extra_markets_retired)
     chain.EndBlock();
     (void)control_a;
     (void)control_b;
+}
+
+BOOST_AUTO_TEST_CASE(cancel_before_the_height)
+{
+    Chain chain;
+    const AssetId MOON{HashName("MOON")};
+    chain.Launch("MOON");
+    const COutPoint proof{chain.Proof(CREATOR)};
+    chain.EndBlock();
+    std::string why;
+    BOOST_CHECK(!chain.Assets().Cancellable(MOON, chain.height, &why));
+    BOOST_CHECK_EQUAL(why, "bad-ba-marker");
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof})), "bad-ba-marker");
+    chain.Until(V10 - 1);
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof})), "bad-ba-marker");
+    chain.EndBlock();
+    BOOST_CHECK(chain.Assets().Cancellable(MOON, chain.height));
+    chain.Require(Chain::Cancel(MOON, {proof}));
+    chain.EndBlock();
+}
+
+BOOST_AUTO_TEST_CASE(cancel_a_launch_never_bought)
+{
+    Chain chain;
+    chain.Until(V10);
+    const AssetId MOON{HashName("MOON")};
+    const CTransaction launched{chain.Launch("MOON")};
+    chain.EndBlock();
+    const LaunchRecord record{*chain.Assets().GetLaunch(MOON)};
+    const uint64_t S{record.Supply()};
+    BOOST_CHECK(chain.Assets().GetAsset(MOON)->fixed);
+    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(MOON)->provided_pools, 1U);
+    // By its creator alone: without a reservation made at the creator's script, or with one made elsewhere, refused.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {})), "bad-ba-cancel-not-creator");
+    const COutPoint elsewhere{chain.Proof(HOLDER)};
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {elsewhere})), "bad-ba-cancel-not-creator");
+    const COutPoint proof{chain.Proof(CREATOR)};
+    // The proof goes with the cancel: listed out again, it is unbacked.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof}, true, CREATOR, {Token{Token::Kind::RESERVATION, proof.hash.ToUint256(), 1}})), "bad-ba-tokens-unbacked");
+    // To the creator's script only, its units and the control coin, both.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof}, true, HOLDER)), "bad-ba-contract-payee");
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof}, false)), "bad-ba-results");
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(HashName("NONE"), {proof})), "bad-ba-no-launch");
+    const CTransaction cancel{Chain::Cancel(MOON, {proof})};
+    chain.Require(cancel);
+    // A buy after it in the block: no curve to buy from.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({}, SwapPools{CHN, {record.pool}, COIN_UNITS, 1, PAYEE}, {std::nullopt}, COIN_UNITS)), "bad-ba-no-pool");
+    const int cancelled_at{chain.height};
+    chain.EndBlock();
+    BOOST_CHECK(chain.paid.empty());
+    // Its whole supply and a control coin, the creator's; nothing bought, so all of it: mintable again.
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == Asset(MOON, S));
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 1}) == (Token{Token::Kind::CONTROL, MOON, 1}));
+    BOOST_CHECK(!chain.TokenAt(proof));
+    BOOST_CHECK(!chain.Assets().GetReservation(proof.hash) && !chain.Assets().GetReservationOrigin(proof.hash));
+    const AssetRecord asset{*chain.Assets().GetAsset(MOON)};
+    BOOST_CHECK(!asset.fixed);
+    BOOST_CHECK_EQUAL(asset.supply, S);
+    BOOST_CHECK_EQUAL(asset.provided_pools, 0U);
+    // Never launched: no record, no curve, none among the launches; the block's log says it was cancelled.
+    BOOST_CHECK(!chain.Assets().GetLaunch(MOON) && !chain.Assets().Launching(MOON));
+    BOOST_CHECK(!chain.Assets().GetPool(record.pool) && !chain.Assets().HasPoolParams(record.pool));
+    bool listed{false};
+    chain.Assets().ForEachLaunch([&](int32_t, const AssetId& token) {
+        listed |= token == MOON;
+        return true;
+    });
+    BOOST_CHECK(!listed);
+    const auto log{chain.Assets().GetLaunchLog(cancelled_at)};
+    BOOST_REQUIRE_EQUAL(log.size(), 1U);
+    BOOST_CHECK(log[0].first == MOON && log[0].second.cancelled && !log[0].second.created && !log[0].second.graduated);
+    BOOST_CHECK(!chain.Assets().Cancellable(MOON, chain.height));
+    // The control coin mints again.
+    const CTransaction mint{MakeTx({COutPoint{cancel.GetHash(), 1}}, Mint{MOON, 8}, {Token{Token::Kind::CONTROL, MOON, 1}, Asset(MOON, 8)})};
+    chain.Require(mint);
+    chain.EndBlock();
+    // And puts it on a curve again, with other parameters: half of what there is, at 2 %; the supply fixed again.
+    const CTransaction again{chain.Curve(MOON, COutPoint{mint.GetHash(), 0}, COutPoint{cancel.GetHash(), 0}, S / 2, 20'000)};
+    chain.Require(again);
+    chain.EndBlock();
+    const LaunchRecord second{*chain.Assets().GetLaunch(MOON)};
+    BOOST_CHECK(second.from_asset && second.txid == again.GetHash() && second.txid != launched.GetHash());
+    BOOST_CHECK_EQUAL(second.Supply(), S / 2);
+    BOOST_CHECK_EQUAL(second.fee, 20'000U);
+    BOOST_CHECK(chain.Assets().GetAsset(MOON)->fixed && !chain.Assets().FirstTokenOf(MOON, Token::Kind::CONTROL));
+    size_t count{0};
+    chain.Assets().ForEachLaunch([&](int32_t at, const AssetId& token) {
+        if (token == MOON) {
+            ++count;
+            BOOST_CHECK_EQUAL(at, second.height);
+        }
+        return true;
+    });
+    BOOST_CHECK_EQUAL(count, 1U);
+    // It trades and graduates as any launch.
+    chain.Buy(MOON, second.graduation + 200 * COIN_UNITS);
+    chain.EndBlock();
+    const LaunchRecord graduated{*chain.Assets().GetLaunch(MOON)};
+    BOOST_CHECK(graduated.Graduated() && chain.Assets().IsLockedPool(graduated.pool));
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {chain.Proof(CREATOR)})), "bad-ba-cancel-graduated");
+}
+
+BOOST_AUTO_TEST_CASE(cancel_after_everything_sold_back)
+{
+    Chain chain;
+    chain.Until(V10);
+    const AssetId MOON{HashName("MOON")};
+    // A split: half the creator's, half a partner's address.
+    const CTransaction launched{chain.Launch("MOON", COIN_UNITS / 20, false, {FeeShare{FeeShare::CREATOR, {}, 5000}, FeeShare{FeeShare::ADDRESS, PARTNER, 5000}})};
+    const COutPoint proof{chain.Proof(CREATOR)};
+    // Its own first buy is an order of this block through its curve: not in this block.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof})), "bad-ba-cancel-order-pending");
+    chain.EndBlock();
+    const COutPoint bought{launched.GetHash(), 0};
+    BOOST_REQUIRE(chain.TokenAt(bought));
+    // Someone holds some of it: not cancelled.
+    std::string why;
+    BOOST_CHECK(!chain.Assets().Cancellable(MOON, chain.height, &why));
+    BOOST_CHECK_EQUAL(why, "bad-ba-cancel-bought");
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof})), "bad-ba-cancel-bought");
+    // Sold back, all of it; in the block of the sale its units are an order's, not the curve's yet.
+    chain.SellAll(bought, MOON);
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(MOON, {proof})), "bad-ba-cancel-bought");
+    chain.EndBlock();
+    const LaunchRecord record{*chain.Assets().GetLaunch(MOON)};
+    const Pool curve{*chain.Assets().GetPool(record.pool)};
+    BOOST_CHECK_EQUAL(curve.reserve1, record.VirtualUnits());
+    BOOST_CHECK_GE(curve.reserve0, record.virtual_coin);
+    BOOST_CHECK_GT(record.creator_fees, MinChnPayout(chain.height));
+    BOOST_REQUIRE_EQUAL(record.share_owed.size(), 2U);
+    BOOST_CHECK_GT(record.share_owed[1], MinChnPayout(chain.height));
+    BOOST_CHECK_LT(record.share_owed[1], MIN_FEE_SHARE_PAYOUT);
+    BOOST_CHECK(chain.Assets().Cancellable(MOON, chain.height));
+    // A buy before the cancel in its block: the cancel waits (and then, the buy filled, is refused for good).
+    {
+        Chain other;
+        other.Until(V10);
+        other.Launch("MOON");
+        const COutPoint other_proof{other.Proof(CREATOR)};
+        other.EndBlock();
+        other.Buy(MOON, COIN_UNITS);
+        BOOST_CHECK_EQUAL(other.Refused(Chain::Cancel(MOON, {other_proof})), "bad-ba-cancel-order-pending");
+        other.EndBlock();
+        BOOST_CHECK_EQUAL(other.Refused(Chain::Cancel(MOON, {other_proof})), "bad-ba-cancel-bought");
+    }
+    // The cancel pays the creator its fees and the partner what it is owed; the curve's leftovers are nobody's.
+    chain.dropped += chain.Dust(MOON);
+    BOOST_CHECK_EQUAL(chain.Dust(MOON), static_cast<int64_t>(curve.reserve0 - record.virtual_coin + record.pool_fees));
+    const CTransaction cancel{Chain::Cancel(MOON, {proof})};
+    chain.Require(cancel);
+    BOOST_REQUIRE_EQUAL(chain.payouts.size(), 2U);
+    BOOST_CHECK(chain.payouts[0] == CTxOut(static_cast<CAmount>(record.creator_fees), CREATOR));
+    BOOST_CHECK(chain.payouts[1] == CTxOut(static_cast<CAmount>(record.share_owed[1]), PARTNER));
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), 0);
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == Asset(MOON, record.Supply()));
+    BOOST_CHECK(!chain.Assets().GetAsset(MOON)->fixed);
+    // Nothing of the launch is left to pay or to buy back in the blocks after.
+    chain.EndBlock();
+    chain.EndBlock();
+    BOOST_CHECK(chain.paid.empty());
+}
+
+BOOST_AUTO_TEST_CASE(cancel_keeps_a_fixed_supply_fixed)
+{
+    Chain chain;
+    chain.Until(V10);
+    const AssetId GOLD{HashName("GOLD")};
+    // A million GOLD: 800 000 on a curve, 200 000 kept in a coin of the issuer's.
+    const uint64_t D{800'000'000'000}, kept{200'000'000'000};
+    const auto [control, coins]{chain.Issue("GOLD", {D, kept}, 6)};
+    chain.EndBlock();
+    chain.Require(chain.Curve(GOLD, control, coins[0], D));
+    chain.EndBlock();
+    BOOST_CHECK(chain.Assets().GetAsset(GOLD)->fixed);
+    const CTransaction cancel{Chain::Cancel(GOLD, {chain.Proof(CREATOR)})};
+    chain.Require(cancel);
+    chain.EndBlock();
+    // The curve's units and a control coin back; someone else holds units, so the supply stays fixed.
+    const COutPoint units{cancel.GetHash(), 0}, coin{cancel.GetHash(), 1};
+    BOOST_CHECK(chain.TokenAt(units) == Asset(GOLD, D));
+    BOOST_CHECK(chain.TokenAt(coin) == (Token{Token::Kind::CONTROL, GOLD, 1}));
+    BOOST_CHECK(chain.Assets().GetAsset(GOLD)->fixed);
+    BOOST_CHECK_EQUAL(chain.Assets().GetAsset(GOLD)->supply, D + kept);
+    // The control coin mints nothing.
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coin}, Mint{GOLD, 1}, {Token{Token::Kind::CONTROL, GOLD, 1}, Asset(GOLD, 1)})), "bad-ba-supply-fixed");
+    // It still changes the asset's data, and moves.
+    UpdateAsset update;
+    update.asset = GOLD;
+    update.updates.info = Update<std::string>{UpdateKind::SET, std::string{"gold again"}};
+    const CTransaction updated{MakeTx({coin}, update, {Token{Token::Kind::CONTROL, GOLD, 1}})};
+    chain.Require(updated);
+    chain.EndBlock();
+    // And puts the asset on a curve again, other parameters: 400 000 at 3 %. Fixed still, the control coin gone again.
+    const CTransaction again{chain.Curve(GOLD, COutPoint{updated.GetHash(), 0}, units, D / 2, 30'000)};
+    chain.Require(again);
+    chain.EndBlock();
+    const LaunchRecord second{*chain.Assets().GetLaunch(GOLD)};
+    BOOST_CHECK_EQUAL(second.Supply(), D / 2);
+    BOOST_CHECK_EQUAL(second.fee, 30'000U);
+    BOOST_CHECK(chain.Assets().GetAsset(GOLD)->fixed && !chain.Assets().FirstTokenOf(GOLD, Token::Kind::CONTROL));
+    chain.Buy(GOLD, COIN_UNITS);
+    chain.EndBlock();
+    BOOST_CHECK_GT(chain.Assets().GetPool(second.pool)->reserve0, second.virtual_coin);
+    // Cancelled once more by a transaction that brings every other unit in with it: all of the supply is here, and
+    // the asset is not fixed any more.
+    Chain whole;
+    whole.Until(V10);
+    const auto [control2, coins2]{whole.Issue("GOLD", {D, kept}, 6)};
+    whole.EndBlock();
+    whole.Require(whole.Curve(GOLD, control2, coins2[0], D));
+    whole.EndBlock();
+    const CTransaction all{Chain::Cancel(GOLD, {whole.Proof(CREATOR), coins2[1]}, true, CREATOR, {Asset(GOLD, kept)})};
+    whole.Require(all);
+    whole.EndBlock();
+    BOOST_CHECK(!whole.Assets().GetAsset(GOLD)->fixed);
+    whole.Require(MakeTx({COutPoint{all.GetHash(), 2}}, Mint{GOLD, 1}, {Token{Token::Kind::CONTROL, GOLD, 1}, Asset(GOLD, 1)}));
+    // One unit short of all of it (a unit burned from the coin brought in does not count as held: the supply is less).
+    Chain part;
+    part.Until(V10);
+    const auto [control3, coins3]{part.Issue("GOLD", {D, kept - 1, 1}, 6)};
+    part.EndBlock();
+    part.Require(part.Curve(GOLD, control3, coins3[0], D));
+    part.EndBlock();
+    const CTransaction most{Chain::Cancel(GOLD, {part.Proof(CREATOR), coins3[1]}, true, CREATOR, {Asset(GOLD, kept - 1)})};
+    part.Require(most);
+    BOOST_CHECK(part.Assets().GetAsset(GOLD)->fixed);
+}
+
+BOOST_AUTO_TEST_CASE(cancel_a_launch_that_kept_its_control_coin)
+{
+    Chain chain;
+    chain.Until(V10);
+    const AssetId KEEP{HashName("KEEP")};
+    const CTransaction launched{chain.Launch("KEEP", 0, /*keep=*/true)};
+    chain.EndBlock();
+    const COutPoint control{launched.GetHash(), 0};
+    BOOST_CHECK(chain.TokenAt(control) == (Token{Token::Kind::CONTROL, KEEP, 1}));
+    BOOST_CHECK(!chain.Assets().GetAsset(KEEP)->fixed);
+    const uint64_t S{chain.Assets().GetLaunch(KEEP)->Supply()};
+    const COutPoint proof{chain.Proof(CREATOR)};
+    // The control coin exists: no second one.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(KEEP, {proof})), "bad-ba-results");
+    const CTransaction cancel{Chain::Cancel(KEEP, {proof}, /*control=*/false)};
+    chain.Require(cancel);
+    chain.EndBlock();
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == Asset(KEEP, S));
+    BOOST_CHECK(chain.TokenAt(control) && !chain.Assets().GetAsset(KEEP)->fixed);
+    BOOST_CHECK(!chain.Assets().GetLaunch(KEEP));
+
+    // One whose creator burned the control coin it kept (the supply fixed): a control coin again.
+    const AssetId BURN{HashName("BURN")};
+    const CTransaction launched2{chain.Launch("BURN", 0, /*keep=*/true)};
+    chain.Require(MakeTx({COutPoint{launched2.GetHash(), 0}}, Burn{{Token{Token::Kind::CONTROL, BURN, 1}}}, {}));
+    chain.EndBlock();
+    BOOST_CHECK(chain.Assets().GetAsset(BURN)->fixed);
+    const CTransaction cancel2{Chain::Cancel(BURN, {chain.Proof(CREATOR)})};
+    chain.Require(cancel2);
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel2.GetHash(), 1}) == (Token{Token::Kind::CONTROL, BURN, 1}));
+    BOOST_CHECK(!chain.Assets().GetAsset(BURN)->fixed);
+    chain.EndBlock();
+}
+
+BOOST_AUTO_TEST_CASE(cancel_and_relaunch_in_one_block_and_undone)
+{
+    Chain chain;
+    chain.Until(V10);
+    const AssetId GOLD{HashName("GOLD")};
+    const uint64_t D{800'000'000'000}, kept{200'000'000'000};
+    const auto [control, coins]{chain.Issue("GOLD", {D, kept}, 6)};
+    const COutPoint proof{chain.Proof(CREATOR)}, proof2{chain.Proof(CREATOR)};
+    chain.EndBlock();
+    const CTransaction put{chain.Curve(GOLD, control, coins[0], D)};
+    chain.Require(put);
+    chain.EndBlock();
+    chain.Buy(GOLD, COIN_UNITS / 20);
+    chain.EndBlock();
+    const CTransaction buy{chain.Buy(GOLD, COIN_UNITS / 20)};
+    chain.EndBlock();
+    // Two buyers; one sells back, the other after it: only then is nothing bought.
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(GOLD, {proof})), "bad-ba-cancel-bought");
+    (void)buy;
+    std::vector<COutPoint> held;
+    chain.Assets().ForEachToken([&](const COutPoint& out, const Token& token) {
+        if (token.kind == Token::Kind::ASSET && token.id == GOLD && token.amount != kept) held.push_back(out);
+        return true;
+    });
+    BOOST_REQUIRE_EQUAL(held.size(), 2U);
+    chain.SellAll(held[0], GOLD);
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(GOLD, {proof})), "bad-ba-cancel-bought");
+    chain.SellAll(held[1], GOLD);
+    chain.EndBlock();
+
+    // The state before the block of the cancel, to the byte; and the journal from here on.
+    const auto before{Dump(chain.store)};
+    BOOST_REQUIRE(!before.empty());
+    (void)chain.store.TakeUndo();
+    const int height{chain.height};
+    const uint32_t time{chain.time};
+    const int64_t burned{chain.burned}, paid_out{chain.paid_out};
+    const LaunchRecord record{*chain.Assets().GetLaunch(GOLD)};
+    const AssetRecord asset{*chain.Assets().GetAsset(GOLD)};
+    const int64_t dust{chain.Dust(GOLD)};
+    BOOST_CHECK(record.trades > 0 && asset.fixed);
+
+    // One block: the cancel, the asset on a curve again (other parameters), and a buy from the new curve.
+    const CTransaction cancel{Chain::Cancel(GOLD, {proof})};
+    const auto block{[&] {
+        chain.dropped += dust;
+        chain.Require(cancel);
+        BOOST_CHECK(!chain.Assets().GetLaunch(GOLD));
+        const CTransaction again{chain.Curve(GOLD, COutPoint{cancel.GetHash(), 1}, COutPoint{cancel.GetHash(), 0}, D / 2, 20'000)};
+        chain.Require(again);
+        chain.Buy(GOLD, COIN_UNITS);
+        const int at{chain.height};
+        chain.EndBlock();
+        const auto log{chain.Assets().GetLaunchLog(at)};
+        BOOST_REQUIRE_EQUAL(log.size(), 1U);
+        BOOST_CHECK(log[0].second.cancelled && log[0].second.created && log[0].second.orders == 1);
+        return again;
+    }};
+    const CTransaction again{block()};
+    const LaunchRecord second{*chain.Assets().GetLaunch(GOLD)};
+    BOOST_CHECK(second.txid == again.GetHash() && second.Supply() == D / 2 && second.trades == 1);
+    BOOST_CHECK(chain.Assets().GetAsset(GOLD)->fixed);
+    const auto after{Dump(chain.store)};
+    BOOST_CHECK(after != before);
+
+    // The block disconnected (a reorganization): the launch's record, its curve, the asset's record, the proof and
+    // every coin as they were, to the byte.
+    chain.store.Revert(chain.store.TakeUndo());
+    BOOST_CHECK(Dump(chain.store) == before);
+    BOOST_CHECK(*chain.Assets().GetLaunch(GOLD) == record);
+    BOOST_CHECK(*chain.Assets().GetAsset(GOLD) == asset);
+    BOOST_CHECK(chain.TokenAt(proof) && !chain.TokenAt(COutPoint{cancel.GetHash(), 0}) && !chain.TokenAt(COutPoint{cancel.GetHash(), 1}));
+    BOOST_CHECK(chain.Assets().GetPool(record.pool) && chain.Assets().Cancellable(GOLD, height));
+    // Connected again: the same state as the first time.
+    chain.height = height;
+    chain.time = time;
+    chain.burned = burned;
+    chain.paid_out = paid_out;
+    chain.dropped -= dust;
+    chain.payouts.clear();
+    g_nonce -= 2;
+    block();
+    BOOST_CHECK(Dump(chain.store) == after);
+
+    // The second launch cancelled in a block of its own after its buyer left, and a third in the next block.
+    std::vector<COutPoint> out;
+    chain.Assets().ForEachToken([&](const COutPoint& o, const Token& token) {
+        if (token.kind == Token::Kind::ASSET && token.id == GOLD && token.amount != kept && token.amount != D / 2) out.push_back(o);
+        return true;
+    });
+    BOOST_REQUIRE_EQUAL(out.size(), 1U);
+    chain.SellAll(out[0], GOLD);
+    chain.EndBlock();
+    chain.dropped += chain.Dust(GOLD);
+    const CTransaction cancel2{Chain::Cancel(GOLD, {proof2})};
+    chain.Require(cancel2);
+    chain.EndBlock();
+    chain.Require(chain.Curve(GOLD, COutPoint{cancel2.GetHash(), 1}, COutPoint{cancel2.GetHash(), 0}, D / 2, 5'000));
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.Assets().GetLaunch(GOLD)->fee, 5'000U);
+}
+
+BOOST_FIXTURE_TEST_CASE(cancel_a_launch_of_before_the_fee_flow, V10OldLaunchSetup)
+{
+    Chain chain{/*fee_flow=*/150};
+    const AssetId OLD{HashName("OLD")};
+    chain.Launch("OLD", COIN_UNITS);
+    chain.EndBlock();
+    const LaunchRecord record{*chain.Assets().GetLaunch(OLD)};
+    BOOST_REQUIRE(!record.v5 && !record.v7);
+    chain.Until(V10);
+    std::vector<COutPoint> held;
+    chain.Assets().ForEachToken([&](const COutPoint& out, const Token& token) {
+        if (token.kind == Token::Kind::ASSET && token.id == OLD) held.push_back(out);
+        return true;
+    });
+    BOOST_REQUIRE_EQUAL(held.size(), 1U);
+    const COutPoint proof{chain.Proof(CREATOR)};
+    BOOST_CHECK_EQUAL(chain.Refused(Chain::Cancel(OLD, {proof})), "bad-ba-cancel-bought");
+    chain.SellAll(held[0], OLD);
+    chain.EndBlock();
+    const LaunchRecord sold{*chain.Assets().GetLaunch(OLD)};
+    chain.dropped += chain.Dust(OLD);
+    const CTransaction cancel{Chain::Cancel(OLD, {proof})};
+    chain.Require(cancel);
+    BOOST_REQUIRE_EQUAL(chain.payouts.size(), 1U);
+    BOOST_CHECK(chain.payouts[0] == CTxOut(static_cast<CAmount>(sold.creator_fees), CREATOR));
+    chain.EndBlock();
+    BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == Asset(OLD, LAUNCH_SUPPLY));
+    BOOST_CHECK(!chain.Assets().GetAsset(OLD)->fixed && !chain.Assets().GetLaunch(OLD));
+    // On a curve again: a launch of now (a `v5` record), graduating into its locked position.
+    chain.Require(chain.Curve(OLD, COutPoint{cancel.GetHash(), 1}, COutPoint{cancel.GetHash(), 0}, LAUNCH_SUPPLY, 10'000));
+    chain.EndBlock();
+    BOOST_CHECK(chain.Assets().GetLaunch(OLD)->v5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

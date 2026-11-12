@@ -351,6 +351,8 @@ std::optional<Marker> ParseMarkerScript(const CScript& script)
             break;
         }
         case CurveAsset::KIND: ReadOperation<CurveAsset>(s, marker.operation); break;
+        // Upgrade v10 (valid from SidechainParams::v10_height: PlanPools).
+        case CancelLaunch::KIND: ReadOperation<CancelLaunch>(s, marker.operation); break;
         case LAUNCH_V7_KIND: {
             LaunchToken launch;
             s >> launch >> VARINT(launch.fee) >> launch.keep_control >> launch.split;
@@ -787,7 +789,7 @@ bool IsCurveOperation(const Operation& op)
     return std::holds_alternative<CreatePool>(op) || std::holds_alternative<PoolDeposit>(op) || std::holds_alternative<PoolWithdraw>(op) ||
            std::holds_alternative<SwapPools>(op) || std::holds_alternative<LaunchToken>(op) || std::holds_alternative<ClaimLaunch>(op) ||
            std::holds_alternative<OpenPosition>(op) || std::holds_alternative<ChangePosition>(op) || std::holds_alternative<PlaceOrder>(op) ||
-           std::holds_alternative<SettleOrder>(op) || std::holds_alternative<CurveAsset>(op);
+           std::holds_alternative<SettleOrder>(op) || std::holds_alternative<CurveAsset>(op) || std::holds_alternative<CancelLaunch>(op);
 }
 
 bool IsLaunchParamsOperation(const Operation& op)
@@ -992,6 +994,8 @@ bool CheckMarker(const CTransaction& tx, std::string& reject_reason)
         if (!positive(withdraw->shares) || withdraw->only > 2 || withdraw->min0 > MAX_AMOUNT || withdraw->min1 > MAX_AMOUNT) return invalid("bad-ba-liquidity");
     } else if (const auto* claim{std::get_if<ClaimLaunch>(&op)}) {
         if (claim->token.IsNull()) return invalid("bad-ba-launch");
+    } else if (const auto* cancel{std::get_if<CancelLaunch>(&op)}) {
+        if (cancel->token.IsNull()) return invalid("bad-ba-launch");
     } else if (const auto* curve{std::get_if<CurveAsset>(&op)}) {
         if (curve->asset.IsNull() || !IsLaunchSupply(curve->amount) || curve->fee < MIN_LAUNCH_FEE || curve->fee > MAX_LAUNCH_FEE || !Spendable(curve->creator)) return invalid("bad-ba-launch");
         if (curve->min_buy > MAX_AMOUNT || curve->max_buy > MAX_AMOUNT || (curve->max_buy != 0 && curve->max_buy < curve->min_buy)) return invalid("bad-ba-launch");
@@ -1126,6 +1130,8 @@ struct State::Plan {
     //! A launch made, or a claim's change of one.
     std::optional<std::pair<AssetId, LaunchRecord>> launch;
     bool launch_created{false};
+    //! A launch cancelled (CancelLaunch): its record as it was, which goes (its curve with it: pools_gone).
+    std::optional<std::pair<AssetId, LaunchRecord>> launch_gone;
     //! Concentrated liquidity: a pool's state, ticks written (nullopt: cleared), a position written (nullopt: closed).
     std::optional<std::pair<uint256, ClState>> cl_state;
     std::vector<std::pair<int32_t, std::optional<ClTick>>> cl_ticks;
@@ -1919,6 +1925,9 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         const auto found{GetAsset(mint->asset)};
         if (!found) return invalid("bad-ba-asset-unknown");
         if (!spends(Token::Kind::CONTROL, mint->asset)) return invalid("bad-ba-no-control");
+        // From v10_height a fixed supply stays fixed whoever holds the control coin (a cancelled launch gives one back:
+        // CancelLaunch). Before it no control coin of a fixed asset exists, and none is spent here.
+        if (found->fixed && Params().GetConsensus().sidechain.V10Active(height)) return invalid("bad-ba-supply-fixed");
         AssetRecord record{*found};
         const auto supply{Add(record.supply, mint->amount)};
         const auto minted{Add(record.minted, mint->amount)};
@@ -2928,6 +2937,59 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         plan.launch = std::make_pair(claim->token, std::move(record));
         return true;
     }
+    if (const auto* cancel{std::get_if<CancelLaunch>(&op)}) {
+        plan.curve_work = 0;
+        // Not known before v10_height: its marker was never valid.
+        if (!v10) return invalid("bad-ba-marker");
+        std::string why;
+        if (!Cancellable(cancel->token, height, &why)) return invalid(why.c_str());
+        // Nor with an order of this block through its curve (it would clear against a curve gone): the next block.
+        if (OrderHolds(cancel->token)) return invalid("bad-ba-cancel-order-pending");
+        const LaunchRecord record{*Assert(GetLaunch(cancel->token))};
+        const auto asset_found{GetAsset(cancel->token)};
+        if (!asset_found) return invalid("bad-ba-asset-unknown");
+        // By its creator: a reservation made at the creator's script (anyone makes one there; only who spends from the
+        // script spends it), which goes with the cancel. And the units of the asset the transaction's inputs carry.
+        std::optional<Txid> proof;
+        unsigned __int128 held{0};
+        for (const auto& [n, token] : SpentTokens(tx)) {
+            if (token.kind == Token::Kind::ASSET && token.id == cancel->token) held += token.amount;
+            if (proof || token.kind != Token::Kind::RESERVATION) continue;
+            const Txid id{Txid::FromUint256(token.id)};
+            const auto origin{GetReservationOrigin(id)};
+            if (GetReservation(id) && origin && origin->script == record.creator) proof = id;
+        }
+        if (!proof) return invalid("bad-ba-cancel-not-creator");
+        debit(Token::Kind::RESERVATION, proof->ToUint256(), 1);
+        plan.reservations_gone.push_back(*proof);
+        // Its units back: the curve's and those kept for its pool, its whole supply S (no allocation exists before a
+        // graduation). Then a control coin, unless one exists (a launch that kept it). All to the creator's script.
+        plan.results.push_back({cancel->token, record.Supply()});
+        if (!FirstTokenOf(cancel->token, Token::Kind::CONTROL)) plan.results.push_back({cancel->token, 1, Token::Kind::CONTROL});
+        plan.result_script = record.creator;
+        // The supply stays fixed, unless every unit there is is here (the inputs' and the launch's): nobody else holds
+        // any, in a coin, a pool, an order or anywhere, and the asset is its creator's to mint again.
+        if (asset_found->fixed && held + record.Supply() == asset_found->supply) {
+            AssetRecord asset{*asset_found};
+            asset.fixed = false;
+            plan.assets.emplace_back(cancel->token, std::move(asset));
+        }
+        // The creator's part of the fees, as a claim pays it, with the coin that waited to buy the token back (its
+        // part too, by its choice; nothing is left to buy back); what a split owes an address, to the address. Less
+        // than the least payout is not paid (dust never is), nor what the curve kept beyond what it sold (the
+        // roundings of trades taken back, the fees' remainder kept for its pool): nobody's.
+        const auto creator_coin{Add(record.creator_fees, record.buyback)};
+        if (!creator_coin || *creator_coin > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
+        if (*creator_coin >= min_chn) plan.payouts.emplace_back(static_cast<CAmount>(*creator_coin), record.creator);
+        for (size_t i{0}; i < record.split.size() && i < record.share_owed.size(); ++i) {
+            if (record.split[i].kind != FeeShare::ADDRESS || record.share_owed[i] < min_chn) continue;
+            if (record.share_owed[i] > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
+            plan.payouts.emplace_back(static_cast<CAmount>(record.share_owed[i]), record.split[i].script);
+        }
+        plan.pools_gone.push_back(record.pool);
+        plan.launch_gone = std::make_pair(cancel->token, record);
+        return true;
+    }
     if (const auto* create{std::get_if<CreatePool>(&op)}) {
         // From v10_height the one kind of pool made is the constant product at a fee tier (owner decision 2026-11-11): no
         // stable, weighted or concentrated pool, no flag. (The concentrated pool a launch graduates into is the rules' own.)
@@ -3207,6 +3269,21 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
             entry.reserve_tokens = record.VirtualUnits();
             out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
         }
+    }
+    if (plan->launch_gone) {
+        // Cancelled: its record, its place among the launches and what scanned it go (its curve below: pools_gone); the
+        // asset was never launched. The block's log says so.
+        const auto& [token, record]{*plan->launch_gone};
+        LAUNCHES.Erase(out, token);
+        out.Erase(HeightKey(LAUNCHES_BY_HEIGHT, record.height, token));
+        if (BUYBACKS.Contains(out, token)) BUYBACKS.Erase(out, token);
+        if (FEE_PAYEES.Contains(out, token)) FEE_PAYEES.Erase(out, token);
+        LaunchLogEntry entry;
+        if (const auto bytes{out.Get(HeightKey(LAUNCH_LOG, height, token))}) entry = sidechain::DecodeValue<LaunchLogEntry>(*bytes);
+        entry.cancelled = true;
+        entry.reserve_coin = 0;
+        entry.reserve_tokens = 0;
+        out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
     }
     for (const uint256& id : plan->pools_gone) {
         SetPool(id, std::nullopt);
@@ -3746,7 +3823,12 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
             ++record->trades;
             LAUNCHES.Put(out, kind.token, *record);
             LaunchLogEntry logged{entry};
-            if (const auto bytes{out.Get(HeightKey(LAUNCH_LOG, height, kind.token))}) logged.created = sidechain::DecodeValue<LaunchLogEntry>(*bytes).created;
+            if (const auto bytes{out.Get(HeightKey(LAUNCH_LOG, height, kind.token))}) {
+                // What the block's transactions noted: the launch made, and (from v10_height) one before it cancelled.
+                const LaunchLogEntry noted{sidechain::DecodeValue<LaunchLogEntry>(*bytes)};
+                logged.created = noted.created;
+                logged.cancelled = noted.cancelled;
+            }
             out.Put(HeightKey(LAUNCH_LOG, height, kind.token), sidechain::EncodeValue(logged));
             const auto pool{GetPool(id)};
             // At the curve's end, or once it raised what it graduates at.
@@ -4929,6 +5011,23 @@ void State::SetClState(const uint256& pool, const ClState& state)
     }
     CL_STATES.Put(out, pool, state);
 }
+bool State::Cancellable(const AssetId& token, int height, std::string* why) const
+{
+    const auto no{[&](const char* reason) {
+        if (why) *why = reason;
+        return false;
+    }};
+    if (!Params().GetConsensus().sidechain.V10Active(height)) return no("bad-ba-marker");
+    const auto record{GetLaunch(token)};
+    if (!record) return no("bad-ba-no-launch");
+    if (record->Graduated()) return no("bad-ba-cancel-graduated");
+    // Nothing bought: every unit its curve sells is on it (never sold, or sold back), none bought back and burned. The
+    // curve's coin is then its virtual coin, but for what the roundings of trades taken back left: nobody's.
+    const auto curve{GetPool(record->pool)};
+    if (!curve || curve->reserve1 != record->VirtualUnits() || record->burned != 0) return no("bad-ba-cancel-bought");
+    return true;
+}
+
 bool State::Launching(const AssetId& asset) const
 {
     if (asset.IsNull()) return false;

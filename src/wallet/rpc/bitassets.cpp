@@ -927,7 +927,8 @@ RPCMethod mintasset()
     if (!pwallet) return UniValue::VNULL;
     const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
     if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, CURRENCY_UNIT + " is not minted");
-    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The supply of this asset is fixed: its control coin was burned");
+    // By the asset's record, not by whether its control coin exists: a cancelled launch gives the coin of a fixed asset back.
+    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The supply of this asset is fixed: no more is minted");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], asset.decimals)};
     CTxDestination dest{ChangeDestination(*pwallet)};
     if (!request.params[2].isNull()) {

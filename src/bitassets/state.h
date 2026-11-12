@@ -893,9 +893,29 @@ struct SettleOrder {
     friend bool operator==(const SettleOrder&, const SettleOrder&) = default;
 };
 
+/**
+ * Cancel a launch nothing is bought from (upgrade v10, SidechainParams::v10_height; owner decision 2026-11-11): one
+ * still on its curve with every unit the curve sells on it (never bought, or all sold back) and no order of the block
+ * through it. By its creator: the transaction spends a reservation made at the creator's script (ReservationOrigin:
+ * the state knows no other output's script, and reads nothing but itself and the block), which goes with it. Results,
+ * to outputs of the creator's script: the launch's units (its curve's and those kept for its pool: its whole supply
+ * S), then, unless a control coin of the asset exists, a new one. The creator's part of the fees (with what waited to
+ * buy back) and what a split owes an address are paid by the coinbase if the least payout at least; less is not paid,
+ * as dust never is. The launch's record and its curve go: the asset was never launched, and can be put on a curve
+ * again (CurveAsset). Its supply stays fixed (no mint, even with the control coin), unless the transaction holds all
+ * of it: its inputs' units and the launch's are the asset's whole supply, and then it is not fixed any more.
+ */
+struct CancelLaunch {
+    static constexpr uint8_t KIND{39};
+    AssetId token;
+    SERIALIZE_METHODS(CancelLaunch, obj) { READWRITE(obj.token); }
+    friend bool operator==(const CancelLaunch&, const CancelLaunch&) = default;
+};
+
 using Operation = std::variant<Reserve, Register, Mint, UpdateAsset, Burn, Swap, AddLiquidity, RemoveLiquidity, CreateAuction, Bid, Collect, ReleaseAsset,
                                Route, RegisterOracle, Attest, CreateOracleContract, SettleOracleContract, SetLogo, SetDisplayName,
-                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition, PlaceOrder, SettleOrder, CurveAsset>;
+                               CreatePool, PoolDeposit, PoolWithdraw, SwapPools, LaunchToken, ClaimLaunch, OpenPosition, ChangePosition, PlaceOrder, SettleOrder, CurveAsset,
+                               CancelLaunch>;
 
 /** The registration an operation makes: a Register's, or a LaunchToken's (nullptr: none). */
 const Register* RegisterOf(const Operation& op);
@@ -1057,7 +1077,10 @@ struct AssetRecord {
     uint64_t supply{0};
     uint64_t minted{0};
     uint64_t burned{0};
-    //! Whether the control coin was burned: no more can be minted, the data cannot change.
+    //! Whether its supply is fixed: no more can be minted. Until v10_height: exactly when no control coin of it exists
+    //! (burned, or gone with a launch), so its data cannot change either. From v10_height a cancelled launch gives a
+    //! control coin of a fixed asset back (CancelLaunch): the coin changes its data and puts it on a curve again, and
+    //! mints nothing (Mint: bad-ba-supply-fixed). What reads "mintable" reads this, not whether the coin exists.
     bool fixed{false};
     //! Its data now.
     AssetData data;
@@ -1307,7 +1330,22 @@ struct LaunchLogEntry {
     uint64_t reserve_tokens{0};
     bool created{false};
     bool graduated{false};
-    SERIALIZE_METHODS(LaunchLogEntry, obj) { READWRITE(obj.coin_in, obj.coin_out, obj.tokens_in, obj.tokens_out, obj.fees, obj.orders, obj.reserve_coin, obj.reserve_tokens, obj.created, obj.graduated); }
+    //! From v10_height: the block cancelled the launch (CancelLaunch). Written only when set: an entry without it is as
+    //! it always was, and ends before it.
+    bool cancelled{false};
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        s << coin_in << coin_out << tokens_in << tokens_out << fees << orders << reserve_coin << reserve_tokens << created << graduated;
+        if (cancelled) s << cancelled;
+    }
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        s >> coin_in >> coin_out >> tokens_in >> tokens_out >> fees >> orders >> reserve_coin >> reserve_tokens >> created >> graduated;
+        cancelled = false;
+        if (!s.empty()) s >> cancelled;
+    }
     friend bool operator==(const LaunchLogEntry&, const LaunchLogEntry&) = default;
 };
 
@@ -1815,6 +1853,12 @@ public:
     std::vector<std::pair<AssetId, LaunchLogEntry>> GetLaunchLog(int32_t height) const;
     /** Whether an asset is on a launch curve that has not graduated (its pools are the curve's alone until then). */
     bool Launching(const AssetId& asset) const;
+    /**
+     * Whether a launch can be cancelled in the block at `height` (CancelLaunch; from v10_height): on its curve, every
+     * unit the curve sells still on it. Not checked here: that the transaction is its creator's, and that no order of
+     * the block goes through its curve. `why`: the rule's reject reason if not.
+     */
+    bool Cancellable(const AssetId& token, int height, std::string* why = nullptr) const;
     // Concentrated liquidity (bitassets/clmath.h).
     std::optional<ClState> GetClState(const uint256& pool) const;
     std::optional<ClTick> GetClTick(const uint256& pool, int32_t tick) const;
