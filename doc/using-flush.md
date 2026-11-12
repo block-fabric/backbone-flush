@@ -140,6 +140,18 @@ price. Trading goes on there.
 `curveasset GOLD 800000` puts part of an existing asset on a curve instead, if it was never launched and has no pool
 with ECX. Its control coin goes with it: the supply is then fixed.
 
+From upgrade v10 (`getdexinfo`'s `v10_active`; not active on any network yet) a launch nothing is bought from (never
+bought, or all sold back: `getlaunch`'s `cancellable`) can be taken back by its creator:
+
+```
+flush-cli cancellaunch MOON      # "step": "authorise": proves this wallet is the creator; wait for a block
+flush-cli cancellaunch MOON      # "step": "cancel": its units and a control coin come back
+```
+
+The asset can then be put on a curve again (`curveasset`), with other settings. Its supply stays fixed (the control
+coin mints nothing), unless the wallet holds every other unit of it. From the same upgrade no new limit order,
+auction, stable, weighted or concentrated pool, nor price range is started; the existing ones are still closed.
+
 ### Fees and the fee split
 
 | Where | Fee | Who gets it |

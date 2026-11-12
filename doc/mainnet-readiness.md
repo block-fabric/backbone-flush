@@ -20,6 +20,15 @@ A fresh chain with the final rules only: every rule is active from Flush's first
 - The buybacks scanned 64 a block from a cursor, those that cannot buy yet out of the index (upgrade v8): a block's
   work bounded whatever the count of launches.
 - Upgrade v9 (Flush 8.3.2): the DEX rules of that release.
+
+## Not active: upgrade v10 (the simplification fork)
+
+Decided 2026-11-11, implemented, and **not active on any network**: `v10_height` is never until a height is chosen and
+set in `MakeSidechain` (src/kernel/chainparams.cpp), in a release every node runs before that height. From it: no new
+limit order, auction, stable, weighted or concentrated pool, nor price range (what closes the existing ones stays
+valid); a launch nothing is bought from can be cancelled by its creator, the supply staying fixed; an empty pool no
+longer keeps an asset off a curve (doc/layers.md, "Upgrade v10"). Setting the height changes the drivechain
+database's fingerprint, as every upgrade height does.
 - Blocks of stake: on `ecash` from block 10 (`fork_height`; none below it), 16 hours without BMM before they halt (3840 slots of 15 s), seed and set 32 hours ahead,
   and the bootstrap: until epoch 72 (2026-11-01 23:17:51 UTC) the set is fixed an epoch ahead, so bonds count within
   one to two hours (doc/ecash-sidechains.md, "The bootstrap"); on `ecashbeta` and `ecashtest`, 24 hours (5760 slots),

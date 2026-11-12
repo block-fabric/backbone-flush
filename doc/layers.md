@@ -510,8 +510,89 @@ newest|oldest|volume|progress|market_cap, cursor, limit}` (`next_cursor`), `quot
 the rules), `getlaunchlog from (to)` (a row per block and launch for indexers: created, graduated, orders, coin
 and tokens in and out, fees, the curve after), `decodeassettx` (launch_token, claim_launch). Wallet: `launchtoken
 ticker {display_name, logo, info, allocation, first_buy, min_buy, max_buy}`, `buyfromlaunch token amount`,
-`selltolaunch token amount`, `claimlaunch token`. Tests: `dex_launch_tests`, `feature_layers_launch.py` (launch,
+`selltolaunch token amount`, `claimlaunch token`, `cancellaunch token` (upgrade v10, below). Tests: `dex_launch_tests`, `feature_layers_launch.py` (launch,
 buys and a sale, graduation at 500 into a locked pool, a reorganisation across it, the creator's claim).
+
+## Upgrade v10 (the simplification fork)
+
+Owner decisions of 2026-11-11. One height, `SidechainParams::v10_height` (`V10Active`; regtest:
+`-testactivationheight=v10@<height>`), **never (the maximum) on every network, mainnet included, until a height is
+chosen and set** in `src/kernel/chainparams.cpp`: until then no rule below applies and every block validates as before.
+In the drivechain database's fingerprint only once set. `getdexinfo` says `v10_height` and `v10_active`.
+`src/bitassets/state.cpp` (`MakePlan`, `PlanPools`, `PlanPosition`, `GraduateLocked`, `Cancellable`, `PoolEmpty`).
+No record's or operation's serialization changes; one marker kind (39) and one trailing field of a log entry are new.
+
+**A. The extra markets are retired.** From the height a transaction that *starts* one is not valid, in a block or in
+the mempool (the mempool checks its asset transactions again when the height is reached):
+
+| Operation | Refused from the height | Reason |
+|---|---|---|
+| `PlaceOrder` | always | `bad-ba-retired-order` |
+| `CreateAuction` | always | `bad-ba-retired-auction` |
+| `CreatePool` | any curve but the constant product, or any flag (the dynamic fee): no stable, weighted or concentrated pool. Every fee tier of the constant product stays | `bad-ba-retired-pool-kind` |
+| `PoolDeposit` | into a pool of such a kind that nobody provides liquidity to any more (it would open it again, as `CreatePool` does) | `bad-ba-retired-pool-kind` |
+| `OpenPosition` | over anything but the full range (the lowest and highest ticks of the pool's spacing: the wallet's prices 0 and 0) | `bad-ba-retired-range` |
+| `ChangePosition` | adding to a position that is not full-range | `bad-ba-retired-range` |
+
+Everything that *closes* what exists stays valid for good: `SettleOrder` (collect, cancel), `Bid` and `Collect`,
+`PoolWithdraw` and `RemoveLiquidity` of any pool, `PoolDeposit` into a stable or weighted pool that has providers (they
+are not stranded), `ChangePosition` taking out, collecting and closing any position, ranged ones included, and adding to
+a full-range one. Swaps and routes trade through every venue that holds liquidity or orders, books and pools of the
+retired kinds included. `AddLiquidity` (the pool at 0.30 %) is as it was. The concentrated pool a launch graduates into
+is made by the rules themselves, as before. The rule only refuses: a node without it follows the chain until a block
+takes what the others refuse.
+
+**B. A launch is cancelled** (`CancelLaunch{token}`, kind 39; before the height its marker is not valid). Valid when
+nothing is bought from its curve: the launch has not graduated (`bad-ba-cancel-graduated`), every unit its curve sells
+is on it and none was bought back and burned, so never bought or all sold back (`bad-ba-cancel-bought`), and no order
+of the block goes through its curve (`bad-ba-cancel-order-pending`: the next block). After trades taken back the
+curve's coin is its virtual coin plus a few satoshis of rounding, which nobody can claim.
+
+*By its creator* (`bad-ba-cancel-not-creator`): the transaction spends a **reservation made at the launch's creator
+script**, which goes with it. The state of the assets is derived from the blocks alone (the node rebuilds it without
+the coins: `RollForwardSidechainDB`), so it does not know the script of an input; it does record the script each
+reservation was made at (`ReservationOrigin`), and only who can spend from that script spends that output. So a cancel
+is two transactions: a `Reserve` paying the reservation to the creator's address (anyone may make it; its commitment
+is of no name), and, once it is in a block, the cancel that spends it. `cancellaunch` does both, a call each.
+
+*Effect.* To outputs of the creator's script only (`bad-ba-contract-payee`, as a claim): the launch's units, its
+curve's and those kept for its pool (its whole S; no allocation exists before a graduation), then, unless a control
+coin of the asset exists (a launch that kept it), a new control coin. The creator's part of the fees, with the coin
+that waited to buy the token back, and what a split owes an address are paid by the coinbase if they are the least
+payout at least; what is less, and what the curve kept beyond its virtual coin and for its pool, goes with the block's
+security fees (no coin the assets held is unaccounted: `HeldChn`, the peg balance). The security parts already paid
+stay paid. The launch's record, its place among the launches and its curve's pool go; the block's log entry says
+`cancelled`. The asset was never launched: `CurveAsset` takes it again, with other parameters.
+
+*The supply stays fixed.* The asset's record keeps `fixed`, and from the height `Mint` is refused for a fixed asset
+whoever spends its control coin (`bad-ba-supply-fixed`). Before the height a fixed asset has no control coin; from it,
+"mintable" is the record's `fixed`, not the coin's existence (`getasset`'s `fixed` and `control`, `getlaunch`'s
+`mintable`, the wallet's `mintasset`, the app's Unlocked Supply badge all read `fixed`). The control coin of a fixed
+asset still changes its data, logo and display name, and puts it on a curve. One exception: when the cancel itself
+holds every unit there is (the units its inputs carry and the launch's are the asset's supply), nobody else holds any
+and the asset is not fixed any more.
+
+**C. Empty pools.** Before the height `CurveAsset` is refused (`bad-ba-launch-pooled`) if a pool of the asset with the
+coin exists, of the kind `AddLiquidity` makes or of the kind a launch graduates into, even one with nothing in it,
+which anyone makes for nothing. From the height a pool that holds nothing does not count (`State::PoolEmpty`: a
+concentrated pool with no liquidity at any tick; any other pool nobody provides liquidity to). While the token is on
+its curve nothing goes into either pool (`OpenPosition`, an adding `ChangePosition`, `PoolDeposit` opening a pool:
+`bad-ba-launch-pooled`, as `AddLiquidity` and `CreatePool` already), and the graduation takes an empty pool of its
+kind over as a new one: the graduation's price, tick, liquidity and locked position, whatever price its maker gave
+it. A pool with liquidity, however little, still keeps the asset off a curve: it is someone's.
+
+**RPCs.** Wallet: `cancellaunch token` (`step`: `authorise`, then `cancel` with `returned`, `control`, `mintable`,
+`fees`); `placeorder`, `createauction`, `createpool`, `openposition`, `changeposition`, `addpoolliquidity` and
+`mintasset` say why before they make a transaction the next block refuses. Node: `getlaunch` and `listlaunches` have
+`cancellable` (always false before the height) and `mintable` by the asset's record; `getlaunchlog` has `cancelled`;
+`decodeassettx` names `cancel_launch`.
+
+**Tests.** `dex_v10_tests` (each rule before and after the height; a cancel never bought, sold back, with a fixed
+supply kept and given back, with a kept and a burned control coin, of a launch of before the fee-flow release; a
+cancel, a relaunch and a buy in one block disconnected to the byte and connected again; a stranger's empty pool taken
+over at graduation, equal to a twin's new pool), `feature_layers_v10.py` (three nodes, one without the rule: the
+wallet's and the node's refusals, a block refused, what still closes, a cancel in its two steps and across a
+reorganisation, the relaunches, an abandoned pool and a curve, the peg balance).
 
 ## Order books
 
