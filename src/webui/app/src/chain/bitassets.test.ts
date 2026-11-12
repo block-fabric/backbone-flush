@@ -2462,7 +2462,8 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(screen.getByTestId('market-chip').textContent).toBe('On curve 40.0%');
     expect(screen.getByTestId('asset-price').textContent).toMatch(/0\.00000081 ECX/);
     // The sections, in their order: the asset's own in the page's column, the wallet's beside it under the box (2026-11-12).
-    for (const column of [['asset-markets', 'asset-activity', 'asset-details'], ['asset-position', 'asset-manage']]) {
+    // About first, More details last; beside them Manage first for who can manage it, then the box's own, then the position.
+    for (const column of [['asset-about', 'asset-markets', 'asset-activity', 'asset-details'], ['asset-manage', 'asset-position']]) {
       const order = column.map((x) => screen.getByTestId(x));
       for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }

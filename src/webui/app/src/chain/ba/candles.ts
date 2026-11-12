@@ -2,7 +2,7 @@
 // launch curve's): candles at 5m, 1h, 4h or 1d, checked as they come; the periods of an asset's price chart (owner
 // decision, 2026-11-11: 1H, 1D, 1W, All) as the interval and the span asked for each; and the figures of a day worked
 // out from its candles (the change of the price, the volume), where the node keeps the index. Pure: no state, no calls
-// (tested in chain/ba/pools.test.ts).
+// (tested in chain/ba/pools.test.ts). The time axis of a chart: a slot per interval, traded or not (timeline).
 import { approx, type Amount } from './model';
 
 /** A candle of the market index. */
@@ -53,6 +53,46 @@ export function spanStats(candles: readonly Candle[]): { change: number; volume:
   const first = candles[0].o;
   const last = candles[candles.length - 1].c;
   return { change: first > 0 ? (last / first - 1) * 100 : 0, volume: candles.reduce((n, c) => n + c.v, 0) };
+}
+
+/** The length of a candle of an interval, in seconds. */
+export const INTERVAL_SECONDS: Record<CandleInterval, number> = { '5m': 300, '1h': 3600, '4h': 14_400, '1d': 86_400 };
+
+/** A slot of a price chart's time axis: the candle of its time, or none traded then (`c` null) and the price carried. */
+export interface Slot {
+  t: number;
+  c: Candle | null;
+  /** The last close before a slot with no trade; null before the first trade known. */
+  carried: number | null;
+}
+
+/**
+ * The time axis of a price chart (owner feedback, 2026-11-12: the graph follows the actual timeline, with an empty line
+ * where nothing traded): one slot per interval from `now - span` to `now` (span 0: from the first candle), each with
+ * its candle or with the price carried from the last trade before it. Candles older than the axis only give the price
+ * its first slots carry. At most `max` slots, the newest.
+ */
+export function timeline(candles: readonly Candle[], interval: CandleInterval, span: number, now: number, max = 500): Slot[] {
+  const step = INTERVAL_SECONDS[interval];
+  const floor = (t: number) => Math.floor(t / step) * step;
+  const end = floor(now);
+  let start = span > 0 ? floor(now - span) + step : candles.length ? floor(candles[0].t) : end;
+  if (start > end) start = end;
+  if ((end - start) / step + 1 > max) start = end - (max - 1) * step;
+  const at = new Map<number, Candle>();
+  let carried: number | null = null;
+  for (const c of candles) {
+    const t = floor(c.t);
+    if (t < start) carried = c.c;
+    else if (t <= end) at.set(t, c);
+  }
+  const out: Slot[] = [];
+  for (let t = start; t <= end; t += step) {
+    const c = at.get(t) ?? null;
+    out.push({ t, c, carried: c ? null : carried });
+    if (c) carried = c.c;
+  }
+  return out;
 }
 
 /** The labels of a time axis for candles of an interval: hours and minutes within a day, the day otherwise. */

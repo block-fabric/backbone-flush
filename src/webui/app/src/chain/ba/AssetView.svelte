@@ -290,6 +290,22 @@
 
     <div class="ba-split">
       <div class="col">
+        <!-- What it is, in a few figures (owner feedback, 2026-11-12: above the price; the rest in More details below). -->
+        <section class="panel" data-testid="asset-about" aria-label="About">
+          <div class="panel-head"><h3>About</h3><span class="muted small">registered in block {formatCount(asset.registered)}</span></div>
+          <div class="panel-body stack">
+            {#if asset.data?.info}<p class="info"><SafeText text={asset.data.info} /></p>{/if}
+            <dl class="stats">
+              <div><dt>Supply</dt><dd>{formatAmount(asset.supply, asset.decimals, { max: 4 })}</dd></div>
+              <div><dt>Minted</dt><dd>{formatAmount(asset.minted, asset.decimals, { max: 4 })}</dd></div>
+              <div><dt>Burned</dt><dd>{formatAmount(asset.burned, asset.decimals, { max: 4 })}</dd></div>
+              <div><dt>Decimals</dt><dd>{asset.decimals}</dd></div>
+              <div><dt>Control coin</dt><dd>{#if asset.fixed && asset.control}{t('Held, supply fixed')}{:else if asset.fixed}{t('None, supply fixed')}{:else}{t('Held, can mint')}{/if}</dd></div>
+              {#if onCurve && launch && launch.pool_supply !== undefined}<div><dt>Set aside for the pool</dt><dd>{formatAmount(launch.pool_supply, 0)}</dd></div>{/if}
+            </dl>
+          </div>
+        </section>
+
         <section class="panel" aria-label="Price">
           <div class="panel-head"><h3>Price</h3><span class="muted small">{TICKER} for 1 <SafeText text={asset.label} /></span></div>
           <div class="panel-body stack">
@@ -309,7 +325,6 @@
               <div><dt>24 h change</dt><dd translate="no"><span class:ba-good={changeDirection(day?.change) === 'up'} class:ba-bad={changeDirection(day?.change) === 'down'}>{day ? formatChange(day.change) : '–'}</span></dd></div>
               <div><dt>24 h volume</dt><dd>{#if day}{formatAmount(day.volume, 8, { max: 4 })} {TICKER}{:else if dayKnown}{t('No trades')}{:else}–{/if}</dd></div>
               <div><dt>Market cap</dt><dd>{#if onCurve && launch}{formatAmount(launch.market_cap, 8, { max: 2 })} {TICKER}{:else if price !== undefined}{formatPrice(price * approx(asset.supply))} {TICKER}{:else}–{/if}</dd></div>
-              <div><dt>Supply</dt><dd>{formatAmount(asset.supply, asset.decimals, { max: 4 })}</dd></div>
             </dl>
           </div>
         </section>
@@ -394,26 +409,18 @@
           {/if}
         </section>
 
-        <section class="panel" data-testid="asset-details" aria-label="Details">
-          <div class="panel-head"><h3>Details</h3><span class="muted small">registered in block {formatCount(asset.registered)}</span></div>
+        <section class="panel" data-testid="asset-details" aria-label="More details">
+          <div class="panel-head"><h3>More details</h3></div>
           <div class="panel-body stack">
-            {#if asset.data?.info}<p class="info"><SafeText text={asset.data.info} /></p>{/if}
             <dl class="ba-lines">
-              <dt>Supply</dt><dd class="strong">{formatAmount(asset.supply, asset.decimals)}</dd>
-              <dt>Minted, all told</dt><dd>{formatAmount(asset.minted, asset.decimals)}</dd>
-              <dt>Burned</dt><dd>{formatAmount(asset.burned, asset.decimals)}</dd>
-              <dt>Decimals</dt><dd>{asset.decimals}</dd>
-              {#if onCurve && launch}
-                <dt>On the curve</dt><dd>{formatAmount(launch.curve_tokens_left, DEC, { max: 4 })} left</dd>
-                {#if launch.pool_supply !== undefined}<dt>Set aside for the pool</dt><dd>{formatAmount(launch.pool_supply, 0)}</dd>{/if}
-              {/if}
+              {#if onCurve && launch}<dt>On the curve</dt><dd>{formatAmount(launch.curve_tokens_left, DEC, { max: 4 })} left</dd>{/if}
               <dt>Control coin</dt><dd>{#if asset.fixed && asset.control}Held, and the supply is fixed: whoever holds it can change its data and put it on a launch curve again, and can mint no more of it.{:else if asset.fixed}None: nobody can mint more of it or change its data.{:else}Held: whoever holds it can mint more and change its data.{/if}</dd>
             </dl>
             {#if launch}
               <h4>Its launch</h4>
               <LaunchFacts {launch} mine={creatorMine} {graduationFee} />
             {/if}
-            <h4>About it</h4>
+            <h4>Its data</h4>
             {#if fields.length === 0}<p class="ba-help">Its issuer gave no data.</p>{/if}
             <dl class="ba-lines facts">
               {#each fields.filter((f) => f !== 'info') as f (f)}
@@ -452,6 +459,29 @@
       </div>
 
       <div class="col side" data-testid="asset-box" data-box={liquidityBox ? 'liquidity' : market.state === 'none' ? 'none' : 'trade'}>
+        <!-- First, for who can manage it (owner feedback, 2026-11-12). -->
+        {#if controlled || creatorMine}
+          <section class="panel" data-testid="asset-manage" aria-label="Manage">
+            <div class="panel-head"><h3>Manage</h3><span class="muted small">{controlled ? t('shown because this wallet holds its control coin') : t('shown because this wallet created its launch')}</span></div>
+            <div class="panel-body stack">
+              {#if holding && controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
+              {#if launch && creatorMine}
+                <div class="row">
+                  <button type="button" class="btn small" class:primary={anyOwed} data-testid="claim-fees" disabled={claiming || !anyOwed} onclick={claim}>Claim creator fees</button>
+                  <span class="faint small">{anyOwed ? t('%1 %2 owed', formatAmount(launch.creator_fees_owed, 8), TICKER) : t('nothing owed')}{#if owed.allocation}{' · '}{t('and the allocation of %1%', String(launch.allocation))}{/if}</span>
+                </div>
+              {/if}
+              {#if launch && cancellable}
+                <div class="row">
+                  <button type="button" class="btn small danger" data-testid="cancel-launch" disabled={cancelling} onclick={cancel}>Cancel launch</button>
+                  <span class="faint small">Nothing is bought from its curve now: its {launch.ticker} and a control coin come back to this wallet, and it can be put on a curve again.</span>
+                </div>
+              {/if}
+              {#if controlled && market.state === 'none'}<OpenMarket {asset} {pools} launched={!!launch} {onCurve} />{/if}
+            </div>
+          </section>
+        {/if}
+
         {#if liquidityBox}
           <!-- In place of Trade: asked for, or its only market is a pool with nothing in it. -->
           {#key id}<AddLiquidity asset={id} {pools} {onCurve} />{/key}
@@ -492,27 +522,6 @@
           </section>
         {/if}
 
-        {#if controlled || creatorMine}
-          <section class="panel" data-testid="asset-manage" aria-label="Manage">
-            <div class="panel-head"><h3>Manage</h3><span class="muted small">{controlled ? t('shown because this wallet holds its control coin') : t('shown because this wallet created its launch')}</span></div>
-            <div class="panel-body stack">
-              {#if holding && controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
-              {#if launch && creatorMine}
-                <div class="row">
-                  <button type="button" class="btn small" class:primary={anyOwed} data-testid="claim-fees" disabled={claiming || !anyOwed} onclick={claim}>Claim creator fees</button>
-                  <span class="faint small">{anyOwed ? t('%1 %2 owed', formatAmount(launch.creator_fees_owed, 8), TICKER) : t('nothing owed')}{#if owed.allocation}{' · '}{t('and the allocation of %1%', String(launch.allocation))}{/if}</span>
-                </div>
-              {/if}
-              {#if launch && cancellable}
-                <div class="row">
-                  <button type="button" class="btn small danger" data-testid="cancel-launch" disabled={cancelling} onclick={cancel}>Cancel launch</button>
-                  <span class="faint small">Nothing is bought from its curve now: its {launch.ticker} and a control coin come back to this wallet, and it can be put on a curve again.</span>
-                </div>
-              {/if}
-              {#if controlled && market.state === 'none'}<OpenMarket {asset} {pools} launched={!!launch} {onCurve} />{/if}
-            </div>
-          </section>
-        {/if}
       </div>
     </div>
   {/if}

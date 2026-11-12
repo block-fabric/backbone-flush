@@ -1,7 +1,7 @@
 // What a pool is to the user and the rules of the one pool form (ba/pools.ts), the figures of a span of candles
 // (ba/candles.ts), and where the old tabs of the DEX land (chain/local.ts dexRoute): owner decisions, 2026-11-11.
 import { describe, expect, it } from 'vitest';
-import { spanStats, candlesOf, PERIODS } from './candles';
+import { spanStats, candlesOf, PERIODS, timeline } from './candles';
 import { MAX_TICK, MIN_TICK } from './cl';
 import type { Pool } from './model';
 import { CURVE_REFUSAL, deeperReference, EMPTY_POOL_TOLERANCE, emptyPoolCheck, priceGuard, REFERENCE_MIN_ECX, referencePrice, THIN_POOL_ECX, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
@@ -235,5 +235,32 @@ describe('the figures of a day, from the candles the node has', () => {
     expect(candlesOf({ items: [{ t: 2, o: 1, h: 2, l: 0.5, c: 1.5, v: 3 }, { t: 1, o: '1', h: '1', l: '1', c: '1', v: '0' }, { t: 3, o: 1, h: 0, l: 1, c: 1 }] }).map((c) => c.t)).toEqual([1, 2]);
     expect(candlesOf('nope')).toEqual([]);
     expect(PERIODS.map((p) => p.id)).toEqual(['1H', '1D', '1W', 'All']);
+  });
+
+  it('the time axis of a chart: a slot per interval over the whole period, an empty line at the last price where nothing traded', () => {
+    const hour = 3600;
+    const now = 100 * hour + 120;
+    const candle = (h: number, o: number, c: number) => ({ t: h * hour, o, h: Math.max(o, c), l: Math.min(o, c), c, v: 1 });
+    // 1D by the hour: 24 slots ending at the hour of now, whatever traded.
+    const slots = timeline([candle(60, 5, 6), candle(80, 6, 7), candle(99, 7, 8)], '1h', 86_400, now);
+    expect(slots.length).toBe(24);
+    expect(slots[0].t).toBe(77 * hour);
+    expect(slots.at(-1)?.t).toBe(100 * hour);
+    // Before its first trade the axis carries the last close before it (hour 60's), then each trade's own.
+    expect(slots[0]).toMatchObject({ c: null, carried: 6 });
+    expect(slots[3].c?.c).toBe(7);
+    expect(slots[4]).toMatchObject({ c: null, carried: 7 });
+    expect(slots[22].c?.c).toBe(8);
+    expect(slots[23]).toMatchObject({ c: null, carried: 8 });
+    expect(slots.filter((s) => s.c).length).toBe(2);
+    // Nothing known before the axis: no line until the first trade.
+    expect(timeline([candle(99, 7, 8)], '1h', 86_400, now)[0]).toMatchObject({ c: null, carried: null });
+    // No trade at all: the slots are there, with nothing to draw.
+    expect(timeline([], '1h', 86_400, now).every((s) => s.c === null && s.carried === null)).toBe(true);
+    // All: from the first candle to now, by the day, the days without a trade included; never more than the cap.
+    const day = 86_400;
+    const all = timeline([{ t: 2 * day, o: 1, h: 1, l: 1, c: 1, v: 1 }, { t: 5 * day, o: 1, h: 2, l: 1, c: 2, v: 1 }], '1d', 0, 7 * day + 5);
+    expect(all.map((s) => (s.c ? 'x' : s.carried))).toEqual(['x', 1, 1, 'x', 2, 2]);
+    expect(timeline([{ t: 0, o: 1, h: 1, l: 1, c: 1, v: 1 }], '1d', 0, 2000 * day, 500).length).toBe(500);
   });
 });
