@@ -272,7 +272,6 @@
         <h2 class="name"><AssetName label={asset.label} display={asset.display_name ?? ''} seq={asset.seq} {id} /></h2>
         <div class="tags">
           <span class="ba-tag market {market.state}" data-testid="market-chip">{#if market.state === 'curve'}{t('On curve %1', formatPercent(Number(launch?.progress) || 0))}{:else if market.state === 'pool'}Pool{:else}No market{/if}</span>
-          <span class="ba-tag" translate="no">#{asset.seq}</span>
           <VerifiedBadge {id} />
           {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<UnlockedSupplyBadge mintable />{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
@@ -298,6 +297,13 @@
               <Candles pool={chartPool} quoteLabel={TICKER} {series} />
             {:else}
               <p class="ba-empty">No price yet: it has no market that trades.</p>
+            {/if}
+            <!-- On its curve: the curve itself, where the price is on it (the candles need the node's market index). -->
+            {#if onCurve && launch}
+              <div data-testid="asset-curve">
+                <Chart points={curveSeries(shape)} marks={[{ x: now.sold, y: now.price }]} area label={t('The bonding curve of the launch: its price by the amount it sold, and where it is')} formatX={(x) => compactNumber(x, 3)} formatY={(y) => formatPrice(y, 4)} />
+                <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} each, 9 times more, over {compactNumber(shape.curveSupply, 3)} of it; then {compactNumber(shape.poolSupply, 3)} go into its pool with the {TICKER} raised, at the curve's last price. It sold {compactNumber(Math.max(0, now.sold), 3)} so far.</p>
+              </div>
             {/if}
             <dl class="stats" data-testid="asset-stats">
               <div><dt>24 h change</dt><dd translate="no"><span class:ba-good={changeDirection(day?.change) === 'up'} class:ba-bad={changeDirection(day?.change) === 'down'}>{day ? formatChange(day.change) : '–'}</span></dd></div>
@@ -406,10 +412,6 @@
             {#if launch}
               <h4>Its launch</h4>
               <LaunchFacts {launch} mine={creatorMine} {graduationFee} />
-              {#if onCurve}
-                <Chart points={curveSeries(shape)} marks={[{ x: now.sold, y: now.price }]} area label={t('The bonding curve of the launch: its price by the amount it sold, and where it is')} formatX={(x) => compactNumber(x, 3)} formatY={(y) => formatPrice(y, 4)} />
-                <p class="ba-help">From {formatPrice(shape.startPrice)} to {formatPrice(shape.endPrice)} {TICKER} each, 9 times more, over {compactNumber(shape.curveSupply, 3)} of it; then {compactNumber(shape.poolSupply, 3)} go into its pool with the {TICKER} raised, at the curve's last price. It sold {compactNumber(Math.max(0, now.sold), 3)} so far.</p>
-              {/if}
             {/if}
             <h4>About it</h4>
             {#if fields.length === 0}<p class="ba-help">Its issuer gave no data.</p>{/if}
@@ -542,6 +544,8 @@
     margin: 0;
     font-size: 1.7rem;
     letter-spacing: 0.01em;
+    /* The name as its issuer wrote it, whatever the look does to headings (Launchpad's rule is of the root: it outweighs a class). */
+    text-transform: none !important;
   }
   .tags {
     display: flex;
