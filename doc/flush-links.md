@@ -150,13 +150,13 @@ any page can open one*. Nothing runs unless the user accepts there.
 | `launch` | The ticker free; launches active; the logo the link names (downloaded from its `logo_url` if it has one, else or on a failure a file chooser of the host: refused if its SHA-256 differs, or the rules refuse it); the first buy's quote on a new curve must meet `min_tokens`. | One question for `reserveasset [ticker]` and `launchtoken [ticker, {display_name, info, logo, first_buy, first_min_out}]`; the launch is sent by the app once the reservation is deep enough (`confirm::Authorizations`: within an hour, for at most the fee shown). |
 | `register` | The ticker free; the supply within what an asset can have at its decimals; the logo as a launch's. | One question for `reserveasset [ticker]` and `registerasset [ticker, supply, decimals, {info}, true, logo, display_name]`, the registration sent by the app once the reservation is deep enough (as a launch). |
 | `curve` | Launch parameters active; the asset by id, its ticker the link's; never launched nor on a curve, no pool with ECX of the default kind; the amount exactly in its places, a curve's supply (a multiple of 8 units, at least 10^6). | `curveasset ["0x<id>", amount, {fee, min_buy, max_buy}]` (the control coin goes with it: the supply fixed for good). |
-| `pool` | Both sides by id with their tickers (ECX only as itself); the amounts exactly in their places. | `createpool [a, amount_a, b, amount_b, {curve, fee, amp, weight_a}]` |
-| `auction` | Both sides by id with their tickers; amounts and prices exactly in their places; the price falls. | `createauction [base, amount, quote, start_price, end_price, duration, delay]` |
-| `order` | Both sides by id with their tickers; the amount exactly in its places. | `placeorder [sell, amount, buy, price, expiry_blocks]` |
+| `pool` | `kind=constant` only (the standard pool at a fee tier): a stable, weighted or concentrated pool is **refused** ("… pools are no longer made from links"). Both sides by id with their tickers (ECX only as itself); the amounts exactly in their places. | `createpool [a, amount_a, b, amount_b, {curve, fee}]` |
+| `auction` | **Refused**: "Auctions are no longer started from links". | none |
+| `order` | **Refused**: "Limit orders are no longer placed from links". | none |
 | `route` | Each pool by id, not abandoned; the path from `from` through each pool to its other side must end in `to`; the amount exactly in its places; the quote hop by hop (each pool alone) must meet the floor. | `swaproute [[from, …, to], amount, slippage, floor, [pools]]` |
 | `deposit` | The pool by id, its two tickers the link's (either order); the amounts exactly in their places; the shares the node quotes now (`quotepoolliquidity`) must meet `min_shares`. | `addpoolliquidity [pool, {a: amount_a, b: amount_b}, null, slippage]` (the slippage that makes its floor the link's) |
 | `withdraw` | The same; what exactly `shares` take out now must meet both floors. | `removepoolliquidity [pool, 100, only, slippage, shares]` (`shares`: exactly the link's, of those the wallet holds) |
-| `position` | The pool by id, its tickers in its own order; previewed by the node (`previewposition`): in range or not said. | `openposition [pool, lower, upper, amounts, null, slippage]` |
+| `position` | The full range only (`price_lower=0` and `price_upper=0`): a price range, one-sided or not, is **refused** ("Positions over a price range are no longer opened from links"). The pool by id, its tickers in its own order; previewed by the node (`previewposition`). | `openposition [pool, "0", "0", amounts, null, slippage]` |
 | `reposition` | The position read whole (`getposition`): its pool, its fees owed. | `changeposition [position, {collect} \| {remove, collect, slippage} \| {close, slippage}]` |
 | `settle` | The order read whole (`getorder`). | `settleorder [order, cancel]` |
 | `bid`, `collect` | The auction read whole (`getauction`): what it sells, for what, its price. | `bidauction [auction, amount, buy_all]`, `collectauction [auction]` |
@@ -180,6 +180,16 @@ connects only the ECX Wallet browser extension; a `flush:connect` link is refuse
 
 The wallet: the one the app shows (its preferences' `lastWallet`) if it is open, else the only open wallet; with none,
 or several and none chosen, the link is refused ("choose one in the app first").
+
+### Retired markets (2026-11-11)
+
+The app starts no extra market from a link, whatever the chain's rules take (this is the app's behaviour, independent
+of upgrade v10's height): `auction` and `order` are refused outright, `position` unless it covers the full range, and
+`pool` unless its kind is the standard constant-product pool. The link is well formed (`Parse` still reads it, so that
+the reason is the right one), and `Resolve` refuses it by the usual path ("a link was refused: <reason>"), before
+anything is asked. The links that close things stay: `settle` (collect or cancel an order), `bid` and `collect`
+(auctions there are), `reposition` (collect, reduce or close any position, ranged ones included), `withdraw`,
+`deposit` into a pool there is, `swap` and `route` through every venue.
 
 ## Where links come in
 

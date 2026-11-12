@@ -580,21 +580,21 @@ BOOST_AUTO_TEST_CASE(launch_with_parameters_and_the_new_verbs)
     BOOST_CHECK_NE(ResolveRefused("flush:curve?" + head + "&asset=" + GOLD_ID + "&ticker=GOLD&amount=80000.001&fee_bps=100", reader).find("places"), std::string::npos);
 
     // pool: both sides by id (ECX by its ticker), a fee tier, the kind's own parameter.
-    const Plan pool{Resolve(Parse("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=weighted&fee_ppm=3000&amount_a=1&amount_b=100&weight_a=80", NET, NOW), Source::BROWSER, reader, NOW)};
+    const Plan pool{Resolve(Parse("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=constant&fee_ppm=3000&amount_a=1&amount_b=100", NET, NOW), Source::BROWSER, reader, NOW)};
     BOOST_CHECK_EQUAL(pool.method, "createpool");
-    BOOST_CHECK_EQUAL(pool.params.write(), R"(["ECX","1","0x)" + GOLD_ID + R"(","100",{"curve":"weighted","fee":0.3000,"weight_a":80}])");
+    BOOST_CHECK_EQUAL(pool.params.write(), R"(["ECX","1","0x)" + GOLD_ID + R"(","100",{"curve":"constant_product","fee":0.3000}])");
+    // The retired kinds (owner decision 2026-11-11): well formed, and refused, whatever the chain's rules take.
+    BOOST_CHECK_NE(ResolveRefused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=weighted&fee_ppm=3000&amount_a=1&amount_b=100&weight_a=80", reader).find("Weighted pools are no longer made from links"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=stable&fee_ppm=500&amount_a=1&amount_b=100&amp=100", reader).find("Stable pools are no longer made from links"), std::string::npos);
+    BOOST_CHECK_NE(ResolveRefused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=concentrated&fee_ppm=10000&amount_a=1&amount_b=20", reader).find("Concentrated pools are no longer made from links"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=constant&fee_ppm=2000&amount_a=1&amount_b=100").find("fee tiers"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=GOLD&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=constant&fee_ppm=3000&amount_a=1&amount_b=100").find("names the coin"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=weighted&fee_ppm=3000&amount_a=1&amount_b=100").find("weight_a"), std::string::npos);
 
     // auction and order.
-    const Plan auction{Resolve(Parse("flush:auction?" + head + "&base=" + GOLD_ID + "&base_ticker=GOLD&amount=10&quote=ECX&quote_ticker=ECX&start_price=5&end_price=1&duration=100", NET, NOW), Source::BROWSER, reader, NOW)};
-    BOOST_CHECK_EQUAL(auction.method, "createauction");
-    BOOST_CHECK_EQUAL(auction.params.write(), R"(["0x)" + GOLD_ID + R"(","10","ECX","5","1",100,1])");
-    BOOST_CHECK_NE(ResolveRefused("flush:auction?" + head + "&base=" + GOLD_ID + "&base_ticker=GOLD&amount=10&quote=ECX&quote_ticker=ECX&start_price=1&end_price=5&duration=100", reader).find("falls"), std::string::npos);
-    const Plan order{Resolve(Parse("flush:order?" + head + "&sell=" + GOLD_ID + "&sell_ticker=GOLD&buy=ECX&buy_ticker=ECX&amount=5&price=0.25&expiry_blocks=1000", NET, NOW), Source::BROWSER, reader, NOW)};
-    BOOST_CHECK_EQUAL(order.method, "placeorder");
-    BOOST_CHECK_EQUAL(order.params.write(), R"(["0x)" + GOLD_ID + R"(","5","ECX","0.25",1000])");
+    // Retired (owner decision 2026-11-11): a well-formed link of either is refused, with the reason.
+    BOOST_CHECK_EQUAL(ResolveRefused("flush:auction?" + head + "&base=" + GOLD_ID + "&base_ticker=GOLD&amount=10&quote=ECX&quote_ticker=ECX&start_price=5&end_price=1&duration=100", reader), "Auctions are no longer started from links");
+    BOOST_CHECK_EQUAL(ResolveRefused("flush:order?" + head + "&sell=" + GOLD_ID + "&sell_ticker=GOLD&buy=ECX&buy_ticker=ECX&amount=5&price=0.25&expiry_blocks=1000", reader), "Limit orders are no longer placed from links");
     BOOST_CHECK_NE(Refused("flush:order?" + head + "&sell=ECX&sell_ticker=ECX&buy=ECX&buy_ticker=ECX&amount=5&price=1&expiry_blocks=10").find("the same"), std::string::npos);
     // A parameter of another verb is refused, as ever.
     BOOST_CHECK_NE(Refused("flush:order?" + head + "&sell=ECX&sell_ticker=ECX&buy=" + GOLD_ID + "&buy_ticker=GOLD&amount=5&price=1&expiry_blocks=10&fee_bps=100").find("not a parameter"), std::string::npos);
@@ -876,10 +876,8 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     const std::string head{"v=1&network=regtest&exp=" + Exp()};
     const auto plan{[&](const std::string& uri) { return Resolve(Parse(uri, NET, NOW), Source::BROWSER, reader, NOW); }};
 
-    // A concentrated pool made at a price (a launch straight into a funded pool: register, this, then a full-range position).
-    const Plan cl{plan("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=concentrated&fee_ppm=10000&amount_a=1&amount_b=20")};
-    BOOST_CHECK_EQUAL(cl.method, "createpool");
-    BOOST_CHECK_EQUAL(cl.params[4].find_value("curve").get_str(), "concentrated");
+    // A concentrated pool made at a price: retired (owner decision 2026-11-11).
+    BOOST_CHECK_NE(ResolveRefused("flush:pool?" + head + "&asset_a=ECX&ticker_a=ECX&asset_b=" + GOLD_ID + "&ticker_b=GOLD&kind=concentrated&fee_ppm=10000&amount_a=1&amount_b=20", reader).find("no longer made from links"), std::string::npos);
 
     // route: the pools follow one another from `from` to `to`; the quote hop by hop meets the floor; the path and pools to swaproute.
     reader.pool_quote = 5'000;
@@ -909,13 +907,15 @@ BOOST_AUTO_TEST_CASE(the_dex_from_the_site)
     BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=05&min_a=1&min_b=0").find("shares"), std::string::npos);
     BOOST_CHECK_NE(Refused("flush:withdraw?" + head + "&pool=" + POOL_ID + "&asset_a=GOLD&asset_b=ECX&shares=5&min_a=1&min_b=0&only=c").find("only"), std::string::npos);
 
-    // position: in the pool's own order only; previewed first; its slippage binds.
-    const Plan position{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=10&price_upper=30&amount_a=1&amount_b=0&slippage_bps=100")};
-    BOOST_CHECK_EQUAL(position.method, "openposition");
-    BOOST_CHECK_EQUAL(position.params.write(), R"([")" + POOL_ID + R"(","10","30",{"ECX":"1"},1.00])");
-    BOOST_CHECK(HasRow(position.preface, "Now", "in this range"));
-    // The full range: both prices 0 (no bound either side).
+    // position: in the pool's own order only; previewed first; its slippage binds. Over the full range only (both prices
+    // 0, no bound either side): a price range, one-sided or not, is retired (owner decision 2026-11-11).
+    for (const std::string range : {"price_lower=10&price_upper=30", "price_lower=0&price_upper=30", "price_lower=10&price_upper=0"}) {
+        BOOST_CHECK_NE(ResolveRefused("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&" + range + "&amount_a=1&amount_b=0&slippage_bps=100", reader).find("only the full range"), std::string::npos);
+    }
     const Plan full{plan("flush:position?" + head + "&pool=" + POOL_ID + "&asset_a=ECX&asset_b=GOLD&price_lower=0&price_upper=0&amount_a=1&amount_b=20&slippage_bps=100")};
+    BOOST_CHECK_EQUAL(full.method, "openposition");
+    BOOST_CHECK_EQUAL(full.params.write(), R"([")" + POOL_ID + R"(","0","0",{"ECX":"1","0x)" + GOLD_ID + R"(":"20"},1.00])");
+    BOOST_CHECK(HasRow(full.preface, "Now", "in this range"));
     BOOST_CHECK_EQUAL(full.params[1].get_str(), "0");
     BOOST_CHECK(HasRow(full.preface, "Range", "the full range"));
     // With the price the site showed: given to the wallet, which refuses at signing if the pool's is not near it.

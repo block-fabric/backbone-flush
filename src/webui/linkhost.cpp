@@ -487,6 +487,9 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         break;
     }
     case Verb::POOL: {
+        // The extra markets are retired from the app (owner decision 2026-11-11), whatever the chain's rules take: a link
+        // makes the standard pool (constant product at a fee tier) and no other kind.
+        if (r.kind != "constant") throw LinkError(strprintf("%s pools are no longer made from links: only the standard pool (kind=constant) is", r.kind == "concentrated" ? "Concentrated" : r.kind == "stable" ? "Stable" : r.kind == "weighted" ? "Weighted" : "Such"));
         const Reader::Asset a{Side(reader, r.asset_a, r.ticker_a)}, b{Side(reader, r.asset_b, r.ticker_b)};
         const uint64_t amount_a{Exact(r.amount_a, a.decimals, "amount_a")}, amount_b{Exact(r.amount_b, b.decimals, "amount_b")};
         UniValue kind{UniValue::VOBJ};
@@ -510,6 +513,9 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         break;
     }
     case Verb::AUCTION: {
+        // Retired from the app (owner decision 2026-11-11): a link starts no auction. Bids on those there are, and their
+        // collection, stay (bid, collect).
+        throw LinkError("Auctions are no longer started from links");
         const Reader::Asset base{Side(reader, r.asset_a, r.ticker_a)}, quote{Side(reader, r.asset_b, r.ticker_b)};
         const uint64_t amount{Exact(r.amount, base.decimals, "amount")};
         const uint64_t start{Exact(r.start_price, quote.decimals, "start_price")}, end{Exact(r.end_price, quote.decimals, "end_price")};
@@ -529,6 +535,9 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         break;
     }
     case Verb::ORDER: {
+        // Retired from the app (owner decision 2026-11-11): a link places no limit order. Those there are are still
+        // collected and cancelled (settle).
+        throw LinkError("Limit orders are no longer placed from links");
         const Reader::Asset sell{Side(reader, r.asset_a, r.ticker_a)}, buy{Side(reader, r.asset_b, r.ticker_b)};
         const uint64_t amount{Exact(r.amount, sell.decimals, "amount")};
         Exact(r.price, std::max(buy.decimals, 8), "price");
@@ -675,6 +684,9 @@ Plan Resolve(const Request& r, Source source, Reader& reader, int64_t now)
         if (r.price_lower != "0") Exact(r.price_lower, 8, "price_lower");
         if (r.price_upper != "0") Exact(r.price_upper, 8, "price_upper");
         const bool full{r.price_lower == "0" && r.price_upper == "0"};
+        // Retired from the app (owner decision 2026-11-11): no price range from a link, the full range only. Positions
+        // there are, ranged or not, are still collected, reduced and closed (reposition).
+        if (!full) throw LinkError("Positions over a price range are no longer opened from links: only the full range (price_lower=0 and price_upper=0) is");
         UniValue amounts{UniValue::VOBJ};
         if (r.amount_a != "0") amounts.pushKV(Ref(a.id), Decimal(Exact(r.amount_a, a.decimals, "amount_a"), a.decimals));
         if (r.amount_b != "0") amounts.pushKV(Ref(b.id), Decimal(Exact(r.amount_b, b.decimals, "amount_b"), b.decimals));
