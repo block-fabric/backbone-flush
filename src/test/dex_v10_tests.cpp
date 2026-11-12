@@ -835,6 +835,136 @@ BOOST_AUTO_TEST_CASE(cancel_and_relaunch_in_one_block_and_undone)
     BOOST_CHECK_EQUAL(chain.Assets().GetLaunch(GOLD)->fee, 5'000U);
 }
 
+BOOST_AUTO_TEST_CASE(empty_pools_do_not_keep_an_asset_off_a_curve)
+{
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")}, TWIN{HashName("TWIN")};
+    const uint64_t D{800'000'000'000}, M{1'000'000};
+    const auto [control, coins]{chain.Issue("GOLD", {D, M, M, M, M}, 6)};
+    const auto [control_twin, coins_twin]{chain.Issue("TWIN", {D}, 6)};
+    chain.EndBlock();
+    // A stranger makes the pool GOLD would graduate into, at a price of its own, nothing in it: for nothing.
+    CreatePool grief;
+    grief.asset_a = CHN;
+    grief.asset_b = GOLD;
+    grief.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    grief.fee = GRADUATION_FEE;
+    grief.amount_a = 1;
+    grief.amount_b = 1'000'000'000;
+    chain.Require(MakeTx({}, grief, {}));
+    const uint256 grad_id{PoolIdOf(CHN, GOLD, GraduationParams())};
+    BOOST_REQUIRE(chain.Assets().GetPool(grad_id));
+    const uint256 stranger_price{chain.Assets().GetClState(grad_id)->sqrt_price};
+    // And the pool AddLiquidity makes, opened and left: abandoned.
+    const CTransaction added{MakeTx({coins[1]}, AddLiquidity{CHN, GOLD, 2 * M, M, 1}, {std::nullopt, std::nullopt}, 2 * M)};
+    chain.Require(added);
+    const uint64_t shares{chain.TokenAt(COutPoint{added.GetHash(), 0})->amount};
+    chain.Require(MakeTx({COutPoint{added.GetHash(), 0}}, RemoveLiquidity{CHN, GOLD, shares, 0, 0, PAYEE}, {std::nullopt}));
+    chain.EndBlock();
+    BOOST_REQUIRE(amm::Abandoned(*chain.Assets().FindPool(CHN, GOLD)));
+    BOOST_CHECK(chain.Assets().PoolEmpty(grad_id, *chain.Assets().GetPool(grad_id)));
+    // Before the height: GOLD cannot go on a curve.
+    BOOST_CHECK_EQUAL(chain.Refused(chain.Curve(GOLD, control, coins[0], D)), "bad-ba-launch-pooled");
+    chain.Until(V10);
+    // From it: it can, and until it graduates nobody puts anything into either pool.
+    chain.Require(chain.Curve(GOLD, control, coins[0], D));
+    chain.Require(chain.Curve(TWIN, control_twin, coins_twin[0], D));
+    chain.EndBlock();
+    const auto [lower, upper]{FullRange(GRADUATION_FEE)};
+    {
+        OpenPosition open;
+        open.pool = grad_id;
+        open.tick_lower = lower;
+        open.tick_upper = upper;
+        open.liquidity_lo = 1000;
+        open.max0 = M;
+        open.max1 = M;
+        BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coins[2]}, open, {std::nullopt, std::nullopt, std::nullopt}, M)), "bad-ba-launch-pooled");
+    }
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coins[2]}, PoolDeposit{PoolId(CHN, GOLD), 2 * M, M, 1}, {std::nullopt}, 2 * M)), "bad-ba-launch-pooled");
+    BOOST_CHECK_EQUAL(chain.Refused(MakeTx({coins[2]}, AddLiquidity{CHN, GOLD, 2 * M, M, 1}, {std::nullopt, std::nullopt}, 2 * M)), "bad-ba-launch-pooled");
+    // Both graduate in one block, the same buys: GOLD into the stranger's pool, taken over as new; TWIN into a new one.
+    const uint64_t pay{chain.Assets().GetLaunch(GOLD)->graduation + 200 * COIN_UNITS};
+    chain.Buy(GOLD, pay);
+    chain.Buy(TWIN, pay);
+    chain.EndBlock();
+    const LaunchRecord gold{*chain.Assets().GetLaunch(GOLD)}, twin{*chain.Assets().GetLaunch(TWIN)};
+    BOOST_REQUIRE(gold.Graduated() && twin.Graduated());
+    BOOST_CHECK(gold.pool == grad_id && chain.Assets().IsLockedPool(grad_id));
+    BOOST_CHECK(twin.pool == PoolIdOf(CHN, TWIN, GraduationParams()));
+    const ClState state{*chain.Assets().GetClState(grad_id)}, twin_state{*chain.Assets().GetClState(twin.pool)};
+    BOOST_CHECK(state.sqrt_price != stranger_price);
+    BOOST_CHECK(state == twin_state);
+    const Pool pool{*chain.Assets().GetPool(grad_id)}, twin_pool{*chain.Assets().GetPool(twin.pool)};
+    BOOST_CHECK_EQUAL(pool.reserve0, twin_pool.reserve0);
+    BOOST_CHECK_EQUAL(pool.reserve1, twin_pool.reserve1);
+    BOOST_CHECK(pool.creation == gold.txid && pool.height == gold.graduated);
+    BOOST_CHECK(*chain.Assets().GetPosition(gold.position) == [&] {
+        ClPosition expected{*chain.Assets().GetPosition(twin.position)};
+        expected.pool = grad_id;
+        expected.txid = gold.txid;
+        return expected;
+    }());
+    BOOST_CHECK_EQUAL(gold.raised_at_graduation, twin.raised_at_graduation);
+    // It trades as the twin does.
+    const CTransaction t1{MakeTx({}, SwapPools{CHN, {grad_id}, COIN_UNITS, 1, PAYEE}, {std::nullopt}, COIN_UNITS)};
+    const CTransaction t2{MakeTx({}, SwapPools{CHN, {twin.pool}, COIN_UNITS, 1, PAYEE}, {std::nullopt}, COIN_UNITS)};
+    chain.Require(t1);
+    chain.Require(t2);
+    chain.EndBlock();
+    BOOST_CHECK_EQUAL(chain.TokenAt(COutPoint{t1.GetHash(), 0})->amount, chain.TokenAt(COutPoint{t2.GetHash(), 0})->amount);
+    // Graduated: the pool AddLiquidity makes opens again, as any.
+    chain.Require(MakeTx({coins[2]}, AddLiquidity{CHN, GOLD, 2 * M, M, 1}, {std::nullopt, std::nullopt}, 2 * M));
+    chain.EndBlock();
+}
+
+BOOST_AUTO_TEST_CASE(pools_with_liquidity_still_keep_an_asset_off_a_curve)
+{
+    Chain chain;
+    const AssetId GOLD{HashName("GOLD")}, IRON{HashName("IRON")};
+    const uint64_t D{800'000'000'000}, M{1'000'000};
+    const auto [control, coins]{chain.Issue("GOLD", {D, M}, 6)};
+    const auto [control_iron, coins_iron]{chain.Issue("IRON", {D, M}, 6)};
+    // IRON's concentrated pool of the graduation's kind, made before the height at 1 coin a unit.
+    CreatePool made;
+    made.asset_a = CHN;
+    made.asset_b = IRON;
+    made.curve = static_cast<uint8_t>(Curve::CONCENTRATED);
+    made.fee = GRADUATION_FEE;
+    made.amount_a = made.amount_b = 1000;
+    chain.Require(MakeTx({}, made, {}));
+    chain.EndBlock();
+    chain.Until(V10);
+    // GOLD's pool with the coin has a provider: no curve.
+    chain.Require(MakeTx({coins[1]}, AddLiquidity{CHN, GOLD, 2 * M, M, 1}, {std::nullopt, std::nullopt}, 2 * M));
+    BOOST_CHECK_EQUAL(chain.Refused(chain.Curve(GOLD, control, coins[0], D)), "bad-ba-launch-pooled");
+    // IRON's pool holds a position (over the full range: IRON is on no curve, so it may): no curve either. The position
+    // closed, the pool holds nothing again, and IRON goes on a curve.
+    const uint256 id{PoolIdOf(CHN, IRON, GraduationParams())};
+    const auto [lower, upper]{FullRange(GRADUATION_FEE)};
+    OpenPosition open;
+    open.pool = id;
+    open.tick_lower = lower;
+    open.tick_upper = upper;
+    open.liquidity_lo = 500'000;
+    open.max0 = open.max1 = M;
+    open.chn_to = PAYEE;
+    const CTransaction opened{MakeTx({coins_iron[1]}, open, {std::nullopt, std::nullopt}, M)};
+    chain.Require(opened);
+    chain.EndBlock();
+    BOOST_CHECK(!chain.Assets().PoolEmpty(id, *chain.Assets().GetPool(id)));
+    BOOST_CHECK_EQUAL(chain.Refused(chain.Curve(IRON, control_iron, coins_iron[0], D)), "bad-ba-launch-pooled");
+    ChangePosition close;
+    close.position = PositionId(opened.GetHash());
+    close.close = true;
+    close.chn_to = PAYEE;
+    chain.Require(MakeTx({COutPoint{opened.GetHash(), 0}}, close, {std::nullopt}));
+    chain.EndBlock();
+    BOOST_CHECK(chain.Assets().PoolEmpty(id, *chain.Assets().GetPool(id)));
+    chain.Require(chain.Curve(IRON, control_iron, coins_iron[0], D));
+    chain.EndBlock();
+}
+
 BOOST_FIXTURE_TEST_CASE(cancel_a_launch_of_before_the_fee_flow, V10OldLaunchSetup)
 {
     Chain chain{/*fee_flow=*/150};

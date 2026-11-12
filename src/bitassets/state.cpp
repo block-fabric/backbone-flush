@@ -1836,9 +1836,16 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         AssetRecord fixed{*found};
         fixed.fixed = true;
         plan.assets.emplace_back(curve->asset, std::move(fixed));
-        if (GetPool(PoolId(CHN, curve->asset))) return invalid("bad-ba-launch-pooled");
+        // From v10_height a pool that holds nothing (PoolEmpty: anyone makes one for nothing) does not count: the
+        // graduation takes it over as a new one, and nobody puts anything into it until then (PlanPools, PlanPosition).
+        const bool v10{Params().GetConsensus().sidechain.V10Active(height)};
+        const auto pooled{[&](const uint256& id) {
+            const auto pool{GetPool(id)};
+            return pool && !(v10 && PoolEmpty(id, *pool));
+        }};
+        if (pooled(PoolId(CHN, curve->asset))) return invalid("bad-ba-launch-pooled");
         // From fee_flow_height: nor of the kind it graduates into then (GraduationParams).
-        if (Params().GetConsensus().sidechain.FeeFlowActive(height) && GetPool(PoolIdOf(CHN, curve->asset, GraduationParams()))) return invalid("bad-ba-launch-pooled");
+        if (Params().GetConsensus().sidechain.FeeFlowActive(height) && pooled(PoolIdOf(CHN, curve->asset, GraduationParams()))) return invalid("bad-ba-launch-pooled");
         LaunchToken launch;
         launch.reg.name = curve->asset;
         launch.creator = curve->creator;
@@ -2445,9 +2452,12 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     const arith_uint256 price{UintToArith256(cl.sqrt_price)};
     const int32_t spacing{cl::TickSpacing(params.fee)};
     // From v10_height (owner decision 2026-11-11) liquidity goes in over the full range only (the widest ticks of the
-    // pool's spacing: what a launch's locked position has). Taking out, collecting and closing: any position, as before.
+    // pool's spacing: what a launch's locked position has), and not into the pool a token still on its curve graduates
+    // into (an empty one may be there: CurveAsset). Taking out, collecting and closing: any position, as before.
     const bool v10{Params().GetConsensus().sidechain.V10Active(height)};
     const auto full_range{[&](int32_t lower, int32_t upper) { return spacing != 0 && lower == -(cl::MAX_TICK / spacing) * spacing && upper == (cl::MAX_TICK / spacing) * spacing; }};
+    const bool adds{std::holds_alternative<OpenPosition>(op) || std::get<ChangePosition>(op).add};
+    if (v10 && adds && pool.asset0.IsNull() && Launching(pool.asset1) && GraduationPool(pool_id, pool.asset1)) return invalid("bad-ba-launch-pooled");
     // A tick's record after a change of the liquidity that starts (lower) or ends (upper) there by `delta` (Uniswap's Tick.update).
     const auto update_tick{[&](int32_t tick, bool upper, unsigned __int128 delta, bool add) -> std::optional<std::optional<ClTick>> {
         ClTick t{GetClTick(pool_id, tick).value_or(ClTick{})};
@@ -3057,8 +3067,10 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         uint64_t shares{0};
         if (amm::Abandoned(pool)) {
             // Opened again as CreatePool opens one, under its rules from v10_height: a constant-product pool without a
-            // flag only (a pool of a retired kind everyone left stays closed).
+            // flag only (a pool of a retired kind everyone left stays closed), and none of a token on its curve (an
+            // empty pool may be there since CurveAsset takes no count of it).
             if (v10 && (params.GetCurve() != Curve::CONSTANT_PRODUCT || params.flags != 0)) return invalid("bad-ba-retired-pool-kind");
+            if (v10 && (Launching(pool.asset0) || Launching(pool.asset1))) return invalid("bad-ba-launch-pooled");
             const auto opened{open(params, pool, deposit->amount0, deposit->amount1, deposit->min_shares)};
             if (!opened) return false;
             shares = *opened;
@@ -4536,8 +4548,14 @@ bool State::GraduateLocked(const AssetId& token, LaunchRecord& record, uint64_t 
     sidechain::StoreOverlay& out{Writable()};
     const PoolParams params{GraduationParams()};
     const uint256 id{PoolIdOf(CHN, token, params)};
-    // Never into a pool there is (none can be: a token on its curve is never pooled, CurveAsset checks it).
-    if (coin == 0 || units == 0 || GetPool(id)) return false;
+    // Never into a pool there is (none can be: a token on its curve is never pooled, CurveAsset checks it). From
+    // v10_height an empty one can be (CurveAsset takes no count of it, and nothing goes into it while the token is on its
+    // curve): taken over as a new pool, at the graduation's price, whatever price its maker gave it; what it still holds
+    // (dust, what positions without liquidity are owed) stays in it.
+    const auto existing{GetPool(id)};
+    const bool takeover{existing && Params().GetConsensus().sidechain.V10Active(height) && PoolEmpty(id, *existing)};
+    if (coin == 0 || units == 0 || (existing && !takeover)) return false;
+    if (takeover && (existing->reserve0 > MAX_AMOUNT - coin || existing->reserve1 > MAX_AMOUNT - units)) return false;
     const arith_uint256 price{SqrtPriceOfAmounts(coin, units)};
     if (price < cl::MinSqrtRatio() || price >= cl::MaxSqrtRatio()) return false;
     const int32_t spacing{cl::TickSpacing(params.fee)};
@@ -4567,8 +4585,8 @@ bool State::GraduateLocked(const AssetId& token, LaunchRecord& record, uint64_t 
     Pool pool;
     pool.asset0 = CHN;
     pool.asset1 = token;
-    pool.reserve0 = coin;
-    pool.reserve1 = units;
+    pool.reserve0 = coin + (takeover ? existing->reserve0 : 0);
+    pool.reserve1 = units + (takeover ? existing->reserve1 : 0);
     // Open (above MIN_LIQUIDITY) with no shares: its positions are its providers.
     pool.shares = MIN_LIQUIDITY + 1;
     pool.creation = record.txid;
@@ -5026,6 +5044,17 @@ bool State::Cancellable(const AssetId& token, int height, std::string* why) cons
     const auto curve{GetPool(record->pool)};
     if (!curve || curve->reserve1 != record->VirtualUnits() || record->burned != 0) return no("bad-ba-cancel-bought");
     return true;
+}
+
+bool State::PoolEmpty(const uint256& id, const Pool& pool) const
+{
+    if (GetPoolParams(id).GetCurve() == Curve::CONCENTRATED) return ClTicksOf(id, 1).empty();
+    return amm::Abandoned(pool);
+}
+
+bool State::GraduationPool(const uint256& pool, const AssetId& token)
+{
+    return pool == PoolId(CHN, token) || pool == PoolIdOf(CHN, token, GraduationParams());
 }
 
 bool State::Launching(const AssetId& asset) const

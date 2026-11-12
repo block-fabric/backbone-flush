@@ -1859,6 +1859,14 @@ public:
      * the block goes through its curve. `why`: the rule's reject reason if not.
      */
     bool Cancellable(const AssetId& token, int height, std::string* why = nullptr) const;
+    /**
+     * Whether a pool holds nothing anyone provides: a concentrated pool with no liquidity at any tick (no position
+     * with any), any other pool nobody provides liquidity to (amm::Abandoned). From v10_height such a pool of an asset
+     * with the coin does not keep the asset off a curve (CurveAsset), and its graduation takes it over.
+     */
+    bool PoolEmpty(const uint256& id, const Pool& pool) const;
+    /** Whether `pool` is one a launch of `token` graduates into: its pool with the coin of the kind AddLiquidity makes, or of GraduationParams. */
+    static bool GraduationPool(const uint256& pool, const AssetId& token);
     // Concentrated liquidity (bitassets/clmath.h).
     std::optional<ClState> GetClState(const uint256& pool) const;
     std::optional<ClTick> GetClTick(const uint256& pool, int32_t tick) const;
