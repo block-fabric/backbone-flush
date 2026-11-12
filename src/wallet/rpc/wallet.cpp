@@ -1106,6 +1106,7 @@ RPCMethod curveasset();
 RPCMethod buyfromlaunch();
 RPCMethod selltolaunch();
 RPCMethod claimlaunch();
+RPCMethod cancellaunch();
 RPCMethod openposition();
 RPCMethod changeposition();
 RPCMethod listpositions();
@@ -1220,6 +1221,7 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &buyfromlaunch},
         {"wallet", &selltolaunch},
         {"wallet", &claimlaunch},
+        {"wallet", &cancellaunch},
         {"hidden", &setlinkdestination},
         {"wallet", &openposition},
         {"wallet", &changeposition},

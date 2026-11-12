@@ -628,6 +628,8 @@ private:
         uint32_t created_time{0};
         double raised{0}, sold{0}, price{0}, mcap{0}, progress{0}, curve_left{0}, volume_total{0};
         int decimals{bitassets::LAUNCH_DECIMALS};
+        //! Whether more of it can be minted: the asset's record (not fixed), not the launch's choice alone.
+        bool mintable{false};
         Window day;
         uint64_t holders{0};
         uint256 pool;
@@ -668,6 +670,7 @@ private:
             l.rec = *rec;
             const auto record{state.GetAsset(token)};
             l.decimals = record ? record->decimals : bitassets::LAUNCH_DECIMALS;
+            l.mintable = record ? !record->fixed : rec->keep_control;
             const double whole{std::pow(10.0, l.decimals)};
             l.ticker = record && !record->text.empty() ? record->text : "0x" + token.GetHex();
             const auto display{state.GetDisplayName(token)};
@@ -736,7 +739,7 @@ private:
         m.SetDouble("curve_supply", Whole(l.rec.CurveSupply(), l.decimals));
         m.SetDouble("pool_supply", Whole(l.rec.PoolSupply(), l.decimals));
         m.SetBool("from_asset", l.rec.from_asset);
-        m.SetBool("mintable", l.rec.keep_control);
+        m.SetBool("mintable", l.mintable);
         m.SetString("fee_destination", DestinationName(l.rec.destination));
         m.SetDouble("graduation_ecx", static_cast<double>(l.rec.graduation) / COIN);
         FillSplit(m, l.rec);
@@ -1355,7 +1358,8 @@ private:
         m.SetUInt("holders", bitassets::market::Enabled() ? bitassets::market::HolderCount(*tip.view, id, bitassets::Token::Kind::ASSET) : 0);
         if (const auto url{LogoUrl(state, id, false)}) m.SetString("logo", *url);
         const auto control{state.FirstTokenOf(id, bitassets::Token::Kind::CONTROL)};
-        m.SetBool("fixed_supply", !control);
+        // The asset's record, not whether its control coin exists (from upgrade v10 a fixed asset may have one).
+        m.SetBool("fixed_supply", record ? record->fixed : !control);
         if (row.exists("control") && row["control"].exists("address")) m.SetString("controller", row["control"]["address"].get_str());
         if (record) {
             m.SetUInt("registered_height", static_cast<uint32_t>(record->height));
@@ -1477,13 +1481,21 @@ private:
     }
 
     /** Why the controller of an asset cannot put part of it on a curve now (nullopt: it can). */
-    static std::optional<std::string> WhyNoCurve(const bitassets::State& state, const AssetId& asset)
+    static std::optional<std::string> WhyNoCurve(const bitassets::State& state, const AssetId& asset, int height)
     {
         const auto record{state.GetAsset(asset)};
         if (!record) return "no such asset";
         if (state.GetLaunch(asset)) return "it was launched or put on a curve already";
         if (!state.FirstTokenOf(asset, bitassets::Token::Kind::CONTROL)) return "it has no control coin (its supply is fixed): nobody can put it on a curve";
-        if (state.GetPool(bitassets::PoolId(bitassets::CHN, asset))) return "it has a pool with " + Coin() + " already: a curve would graduate into it";
+        // From upgrade v10 a pool that holds nothing does not count (CurveAsset; the graduation takes it over).
+        const bool v10{Params().GetConsensus().sidechain.V10Active(height)};
+        const auto pooled{[&](const uint256& id) {
+            const auto pool{state.GetPool(id)};
+            return pool && !(v10 && state.PoolEmpty(id, *pool));
+        }};
+        if (pooled(bitassets::PoolId(bitassets::CHN, asset)) || (v10 && pooled(bitassets::PoolIdOf(bitassets::CHN, asset, bitassets::GraduationParams())))) {
+            return "it has a pool with " + Coin() + " already: a curve would graduate into it";
+        }
         return std::nullopt;
     }
 
@@ -1787,7 +1799,7 @@ private:
             if (!Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1)) Fail(Code::FAILED_PRECONDITION, "existing assets go on curves from launch_params_height: not yet on this network");
             const AssetId asset{ResolveRegistered(state, req.GetString("asset"))};
             if (asset.IsNull()) Fail(Code::INVALID_ARGUMENT, "asset: not " + Coin());
-            if (const auto why{WhyNoCurve(state, asset)}) Fail(Code::FAILED_PRECONDITION, *why);
+            if (const auto why{WhyNoCurve(state, asset, tip.height + 1)}) Fail(Code::FAILED_PRECONDITION, *why);
             const int d{DecimalsOf(state, asset)};
             const uint64_t amount{ParseAmount(req.GetString("amount"), d, "amount")};
             if (!bitassets::IsLaunchSupply(amount)) Fail(Code::INVALID_ARGUMENT, strprintf("amount: a multiple of 8 units, %s to %s", Decimal(bitassets::MIN_LAUNCH_SUPPLY, d, 12), Decimal(bitassets::MAX_LAUNCH_SUPPLY, d, 12)));
@@ -2999,7 +3011,7 @@ private:
             d.SetBool("fee_flow", l.rec.v5);
             d.SetString("fee_destination", DestinationName(l.rec.destination));
             d.SetDouble("burn_percent", l.rec.burn_bps / 100.0);
-            d.SetBool("mintable", l.rec.keep_control);
+            d.SetBool("mintable", l.mintable);
             d.SetDouble("burned", Whole(l.rec.burned, l.decimals));
             d.SetDouble("buyback_pending_ecx", static_cast<double>(l.rec.buyback) / COIN);
             d.SetDouble("creator_tokens_owed", Whole(l.rec.creator_tokens, l.decimals));
@@ -3394,7 +3406,7 @@ private:
                 a.SetDouble("remaining", Whole(auction->remaining, DecimalsOf(state, id)));
             }
             Message& can{d.Mutable("can_curve")};
-            const auto why{Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1) ? WhyNoCurve(state, id) : std::optional<std::string>{"existing assets go on curves from launch_params_height: not yet on this network"}};
+            const auto why{Params().GetConsensus().sidechain.LaunchParamsActive(tip.height + 1) ? WhyNoCurve(state, id, tip.height + 1) : std::optional<std::string>{"existing assets go on curves from launch_params_height: not yet on this network"}};
             can.SetBool("allowed", !why);
             if (why) can.SetString("reason", *why);
             return d;

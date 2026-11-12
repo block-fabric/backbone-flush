@@ -155,7 +155,8 @@ BOOST_AUTO_TEST_CASE(the_pages_read_and_never_bond_on_their_own)
     BOOST_CHECK_EQUAL(keyed.size(), 2U);
     const auto confirmed{webui::local::ConfirmedRpcMethods()};
     // curveasset among them (an existing asset on a curve).
-    BOOST_CHECK_EQUAL(confirmed.size(), 33U);
+    BOOST_CHECK_EQUAL(confirmed.size(), 34U);
+    BOOST_CHECK(confirmed.contains("cancellaunch"));
     BOOST_CHECK(confirmed.contains("curveasset"));
     // The anchor bid policy spends the mainchain wallet: confirmed, as a change of the node.
     BOOST_CHECK(confirmed.contains("setanchorbidpolicy"));
@@ -416,6 +417,7 @@ BOOST_FIXTURE_TEST_CASE(confirmations_resolve_every_asset_and_pool, ReadingNode)
              {"addpoolliquidity", Arr({UniValue{std::string(64, 'a')}, Obj({{"GOLD", UniValue{"1"}}})})},
              {"buyfromlaunch", Arr({UniValue{"MOON"}, UniValue{"1"}})},
              {"claimlaunch", Arr({UniValue{"1739-0029"}})},
+             {"cancellaunch", Arr({UniValue{"1739-0029"}})},
              {"updateasset", Arr({UniValue{"0000-0012-0034"}, Obj({{"info", UniValue{"x"}}})})},
              {"transferassetcontrol", Arr({UniValue{"GOLD"}, UniValue{"addr"}})},
              {"fixassetsupply", Arr({UniValue{"gold"}, UniValue{true}})},

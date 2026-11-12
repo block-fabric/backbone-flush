@@ -986,7 +986,8 @@ RPCMethod updateasset()
     if (!pwallet) return UniValue::VNULL;
     const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
     if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, CURRENCY_UNIT + " has no data");
-    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: its control coin was burned");
+    // By the control coin, not by the fixed supply: from upgrade v10 a fixed asset may have one (a cancelled launch gives it back).
+    if (asset.record->fixed && !pwallet->chain().getBitAssetsControlExists(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: it has no control coin");
     const bitassets::AssetUpdates updates{bitassets::ParseUpdates(request.params[1])};
     if (updates.Empty()) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nothing to change");
     const auto [inputs, total]{Select(*pwallet, Token::Kind::CONTROL, asset.id, 1, "the control coin of " + asset.label)};
@@ -1025,7 +1026,8 @@ RPCMethod setassetlogo()
     if (!pwallet) return UniValue::VNULL;
     const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
     if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, CURRENCY_UNIT + " has no logo here");
-    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: its control coin was burned");
+    // By the control coin, not by the fixed supply: from upgrade v10 a fixed asset may have one (a cancelled launch gives it back).
+    if (asset.record->fixed && !pwallet->chain().getBitAssetsControlExists(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: it has no control coin");
     NeedLogos(*pwallet);
     const std::vector<unsigned char> logo{ParseLogo(request.params[1], /*allow_empty=*/true)};
     if (logo.empty() && !pwallet->chain().getBitAssetLogo(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "This asset has no logo to remove");
@@ -1089,7 +1091,8 @@ RPCMethod setassetdisplayname()
     if (!pwallet) return UniValue::VNULL;
     const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
     if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, CURRENCY_UNIT + " has no display name here");
-    if (asset.record->fixed) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: its control coin was burned");
+    // By the control coin, not by the fixed supply: from upgrade v10 a fixed asset may have one (a cancelled launch gives it back).
+    if (asset.record->fixed && !pwallet->chain().getBitAssetsControlExists(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "The data of this asset is fixed: it has no control coin");
     NeedTickers(*pwallet);
     const std::string display_name{ParseDisplayName(request.params[1], /*allow_empty=*/true)};
     if (display_name.empty() && !pwallet->chain().getBitAssetDisplayName(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, "This asset has no display name to remove");
@@ -2444,7 +2447,10 @@ RPCMethod curveasset()
     const AssetInfo asset{ParseAsset(*pwallet, request.params[0])};
     if (asset.id.IsNull()) throw JSONRPCError(RPC_INVALID_PARAMETER, CURRENCY_UNIT + " is the coin the curve prices in");
     if (pwallet->chain().getBitAssetsLaunch(asset.id)) throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s was launched or put on a curve already", asset.label));
-    if (pwallet->chain().getBitAssetsPool(bitassets::PoolId(bitassets::CHN, asset.id))) {
+    // From upgrade v10 a pool that holds nothing does not count (anyone makes one for nothing): the graduation takes it over.
+    const uint256 default_pool{bitassets::PoolId(bitassets::CHN, asset.id)};
+    if (pwallet->chain().getBitAssetsV10Active() ? pwallet->chain().getBitAssetsPoolHasLiquidity(default_pool) || pwallet->chain().getBitAssetsPoolHasLiquidity(bitassets::PoolIdOf(bitassets::CHN, asset.id, bitassets::GraduationParams()))
+                                                 : pwallet->chain().getBitAssetsPool(default_pool).has_value()) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s has a pool with %s already: the curve would graduate into it", asset.label, CURRENCY_UNIT));
     }
     const uint64_t amount{bitassets::ParseUnits(request.params[1], asset.decimals)};
@@ -2579,6 +2585,111 @@ RPCMethod selltolaunch()
     result.pushKV("txid", tx->GetHash().GetHex());
     result.pushKV("quote", ValueFromAmount(static_cast<CAmount>(quote->outs[0])));
     result.pushKV("min_out", ValueFromAmount(static_cast<CAmount>(min_out)));
+    return result;
+},
+    };
+}
+
+RPCMethod cancellaunch()
+{
+    return RPCMethod{
+        "cancellaunch",
+        "Layers' launches (upgrade v10: getdexinfo's v10_active): cancel a launch of this wallet that nothing is bought from now (getlaunch's cancellable: on its curve, never bought or "
+        "all sold back). The launch's units (its curve's and those kept for its pool) come back to its creator's address with a control coin of the asset, and what the creator is owed "
+        "of its fees is paid (" + CURRENCY_UNIT + ", by the coinbase). The asset was never launched then: it can be put on a curve again (curveasset), with other parameters. Its supply stays "
+        "fixed (the control coin mints nothing), unless this wallet holds every other unit of it: they go through the transaction, and the asset can be minted again.\n"
+        "Two steps, a block apart. The rules know the creator by a reservation made at the creator's address: the first call makes it (\"step\": \"authorise\"), the second, once "
+        "it is in a block, cancels (\"step\": \"cancel\")." + HELP_REQUIRING_PASSPHRASE,
+        {
+            {"token", RPCArg::Type::STR, RPCArg::Optional::NO, "The asset (launched, or put on a curve). " + bitassets::AssetArgHelp()},
+        },
+        RPCResult{RPCResult::Type::OBJ, "", "",
+        {
+            {RPCResult::Type::STR_HEX, "txid", "The transaction"},
+            {RPCResult::Type::STR, "step", "\"authorise\": the proof that this wallet is the creator was sent, call again once it is in a block; \"cancel\": the launch is cancelled by this transaction"},
+            {RPCResult::Type::NUM, "returned", /*optional=*/true, "cancel: whole units back at the creator's address"},
+            {RPCResult::Type::BOOL, "control", /*optional=*/true, "cancel: whether a new control coin comes with them (false: the asset has one, a launch that kept it)"},
+            {RPCResult::Type::BOOL, "mintable", /*optional=*/true, "cancel: whether the asset can be minted after (false: its supply stays fixed)"},
+            {RPCResult::Type::STR_AMOUNT, "fees", /*optional=*/true, "cancel: " + CURRENCY_UNIT + " paid to the creator"},
+        }},
+        RPCExamples{HelpExampleCli("cancellaunch", "\"MOON\"")},
+        [&](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
+{
+    const auto pwallet{ReadyWallet(request)};
+    if (!pwallet) return UniValue::VNULL;
+    NeedCurves(*pwallet);
+    if (!pwallet->chain().getBitAssetsV10Active()) throw JSONRPCError(RPC_MISC_ERROR, "Launches are not cancelled on this network yet (upgrade v10: getdexinfo's v10_active)");
+    const AssetInfo token{ParseAsset(*pwallet, request.params[0])};
+    const auto [launch, curve]{LaunchOf(*pwallet, token)};
+    CTxDestination creator;
+    if (!ExtractDestination(launch.creator, creator) || !WITH_LOCK(pwallet->cs_wallet, return pwallet->IsMine(launch.creator))) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "This wallet is not the creator of this launch: only its creator cancels it");
+    }
+    std::string why;
+    if (!pwallet->chain().getBitAssetsLaunchCancellable(token.id, why)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, why == "bad-ba-cancel-graduated" ? "The launch graduated: it cannot be cancelled"
+                                                  : why == "bad-ba-cancel-bought"  ? "Someone holds units bought from the curve: a launch is cancelled only while nothing is bought from it (never bought, or all sold back)"
+                                                                                   : "The launch cannot be cancelled (" + why + ")");
+    }
+    // The proof: a reservation made at the creator's script, in a block. None yet: made now, the cancel a block later.
+    std::optional<COutPoint> proof;
+    uint64_t held{0};
+    std::vector<COutPoint> units;
+    for (const OwnedToken& owned : OwnedTokens(*pwallet)) {
+        if (owned.token.kind == Token::Kind::ASSET && owned.token.id == token.id) {
+            held += owned.token.amount;
+            units.push_back(owned.outpoint);
+        }
+        if (proof || owned.token.kind != Token::Kind::RESERVATION) continue;
+        if (pwallet->chain().getBitAssetsReservationScript(Txid::FromUint256(owned.token.id)) == launch.creator) proof = owned.outpoint;
+    }
+    UniValue result(UniValue::VOBJ);
+    if (!proof) {
+        {
+            // One on its way already (the first call's): wait for its block.
+            LOCK(pwallet->cs_wallet);
+            for (const auto& [txid, wtx] : pwallet->mapWallet) {
+                if (pwallet->GetTxDepthInMainChain(wtx) != 0 || wtx.isAbandoned()) continue;
+                const auto marker{bitassets::GetMarker(*wtx.GetTx())};
+                if (!marker || !marker->operation || !std::holds_alternative<bitassets::Reserve>(*marker->operation)) continue;
+                for (const bitassets::MarkerOutput& out : marker->outputs) {
+                    if (out.token && out.token->kind == Token::Kind::RESERVATION && wtx.GetTx()->vout[out.n].scriptPubKey == launch.creator) {
+                        throw JSONRPCError(RPC_WALLET_ERROR, "The proof that this wallet is the creator is waiting for the next block: try again once it is in");
+                    }
+                }
+            }
+        }
+        // It commits to nothing anyone registers: a hash of the launch, not of a name and a nonce.
+        const uint256 commitment{(HashWriter{} << std::string{"cancellaunch"} << token.id << launch.txid).GetSHA256()};
+        const CTransactionRef tx{Send(*pwallet, bitassets::Reserve{commitment}, {{creator, UnitToken(Token::Kind::RESERVATION, uint256{})}}, {})};
+        result.pushKV("txid", tx->GetHash().GetHex());
+        result.pushKV("step", "authorise");
+        return result;
+    }
+    // Its units and, unless one exists, a control coin: to the creator's address (the rules pay nowhere else).
+    const bool control{!pwallet->chain().getBitAssetsControlExists(token.id)};
+    std::vector<COutPoint> inputs{*proof};
+    std::vector<Out> outs;
+    // Every other unit there is in this wallet's coins (not too many of them): through the transaction, and the supply is
+    // not fixed any more.
+    bool mintable{!token.record->fixed};
+    if (token.record->fixed && held <= token.record->supply && held + launch.Supply() == token.record->supply && units.size() <= 50) {
+        if (held > 0) {
+            inputs.insert(inputs.end(), units.begin(), units.end());
+            outs.push_back({ChangeDestination(*pwallet), AssetToken(token.id, held)});
+        }
+        mintable = true;
+    }
+    outs.push_back({creator, std::nullopt});
+    if (control) outs.push_back({creator, std::nullopt});
+    const uint64_t fees{launch.creator_fees + launch.buyback >= MinChn(*pwallet) ? launch.creator_fees + launch.buyback : 0};
+    const CTransactionRef tx{Send(*pwallet, bitassets::CancelLaunch{token.id}, outs, inputs)};
+    result.pushKV("txid", tx->GetHash().GetHex());
+    result.pushKV("step", "cancel");
+    result.pushKV("returned", bitassets::AmountToJSON(launch.Supply(), token.decimals));
+    result.pushKV("control", control);
+    result.pushKV("mintable", mintable);
+    result.pushKV("fees", ValueFromAmount(static_cast<CAmount>(fees)));
     return result;
 },
     };
@@ -3350,7 +3461,7 @@ RPCMethod listassettransactions()
             {RPCResult::Type::NUM, "blockheight", /*optional=*/true, ""},
             {RPCResult::Type::STR, "category", "send, receive, register, mint, burn, swap (a swap, a route, a buy or a sale), pool_create, pool_add, pool_remove, "
                                                "position_open, position_add, position_remove, position_collect, position_close, order_place, order_settle, order_cancel, "
-                                               "launch, curve, claim, auction, bid, collect, contract, contract_settle, oracle, attest, logo, display_name, update, control, "
+                                               "launch, curve, claim, launch_cancel, auction, bid, collect, contract, contract_settle, oracle, attest, logo, display_name, update, control, "
                                                "reserve, release, operation (any other)"},
             {RPCResult::Type::STR_HEX, "asset", /*optional=*/true, "The asset (none for a reservation, nor for the coin)"},
             {RPCResult::Type::BOOL, "coin", /*optional=*/true, "A row of " + CURRENCY_UNIT + " itself: paid into the operation by the transaction (sign -1), or out by the coinbase (via)"},
@@ -3833,6 +3944,13 @@ RPCMethod listassettransactions()
                     }
                     if (creator) add_coin("claim", std::nullopt, +1, /*coinbase=*/true);
                     fallback = "claim";
+                } else if constexpr (std::is_same_v<T, bitassets::CancelLaunch>) {
+                    // The launch's units back to its creator (the result output), and a control coin if one was made.
+                    if (results_read) {
+                        if (const uint64_t got{result_of(op.token)}) add("launch_cancel", op.token, got, +1, false, false, /*results_only=*/true);
+                    }
+                    if (received(op.token, Token::Kind::CONTROL)) add("control", op.token, std::nullopt, +1);
+                    fallback = "launch_cancel";
                 } else if constexpr (std::is_same_v<T, bitassets::CreateAuction>) {
                     add("auction", op.base, op.base_amount, -1);
                     fallback = "auction";
@@ -4162,6 +4280,9 @@ RPCMethod listassetactivity()
                 } else if constexpr (std::is_same_v<T, bitassets::CurveAsset>) {
                     operation = "curve";
                     summary = strprintf("Put %s on a bonding curve", amount(op.asset, op.amount));
+                } else if constexpr (std::is_same_v<T, bitassets::CancelLaunch>) {
+                    operation = "cancel launch";
+                    summary = "Cancelled the launch of " + LabelOfAsset(*pwallet, op.token) + ": its units and a control coin back to its creator";
                 } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
                     operation = "claim launch";
                     summary = "Paid the creator of " + LabelOfAsset(*pwallet, op.token) + "'s launch what it was owed (" + CURRENCY_UNIT + " by the coinbase, the allocation once graduated)";

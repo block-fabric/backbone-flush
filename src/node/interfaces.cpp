@@ -917,6 +917,31 @@ public:
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.V10Active(chainman().ActiveChain().Height() + 1);
     }
+    bool getBitAssetsLaunchCancellable(const bitassets::AssetId& token, std::string& why) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().Cancellable(token, chainman().ActiveChain().Height() + 1, &why);
+    }
+    std::optional<CScript> getBitAssetsReservationScript(const Txid& txid) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        const auto origin{state.GetReservationOrigin(txid)};
+        if (!origin || !state.GetReservation(txid)) return std::nullopt;
+        return origin->script;
+    }
+    bool getBitAssetsControlExists(const bitassets::AssetId& asset) override
+    {
+        LOCK(::cs_main);
+        return chainman().ActiveChainstate().SideState().BitAssets().FirstTokenOf(asset, bitassets::Token::Kind::CONTROL).has_value();
+    }
+    bool getBitAssetsPoolHasLiquidity(const uint256& pool) override
+    {
+        LOCK(::cs_main);
+        const auto state{chainman().ActiveChainstate().SideState().BitAssets()};
+        const auto found{state.GetPool(pool)};
+        return found && !state.PoolEmpty(pool, *found);
+    }
     uint64_t getBitAssetsMinChnPayout() override
     {
         LOCK(::cs_main);

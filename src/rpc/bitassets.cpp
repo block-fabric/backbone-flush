@@ -150,13 +150,13 @@ std::vector<RPCResult> AssetResults()
         {RPCResult::Type::NUM, "supply", "How much there is: all minted, less all burned"},
         {RPCResult::Type::NUM, "minted", "All ever minted, the initial supply included"},
         {RPCResult::Type::NUM, "burned", "All ever burned"},
-        {RPCResult::Type::BOOL, "fixed", "Whether the control coin was burned: nothing more can be minted, the data cannot change"},
+        {RPCResult::Type::BOOL, "fixed", "Whether its supply is fixed: nothing more can be minted (its control coin was burned or went with a launch; a cancelled launch gives a control coin back, which changes its data and mints nothing)"},
         {RPCResult::Type::NUM, "registered", "The height of the block that registered it"},
         {RPCResult::Type::STR_HEX, "registration", "The transaction that registered it"},
         {RPCResult::Type::OBJ, "data", /*optional=*/true, "Its data; left out at a height before its registration", bitassets::DataResults()},
         {RPCResult::Type::BOOL, "releasable", "Whether it is dead and can be retired (releaseasset): fixed supply, every unit in pools nobody provides for"},
         {RPCResult::Type::NUM, "release_fee", /*optional=*/true, "If releasable: the " + CURRENCY_UNIT + " its pools hold, which retiring it pays to mainchain miners"},
-        {RPCResult::Type::OBJ, "control", /*optional=*/true, "The output that carries its control coin, unless burned",
+        {RPCResult::Type::OBJ, "control", /*optional=*/true, "The output that carries its control coin, if one exists (whether it mints: `fixed`)",
         {
             {RPCResult::Type::STR_HEX, "txid", ""},
             {RPCResult::Type::NUM, "vout", ""},
@@ -192,9 +192,8 @@ UniValue AssetToJSON(Chainstate& chainstate, const bitassets::State& state, cons
         }
         obj.pushKV("release_fee", ValueFromAmount(fee));
     }
-    if (!record.fixed) {
-        if (const auto outpoint{state.FirstTokenOf(asset, bitassets::Token::Kind::CONTROL)}) obj.pushKV("control", OutputToJSON(chainstate, *outpoint));
-    }
+    // Whether it exists, not whether the supply is fixed: from upgrade v10 a fixed asset may have one (a cancelled launch).
+    if (const auto outpoint{state.FirstTokenOf(asset, bitassets::Token::Kind::CONTROL)}) obj.pushKV("control", OutputToJSON(chainstate, *outpoint));
     if (const auto logo{state.GetLogo(asset)}) obj.pushKV("logo", LogoToJSON(*logo));
     return obj;
 }
@@ -2700,6 +2699,9 @@ UniValue OperationToJSON(const bitassets::Operation& operation)
         } else if constexpr (std::is_same_v<T, bitassets::ClaimLaunch>) {
             obj.pushKV("name", "claim_launch");
             obj.pushKV("token", asset(op.token));
+        } else if constexpr (std::is_same_v<T, bitassets::CancelLaunch>) {
+            obj.pushKV("name", "cancel_launch");
+            obj.pushKV("token", asset(op.token));
         } else {
             static const std::map<int, std::string> names{{5, "burn"}, {4, "update"}, {9, "create_auction"}, {10, "bid"}, {11, "collect"}, {12, "release_asset"}, {14, "register_oracle"},
                                                           {15, "attest"}, {16, "create_oracle_contract"}, {17, "settle_oracle_contract"}, {32, "set_logo"}, {34, "set_display_name"}};
@@ -2851,7 +2853,8 @@ std::vector<RPCResult> LaunchResults()
                         {RPCResult::Type::STR_AMOUNT, "owed", "What it is owed and not paid yet"},
                     }},
             }},
-        {RPCResult::Type::BOOL, "mintable", "Whether its creator kept the control coin: the creator can create more units (a risk to buyers)"},
+        {RPCResult::Type::BOOL, "mintable", "Whether more units can be minted (a risk to buyers): its creator kept the control coin and the supply is not fixed (the asset's `fixed`)"},
+        {RPCResult::Type::BOOL, "cancellable", "Whether its creator can cancel it in the next block (cancellaunch; upgrade v10, getdexinfo's v10_active): on its curve, nothing bought from it now (never, or all sold back). Always false before the upgrade"},
         {RPCResult::Type::NUM, "burned", "Whole units bought back and burned"},
         {RPCResult::Type::STR_AMOUNT, "buyback_pending", CURRENCY_UNIT + " waiting to buy it back"},
         {RPCResult::Type::NUM, "creator_tokens_owed", "The creator's part of its locked position's fees in its own units, not claimed yet (claimlaunch)"},
@@ -2934,7 +2937,9 @@ UniValue LaunchToJSON(const bitassets::State& state, const AssetId& token, const
         split.push_back(std::move(entry));
     }
     obj.pushKV("fee_split", std::move(split));
-    obj.pushKV("mintable", launch.keep_control);
+    // By the asset's record (a kept control coin burned since fixes the supply), not by the launch's choice alone.
+    obj.pushKV("mintable", record ? !record->fixed : launch.keep_control);
+    obj.pushKV("cancellable", state.Cancellable(token, next_height));
     obj.pushKV("burned", AmountToJSON(launch.burned, decimals));
     obj.pushKV("buyback_pending", ValueFromAmount(static_cast<CAmount>(launch.buyback)));
     obj.pushKV("creator_tokens_owed", AmountToJSON(launch.creator_tokens, decimals));
@@ -3249,6 +3254,7 @@ RPCMethod getlaunchlog()
                 {RPCResult::Type::STR_HEX, "token", "The launch"},
                 {RPCResult::Type::BOOL, "created", "Made in this block"},
                 {RPCResult::Type::BOOL, "graduated", "Graduated in this block"},
+                {RPCResult::Type::BOOL, "cancelled", "Cancelled in this block by its creator (cancellaunch; upgrade v10): no launch any more, unless `created` again in the same block"},
                 {RPCResult::Type::NUM, "orders", "Orders it filled"},
                 {RPCResult::Type::STR_AMOUNT, "coin_in", CURRENCY_UNIT + " buyers paid in (what came back not counted)"},
                 {RPCResult::Type::STR_AMOUNT, "coin_out", CURRENCY_UNIT + " sellers got"},
@@ -3275,6 +3281,7 @@ RPCMethod getlaunchlog()
                 row.pushKV("token", token.GetHex());
                 row.pushKV("created", e.created);
                 row.pushKV("graduated", e.graduated);
+                row.pushKV("cancelled", e.cancelled);
                 row.pushKV("orders", e.orders);
                 row.pushKV("coin_in", ValueFromAmount(static_cast<CAmount>(e.coin_in)));
                 row.pushKV("coin_out", ValueFromAmount(static_cast<CAmount>(e.coin_out)));

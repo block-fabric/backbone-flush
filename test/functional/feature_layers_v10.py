@@ -12,8 +12,15 @@ The extra markets retired:
     stable pool traded through, added to and left, positions reduced and closed, a full-range position added to;
   - the standard pool (constant product, at a fee tier) and a full-range position are still made;
   - a stable pool everyone left is not opened again;
-  - a node without the rule follows the chain (the rule only refuses), until it takes what the others refuse;
-  - the peg balance holds throughout.
+  - a node without the rule follows the chain (the rule only refuses), until it takes what the others refuse.
+A launch cancelled (cancellaunch):
+  - by its creator alone, in two steps a block apart; its units and a control coin back, the launch gone from getlaunch
+    and listlaunches, the block's log entry cancelled; a reorganisation across it puts the launch back, and forward;
+  - never bought and all of it the creator's: mintable again; on a curve again with other parameters;
+  - bought from: refused until all is sold back; then, with units held elsewhere, the supply stays fixed (no mint), the
+    control coin still changes the data, and a third curve takes it.
+An empty pool: an abandoned pool with ECX keeps an asset off a curve only while it has liquidity.
+The peg balance holds throughout.
 """
 
 from decimal import Decimal
@@ -201,6 +208,115 @@ class LayersV10Test(LayersTest):
         assert n0.getpool(stable)["abandoned"]
         assert_raises_rpc_error(-1, retired, n0.addpoolliquidity, stable, {"USDX": 50000, "USDY": 50000})
         assert_raises_rpc_error(-1, retired, n0.createpool, "USDX", 50000, "USDY", 50000, {"curve": "stable", "fee": 0.05, "amp": 200})
+        assert_peg_balance(main, new)
+
+        self.log.info("A launch cancelled by its creator: its units and a control coin back, mintable again (it held all of it)")
+        n0.reserveasset("MOON")
+        self.bmm_to(n0.getblockcount() + 3, new)
+        made = n0.launchtoken("MOON")
+        self.bmm_on(new)
+        assert n0.getlaunch("MOON")["cancellable"]
+        assert not n0.getlaunch("MOON")["mintable"]
+        assert_raises_rpc_error(-4, "not the creator", n1.cancellaunch, "MOON")
+        first = n0.cancellaunch("MOON")
+        assert_equal(first["step"], "authorise")
+        assert_raises_rpc_error(-4, "waiting for the next block", n0.cancellaunch, "MOON")
+        self.bmm_on(new)
+        assert n0.getlaunch("MOON")["cancellable"]
+        done = n0.cancellaunch("MOON")
+        assert_equal((done["step"], done["returned"], done["control"], done["mintable"]), ("cancel", Decimal("1000000000"), True, True))
+        cancel_block = self.bmm_on(new)
+        height = n0.getblockcount()
+        assert_raises_rpc_error(-8, "Not an asset on a curve", n1.getlaunch, "MOON")
+        asset = n1.getasset("MOON")
+        assert not asset["fixed"]
+        assert "control" in asset
+        assert_equal(self.holding(n0, "MOON"), Decimal("1000000000"))
+        assert_equal([l["ticker"] for l in n1.listlaunches()["launches"]], [])
+        log = n1.getlaunchlog(height)
+        assert_equal([(r["token"], r["cancelled"], r["created"]) for r in log], [(made["token"], True, False)])
+        assert_equal(n1.decodeassettx(n0.gettransaction(done["txid"])["hex"])["operation"]["name"], "cancel_launch")
+        assert_equal(self.moves(n0, done["txid"])[0][:4], ("launch_cancel", "MOON", 1, Decimal("1000000000")))
+        assert_peg_balance(main, new)
+
+        self.log.info("A reorganisation across the cancel puts the launch back, and forward again")
+        tip = n0.getbestblockhash()
+        for n in new:
+            n.invalidateblock(cancel_block)
+        back = n1.getlaunch("MOON")
+        assert_equal((back["status"], back["cancellable"], back["txid"]), ("curve", True, made["txid"]))
+        assert n1.getasset("MOON")["fixed"]
+        assert "control" not in n1.getasset("MOON")
+        for n in new:
+            n.reconsiderblock(cancel_block)
+        self.wait_until(lambda: all(n.getbestblockhash() == tip for n in new))
+        assert_raises_rpc_error(-8, "Not an asset on a curve", n1.getlaunch, "MOON")
+        assert_equal(n1.getasset("MOON"), asset)
+
+        self.log.info("Minted again, then on a curve again with other parameters; bought from: not cancelled until sold back")
+        n0.mintasset("MOON", 8)
+        self.bmm_on(new)
+        n0.sendasset(n1.getnewaddress(), "MOON", 5)
+        self.bmm_on(new)
+        again = n0.curveasset("MOON", 800000000, {"fee": 2})
+        self.bmm_on(new)
+        launch = n1.getlaunch("MOON")
+        assert_equal((launch["fee"], launch["from_asset"], launch["txid"], launch["cancellable"]), (Decimal("2"), True, again["txid"], True))
+        assert n1.getasset("MOON")["fixed"]
+        assert "control" not in n1.getasset("MOON")
+        n1.buyfromlaunch("MOON", 1)
+        self.bmm_on(new)
+        assert not n0.getlaunch("MOON")["cancellable"]
+        assert_raises_rpc_error(-8, "Someone holds units bought from the curve", n0.cancellaunch, "MOON")
+        # The buyer sells back what it bought (it keeps the 5 it was sent, which never were the curve's).
+        n1.selltolaunch("MOON", self.holding(n1, "MOON") - 5)
+        self.bmm_on(new)
+        launch = n0.getlaunch("MOON")
+        assert launch["cancellable"]
+        assert_greater_than(launch["creator_fees_owed"], 0)
+
+        self.log.info("Cancelled with units held elsewhere: the supply stays fixed, the control coin mints nothing; a third curve")
+        assert_equal(n0.cancellaunch("MOON")["step"], "authorise")
+        self.bmm_on(new)
+        done = n0.cancellaunch("MOON")
+        assert_equal((done["step"], done["returned"], done["control"], done["mintable"], done["fees"]), ("cancel", Decimal("800000000"), True, False, launch["creator_fees_owed"]))
+        block = self.bmm_on(new)
+        assert self.paid_in(n0, block, launch["creator_fees_owed"]), "the creator's fees by the coinbase"
+        asset = n1.getasset("MOON")
+        assert asset["fixed"]
+        assert "control" in asset
+        assert_raises_rpc_error(-8, "The supply of this asset is fixed", n0.mintasset, "MOON", 1)
+        n0.updateasset("MOON", {"info": "On a curve again"})
+        self.bmm_on(new)
+        assert_equal(n1.getasset("MOON")["data"]["info"], "On a curve again")
+        n0.curveasset("MOON", 400000000, {"fee": 3})
+        self.bmm_on(new)
+        assert_equal(n1.getlaunch("MOON")["fee"], Decimal("3"))
+        assert_equal([l["ticker"] for l in n1.listlaunches()["launches"]], ["MOON"])
+        n1.buyfromlaunch("MOON", 1)
+        self.bmm_on(new)
+        assert_greater_than(n1.getlaunch("MOON")["raised"], 0)
+        assert_peg_balance(main, new)
+
+        self.log.info("An empty pool does not keep an asset off a curve: a stranger's pool and an abandoned one")
+        n0.reserveasset("GOLD")
+        self.bmm_to(n0.getblockcount() + 3, new)
+        n0.registerasset("GOLD", 10000000, 2)
+        self.bmm_on(new)
+        n0.sendasset(n1.getnewaddress(), "GOLD", 1000)
+        self.bmm_on(new)
+        # The pool addliquidity makes, opened by a holder and left; with liquidity it keeps GOLD off a curve.
+        n1.addliquidity("GOLD", 1000, "ECX", 1)
+        self.bmm_on(new)
+        assert_raises_rpc_error(-8, "has a pool with", n0.curveasset, "GOLD", 8000000)
+        n1.removeliquidity("GOLD", "ECX")
+        self.bmm_on(new)
+        assert n0.getpool("GOLD", "ECX")["abandoned"]
+        n0.curveasset("GOLD", 8000000)
+        self.bmm_on(new)
+        assert_equal(n1.getlaunch("GOLD")["status"], "curve")
+        # Nothing goes into it while GOLD is on its curve.
+        assert_raises_rpc_error(-4, "not accepted", n1.addliquidity, "GOLD", 500, "ECX", 1)
         assert_peg_balance(main, new)
 
 

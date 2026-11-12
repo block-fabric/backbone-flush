@@ -258,6 +258,14 @@ public:
     virtual bool getBitAssetsLaunchParamsActive() = 0;
     //! Upgrade v10 (the extra markets retired, launches cancelled): whether the next block has its rules (SidechainParams::v10_height).
     virtual bool getBitAssetsV10Active() = 0;
+    //! Whether the next block takes a cancel of a launch (bitassets::State::Cancellable); `why`: the rule's reason if not.
+    virtual bool getBitAssetsLaunchCancellable(const bitassets::AssetId& token, std::string& why) = 0;
+    //! The script of the output a reservation was made at (what proves a launch's creator to a cancel); none: no such reservation.
+    virtual std::optional<CScript> getBitAssetsReservationScript(const Txid& txid) = 0;
+    //! Whether a control coin of an asset exists.
+    virtual bool getBitAssetsControlExists(const bitassets::AssetId& asset) = 0;
+    //! Whether a pool exists and holds something anyone provides (not bitassets::State::PoolEmpty).
+    virtual bool getBitAssetsPoolHasLiquidity(const uint256& pool) = 0;
     //! Launches: the most a launch's allocation can be in the next block, in basis points (SidechainParams::allocation10_height).
     virtual uint16_t getBitAssetsMaxLaunchAllocation() = 0;
     //! The least CHN paid out in the next block (bitassets::MinChnPayout: SidechainParams::small_payout_height).
