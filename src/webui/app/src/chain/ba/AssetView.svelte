@@ -357,49 +357,6 @@
           </ul>
         </section>
 
-        {#if wallets.current !== null}
-          <section class="panel" data-testid="asset-position" aria-label="Your position">
-            <div class="panel-head"><h3>Your position</h3></div>
-            <div class="panel-body stack">
-              <dl class="stats">
-                <div><dt>Balance</dt><dd>{holding ? formatAmount(holding.balance, asset.decimals) : '0'} <SafeText text={asset.label} /></dd></div>
-                <div><dt>Worth</dt><dd>{#if holding && price !== undefined}{formatPrice(price * approx(holding.balance))} {TICKER}{:else}–{/if}</dd></div>
-                <div><dt>Share of supply</dt><dd>{heldShare ? formatPercent(heldShare * 100) : '–'}</dd></div>
-                <div><dt>Pool share</dt><dd>{poolShare !== null ? formatPercent(poolShare) : t('None yet')}</dd></div>
-              </dl>
-              {#if holding && approx(holding.pending) > 0}<p class="ba-warn small">+{formatAmount(holding.pending, asset.decimals)} on the way: spendable after the next block</p>{/if}
-              <div class="row">
-                <button type="button" class="btn small" disabled={!held} onclick={() => { sendAsset(id); go('send'); }}><Icon name="send" size={14} /> Send</button>
-                <button type="button" class="btn small ghost" onclick={() => go('receive')}><Icon name="receive" size={14} /> Receive</button>
-              </div>
-              <!-- A holder who does not control it: burning its own units is all it can do to the asset. -->
-              {#if holding && held && !controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
-            </div>
-          </section>
-        {/if}
-
-        {#if controlled || creatorMine}
-          <section class="panel" data-testid="asset-manage" aria-label="Manage">
-            <div class="panel-head"><h3>Manage</h3><span class="muted small">{controlled ? t('shown because this wallet holds its control coin') : t('shown because this wallet created its launch')}</span></div>
-            <div class="panel-body stack">
-              {#if holding && controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
-              {#if launch && creatorMine}
-                <div class="row">
-                  <button type="button" class="btn small" class:primary={anyOwed} data-testid="claim-fees" disabled={claiming || !anyOwed} onclick={claim}>Claim creator fees</button>
-                  <span class="faint small">{anyOwed ? t('%1 %2 owed', formatAmount(launch.creator_fees_owed, 8), TICKER) : t('nothing owed')}{#if owed.allocation}{' · '}{t('and the allocation of %1%', String(launch.allocation))}{/if}</span>
-                </div>
-              {/if}
-              {#if launch && cancellable}
-                <div class="row">
-                  <button type="button" class="btn small danger" data-testid="cancel-launch" disabled={cancelling} onclick={cancel}>Cancel launch</button>
-                  <span class="faint small">Nothing is bought from its curve now: its {launch.ticker} and a control coin come back to this wallet, and it can be put on a curve again.</span>
-                </div>
-              {/if}
-              {#if controlled && market.state === 'none'}<OpenMarket {asset} {pools} launched={!!launch} {onCurve} />{/if}
-            </div>
-          </section>
-        {/if}
-
         <section class="panel" data-testid="asset-activity" aria-label="Activity">
           <div class="panel-head"><h3>Activity</h3></div>
           <TabRow label="Activity" tabs={[{ id: 'trades', label: 'Trades' }, { id: 'changes', label: 'Changes' }]} current={activity} select={(x) => (activity = x === 'changes' ? 'changes' : 'trades')} />
@@ -507,6 +464,50 @@
               <h3>Trade <SafeText text={asset.label} /></h3>
               <p class="ba-empty">No market yet: nothing to trade it against.</p>
               {#if held}<div class="row"><button type="button" class="btn small primary" onclick={() => setBox('liquidity')}>Add liquidity</button></div>{/if}
+            </div>
+          </section>
+        {/if}
+
+        <!-- Beside the page, under the box (user feedback 2026-11-12: everything was in the left column): what is the wallet's own. -->
+        {#if wallets.current !== null}
+          <section class="panel" data-testid="asset-position" aria-label="Your position">
+            <div class="panel-head"><h3>Your position</h3></div>
+            <div class="panel-body stack">
+              <dl class="stats">
+                <div><dt>Balance</dt><dd>{holding ? formatAmount(holding.balance, asset.decimals) : '0'} <SafeText text={asset.label} /></dd></div>
+                <div><dt>Worth</dt><dd>{#if holding && price !== undefined}{formatPrice(price * approx(holding.balance))} {TICKER}{:else}–{/if}</dd></div>
+                <div><dt>Share of supply</dt><dd>{heldShare ? formatPercent(heldShare * 100) : '–'}</dd></div>
+                <div><dt>Pool share</dt><dd>{poolShare !== null ? formatPercent(poolShare) : t('None yet')}</dd></div>
+              </dl>
+              {#if holding && approx(holding.pending) > 0}<p class="ba-warn small">+{formatAmount(holding.pending, asset.decimals)} on the way: spendable after the next block</p>{/if}
+              <div class="row">
+                <button type="button" class="btn small" disabled={!held} onclick={() => { sendAsset(id); go('send'); }}><Icon name="send" size={14} /> Send</button>
+                <button type="button" class="btn small ghost" onclick={() => go('receive')}><Icon name="receive" size={14} /> Receive</button>
+              </div>
+              <!-- A holder who does not control it: burning its own units is all it can do to the asset. -->
+              {#if holding && held && !controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
+            </div>
+          </section>
+        {/if}
+
+        {#if controlled || creatorMine}
+          <section class="panel" data-testid="asset-manage" aria-label="Manage">
+            <div class="panel-head"><h3>Manage</h3><span class="muted small">{controlled ? t('shown because this wallet holds its control coin') : t('shown because this wallet created its launch')}</span></div>
+            <div class="panel-body stack">
+              {#if holding && controlled}{#key id}<ManagePanel {holding} embedded />{/key}{/if}
+              {#if launch && creatorMine}
+                <div class="row">
+                  <button type="button" class="btn small" class:primary={anyOwed} data-testid="claim-fees" disabled={claiming || !anyOwed} onclick={claim}>Claim creator fees</button>
+                  <span class="faint small">{anyOwed ? t('%1 %2 owed', formatAmount(launch.creator_fees_owed, 8), TICKER) : t('nothing owed')}{#if owed.allocation}{' · '}{t('and the allocation of %1%', String(launch.allocation))}{/if}</span>
+                </div>
+              {/if}
+              {#if launch && cancellable}
+                <div class="row">
+                  <button type="button" class="btn small danger" data-testid="cancel-launch" disabled={cancelling} onclick={cancel}>Cancel launch</button>
+                  <span class="faint small">Nothing is bought from its curve now: its {launch.ticker} and a control coin come back to this wallet, and it can be put on a curve again.</span>
+                </div>
+              {/if}
+              {#if controlled && market.state === 'none'}<OpenMarket {asset} {pools} launched={!!launch} {onCurve} />{/if}
             </div>
           </section>
         {/if}

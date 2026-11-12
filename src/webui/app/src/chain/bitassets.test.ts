@@ -2461,9 +2461,15 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     await waitFor(() => expect(page.dataset.market).toBe('curve'));
     expect(screen.getByTestId('market-chip').textContent).toBe('On curve 40.0%');
     expect(screen.getByTestId('asset-price').textContent).toMatch(/0\.00000081 ECX/);
-    // The sections, in their order.
-    const order = ['asset-markets', 'asset-position', 'asset-manage', 'asset-activity', 'asset-details'].map((x) => screen.getByTestId(x));
-    for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The sections, in their order: the asset's own in the page's column, the wallet's beside it under the box (2026-11-12).
+    for (const column of [['asset-markets', 'asset-activity', 'asset-details'], ['asset-position', 'asset-manage']]) {
+      const order = column.map((x) => screen.getByTestId(x));
+      for (let i = 1; i < order.length; i++) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    const beside = screen.getByTestId('asset-box');
+    expect(beside.contains(screen.getByTestId('asset-position'))).toBe(true);
+    expect(beside.contains(screen.getByTestId('asset-manage'))).toBe(true);
+    expect(beside.contains(screen.getByTestId('asset-markets'))).toBe(false);
     // Markets: the curve, with its progress and fee; its pool at graduation, which nobody can open before.
     const rows = within(screen.getByTestId('asset-markets')).getAllByTestId('market-row');
     expect(rows.map((r) => r.dataset.kind)).toEqual(['curve', 'pool-at-graduation']);
