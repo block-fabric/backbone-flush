@@ -10,7 +10,7 @@
   import AssetBadge from './AssetBadge.svelte';
   import { assetRoute, poolRoute } from './assetactions';
   import { approx, formatAmount } from './model';
-  import { ecxPoolsOf } from './pools';
+  import { fundedEcxPoolOf } from './pools';
   import { ba, displayNameOf, loadLaunchFlags, onCurve } from './store.svelte';
   import { hiddenAsset } from './visible.svelte';
   import { TICKER } from '../config';
@@ -23,7 +23,8 @@
   const held = $derived((ba.mine?.assets ?? []).filter((h) => approx(h.balance) > 0 && !hiddenAsset(h.asset, h.label)));
   const rows = $derived(
     held.map((h) => {
-      const pool = ecxPoolsOf(h.asset, ba.pools)[0];
+      // A pool with nothing in it is no pool of the asset: it is offered a new one (owner decision, 2026-11-11).
+      const pool = fundedEcxPoolOf(h.asset, ba.pools);
       return { h, pool, state: onCurve(h.asset) ? ('curve' as const) : pool ? ('pool' as const) : ('free' as const) };
     }),
   );

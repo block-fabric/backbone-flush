@@ -18,7 +18,7 @@
   import { amountParam, assetArg, formatUnits, isChn, unitsAtMost, type Asset, type Pool } from './model';
   import { assetTextOf, ba, refreshBitAssets } from './store.svelte';
   import { assetRoute } from './assetactions';
-  import { poolFormState } from './pools';
+  import { poolEmpty, poolFormState } from './pools';
   import { nav } from '../../lib/nav.svelte';
   import { TICKER } from '../config';
 
@@ -36,7 +36,10 @@
   const holding = $derived(ba.mine?.assets.find((a) => a.asset === asset.asset) ?? null);
   const heldUnits = $derived(holding ? unitsAtMost(holding.balance, asset.decimals) : 0n);
   // Its pool with the coin of the default kind: the one a curve graduates into.
-  const ecxPool = $derived(pools.some((p) => (isChn(p.asset_a_id) || isChn(p.asset_b_id)) && p.default_kind !== false && p.curve !== 'book' && p.curve !== 'launch'));
+  // From upgrade v10 (getdexinfo v10_active) one that holds nothing does not count, nor keeps the asset off a curve; and
+  // then a pool of the kind a launch graduates into that holds liquidity does.
+  const v10 = $derived(ba.dex?.v10_active === true);
+  const ecxPool = $derived(pools.some((p) => (isChn(p.asset_a_id) || isChn(p.asset_b_id)) && p.curve !== 'book' && p.curve !== 'launch' && (v10 ? !poolEmpty(p) && (p.default_kind !== false || (p.curve === 'concentrated' && p.fee === 1)) : p.default_kind !== false)));
   const curveOk = $derived(canCurve({ params, controlled: !!holding?.control, launched, ecxPool, heldUnits }));
 
   // The pool: by the rules of the one pool form (ba/pools.ts).

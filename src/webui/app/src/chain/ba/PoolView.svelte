@@ -323,7 +323,7 @@
           </div>
         </section>
         {#if (open === 'add' || empty) && withEcx}
-          {#key pool.pool}<AddLiquidity asset={sides.base.id} pools={[pool]} onCurve={onCurve(sides.base.id)} />{/key}
+          {#key pool.pool}<AddLiquidity asset={sides.base.id} pools={[pool]} onCurve={onCurve(sides.base.id)} exact />{/key}
         {/if}
       </div>
     </div>

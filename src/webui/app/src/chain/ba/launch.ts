@@ -100,6 +100,8 @@ export interface Launch {
    *  basis points of it, with what it was paid and is owed (CHN); a v5 launch's mapped from its fee_destination. */
   fee_split?: FeeShare[];
   mintable?: boolean;
+  /** Whether its creator can cancel it in the next block (cancellaunch; upgrade v10): on its curve, nothing bought from it now. A node from before does not say. */
+  cancellable?: boolean;
   burned?: Amount;
   buyback_pending?: Amount;
   creator_tokens_owed?: Amount;

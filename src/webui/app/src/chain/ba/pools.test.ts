@@ -30,8 +30,12 @@ describe('the one pool form, by the state of its asset', () => {
   it('makes a standard pool where there is none, adds where there is one, reopens an empty one, and takes the full range of one concentrated on the chain', () => {
     expect(form({})).toEqual({ ok: true, reason: '', mode: 'create', pool: null });
     expect(form({ pools: [pool()] })).toMatchObject({ ok: true, mode: 'add', pool: { pool: 'p'.repeat(64) } });
-    expect(form({ pools: [pool({ abandoned: true })] })).toMatchObject({ ok: true, mode: 'reopen' });
-    expect(form({ pools: [emptyCl] })).toMatchObject({ ok: true, mode: 'full-range', pool: { pool: emptyCl.pool } });
+    // An empty pool someone made is no pool of the asset: it is offered a new standard pool (owner decision 2026-11-11).
+    expect(form({ pools: [pool({ abandoned: true })] })).toEqual({ ok: true, reason: '', mode: 'create', pool: null });
+    expect(form({ pools: [emptyCl] })).toEqual({ ok: true, reason: '', mode: 'create', pool: null });
+    // On the empty pool's own page it is taken as it is: reopened, or the full range of a concentrated one (price guard).
+    expect(form({ pools: [pool({ abandoned: true })], exact: true })).toMatchObject({ ok: true, mode: 'reopen' });
+    expect(form({ pools: [emptyCl], exact: true })).toMatchObject({ ok: true, mode: 'full-range', pool: { pool: emptyCl.pool } });
     // An order book of the pair is no pool: a pool can still be made.
     expect(form({ pools: [book] })).toMatchObject({ ok: true, mode: 'create' });
     // The pool with liquidity before an empty one of the same pair.
@@ -193,11 +197,14 @@ describe('a pool as the pages show it', () => {
     expect(ecxPoolsOf(A, [emptyCl, book, curve, pool()]).map((p) => p.pool)).toEqual([pool().pool, emptyCl.pool]);
   });
 
-  it('where an asset trades: on its curve until it graduates, then its pool, an empty pool, or nowhere', () => {
+  it('where an asset trades: on its curve until it graduates, then its pool, or nowhere; an empty pool is no market', () => {
     expect(marketState(A, [curve]).state).toBe('curve');
     expect(marketState(A, [pool()], { status: 'curve', pool: curve.pool })).toMatchObject({ state: 'curve', curvePool: curve.pool });
     expect(marketState(A, [pool()], { status: 'graduated' })).toMatchObject({ state: 'pool', pool: { pool: pool().pool } });
-    expect(marketState(A, [emptyCl]).state).toBe('pool-empty');
+    expect(marketState(A, [emptyCl])).toEqual({ state: 'none', pool: null, curvePool: '' });
+    expect(marketState(A, [pool({ abandoned: true })]).state).toBe('none');
+    // A pool with liquidity next to an empty one: the asset's pool is the one with liquidity.
+    expect(marketState(A, [emptyCl, pool()])).toMatchObject({ state: 'pool', pool: { pool: pool().pool } });
     expect(marketState(A, [book]).state).toBe('none');
     expect(marketState(A, []).state).toBe('none');
   });

@@ -4,7 +4,9 @@
   // "opening at graduation" (the assets on their launch curve: listlaunches), and one New pool action (ba/NewPool.svelte:
   // an asset to pick, then its page). A row opens the pool's page (ba/PoolView.svelte, "pools/<pool>"). One kind of pool
   // is shown: a pool is its pair and its fee, whatever its curve on the chain (ba/pools.ts). Order books and launch
-  // curves are no rows here. The node gives no fees earned over a day: that column is left out.
+  // curves are no rows here. The node gives no fees earned over a day: that column is left out. Pools with nothing in
+  // them (anyone makes one of any asset for nothing) are left out unless "Show empty pools" is on (off by default; owner
+  // decision, 2026-11-11): such a pool is no pool of its asset anywhere else in the app (ba/pools.ts).
   import SafeText from '../../components/SafeText.svelte';
   import Icon from '../../components/Icon.svelte';
   import Term from '../../components/Term.svelte';
@@ -85,6 +87,7 @@
 
   let query = $state('');
   let showHidden = $state(false);
+  let showEmpty = $state(false);
   const shares = $derived(new Map((ba.mine?.liquidity ?? []).map((l) => [l.pool, l.percent])));
   const rows = $derived(
     source
@@ -98,7 +101,8 @@
   );
   const matches = (r: (typeof rows)[number], q: string) => !q || [r.s.base, r.s.quote].some((x) => [x.label, displayNameOf(x.id) ?? '', assetById(x.id)?.seq ?? ''].some((v) => v.toLowerCase().includes(q)));
   const isHidden = (r: (typeof rows)[number]) => hiddenAsset(r.s.base.id, r.s.base.label) || hiddenAsset(r.s.quote.id, r.s.quote.label);
-  const matching = $derived(rows.filter((r) => matches(r, query.trim().toLowerCase())));
+  const matching = $derived(rows.filter((r) => (showEmpty || !r.empty) && matches(r, query.trim().toLowerCase())));
+  const emptyCount = $derived(rows.filter((r) => r.empty).length);
   const hiddenCount = $derived(showHidden ? 0 : matching.filter(isHidden).length);
   const list = $derived(showHidden ? matching : matching.filter((r) => !isHidden(r)));
   const curves = $derived(launchesRead.list.filter((l) => l.status !== 'graduated' && (showHidden || !hiddenAsset(l.token, l.ticker))));
@@ -123,10 +127,11 @@
         <h3>Open pools</h3>
         <input type="search" class="search" placeholder="Find a pool by an asset" aria-label="Find a pool" bind:value={query} />
       </div>
+      <label class="check show-empty" data-testid="show-empty-pools"><input type="checkbox" role="switch" bind:checked={showEmpty} /> <span>Show empty pools{#if emptyCount > 0} <span class="faint">({emptyCount})</span>{/if}</span></label>
       <HiddenToggle count={hiddenCount} bind:show={showHidden} />
       {#if error}<p class="ba-problems bad" role="alert"><SafeText text={error} /></p>{/if}
       {#if list.length === 0}
-        <p class="ba-empty">{rows.length === 0 ? t('No pool yet. A pool opens when an asset graduates from its launch curve, or when someone makes one with New pool.') : t('No pool matches.')}</p>
+        <p class="ba-empty">{rows.length - (showEmpty ? 0 : emptyCount) === 0 ? t('No pool yet. A pool opens when an asset graduates from its launch curve, or when someone makes one with New pool.') : t('No pool matches.')}</p>
       {:else}
         <div class="ba-wrap">
           <table class="ba-table" use:stacked aria-label="Pools">
@@ -176,6 +181,13 @@
 <style>
   .new-pool {
     margin-inline-start: auto;
+  }
+  .show-empty {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.3rem 0;
+    font-size: 0.88rem;
   }
   .search {
     flex: 1 1 14rem;

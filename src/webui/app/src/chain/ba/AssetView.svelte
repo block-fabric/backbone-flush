@@ -40,6 +40,7 @@
   import LaunchFacts from './LaunchFacts.svelte';
   import LaunchLog from './LaunchLog.svelte';
   import ManagePanel from './ManagePanel.svelte';
+  import { cancelLaunch } from './cancel';
   import OpenMarket from './OpenMarket.svelte';
   import SwapPanel from './SwapPanel.svelte';
   import UnlockedSupplyBadge from './UnlockedSupplyBadge.svelte';
@@ -121,8 +122,8 @@
   const onCurve = $derived(!!launch && launch.status !== 'graduated');
   const graduated = $derived(launch?.status === 'graduated');
   const market = $derived(marketState(id, pools, launch));
-  /** Its pools as the page lists them: no order book, no launch curve. */
-  const shown = $derived(pools.filter(isShownPool));
+  /** Its pools as the page lists them: no order book, no launch curve, none with nothing in it (those are no pool of the asset: Pools shows them behind "Show empty pools"). */
+  const shown = $derived(pools.filter((p) => isShownPool(p) && !poolEmpty(p)));
   /** Its price in ECX: its curve's now, else its pool's with ECX. */
   const price = $derived.by(() => {
     if (onCurve && launch) return Number(launch.price) || undefined;
@@ -198,6 +199,23 @@
   const rules = $derived(rulesOf(stats?.rules));
   const shape = $derived(curveShape(launch ? approx(launch.graduation) : rules.graduation, launchSupply(launch, rules.supply)));
   const DEC = $derived(launch ? launchDecimals(launch) : (asset?.decimals ?? 0));
+
+  // Cancel launch (upgrade v10): only when the node says it can be cancelled now, and this wallet is its creator. What
+  // comes back is said before the wallet is asked: its units, a control coin unless one exists, and whether its supply
+  // is unlocked again (this wallet holds every other unit) or stays fixed.
+  const cancellable = $derived(launch?.cancellable === true && creatorMine);
+  const launchUnits = $derived(launch ? launchSupply(launch, rules.supply) : 0);
+  let cancelling = $state(false);
+  async function cancel() {
+    if (!launch || !asset || cancelling) return;
+    cancelling = true;
+    try {
+      const others = approx(asset.supply) - launchUnits;
+      await cancelLaunch(launch, { fixed: asset.fixed, holdsAllOther: Math.abs(approx(holding?.balance) - others) < 10 ** -asset.decimals / 2, hasControl: asset.control !== undefined, units: launchUnits });
+    } finally {
+      cancelling = false;
+    }
+  }
   const now = $derived(curvePointAt(shape, graduated ? shape.graduation : launch ? approx(launch.raised) : 0));
   const allocationShown = $derived(launch ? creatorAllocation(launch) : null);
   const graduationFee = $derived(Number(stats?.rules?.graduation_fee ?? 1));
@@ -208,8 +226,8 @@
   );
   const fields = $derived(DATA_FIELDS.filter((f) => asset?.data?.[f] !== undefined));
 
-  /** What the side box is: the Trade box, or Add liquidity in its place (asked for, or the only market is an empty pool). */
-  const liquidityBox = $derived(box === 'liquidity' || market.state === 'pool-empty');
+  /** What the side box is: the Trade box, or Add liquidity in its place (asked for). */
+  const liquidityBox = $derived(box === 'liquidity');
   const setBox = (b: AssetBox) => (nav.tab = assetRoute(id, b));
   let activity = $state<'trades' | 'changes'>('trades');
 
@@ -253,10 +271,10 @@
       <div class="who">
         <h2 class="name"><AssetName label={asset.label} display={asset.display_name ?? ''} seq={asset.seq} {id} /></h2>
         <div class="tags">
-          <span class="ba-tag market {market.state}" data-testid="market-chip">{#if market.state === 'curve'}{t('On curve %1', formatPercent(Number(launch?.progress) || 0))}{:else if market.state === 'pool'}Pool{:else if market.state === 'pool-empty'}Pool, empty{:else}No market{/if}</span>
+          <span class="ba-tag market {market.state}" data-testid="market-chip">{#if market.state === 'curve'}{t('On curve %1', formatPercent(Number(launch?.progress) || 0))}{:else if market.state === 'pool'}Pool{:else}No market{/if}</span>
           <span class="ba-tag" translate="no">#{asset.seq}</span>
           <VerifiedBadge {id} />
-          {#if asset.fixed && launch?.mintable !== true}<span class="ba-tag accent">Fixed supply</span>{:else}<UnlockedSupplyBadge mintable />{/if}
+          {#if asset.fixed}<span class="ba-tag accent">Fixed supply</span>{:else}<UnlockedSupplyBadge mintable />{/if}
           {#if !asset.name}<span class="ba-tag warn" title="Its registration did not publish the name: it is known by its hash and number">Private name</span>{/if}
           {#if launch && launch.allocation > 0}<span class="ba-tag warn" title="Minted to the creator at graduation, on top of the supply">Creator allocation {launch.allocation}%</span>{/if}
           {#if controlled}<span class="ba-tag accent"><Icon name="crown" size={12} /> You control it</span>{/if}
@@ -321,17 +339,11 @@
               {/if}
               {#each shown as p (p.pool)}
                 {@const s = poolSides(p)}
-                {@const empty = poolEmpty(p)}
-                <li class="mrow" data-testid="market-row" data-kind={empty ? 'pool-empty' : 'pool'}>
+                <li class="mrow" data-testid="market-row" data-kind="pool">
                   <button type="button" class="mmain link-row" onclick={() => go('pools', poolRoute(p.pool))}>
                     <span><strong>Pool <SafeText text={s.base.label} /> / <SafeText text={s.quote.label} /></strong> <span class="faint">· <span translate="no">{poolFeeText(p)}</span> fee</span></span>
-                    {#if empty}
-                      <span class="faint small">Nothing in it yet. {#if s.price}Its starting price is {formatPrice(s.price)} <SafeText text={s.quote.label} /> for 1 <SafeText text={s.base.label} />. {/if}It cannot be traded until someone adds liquidity.</span>
-                    {:else}
-                      <span class="faint small">{#if poolEcx(p) !== undefined}{formatAmount(poolEcx(p) ?? 0, 8, { max: 4 })} {TICKER} of liquidity · {/if}{formatCount(p.swaps)} swaps</span>
-                    {/if}
+                    <span class="faint small">{#if poolEcx(p) !== undefined}{formatAmount(poolEcx(p) ?? 0, 8, { max: 4 })} {TICKER} of liquidity · {/if}{formatCount(p.swaps)} swaps</span>
                   </button>
-                  {#if empty}<span class="ba-tag warn">Needs liquidity</span>{/if}
                   {#if wallets.current !== null && isChn(s.quote.id)}<button type="button" class="btn small" data-testid="add-liquidity" onclick={() => setBox('liquidity')}>Add liquidity</button>{/if}
                 </li>
               {/each}
@@ -375,6 +387,12 @@
                 <div class="row">
                   <button type="button" class="btn small" class:primary={anyOwed} data-testid="claim-fees" disabled={claiming || !anyOwed} onclick={claim}>Claim creator fees</button>
                   <span class="faint small">{anyOwed ? t('%1 %2 owed', formatAmount(launch.creator_fees_owed, 8), TICKER) : t('nothing owed')}{#if owed.allocation}{' · '}{t('and the allocation of %1%', String(launch.allocation))}{/if}</span>
+                </div>
+              {/if}
+              {#if launch && cancellable}
+                <div class="row">
+                  <button type="button" class="btn small danger" data-testid="cancel-launch" disabled={cancelling} onclick={cancel}>Cancel launch</button>
+                  <span class="faint small">Nothing is bought from its curve now: its {launch.ticker} and a control coin come back to this wallet, and it can be put on a curve again.</span>
                 </div>
               {/if}
               {#if controlled && market.state === 'none'}<OpenMarket {asset} {pools} launched={!!launch} {onCurve} />{/if}
@@ -426,7 +444,7 @@
                 <dt>On the curve</dt><dd>{formatAmount(launch.curve_tokens_left, DEC, { max: 4 })} left</dd>
                 {#if launch.pool_supply !== undefined}<dt>Set aside for the pool</dt><dd>{formatAmount(launch.pool_supply, 0)}</dd>{/if}
               {/if}
-              <dt>Control coin</dt><dd>{#if asset.fixed}Burned: nobody can mint more of it or change its data, ever.{:else}Held: whoever holds it can mint more and change its data.{/if}</dd>
+              <dt>Control coin</dt><dd>{#if asset.fixed && asset.control}Held, and the supply is fixed: whoever holds it can change its data and put it on a launch curve again, and can mint no more of it.{:else if asset.fixed}None: nobody can mint more of it or change its data.{:else}Held: whoever holds it can mint more and change its data.{/if}</dd>
             </dl>
             {#if launch}
               <h4>Its launch</h4>
@@ -539,10 +557,6 @@
   }
   .ba-tag.market.pool {
     color: var(--positive);
-  }
-  .ba-tag.market.pool-empty {
-    color: var(--warning);
-    border-color: var(--warning);
   }
   .col {
     display: flex;

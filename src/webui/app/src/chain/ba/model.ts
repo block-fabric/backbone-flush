@@ -104,7 +104,7 @@ export const EXACT_METHODS = ['listassets', 'getasset', 'listpools', 'getpool', 
   // Layers' DEX: the pool kinds' quotes, previews and depth, and what the wallet does with them.
   'searchpools', 'getswapquote', 'quoteroute', 'previewpool', 'getpoolcurve', 'simulateclearing', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute',
   'getposition', 'getpoolticks', 'previewposition', 'listpositions', 'openposition', 'changeposition',
-  'quotepoolliquidity', 'getlaunch', 'listlaunches', 'quotelaunch', 'getlaunchstats', 'getlaunchlog', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch',
+  'quotepoolliquidity', 'getlaunch', 'listlaunches', 'quotelaunch', 'getlaunchstats', 'getlaunchlog', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'cancellaunch',
   // Order books: the ladder, the orders, and what the wallet does with them.
   'getbook', 'getorder', 'listorders', 'placeorder', 'settleorder'];
 

@@ -292,7 +292,10 @@
   {/if}
 
   <div class="actions">
-    {#if control && !holding.fixed}
+    <!-- Minting follows the asset's fixed supply, not the coin: a cancelled launch gives the control coin of a fixed asset
+         back, which changes its data and puts it on a curve again, and mints nothing (upgrade v10). -->
+    {#if control}
+      {#if !holding.fixed}
       <button type="button" class="act" aria-expanded={open === 'mint'} onclick={() => toggle('mint')}><Icon name="plus" size={16} /> <span>Mint more</span></button>
       {#if open === 'mint'}
         <form class="ba-form body" onsubmit={(e) => { e.preventDefault(); void mint(); }}>
@@ -300,6 +303,9 @@
           <AddressInput id="mint-to" label="To" bind:value={mintTo} bind:valid={mintToValid} required={false} hint="Empty: this wallet" />
           <div><button type="submit" class="btn primary" disabled={busy || mintUnits === null || (!!mintTo.trim() && !mintToValid)}>Mint</button></div>
         </form>
+      {/if}
+      {:else}
+        <p class="ba-help body" data-testid="fixed-with-control">Its supply is fixed: this control coin mints no more of it. It still changes the asset's data, and can put the asset on a launch curve again.</p>
       {/if}
 
       <button type="button" class="act" aria-expanded={open === 'data'} onclick={() => toggle('data')}><Icon name="edit" size={16} /> <span>Change its data</span></button>
@@ -361,8 +367,10 @@
             <AddressInput id="control-to" label="Give the control coin to" bind:value={giveTo} bind:valid={giveValid} />
             <div><button type="submit" class="btn" disabled={busy || !giveValid}>Give control</button></div>
           </form>
-          <p class="ba-help">Fixing the supply burns the control coin: nobody can mint more or change the data, ever. Holders know the supply will never grow.</p>
-          <div><button type="button" class="btn danger" disabled={busy} onclick={fixSupply}>Fix the supply for good</button></div>
+          {#if !holding.fixed}
+            <p class="ba-help">Fixing the supply burns the control coin: nobody can mint more or change the data, ever. Holders know the supply will never grow.</p>
+            <div><button type="button" class="btn danger" disabled={busy} onclick={fixSupply}>Fix the supply for good</button></div>
+          {/if}
         </div>
       {/if}
     {:else if holding.fixed}

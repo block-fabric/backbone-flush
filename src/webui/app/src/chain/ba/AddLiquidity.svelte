@@ -40,6 +40,7 @@
     asset,
     pools,
     onCurve,
+    exact = false,
   }: {
     /** The asset the form is fixed on: the page's. */
     asset: string;
@@ -47,10 +48,12 @@
     pools: readonly Pool[];
     /** It is on its launch curve, not graduated. */
     onCurve: boolean;
+    /** On a pool's own page: that pool as it is, empty or not (elsewhere an empty pool is passed over for a new one). */
+    exact?: boolean;
   } = $props();
 
   const curvesActive = $derived(ba.dex?.curves_active === true);
-  const form = $derived(poolFormState({ asset, wallet: wallets.current !== null, onCurve, pools, curvesActive }));
+  const form = $derived(poolFormState({ asset, wallet: wallets.current !== null, onCurve, pools, curvesActive, exact }));
   const mode = $derived(form.mode);
   const pool = $derived(form.pool);
   const label = $derived(labelOf(asset));
@@ -238,7 +241,7 @@
         return;
       }
       if (now) {
-        const again = poolFormState({ asset, wallet: true, onCurve: false, pools: sPool ? now.filter((p) => p.pool === sPool.pool) : now, curvesActive });
+        const again = poolFormState({ asset, wallet: true, onCurve: false, pools: sPool ? now.filter((p) => p.pool === sPool.pool) : now, curvesActive, exact });
         if (again.mode !== sMode || (again.pool?.pool ?? '') !== (sPool?.pool ?? '')) {
           await inform(t('Add liquidity'), t('The pool of %1 changed while you typed (someone opened it, or put liquidity in): nothing was sent. Look at it again.', nameOf(asset)), 'warning');
           void refreshBitAssets();

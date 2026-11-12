@@ -24,6 +24,7 @@ import type { Launch } from './launch';
 import { assetRoute, poolRoute } from './assetactions';
 import { flipped, turn } from './cl';
 import { assetArg, assetIdentity, assetText, escapeName, shortId, EXACT_METHODS, formatPrice, setLimits, type Activity, type AssetTx, type Amount, type Asset, type AssetData, type Auction, type BitAssetsInfo, type Holding, type Holdings, type Pool } from './model';
+import { poolEmpty } from './pools';
 import { TICKER } from '../config';
 import { dexRoute, type DexPage } from '../local';
 
@@ -1138,7 +1139,8 @@ export function poolOf(a: string, b: string): Pool | undefined {
         better(`${p.asset_a_id}:${p.asset_b_id}`, p);
         better(`${p.asset_b_id}:${p.asset_a_id}`, p);
       }
-      if (!p.abandoned) {
+      // A pool with nothing in it is no market (an empty concentrated pool is not "abandoned" on the chain: ba/pools.ts).
+      if (!poolEmpty(p)) {
         pooled.add(p.asset_a_id);
         pooled.add(p.asset_b_id);
       }

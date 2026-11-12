@@ -154,7 +154,7 @@
   /** What the filter keeps that the node's search does not tell, and what the wallet ignores. */
   function keep(r: Row): boolean {
     if (filter === 'curve' && r.state !== 'curve') return false;
-    if (filter === 'pool' && r.state !== 'pool' && r.state !== 'pool-empty') return false;
+    if (filter === 'pool' && r.state !== 'pool') return false;
     if (filter === 'none' && r.state !== 'none') return false;
     return showHidden || !hiddenAsset(r.a.asset, r.a.label);
   }
@@ -164,7 +164,7 @@
     change: (r) => r.change,
     volume: (r) => r.volume,
     cap: (r) => r.cap,
-    market: (r) => (r.state === 'curve' ? 3 + (r.progress ?? 0) / 100 : r.state === 'pool' ? 2 : r.state === 'pool-empty' ? 1 : 0),
+    market: (r) => (r.state === 'curve' ? 3 + (r.progress ?? 0) / 100 : r.state === 'pool' ? 2 : 0),
     held: (r) => r.held,
   };
   const list = $derived.by(() => {
@@ -370,7 +370,7 @@
                   <td class="end" translate="no"><span class:ba-good={changeDirection(r.change) === 'up'} class:ba-bad={changeDirection(r.change) === 'down'}>{formatChange(r.change)}</span></td>
                   <td class="end">{r.volume !== undefined ? formatAmount(r.volume, 8, { max: 2 }) : '–'}</td>
                   <td class="end">{r.cap !== undefined ? formatPrice(r.cap) : '–'}</td>
-                  <td><span class="ba-tag market {r.state}" data-testid="market-badge">{#if r.state === 'curve'}{t('On curve %1', formatPercent(r.progress ?? 0))}{:else if r.state === 'pool'}Pool{:else if r.state === 'pool-empty'}Pool, empty{:else}No market{/if}</span></td>
+                  <td><span class="ba-tag market {r.state}" data-testid="market-badge">{#if r.state === 'curve'}{t('On curve %1', formatPercent(r.progress ?? 0))}{:else if r.state === 'pool'}Pool{:else}No market{/if}</span></td>
                   <td class="end">{#if r.held > 0}{formatAmount(holdingOf(r.a.asset)?.balance ?? 0, r.a.decimals, { max: 4 })}{:else}<span class="faint">None</span>{/if}</td>
                 </tr>
               {/each}
@@ -444,10 +444,6 @@
   }
   .ba-tag.market.pool {
     color: var(--positive);
-  }
-  .ba-tag.market.pool-empty {
-    color: var(--warning);
-    border-color: var(--warning);
   }
   .ba-tag.market.none {
     color: var(--text-faint, var(--text-muted));

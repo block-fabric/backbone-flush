@@ -55,6 +55,9 @@ export interface DexInfo {
   /** The first block of the pool kinds (-1: never on this network), and whether the next block has them. */
   curves_height: number;
   curves_active: boolean;
+  /** Upgrade v10 (the extra markets retired, launches cancelled, empty pools no bar to a curve): its first block (-1: never), and whether the next block is under it. A node from before says neither. */
+  v10_height?: number;
+  v10_active?: boolean;
   fee_tiers: number[];
   curves: string[];
   min_amp: number;

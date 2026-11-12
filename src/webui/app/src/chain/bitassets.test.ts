@@ -171,7 +171,7 @@ function units(n: number | string, d: number): bigint {
 
 // What pays or signs goes through the host (rpc.confirmed, local.cpp ConfirmedRpcMethods), which asks on the desktop and runs
 // the call: here, at once, as the node would.
-const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'openposition', 'changeposition', 'curveasset', 'placeorder', 'settleorder'];
+const CONFIRMED = ['reserveasset', 'registerasset', 'releaseassetreservation', 'sendasset', 'mintasset', 'burnasset', 'updateasset', 'transferassetcontrol', 'fixassetsupply', 'releaseasset', 'swapasset', 'addliquidity', 'removeliquidity', 'createauction', 'bidauction', 'collectauction', 'setassetlogo', 'setassetdisplayname', 'createpool', 'addpoolliquidity', 'removepoolliquidity', 'swappools', 'swaproute', 'launchtoken', 'buyfromlaunch', 'selltolaunch', 'claimlaunch', 'cancellaunch', 'openposition', 'changeposition', 'curveasset', 'placeorder', 'settleorder'];
 
 // The questions the host asked (each a dialog on the desktop), the second steps it was told to run without one
 // (confirm.h Authorizations: [wallet, method, params] as JSON), and how long a question takes to be answered.
@@ -233,7 +233,7 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
     }
     case 'getasset': {
       // The launched tokens are assets too (their pages: ba/AssetView.svelte).
-      const launched = p[0] === assetArg(MOON) ? asset(MOON, { label: 'MOON', name: 'MOON', display_name: 'To the moon', seq: '2001-0001', decimals: 6, supply: 1000000000, minted: 1000000000, fixed: true }) : p[0] === assetArg(STAR) ? asset(STAR, { label: 'STAR', name: 'STAR', seq: '2001-0002', decimals: 6, supply: 1020000000, minted: 1020000000, fixed: true }) : undefined;
+      const launched = p[0] === assetArg(MOON) ? asset(MOON, { label: 'MOON', name: 'MOON', display_name: 'To the moon', seq: '2001-0001', decimals: 6, supply: 1000000000, minted: 1000000000, fixed: (launchPatch as { mintable?: boolean }).mintable !== true }) : p[0] === assetArg(STAR) ? asset(STAR, { label: 'STAR', name: 'STAR', seq: '2001-0002', decimals: 6, supply: 1020000000, minted: 1020000000, fixed: true }) : undefined;
       const a = byArg(p[0]) ?? (dexOn ? launched : undefined);
       if (!a) fail('No such asset is registered');
       return a;
@@ -375,6 +375,8 @@ async function fakeNode(r: BridgeRequest): Promise<unknown> {
       return { txid: id('7'), quote: '0.79000000', min_out: '0.78210000' };
     case 'claimlaunch':
       return { txid: id('7'), fees: '0.01000000', allocation: 0 };
+    case 'cancellaunch':
+      return { txid: id('7'), step: 'cancel', returned: '1000000000.000000', control: true, mintable: true, fees: '0.01000000' };
     case 'getaddressinfo':
       return { ismine: p[0] === ME };
     // The wallet's "launch creator" addresses (My launches).
@@ -749,7 +751,8 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     expect(cells(GOLD).slice(1)).toEqual(['0.1', '+12.5%', '3', '100', 'Pool', '200']);
     expect(cells(MOON).slice(1)).toEqual(['0.00000081', '–', '–', '810', 'On curve 40.0%', 'None']);
     // What the node does not give is a dash or said so, never a number made up.
-    expect(cells(SILVER).slice(1)).toEqual(['No price yet', '–', '–', '–', 'Pool, empty', '30']);
+    // A pool with nothing in it is no market of its asset.
+    expect(cells(SILVER).slice(1)).toEqual(['No price yet', '–', '–', '–', 'No market', '30']);
     expect(cells(PEBBLES).slice(1)).toEqual(['No price yet', '–', '–', '–', 'No market', 'None']);
     expect(screen.getByRole('table', { name: 'Assets' }).textContent).not.toMatch(/Holders/);
     // The filters.
@@ -758,9 +761,10 @@ describe.runIf(CHAIN.name === 'Flush')('the pages of BitAssets', () => {
     await fireEvent.click(screen.getByRole('button', { name: /^On curve/ }));
     await waitFor(() => expect(ids()).toEqual([MOON]));
     await fireEvent.click(screen.getByRole('button', { name: /^Has a pool/ }));
-    await waitFor(() => expect(ids().sort()).toEqual([GOLD, SILVER]));
+    // SILVER's only pool holds nothing: no pool of it, no market.
+    await waitFor(() => expect(ids()).toEqual([GOLD]));
     await fireEvent.click(screen.getByRole('button', { name: /^No market/ }));
-    await waitFor(() => expect(ids()).toEqual([PEBBLES]));
+    await waitFor(() => expect(ids().sort()).toEqual([SILVER, PEBBLES].sort()));
     await fireEvent.click(screen.getByRole('button', { name: /^Held by you/ }));
     await waitFor(() => expect(ids().sort()).toEqual([GOLD, SILVER]));
     await fireEvent.click(screen.getByRole('button', { name: /^All/ }));
@@ -1673,6 +1677,13 @@ describe('the assets a wallet hides (user feedback 2026-10-19, item 19)', () => 
     await loaded();
     expect(screen.getByRole('heading', { name: 'Pools' })).toBeTruthy();
     const rows = () => within(screen.getByRole('table', { name: 'Pools' })).getAllByTestId('pool-row').map((r) => r.textContent ?? '');
+    // Empty pools are left out until "Show empty pools" is on (off by default).
+    await waitFor(() => expect(rows().length).toBe(2));
+    expect(rows().join(' ')).not.toMatch(/PEBBLES/);
+    const empties = within(screen.getByTestId('show-empty-pools')).getByRole('switch') as HTMLInputElement;
+    expect(empties.checked).toBe(false);
+    expect(screen.getByTestId('show-empty-pools').textContent).toMatch(/Show empty pools\s*\(1\)/);
+    await fireEvent.click(empties);
     await waitFor(() => expect(rows().length).toBe(3));
     expect(rows()[0]).toContain('SILVER');
     expect(rows()[2]).toMatch(/PEBBLES.*Needs liquidity/);
@@ -2125,23 +2136,30 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(called('openposition')).toHaveLength(0);
   });
 
-  it('a pool with nothing in it: Add liquidity takes the place of Trade; one concentrated on the chain takes the full range, never a range to pick', async () => {
+  it('a pool with nothing in it is no pool of its asset (No market, a new pool offered); on its own page, one concentrated on the chain takes the full range under the price guard, never a range to pick', async () => {
     dexOn = true;
     // SILVER's pool was made empty at 0.01 ECX (a concentrated one, as the app made them before 2026-11-11).
     clPool(id('e'), { asset_a: 'SILVER', asset_a_id: SILVER, reserve_a: 0, reserve_b: 0, price: 0.01, swaps: 0, concentrated: { ...CL, liquidity: '0' } });
     nav.tab = `asset/${SILVER}`;
-    render(Dex, { props: { page: 'assets' } });
+    const page = render(Dex, { props: { page: 'assets' } });
     render(DialogHost);
     await loaded();
-    await waitFor(() => expect(screen.getByTestId('asset-page').dataset.market).toBe('pool-empty'));
-    expect(screen.getByTestId('market-chip').textContent).toBe('Pool, empty');
-    expect(screen.getByTestId('asset-box').dataset.box).toBe('liquidity');
-    expect(screen.queryByTestId('trade-box')).toBeNull();
+    // The asset's page: the empty pool someone made does not count (owner decision 2026-11-11).
+    await waitFor(() => expect(screen.getByTestId('asset-page').dataset.market).toBe('none'));
+    expect(screen.getByTestId('market-chip').textContent).toBe('No market');
     const row = within(screen.getByTestId('asset-markets')).getByTestId('market-row');
-    expect(row.dataset.kind).toBe('pool-empty');
-    expect(row.textContent).toMatch(/Nothing in it yet\.\s*Its starting price is 0\.01 ECX for 1 SILVER\..*Needs liquidity/);
-    const box = screen.getByTestId('add-liquidity-box');
-    expect(box.dataset.mode).toBe('full-range');
+    expect(row.dataset.kind).toBe('none');
+    expect(screen.getByTestId('asset-markets').textContent).not.toMatch(/Needs liquidity|Nothing in it yet/);
+    // Its one pool form makes a new standard pool, at the user's own price; the empty pool is not what it funds.
+    await fireEvent.click(within(row).getByTestId('add-liquidity'));
+    await waitFor(() => expect(screen.getByTestId('add-liquidity-box').dataset.mode).toBe('create'));
+    expect(screen.queryByTestId('empty-pool-price')).toBeNull();
+    page.unmount();
+    // The empty pool's own page (Pools, "Show empty pools") still funds it, over the full range, under the price guard.
+    nav.tab = `pools/${id('e')}`;
+    render(Dex, { props: { page: 'pools' } });
+    const box = await screen.findByTestId('add-liquidity-box');
+    await waitFor(() => expect(box.dataset.mode).toBe('full-range'));
     // Its price is whoever made the pool's, not the user's: said first, and with no other market to hold it against,
     // nothing is sent without an explicit word (security review 2026-11-11).
     expect(screen.getByTestId('empty-pool-price').textContent).toMatch(/This pool is empty: its starting price is 0\.01 ECX for 1 SILVER\..*you accept that price.*set by whoever made or last moved the pool, not by you/);
@@ -2472,6 +2490,40 @@ describe.runIf(CHAIN.name === 'Flush')('the DEX in four: Swap, Pools, Launch, Po
     expect(screen.getByTestId('launch-facts').textContent).toMatch(/Launched\s*block 12/);
     // The creator is this wallet: Manage, with the fees to claim.
     expect(within(screen.getByTestId('asset-manage')).getByTestId('claim-fees')).toHaveProperty('disabled', false);
+    // The node does not say the launch can be cancelled: no such action.
+    expect(screen.queryByTestId('cancel-launch')).toBeNull();
+  });
+
+  it('Cancel launch: only when the node says the launch can be cancelled and the wallet is its creator; the confirmation says what comes back; then cancellaunch', async () => {
+    dexOn = true;
+    // Not the creator's wallet: no action, whatever the node says.
+    launchPatch = { cancellable: true, creator: 'someone-else', curve_supply: '750000000.000000', pool_supply: '250000000.000000' };
+    nav.tab = `asset/${MOON}`;
+    let shown = render(Dex, { props: { page: 'assets' } });
+    render(DialogHost);
+    await loaded();
+    await waitFor(() => expect(screen.getByTestId('market-chip').textContent).toMatch(/On curve/));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('cancel-launch')).toBeNull();
+    shown.unmount();
+    // The creator's wallet, a launch nothing is bought from (getlaunch cancellable).
+    launchPatch = { cancellable: true, curve_supply: '750000000.000000', pool_supply: '250000000.000000' };
+    shown = render(Dex, { props: { page: 'assets' } });
+    const button = await screen.findByTestId('cancel-launch');
+    expect(screen.getByTestId('asset-manage').contains(button)).toBe(true);
+    await fireEvent.click(button);
+    await waitFor(() => expect(document.querySelector('dialog[open]')?.textContent).toMatch(/Cancel the launch of .*MOON/));
+    const said = document.querySelector('dialog[open]')?.textContent ?? '';
+    // What comes back: its tokens, a control coin, whether minting returns; and that it can go on a curve again.
+    expect(said).toMatch(/the 1,000,000,000 MOON of the launch .*, and a control coin of the asset/);
+    // Nothing of it is anywhere else (never bought, its whole supply the launch's): minting returns.
+    expect(said).toMatch(/Nobody else holds any of it .*, so its supply is unlocked again: the control coin can mint more\./);
+    expect(said).toMatch(/can then be put on a launch curve again/);
+    expect(said).toMatch(/two transactions, a block apart/);
+    expect(called('cancellaunch')).toHaveLength(0);
+    await answer('yes');
+    await waitFor(() => expect(called('cancellaunch').at(-1)?.params).toEqual([assetArg(MOON)]));
+    expect(asked).toEqual(['cancellaunch']);
   });
 
   it('the asset page, in a pool: buy and sell by the best route, the asset fixed (no picker); Your position; Manage only for its controller', async () => {

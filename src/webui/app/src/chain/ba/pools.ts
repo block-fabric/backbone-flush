@@ -46,22 +46,28 @@ export function ecxPoolsOf(asset: string, pools: readonly Pool[]): Pool[] {
     .sort((x, y) => Number(poolEmpty(x)) - Number(poolEmpty(y)) || (poolEcx(y) ?? 0) - (poolEcx(x) ?? 0) || x.created - y.created);
 }
 
+/** The pool of an asset with ECX that holds liquidity and the most ECX: its pool, for its page and its one pool form. Empty pools are none. */
+export function fundedEcxPoolOf(asset: string, pools: readonly Pool[]): Pool | null {
+  return ecxPoolsOf(asset, pools).find((p) => !poolEmpty(p)) ?? null;
+}
+
 /** Where an asset trades now (owner decision, 2026-11-11: the Market chip of Assets and of an asset's page). */
-export type MarketState = 'curve' | 'pool' | 'pool-empty' | 'none';
+export type MarketState = 'curve' | 'pool' | 'none';
 
 /**
  * The market of an asset from its pools (listpools by asset, or those read) and its launch when known: on its launch
- * curve until it graduates (then nothing else trades it); else in a pool that holds liquidity; else a pool with nothing
- * in it ("Pool, empty": its Trade box gives way to Add liquidity); else none. `pool`: its pool with ECX (the first of
- * ecxPoolsOf), else any pool shown; `curvePool`: the id of its curve's pool, for its candles.
+ * curve until it graduates (then nothing else trades it); else in a pool that holds liquidity; else none. A pool with
+ * nothing in it is no market and no pool of the asset (owner decision, 2026-11-11: anyone makes an empty pool of any
+ * asset for nothing; such pools are listed on Pools behind "Show empty pools" only). `pool`: its pool with ECX that
+ * holds liquidity (the first of ecxPoolsOf), else any pool shown that does; `curvePool`: the id of its curve's pool, for
+ * its candles.
  */
 export function marketState(asset: string, pools: readonly Pool[], launch?: { status: string; pool?: string } | null): { state: MarketState; pool: Pool | null; curvePool: string } {
   const curve = pools.find((p) => p.curve === 'launch' && (p.asset_a_id === asset || p.asset_b_id === asset));
   if (launch ? launch.status !== 'graduated' : !!curve) return { state: 'curve', pool: null, curvePool: curve?.pool ?? launch?.pool ?? '' };
-  const own = pools.filter((p) => isShownPool(p) && (p.asset_a_id === asset || p.asset_b_id === asset));
-  const pool = ecxPoolsOf(asset, pools)[0] ?? own.find((p) => !poolEmpty(p)) ?? own[0] ?? null;
-  if (!pool) return { state: 'none', pool: null, curvePool: '' };
-  return { state: own.some((p) => !poolEmpty(p)) ? 'pool' : 'pool-empty', pool, curvePool: '' };
+  const own = pools.filter((p) => isShownPool(p) && !poolEmpty(p) && (p.asset_a_id === asset || p.asset_b_id === asset));
+  const pool = fundedEcxPoolOf(asset, pools) ?? own[0] ?? null;
+  return pool ? { state: 'pool', pool, curvePool: '' } : { state: 'none', pool: null, curvePool: '' };
 }
 
 /** Whether a position of concentrated liquidity covers the full range of its pool (its lowest and highest ticks to the spacing). */
@@ -73,14 +79,17 @@ export function isFullRange(p: Pick<Position, 'tick_lower' | 'tick_upper'>, spac
 /**
  * How the one pool form puts liquidity in, by the asset's state (owner decision, 2026-11-11: a form only offers what the
  * state allows, and says why otherwise):
- *  - 'create': no pool with ECX yet: a standard pool at a fee tier, made and funded in one transaction (createpool);
- *    both amounts set the price.
- *  - 'reopen': its standard pool is empty (everyone left it): both amounts go in and set the price again (createpool
+ *  - 'create': no pool with ECX that holds liquidity: a standard pool at a fee tier, made and funded in one transaction
+ *    (createpool); both amounts set the price. An empty pool someone made of it does not count (owner decision,
+ *    2026-11-11): the asset is offered a new standard pool, at the user's own price.
+ *  - 'reopen': on an empty standard pool's own page (`exact`): both amounts go in and set the price again (createpool
  *    of the same kind and fee).
  *  - 'add': its pool has liquidity: at the pool's price (addpoolliquidity by the pool's id; addliquidity on a node from
  *    before the pool kinds).
- *  - 'full-range': its pool is concentrated on the chain (a graduated launch's, or one made empty before 2026-11-11): a
+ *  - 'full-range': its pool is concentrated on the chain (a graduated launch's; or, on its own page, one made empty): a
  *    position over the full range (openposition with prices of 0), at the pool's price.
+ * The two paths that still fund an existing empty pool ('reopen' and 'full-range' on the pool's own page) keep the
+ * price guard (priceGuard).
  */
 export type PoolFormMode = 'create' | 'reopen' | 'add' | 'full-range';
 
@@ -105,13 +114,15 @@ export function poolFormState(o: {
   pools: readonly Pool[];
   /** The pool kinds apply (getdexinfo curves_active): createpool, addpoolliquidity, openposition. */
   curvesActive: boolean;
+  /** The form is on a pool's own page: `pools` is that one pool, taken as it is, empty or not. */
+  exact?: boolean;
 }): PoolFormState {
   const no = (reason: string): PoolFormState => ({ ok: false, reason, mode: null, pool: null });
   if (isChn(o.asset)) return no(`${TICKER} is the other side of every pool: pick the asset.`);
   // The rule of consensus first: nothing else matters while it holds.
   if (o.onCurve || o.pools.some((p) => p.curve === 'launch' && (p.asset_a_id === o.asset || p.asset_b_id === o.asset))) return no(CURVE_REFUSAL);
   if (!o.wallet) return no('Load a wallet to add liquidity.');
-  const pool = ecxPoolsOf(o.asset, o.pools)[0] ?? null;
+  const pool = o.exact ? (ecxPoolsOf(o.asset, o.pools)[0] ?? null) : fundedEcxPoolOf(o.asset, o.pools);
   if (!pool) return { ok: true, reason: '', mode: 'create', pool: null };
   const kind = kindOf(pool);
   if (kind.curve === 'concentrated') return o.curvesActive ? { ok: true, reason: '', mode: 'full-range', pool } : no('This node does not have the pool kinds yet.');

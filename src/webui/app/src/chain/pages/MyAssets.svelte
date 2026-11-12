@@ -264,7 +264,7 @@
   /** What an asset's row offers, each on the asset's own page: its Trade box, its Manage, its Add liquidity box. */
   function canOf(h: { asset: string; control: boolean; balance: Amount }) {
     const m = marketState(h.asset, ba.pools, launchById(h.asset));
-    return { trade: m.state === 'curve' || m.state === 'pool', manage: h.control, liquidity: (m.state === 'none' || m.state === 'pool-empty') && approx(h.balance) > 0 };
+    return { trade: m.state === 'curve' || m.state === 'pool', manage: h.control, liquidity: m.state === 'none' && approx(h.balance) > 0 };
   }
 
   /** Read more of the activity (it shows the newest ACTIVITY_PAGE at first: audit port-2 #13). */
