@@ -143,9 +143,10 @@ export const THIN_POOL_ECX = 1;
 export const REFERENCE_MIN_ECX = 10;
 
 /**
- * The reference a thin pool's price is held against: the price the asset's launch graduated at, which is the curve's
- * and nobody's to move (given by the page from the launch), before the deepest other pool of the asset with ECX that
- * holds at least REFERENCE_MIN_ECX. The pool itself, thin pools and pools without ECX never count. null: none.
+ * The reference the price of a pool that is not deep is held against (priceGuard): the price the asset's launch
+ * graduated at, which is the curve's and nobody's to move (given by the page from the launch), before the deepest other
+ * pool of the asset with ECX that holds at least REFERENCE_MIN_ECX. The pool itself, thin pools and pools without ECX
+ * never count. null: none.
  */
 export function referencePrice(asset: string, target: string, pools: readonly Pool[], launchPrice?: number): number | null {
   if (launchPrice !== undefined && Number.isFinite(launchPrice) && launchPrice > 0) return launchPrice;
@@ -178,16 +179,35 @@ export function emptyPoolCheck(price: number | undefined, references: readonly (
 }
 
 /**
+ * The price of the deepest other pool of the asset with ECX that is a reference (at least REFERENCE_MIN_ECX, not empty)
+ * and holds more ECX than `held`: what may contradict a deep pool's own price. null: none.
+ */
+export function deeperReference(asset: string, target: string, pools: readonly Pool[], held: number): number | null {
+  for (const p of ecxPoolsOf(asset, pools)) {
+    const ecx = poolEcx(p) ?? 0;
+    if (p.pool === target || poolEmpty(p) || ecx < REFERENCE_MIN_ECX || !(ecx > held)) continue;
+    const price = poolSides(p).price;
+    if (price !== undefined && Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+/**
  * The guard of a deposit into a pool that exists, in one place (ba/AddLiquidity.svelte asks it as the user types, and
  * again on the node's fresh lists right before the wallet is asked). null: nothing to say, the pool's price is a
  * market's. Else what the form shows, and whether it needs the user's explicit word:
- *  - With a reference (referencePrice), the pool's price is ALWAYS held against it, whatever the pool's depth: beyond
- *    EMPTY_POOL_TOLERANCE the word is needed. Within it, the price is only shown, and only when the deposit would be
- *    most of the pool; the deposit is valued at the reference, never at the pool's own price (an attacker who sets the
- *    pool's price near zero would otherwise make a real deposit look smaller than the dust in it).
- *  - Without a reference, nothing vouches for the price but the pool itself: the word is needed unless the pool's ECX
- *    alone is at least REFERENCE_MIN_ECX (what would make it a reference for another pool) and more than the ECX going
- *    in. The asset side of the deposit is not valued at all then.
+ *  - A deep pool (its ECX at least REFERENCE_MIN_ECX, what would make it a reference for another pool, and more than
+ *    the ECX going in) vouches for its own price: a market moves away from the price its launch graduated at, and an
+ *    honest add to it is not asked about (owner decision, 2026-11-11). Unless a deeper reference pool of the same pair
+ *    (deeperReference) disagrees beyond EMPTY_POOL_TOLERANCE: then the word is needed, against that pool's price.
+ *  - A pool that is not deep is held against the reference (referencePrice: the graduation price first, else the
+ *    deepest other pool that counts): beyond EMPTY_POOL_TOLERANCE the word is needed. Within it, the price is only
+ *    shown, and only when the deposit would be most of the pool; the deposit is valued at the reference, never at the
+ *    pool's own price (an attacker who sets the pool's price near zero would otherwise make a real deposit look smaller
+ *    than the dust in it).
+ *  - Not deep and without a reference, nothing vouches for the price: the word is needed. The asset side of the
+ *    deposit is not valued at all then.
+ * Nothing is ever valued at the price of a thin pool, and dust pools are no reference, deeper or not.
  * depositAsset: whole units of the asset going in; depositEcx: the ECX going in, alone.
  */
 export function priceGuard(o: { asset: string; pool: Pool; pools: readonly Pool[]; depositAsset: number; depositEcx: number; launchPrice?: number }): PriceGuard | null {
@@ -195,11 +215,14 @@ export function priceGuard(o: { asset: string; pool: Pool; pools: readonly Pool[
   const held = poolEmpty(o.pool) ? 0 : (poolEcx(o.pool) ?? 0);
   const ecxIn = Number.isFinite(o.depositEcx) && o.depositEcx > 0 ? o.depositEcx : 0;
   const assetIn = Number.isFinite(o.depositAsset) && o.depositAsset > 0 ? o.depositAsset : 0;
-  const check = emptyPoolCheck(price, [referencePrice(o.asset, o.pool.pool, o.pools, o.launchPrice)]);
-  if (check.reference === null) {
-    const deep = held >= REFERENCE_MIN_ECX && held > ecxIn;
-    return deep ? null : { ...check, thin: true };
+  if (held >= REFERENCE_MIN_ECX && held > ecxIn && price !== undefined && price > 0) {
+    const deeper = deeperReference(o.asset, o.pool.pool, o.pools, held);
+    if (deeper === null) return null;
+    const against = emptyPoolCheck(price, [deeper]);
+    return against.acknowledge ? { ...against, thin: false } : null;
   }
+  const check = emptyPoolCheck(price, [referencePrice(o.asset, o.pool.pool, o.pools, o.launchPrice)]);
+  if (check.reference === null) return { ...check, thin: true };
   const thin = held < THIN_POOL_ECX || held < ecxIn + assetIn * check.reference;
   return check.acknowledge || thin ? { ...check, thin } : null;
 }
