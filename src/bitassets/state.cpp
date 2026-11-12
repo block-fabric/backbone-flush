@@ -2080,6 +2080,8 @@ std::optional<State::Plan> State::MakePlan(const CTransaction& tx, int height, s
         if (out_b > 0) plan.results.push_back({remove->asset_b, out_b});
         plan.pool = std::make_pair(id, pool);
     } else if (const auto* create{op ? std::get_if<CreateAuction>(op) : nullptr}) {
+        // From v10_height no new auction (owner decision 2026-11-11); those there are take bids and are collected as before.
+        if (Params().GetConsensus().sidechain.V10Active(height)) return invalid("bad-ba-retired-auction");
         if (!tradable(create->base) || !tradable(create->quote)) return invalid("bad-ba-asset-unknown");
         if (create->start_height < height) return invalid("bad-ba-auction-started");
         // An auction that never starts would hold what it sells, and the asset it quotes, for ever.
@@ -2433,6 +2435,10 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     ClState cl{*cl_found};
     const arith_uint256 price{UintToArith256(cl.sqrt_price)};
     const int32_t spacing{cl::TickSpacing(params.fee)};
+    // From v10_height (owner decision 2026-11-11) liquidity goes in over the full range only (the widest ticks of the
+    // pool's spacing: what a launch's locked position has). Taking out, collecting and closing: any position, as before.
+    const bool v10{Params().GetConsensus().sidechain.V10Active(height)};
+    const auto full_range{[&](int32_t lower, int32_t upper) { return spacing != 0 && lower == -(cl::MAX_TICK / spacing) * spacing && upper == (cl::MAX_TICK / spacing) * spacing; }};
     // A tick's record after a change of the liquidity that starts (lower) or ends (upper) there by `delta` (Uniswap's Tick.update).
     const auto update_tick{[&](int32_t tick, bool upper, unsigned __int128 delta, bool add) -> std::optional<std::optional<ClTick>> {
         ClTick t{GetClTick(pool_id, tick).value_or(ClTick{})};
@@ -2506,6 +2512,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     }};
     if (const auto* open{std::get_if<OpenPosition>(&op)}) {
         if (spacing == 0 || open->tick_lower % spacing != 0 || open->tick_upper % spacing != 0) return invalid("bad-ba-position-ticks");
+        if (v10 && !full_range(open->tick_lower, open->tick_upper)) return invalid("bad-ba-retired-range");
         const unsigned __int128 delta{open->Liquidity()};
         ClPosition position;
         position.pool = pool_id;
@@ -2546,6 +2553,7 @@ bool State::PlanPosition(const CTransaction& tx, const Operation& op, int height
     const unsigned __int128 delta{change.close ? position.Liquidity() : change.Liquidity()};
     const arith_uint256 sa{cl::SqrtRatioAtTick(position.tick_lower)}, sb{cl::SqrtRatioAtTick(position.tick_upper)};
     if (change.add) {
+        if (v10 && !full_range(position.tick_lower, position.tick_upper)) return invalid("bad-ba-retired-range");
         const auto needed{cl::AmountsForLiquidity(price, sa, sb, delta, /*round_up=*/true)};
         if (!needed || needed->first > change.limit0 || needed->second > change.limit1) return invalid("bad-ba-position-price");
         if (needed->first > MAX_AMOUNT - pool.reserve0 || needed->second > MAX_AMOUNT - pool.reserve1) return invalid("bad-ba-position");
@@ -2732,7 +2740,11 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         pool.shares = *total;
         return shares;
     }};
+    const Consensus::SidechainParams& rules{Params().GetConsensus().sidechain};
+    const bool v10{rules.V10Active(height)};
     if (const auto* place{std::get_if<PlaceOrder>(&op)}) {
+        // From v10_height no new order (owner decision 2026-11-11); those there are trade, are settled and cancelled as before.
+        if (v10) return invalid("bad-ba-retired-order");
         // The first order of a block in a book: the book crosses at the block's end, a round's work (2 units, as a hop).
         plan.curve_work = BOOKS_TOUCHED.Get(*m_view, BookId(place->asset_sell, place->asset_buy)) ? 0 : 2;
         const auto tradable{[&](const AssetId& asset) { return asset.IsNull() || HasAsset(asset); }};
@@ -2917,6 +2929,9 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         return true;
     }
     if (const auto* create{std::get_if<CreatePool>(&op)}) {
+        // From v10_height the one kind of pool made is the constant product at a fee tier (owner decision 2026-11-11): no
+        // stable, weighted or concentrated pool, no flag. (The concentrated pool a launch graduates into is the rules' own.)
+        if (v10 && (create->curve != static_cast<uint8_t>(Curve::CONSTANT_PRODUCT) || create->flags != 0)) return invalid("bad-ba-retired-pool-kind");
         const auto tradable{[&](const AssetId& asset) { return asset.IsNull() || HasAsset(asset); }};
         if (!tradable(create->asset_a) || !tradable(create->asset_b)) return invalid("bad-ba-asset-unknown");
         // A token on its launch curve trades there alone until it graduates into its pool.
@@ -2979,6 +2994,9 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         if (params.GetCurve() == Curve::BOOK) return invalid("bad-ba-book");
         uint64_t shares{0};
         if (amm::Abandoned(pool)) {
+            // Opened again as CreatePool opens one, under its rules from v10_height: a constant-product pool without a
+            // flag only (a pool of a retired kind everyone left stays closed).
+            if (v10 && (params.GetCurve() != Curve::CONSTANT_PRODUCT || params.flags != 0)) return invalid("bad-ba-retired-pool-kind");
             const auto opened{open(params, pool, deposit->amount0, deposit->amount1, deposit->min_shares)};
             if (!opened) return false;
             shares = *opened;

@@ -203,6 +203,7 @@ BASE_SCRIPTS = [
     'feature_layers_v6.py',
     'feature_layers_v7.py',
     'feature_layers_v8.py',
+    'feature_layers_v10.py',
     'feature_layers_cl.py',
     'feature_layers_book.py',
     'feature_layers_release_book.py',

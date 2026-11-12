@@ -214,6 +214,21 @@ struct SidechainParams {
      */
     int v9_height{std::numeric_limits<int>::max()};
     bool V9Active(int height) const { return DexActive(height) && height >= v9_height; }
+    /**
+     * Upgrade v10 (the simplification fork; owner decisions 2026-11-11), from this block:
+     *  - the extra markets are retired: no new limit order (PlaceOrder), no new auction (CreateAuction), no new pool but
+     *    a constant-product one (CreatePool; a pool of another kind nobody provides liquidity to is not opened again),
+     *    no new position but over the full range (OpenPosition; ChangePosition adds to a full-range one only); what
+     *    closes the existing ones stays valid for good, and swaps keep trading through every venue;
+     *  - a launch nothing is bought from can be cancelled by its creator (bitassets::CancelLaunch): its tokens and a
+     *    control coin back, the asset free to be put on a curve again; an asset whose supply is fixed mints no more,
+     *    whoever holds its control coin;
+     *  - an existing asset goes on a curve (CurveAsset) whatever empty pools of it with the coin there are, and its
+     *    graduation takes such a pool over as a new one.
+     * Never (the maximum) unless a network sets it; regtest unless -testactivationheight=v10@<height>.
+     */
+    int v10_height{std::numeric_limits<int>::max()};
+    bool V10Active(int height) const { return DexActive(height) && height >= v10_height; }
     //! The parts of a launch's curve fee for a launch made at `height`.
     uint32_t LaunchSecurityShare(int height) const { return FeeSplitActive(height) ? launch_security_share_v7 : launch_security_share; }
     //! The parts in force at `height` (what the pages show): the protocol's 0 from no_treasury_height, its part the providers' or the creator's.

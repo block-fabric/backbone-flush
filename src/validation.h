@@ -920,6 +920,8 @@ private:
     bool m_mempool_dex_active GUARDED_BY(::cs_main){false};
     //! The same for the DEX's pool kinds (SidechainParams::dex_curves_height).
     bool m_mempool_dex_curves_active GUARDED_BY(::cs_main){false};
+    //! Whether upgrade v10 (SidechainParams::V10Active) applied to the next block at the last check of the mempool's asset transactions.
+    bool m_mempool_v10_active GUARDED_BY(::cs_main){false};
     /** Note the keys of the sidechain state a block connected or disconnected changed (`changes`: those of its overlay). */
     void NoteSideChanges(const std::map<std::vector<unsigned char>, std::optional<std::vector<unsigned char>>>& changes) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 public:

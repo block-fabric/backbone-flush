@@ -71,6 +71,8 @@ static void HandleDeploymentArgs(const ArgsManager& args, CChainParams::Deployme
             options.v8_height = *height;
         } else if (deployment_name == "v9") {
             options.v9_height = *height;
+        } else if (deployment_name == "v10") {
+            options.v10_height = *height;
         } else if (deployment_name == "pegfix") {
             options.peg_fix_height = *height;
         } else if (const auto buried_deployment = GetBuriedDeployment(deployment_name)) {

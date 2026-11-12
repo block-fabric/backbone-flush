@@ -5949,7 +5949,10 @@ void Chainstate::RemoveStaleDrivechainTxs()
         const bool dex{side_params.DexActive(tip->nHeight + 1)};
         const bool curves{side_params.DexCurvesActive(tip->nHeight + 1)};
         const bool dex_was{std::exchange(m_mempool_dex_active, dex)}, curves_were{std::exchange(m_mempool_dex_curves_active, curves)};
-        const bool dex_changed{dex_was != dex || curves_were != curves};
+        // Upgrade v10 retires operations at its height (new orders, auctions, pool kinds, ranges): the same way.
+        const bool v10{side_params.V10Active(tip->nHeight + 1)};
+        const bool v10_was{std::exchange(m_mempool_v10_active, v10)};
+        const bool dex_changed{dex_was != dex || curves_were != curves || v10_was != v10};
         if (changed_all || dex_changed) {
             to_check = m_mempool->m_bitassets_txs;
         } else {

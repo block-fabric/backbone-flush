@@ -912,6 +912,11 @@ public:
         LOCK(::cs_main);
         return chainman().GetConsensus().sidechain.LaunchParamsActive(chainman().ActiveChain().Height() + 1);
     }
+    bool getBitAssetsV10Active() override
+    {
+        LOCK(::cs_main);
+        return chainman().GetConsensus().sidechain.V10Active(chainman().ActiveChain().Height() + 1);
+    }
     uint64_t getBitAssetsMinChnPayout() override
     {
         LOCK(::cs_main);

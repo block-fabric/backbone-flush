@@ -60,6 +60,7 @@ add_executable(test_bitcoin
   dex_curves_tests.cpp
   dex_feeflow_tests.cpp
   dex_v7_tests.cpp
+  dex_v10_tests.cpp
   dex_v8_tests.cpp
   dex_launch_tests.cpp
   dex_market_tests.cpp

@@ -256,6 +256,8 @@ public:
     virtual bool getBitAssetsDexCurvesActive() = 0;
     //! Launches with parameters: whether the next block has their rules (SidechainParams::launch_params_height).
     virtual bool getBitAssetsLaunchParamsActive() = 0;
+    //! Upgrade v10 (the extra markets retired, launches cancelled): whether the next block has its rules (SidechainParams::v10_height).
+    virtual bool getBitAssetsV10Active() = 0;
     //! Launches: the most a launch's allocation can be in the next block, in basis points (SidechainParams::allocation10_height).
     virtual uint16_t getBitAssetsMaxLaunchAllocation() = 0;
     //! The least CHN paid out in the next block (bitassets::MinChnPayout: SidechainParams::small_payout_height).

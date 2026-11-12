@@ -1829,6 +1829,15 @@ void NeedCurves(CWallet& wallet)
     if (!wallet.chain().getBitAssetsDexCurvesActive()) throw JSONRPCError(RPC_MISC_ERROR, "The DEX's pool kinds do not apply yet (getdexinfo's curves_active)");
 }
 
+/**
+ * Upgrade v10 retired the extra markets (owner decision 2026-11-11; getdexinfo's v10_active): what would start one is
+ * refused here, in words, before a transaction the next block refuses is made (bad-ba-retired-...).
+ */
+void RefuseRetired(CWallet& wallet, bool retired, const std::string& why)
+{
+    if (retired && wallet.chain().getBitAssetsV10Active()) throw JSONRPCError(RPC_MISC_ERROR, why + " (retired by upgrade v10)");
+}
+
 /** The pool kind an options object names: curve, fee (percent), amp, weight_a. */
 bitassets::CreatePool KindOf(const UniValue& options)
 {
@@ -1900,6 +1909,8 @@ RPCMethod createpool()
     if (!pwallet) return UniValue::VNULL;
     NeedCurves(*pwallet);
     bitassets::CreatePool create{KindOf(request.params[4])};
+    RefuseRetired(*pwallet, create.curve != static_cast<uint8_t>(bitassets::Curve::CONSTANT_PRODUCT) || create.flags != 0,
+                  "Only constant-product pools at a fee tier are made now: no new stable, weighted or concentrated pool, no dynamic fee");
     const AssetInfo a{ParseAsset(*pwallet, request.params[0])};
     const AssetInfo b{ParseAsset(*pwallet, request.params[2])};
     if (a.id == b.id) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a pool");
@@ -1995,6 +2006,8 @@ RPCMethod addpoolliquidity()
     const uint64_t slippage{Slippage(request.params[2], 1)};
     uint64_t shares{0};
     if (bitassets::amm::Abandoned(pool)) {
+        RefuseRetired(*pwallet, kind.GetCurve() != bitassets::Curve::CONSTANT_PRODUCT || kind.flags != 0,
+                      "Nobody provides liquidity to this pool any more, and a pool of its kind is not opened again");
         if (amount0 == 0 || amount1 == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Nobody provides liquidity to this pool any more: both amounts reopen it, at their price");
         const auto total{bitassets::curves::OpeningShares(kind, pool.reserve0 + amount0, pool.reserve1 + amount1)};
         if (!total || *total <= bitassets::MIN_LIQUIDITY + bitassets::MIN_OPEN_SHARES) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little to open the pool again");
@@ -2705,6 +2718,8 @@ RPCMethod openposition()
     const int32_t lower{TickOfPrice(PriceArg(request.params[1]), info0.decimals, info1.decimals, spacing, false)};
     const int32_t upper{TickOfPrice(PriceArg(request.params[2]), info0.decimals, info1.decimals, spacing, true)};
     if (lower >= upper) throw JSONRPCError(RPC_INVALID_PARAMETER, "The range is empty: the lower price is below the upper, a tick spacing apart at least");
+    RefuseRetired(*pwallet, lower != bitassets::cl::MIN_TICK / spacing * spacing || upper != bitassets::cl::MAX_TICK / spacing * spacing,
+                  "A new position covers the full range only (0 for both prices): no new price range");
     const auto [max0, max1]{PoolAmounts(*pwallet, pool, request.params[3].get_obj())};
     const arith_uint256 price{UintToArith256(cl->sqrt_price)}, sa{bitassets::cl::SqrtRatioAtTick(lower)}, sb{bitassets::cl::SqrtRatioAtTick(upper)};
     unsigned __int128 liquidity{bitassets::cl::LiquidityForAmounts(price, sa, sb, max0, max1)};
@@ -2802,6 +2817,9 @@ RPCMethod changeposition()
     unsigned __int128 delta{0};
     if (o.exists("add")) {
         change.add = true;
+        const int32_t spacing{bitassets::cl::TickSpacing(found->second.fee)};
+        RefuseRetired(*pwallet, spacing == 0 || position->tick_lower != bitassets::cl::MIN_TICK / spacing * spacing || position->tick_upper != bitassets::cl::MAX_TICK / spacing * spacing,
+                      "Liquidity is added to a full-range position only: this one can be reduced, collected and closed");
         const auto [max0, max1]{PoolAmounts(*pwallet, pool, o["add"].get_obj())};
         delta = bitassets::cl::LiquidityForAmounts(price, sa, sb, max0, max1) / 10000 * (10000 - slippage);
         if (delta == 0) throw JSONRPCError(RPC_INVALID_PARAMETER, "Too little to add");
@@ -2940,6 +2958,7 @@ RPCMethod placeorder()
     const auto pwallet{ReadyWallet(request)};
     if (!pwallet) return UniValue::VNULL;
     NeedCurves(*pwallet);
+    RefuseRetired(*pwallet, true, "No new limit order: the orders there are still trade, and are collected and cancelled (settleorder)");
     const AssetInfo sell{ParseAsset(*pwallet, request.params[0])}, buy{ParseAsset(*pwallet, request.params[2])};
     if (sell.id == buy.id) throw JSONRPCError(RPC_INVALID_PARAMETER, "Two different assets make a book");
     const uint64_t amount{bitassets::ParseUnits(request.params[1], sell.decimals)};
@@ -3108,6 +3127,7 @@ RPCMethod createauction()
 {
     const auto pwallet{ReadyWallet(request)};
     if (!pwallet) return UniValue::VNULL;
+    RefuseRetired(*pwallet, true, "No new auction: the auctions there are still take bids (bidauction) and are collected (collectauction)");
     const AssetInfo base{ParseAsset(*pwallet, request.params[0])};
     const AssetInfo quote{ParseAsset(*pwallet, request.params[2])};
     if (base.id == quote.id) throw JSONRPCError(RPC_INVALID_PARAMETER, "It sells one asset for another");

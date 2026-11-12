@@ -711,6 +711,8 @@ public:
             consensus.sidechain.v8_height = opts.dep_opts.v8_height.value_or(std::numeric_limits<int>::max());
             // Upgrade v9 only if a test asks (-testactivationheight=v9@<height>).
             consensus.sidechain.v9_height = opts.dep_opts.v9_height.value_or(std::numeric_limits<int>::max());
+            // Upgrade v10 only if a test asks (-testactivationheight=v10@<height>).
+            consensus.sidechain.v10_height = opts.dep_opts.v10_height.value_or(std::numeric_limits<int>::max());
             // The peg fix from the first block, unless a test asks (-testactivationheight=pegfix@<height>); a bundle with the
             // enforcer's events alone fails unproposed after as many blocks as with the scores (unproposed_expiry_blocks below).
             consensus.sidechain.peg_fix_height = opts.dep_opts.peg_fix_height.value_or(0);
@@ -932,6 +934,8 @@ public:
         // have no block yet (slot 46 is not active on eCash: the node does not start without its activation block); on
         // betanet from block 42,000, the height the betanet chain takes it at.
         consensus.sidechain.v9_height = chain == ChainType::ECASH_BETANET ? 42'000 : 0;
+        // Upgrade v10 (the simplification fork; owner decisions 2026-11-11): no height yet on any network (v10_height
+        // stays at never, the rules of before), until one is chosen and set here.
         // A bundle is handed to an enforcer once its commitment is a day deep (144 blocks; two hours on the test
         // network): nothing next to the three months a bundle takes to be paid.
         consensus.sidechain.bundle_handoff_depth = chain == ChainType::ECASH_TESTNET ? 12 : 144;

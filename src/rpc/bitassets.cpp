@@ -1057,6 +1057,8 @@ RPCMethod getdexinfo()
             {RPCResult::Type::NUM, "max_contract_duration", "Latest an oracle contract expires, in blocks"},
             {RPCResult::Type::NUM, "curves_height", "The first block of the pool kinds (fee tiers, stable and weighted pools; -1: never on this network)"},
             {RPCResult::Type::BOOL, "curves_active", "Whether the next block has them"},
+            {RPCResult::Type::NUM, "v10_height", "The first block of upgrade v10 (-1: never on this network): no new limit order, auction, stable, weighted or concentrated pool, nor price range (what closes those there are stays); a launch nothing is bought from can be cancelled by its creator"},
+            {RPCResult::Type::BOOL, "v10_active", "Whether the next block is under it"},
             {RPCResult::Type::ARR, "fee_tiers", "The fees a pool is made with, in percent", {{RPCResult::Type::NUM, "", ""}}},
             {RPCResult::Type::ARR, "curves", "The curves", {{RPCResult::Type::STR, "", ""}}},
             {RPCResult::Type::NUM, "min_amp", "A stable pool's least amplification"},
@@ -1087,6 +1089,8 @@ RPCMethod getdexinfo()
     result.pushKV("max_contract_duration", bitassets::MAX_CONTRACT_DURATION);
     result.pushKV("curves_height", params.dex_curves_height == std::numeric_limits<int>::max() ? -1 : std::max(params.dex_curves_height, params.dex_height));
     result.pushKV("curves_active", params.DexCurvesActive(NextHeight(chainman)));
+    result.pushKV("v10_height", params.v10_height == std::numeric_limits<int>::max() ? -1 : std::max(params.v10_height, params.dex_height));
+    result.pushKV("v10_active", params.V10Active(NextHeight(chainman)));
     UniValue tiers(UniValue::VARR);
     for (uint32_t fee : bitassets::FEE_TIERS) tiers.push_back(DecimalToJSON(fee / 10000.0));
     result.pushKV("fee_tiers", std::move(tiers));
