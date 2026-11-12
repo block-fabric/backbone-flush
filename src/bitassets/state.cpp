@@ -1132,6 +1132,8 @@ struct State::Plan {
     bool launch_created{false};
     //! A launch cancelled (CancelLaunch): its record as it was, which goes (its curve with it: pools_gone).
     std::optional<std::pair<AssetId, LaunchRecord>> launch_gone;
+    //! The coin a cancelled launch held that nobody is paid: to the block's security, with its fees (SecurityFees).
+    uint64_t security{0};
     //! Concentrated liquidity: a pool's state, ticks written (nullopt: cleared), a position written (nullopt: closed).
     std::optional<std::pair<uint256, ClState>> cl_state;
     std::vector<std::pair<int32_t, std::optional<ClTick>>> cl_ticks;
@@ -2986,16 +2988,35 @@ bool State::PlanPools(const CTransaction& tx, const Operation& op, int height, P
         }
         // The creator's part of the fees, as a claim pays it, with the coin that waited to buy the token back (its
         // part too, by its choice; nothing is left to buy back); what a split owes an address, to the address. Less
-        // than the least payout is not paid (dust never is), nor what the curve kept beyond what it sold (the
-        // roundings of trades taken back, the fees' remainder kept for its pool): nobody's.
+        // than the least payout is not paid out (dust never is). That, and what the curve kept beyond what it sold (the
+        // roundings of trades taken back, the fees' remainder kept for its pool), is nobody's: it leaves with the
+        // block's security fees, as what no liquidity earned does, so that no coin the assets held goes unaccounted
+        // (HeldChn, the peg balance).
+        const Pool curve{*Assert(GetPool(record.pool))};
+        uint64_t unpaid{curve.reserve0 - std::min(curve.reserve0, record.virtual_coin)};
+        const auto leave{[&](uint64_t amount) {
+            const auto sum{Add(unpaid, amount)};
+            if (sum) unpaid = *sum;
+            return sum.has_value();
+        }};
+        if (!leave(record.pool_fees)) return invalid("bad-ba-chn-amount");
         const auto creator_coin{Add(record.creator_fees, record.buyback)};
         if (!creator_coin || *creator_coin > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
-        if (*creator_coin >= min_chn) plan.payouts.emplace_back(static_cast<CAmount>(*creator_coin), record.creator);
-        for (size_t i{0}; i < record.split.size() && i < record.share_owed.size(); ++i) {
-            if (record.split[i].kind != FeeShare::ADDRESS || record.share_owed[i] < min_chn) continue;
-            if (record.share_owed[i] > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
-            plan.payouts.emplace_back(static_cast<CAmount>(record.share_owed[i]), record.split[i].script);
+        if (*creator_coin >= min_chn) {
+            plan.payouts.emplace_back(static_cast<CAmount>(*creator_coin), record.creator);
+        } else if (!leave(*creator_coin)) {
+            return invalid("bad-ba-chn-amount");
         }
+        for (size_t i{0}; i < record.share_owed.size(); ++i) {
+            const uint64_t owed{record.share_owed[i]};
+            if (i < record.split.size() && record.split[i].kind == FeeShare::ADDRESS && owed >= min_chn && owed <= static_cast<uint64_t>(MAX_MONEY)) {
+                plan.payouts.emplace_back(static_cast<CAmount>(owed), record.split[i].script);
+            } else if (!leave(owed)) {
+                return invalid("bad-ba-chn-amount");
+            }
+        }
+        if (unpaid > static_cast<uint64_t>(MAX_MONEY)) return invalid("bad-ba-chn-amount");
+        plan.security = unpaid;
         plan.pools_gone.push_back(record.pool);
         plan.launch_gone = std::make_pair(cancel->token, record);
         return true;
@@ -3296,6 +3317,15 @@ bool State::ApplyTx(const CTransaction& tx, int height, std::vector<CTxOut>& pay
         entry.reserve_coin = 0;
         entry.reserve_tokens = 0;
         out.Put(HeightKey(LAUNCH_LOG, height, token), sidechain::EncodeValue(entry));
+        // What it held that nobody is paid: with the block's security fees (the block's end adds its own: ClearOrders).
+        if (plan->security > 0) {
+            SecurityFees fees{SECURITY_FEES.Get(out)};
+            if (fees.height != height) fees.amount = 0;
+            fees.height = height;
+            fees.amount = Add(fees.amount, plan->security).value_or(MAX_AMOUNT);
+            fees.total = Add(fees.total, plan->security).value_or(MAX_AMOUNT);
+            SECURITY_FEES.Put(out, fees);
+        }
     }
     for (const uint256& id : plan->pools_gone) {
         SetPool(id, std::nullopt);
@@ -3857,8 +3887,10 @@ void State::ClearOrders(const std::vector<Order>& orders, std::vector<CTxOut>& p
     const auto record_security{[&]() {
         if (security == 0) return;
         SecurityFees fees{SECURITY_FEES.Get(Writable())};
+        // On top of what a transaction of the block left it (a cancelled launch's leftovers, from v10_height; none before).
+        const uint64_t before{fees.height == height ? fees.amount : 0};
         fees.height = height;
-        fees.amount = security;
+        fees.amount = Add(before, security).value_or(MAX_AMOUNT);
         fees.total = Add(fees.total, security).value_or(MAX_AMOUNT);
         SECURITY_FEES.Put(Writable(), fees);
     }};

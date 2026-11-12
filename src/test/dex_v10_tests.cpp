@@ -65,8 +65,8 @@ struct Chain {
     int height{100};
     uint32_t time{1'800'000'000};
     std::vector<CTxOut> payouts, refunds, paid;
-    //! The coin the markers burned, what the coinbases paid, and what a cancelled launch held that nobody is paid (dust).
-    int64_t burned{0}, paid_out{0}, dropped{0};
+    //! The coin the markers burned, and what the coinbases paid (the blocks' security fees with it).
+    int64_t burned{0}, paid_out{0};
 
     explicit Chain(int fee_flow = 0)
     {
@@ -116,8 +116,8 @@ struct Chain {
         refunds.clear();
         ++height;
         time += 15;
-        // Every block: the coin the assets hold is what came in less what went out (and what a cancel left nobody's).
-        BOOST_CHECK_EQUAL(Assets().HeldChn(), burned - paid_out - dropped);
+        // Every block: the coin the assets hold is what came in less what went out (a cancel's leftovers with the security fees).
+        BOOST_CHECK_EQUAL(Assets().HeldChn(), burned - paid_out);
     }
     void Until(int h)
     {
@@ -204,7 +204,7 @@ struct Chain {
         }
         return MakeTx(inputs, CancelLaunch{token}, listed, 0, scripts);
     }
-    /** What a cancel of `token`'s launch leaves nobody's: what its curve kept beyond its virtual coin, the fees kept for its pool, and what is owed under the least payout. */
+    /** What a cancel of `token`'s launch leaves to the block's security: what its curve kept beyond its virtual coin, the fees kept for its pool, and what is owed under the least payout. */
     int64_t Dust(const AssetId& token) const
     {
         const LaunchRecord record{*Assets().GetLaunch(token)};
@@ -615,14 +615,18 @@ BOOST_AUTO_TEST_CASE(cancel_after_everything_sold_back)
         BOOST_CHECK_EQUAL(other.Refused(Chain::Cancel(MOON, {other_proof})), "bad-ba-cancel-bought");
     }
     // The cancel pays the creator its fees and the partner what it is owed; the curve's leftovers are nobody's.
-    chain.dropped += chain.Dust(MOON);
-    BOOST_CHECK_EQUAL(chain.Dust(MOON), static_cast<int64_t>(curve.reserve0 - record.virtual_coin + record.pool_fees));
+    const int64_t leftovers{chain.Dust(MOON)};
+    BOOST_CHECK_EQUAL(leftovers, static_cast<int64_t>(curve.reserve0 - record.virtual_coin + record.pool_fees));
     const CTransaction cancel{Chain::Cancel(MOON, {proof})};
     chain.Require(cancel);
     BOOST_REQUIRE_EQUAL(chain.payouts.size(), 2U);
     BOOST_CHECK(chain.payouts[0] == CTxOut(static_cast<CAmount>(record.creator_fees), CREATOR));
     BOOST_CHECK(chain.payouts[1] == CTxOut(static_cast<CAmount>(record.share_owed[1]), PARTNER));
+    const int at{chain.height};
     chain.EndBlock();
+    // What nobody is paid left with the block's security fees: nothing the assets held is unaccounted.
+    BOOST_CHECK_EQUAL(chain.Assets().BlockSecurityFees(at), leftovers);
+    BOOST_CHECK_GT(leftovers, 0);
     BOOST_CHECK_EQUAL(chain.Assets().HeldChn(), 0);
     BOOST_CHECK(chain.TokenAt(COutPoint{cancel.GetHash(), 0}) == Asset(MOON, record.Supply()));
     BOOST_CHECK(!chain.Assets().GetAsset(MOON)->fixed);
@@ -772,13 +776,11 @@ BOOST_AUTO_TEST_CASE(cancel_and_relaunch_in_one_block_and_undone)
     const int64_t burned{chain.burned}, paid_out{chain.paid_out};
     const LaunchRecord record{*chain.Assets().GetLaunch(GOLD)};
     const AssetRecord asset{*chain.Assets().GetAsset(GOLD)};
-    const int64_t dust{chain.Dust(GOLD)};
     BOOST_CHECK(record.trades > 0 && asset.fixed);
 
     // One block: the cancel, the asset on a curve again (other parameters), and a buy from the new curve.
     const CTransaction cancel{Chain::Cancel(GOLD, {proof})};
     const auto block{[&] {
-        chain.dropped += dust;
         chain.Require(cancel);
         BOOST_CHECK(!chain.Assets().GetLaunch(GOLD));
         const CTransaction again{chain.Curve(GOLD, COutPoint{cancel.GetHash(), 1}, COutPoint{cancel.GetHash(), 0}, D / 2, 20'000)};
@@ -811,7 +813,6 @@ BOOST_AUTO_TEST_CASE(cancel_and_relaunch_in_one_block_and_undone)
     chain.time = time;
     chain.burned = burned;
     chain.paid_out = paid_out;
-    chain.dropped -= dust;
     chain.payouts.clear();
     g_nonce -= 2;
     block();
@@ -826,7 +827,6 @@ BOOST_AUTO_TEST_CASE(cancel_and_relaunch_in_one_block_and_undone)
     BOOST_REQUIRE_EQUAL(out.size(), 1U);
     chain.SellAll(out[0], GOLD);
     chain.EndBlock();
-    chain.dropped += chain.Dust(GOLD);
     const CTransaction cancel2{Chain::Cancel(GOLD, {proof2})};
     chain.Require(cancel2);
     chain.EndBlock();
@@ -985,7 +985,6 @@ BOOST_FIXTURE_TEST_CASE(cancel_a_launch_of_before_the_fee_flow, V10OldLaunchSetu
     chain.SellAll(held[0], OLD);
     chain.EndBlock();
     const LaunchRecord sold{*chain.Assets().GetLaunch(OLD)};
-    chain.dropped += chain.Dust(OLD);
     const CTransaction cancel{Chain::Cancel(OLD, {proof})};
     chain.Require(cancel);
     BOOST_REQUIRE_EQUAL(chain.payouts.size(), 1U);

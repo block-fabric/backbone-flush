@@ -900,8 +900,8 @@ struct SettleOrder {
  * the state knows no other output's script, and reads nothing but itself and the block), which goes with it. Results,
  * to outputs of the creator's script: the launch's units (its curve's and those kept for its pool: its whole supply
  * S), then, unless a control coin of the asset exists, a new one. The creator's part of the fees (with what waited to
- * buy back) and what a split owes an address are paid by the coinbase if the least payout at least; less is not paid,
- * as dust never is. The launch's record and its curve go: the asset was never launched, and can be put on a curve
+ * buy back) and what a split owes an address are paid by the coinbase if the least payout at least; less, and what the
+ * curve kept beyond its virtual coin (roundings), goes with the block's security fees. The launch's record and its curve go: the asset was never launched, and can be put on a curve
  * again (CurveAsset). Its supply stays fixed (no mint, even with the control coin), unless the transaction holds all
  * of it: its inputs' units and the launch's are the asset's whole supply, and then it is not fixed any more.
  */
