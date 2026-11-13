@@ -95,10 +95,15 @@ export function timeline(candles: readonly Candle[], interval: CandleInterval, s
   return out;
 }
 
-/** The labels of a time axis for candles of an interval: hours and minutes within a day, the day otherwise. */
+/**
+ * The labels of a time axis for candles of an interval, in the computer's local time (owner decision, 2026-11-12: the
+ * wallet runs on it): hours and minutes within a day, the day and the hour for 4 h candles. A day's candle is a day of
+ * UTC, which is what the node keeps: its label is that date, not the local evening it starts on.
+ */
 export function formatCandleTime(seconds: number, interval: CandleInterval): string {
   const d = new Date(seconds * 1000);
   const pad = (x: number) => String(x).padStart(2, '0');
-  if (interval === '1d' || interval === '4h') return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}${interval === '4h' ? ` ${pad(d.getUTCHours())}h` : ''}`;
-  return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  if (interval === '1d') return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  if (interval === '4h') return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}h`;
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

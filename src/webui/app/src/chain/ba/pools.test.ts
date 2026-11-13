@@ -1,7 +1,7 @@
 // What a pool is to the user and the rules of the one pool form (ba/pools.ts), the figures of a span of candles
 // (ba/candles.ts), and where the old tabs of the DEX land (chain/local.ts dexRoute): owner decisions, 2026-11-11.
 import { describe, expect, it } from 'vitest';
-import { spanStats, candlesOf, PERIODS, timeline } from './candles';
+import { spanStats, candlesOf, formatCandleTime, PERIODS, timeline } from './candles';
 import { MAX_TICK, MIN_TICK } from './cl';
 import type { Pool } from './model';
 import { CURVE_REFUSAL, deeperReference, EMPTY_POOL_TOLERANCE, emptyPoolCheck, priceGuard, REFERENCE_MIN_ECX, referencePrice, THIN_POOL_ECX, ecxPoolsOf, hopParts, isFullRange, isShownPool, marketState, poolEmpty, poolFeeText, poolFormState, poolSides } from './pools';
@@ -262,5 +262,15 @@ describe('the figures of a day, from the candles the node has', () => {
     const all = timeline([{ t: 2 * day, o: 1, h: 1, l: 1, c: 1, v: 1 }, { t: 5 * day, o: 1, h: 2, l: 1, c: 2, v: 1 }], '1d', 0, 7 * day + 5);
     expect(all.map((s) => (s.c ? 'x' : s.carried))).toEqual(['x', 1, 1, 'x', 2, 2]);
     expect(timeline([{ t: 0, o: 1, h: 1, l: 1, c: 1, v: 1 }], '1d', 0, 2000 * day, 500).length).toBe(500);
+  });
+
+  it('the labels of the axis are in the computer\'s local time; a day\'s candle keeps its date of UTC', () => {
+    const at = Date.UTC(2026, 10, 12, 14, 5) / 1000;
+    const local = new Date(at * 1000);
+    const pad = (x: number) => String(x).padStart(2, '0');
+    expect(formatCandleTime(at, '1h')).toBe(`${pad(local.getHours())}:${pad(local.getMinutes())}`);
+    expect(formatCandleTime(at, '5m')).toBe(`${pad(local.getHours())}:${pad(local.getMinutes())}`);
+    expect(formatCandleTime(at, '4h')).toBe(`${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}h`);
+    expect(formatCandleTime(Date.UTC(2026, 10, 12) / 1000, '1d')).toBe('2026-11-12');
   });
 });
