@@ -354,7 +354,40 @@ class SidechainEnforcerTest(BitcoinTestFramework):
         main.setwithdrawalvote(SLOT, "default")
         self.check_in_sync()
 
+        self.run_short_reorg_under_long_record_test()
         self.run_reorg_before_handoff_test()
+
+    def run_short_reorg_under_long_record_test(self):
+        """A reorg of one mainchain block, with more than 1000 blocks on record above a commitment: one block dropped.
+
+        The enforcer's interface gives 1000 blocks a call, and the follower looks back 2000 at a time: the heights a
+        short answer left out were read as dropped, 1001 blocks and every commitment in them (eCash mainnet, 2026-11-19)."""
+        main = self.main
+        side, other = self.nodes
+        self.log.info("A reorg of one mainchain block under a long record keeps the commitments below it")
+        committed = self.bmm()
+        height = side.getblockcount()
+        self.mine_main(1100)
+        assert_equal(side.getbestblockhash(), committed)
+        tip = main.getbestblockhash()
+        main.invalidateblock(tip)
+        # (To another address: the same empty block again would be the one invalidated.)
+        fork_address = main.getnewaddress()
+        main.generateblock(fork_address, [])
+        main.generateblock(fork_address, [])
+        self.sync_main()
+        for node in self.nodes:
+            assert_equal(node.getbestblockhash(), committed)
+            assert_equal(node.getblockcount(), height)
+            assert_equal(node.getmainchaininfo()["bestblockhash"], main.getbestblockhash())
+            with open(node.debug_log_path, encoding="utf-8") as f:
+                drops = [line for line in f if "The mainchain dropped" in line]
+            assert drops and "dropped 1 blocks" in drops[-1], drops[-1:]
+        # The chain goes on from there.
+        self.bmm()
+        assert_equal(side.getblockcount(), height + 1)
+        main.reconsiderblock(tip)
+        self.sync_main()
         self.run_foreign_bundle_test()
 
     def run_reorg_before_handoff_test(self):

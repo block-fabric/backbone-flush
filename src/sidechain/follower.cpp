@@ -412,10 +412,24 @@ bool Follower::UpdateRecord(bool may_drop)
                 }
                 // The mainchain dropped blocks on record: go back to the last one it still has, a
                 // batch of blocks at a time.
+                // An answer may hold fewer blocks than asked for (through the enforcer's interface: 1000 a
+                // call, MainClient::EnforcerEvents): the rest of the range is asked for until the node has
+                // no more. A height left out of a short answer is not a block the mainchain dropped: read
+                // as one, a reorganisation of one mainchain block took 1001 off the record and with them
+                // every commitment in them (eCash mainnet, 2026-11-19: 13,150 blocks of this chain).
+                const auto fetch_range{[&](int from, int count) {
+                    UniValue all{UniValue::VARR};
+                    while (static_cast<int>(all.size()) < count) {
+                        const UniValue part{fetch(from + static_cast<int>(all.size()), count - static_cast<int>(all.size()))};
+                        if (part.empty()) break;
+                        for (size_t i{0}; i < part.size(); ++i) all.push_back(part[i]);
+                    }
+                    return all;
+                }};
                 int common{height - 1};
                 while (common >= base) {
                     const int from{std::max(common - BATCH + 1, base)};
-                    const UniValue batch{fetch(from, common - from + 1)};
+                    const UniValue batch{fetch_range(from, common - from + 1)};
                     int found{-1};
                     for (int h{common}; h >= from; --h) {
                         const size_t i{static_cast<size_t>(h - from)};
